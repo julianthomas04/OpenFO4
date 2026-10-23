@@ -1,0 +1,180 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="using:AssetConverter.InstallerUi"
+        x:Class="AssetConverter.InstallerUi.InstallerWindow"
+        x:DataType="ui:InstallerViewModel"
+        x:Name="Root"
+        Title="OpenFO4 Installer"
+        Width="900" Height="740" MinWidth="680" MinHeight="600"
+        WindowStartupLocation="CenterScreen">
+  <Window.Styles>
+    <Style Selector="TextBlock.muted">
+      <Setter Property="Opacity" Value="0.7" />
+    </Style>
+    <Style Selector="TextBlock.status">
+      <Setter Property="Width" Value="22" />
+      <Setter Property="Opacity" Value="0.45" />
+    </Style>
+    <Style Selector="TextBlock.status.running, TextBlock.status.done, TextBlock.status.failed, TextBlock.status.cancelled">
+      <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="ProgressBar.rowFill">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="MinHeight" Value="0" />
+      <Setter Property="VerticalAlignment" Value="Stretch" />
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Border x:Name="PART_Track" Background="{TemplateBinding Background}" ClipToBounds="True">
+            <Border x:Name="PART_Indicator" HorizontalAlignment="Left" Background="{TemplateBinding Foreground}" />
+          </Border>
+        </ControlTemplate>
+      </Setter>
+    </Style>
+    <Style Selector="ProgressBar.rowFill.running">
+      <Setter Property="Foreground">
+        <SolidColorBrush Color="{DynamicResource SystemAccentColor}" Opacity="0.38" />
+      </Setter>
+    </Style>
+    <Style Selector="ProgressBar.rowFill.done">
+      <Setter Property="Foreground">
+        <SolidColorBrush Color="#2E9E5B" Opacity="0.26" />
+      </Setter>
+    </Style>
+    <Style Selector="ProgressBar.rowFill.failed">
+      <Setter Property="Foreground">
+        <SolidColorBrush Color="#E5534B" Opacity="0.4" />
+      </Setter>
+    </Style>
+    <Style Selector="ProgressBar.rowFill.cancelled">
+      <Setter Property="Foreground">
+        <SolidColorBrush Color="#D4A017" Opacity="0.34" />
+      </Setter>
+    </Style>
+    <Style Selector="TextBlock.overall.succeeded">
+      <Setter Property="Foreground" Value="#2E9E5B" />
+    </Style>
+    <Style Selector="TextBlock.overall.failed">
+      <Setter Property="Foreground" Value="#E5534B" />
+    </Style>
+    <Style Selector="TextBlock.overall.cancelled">
+      <Setter Property="Foreground" Value="#D4A017" />
+    </Style>
+    <Style Selector="TextBlock.logLine">
+      <Setter Property="FontFamily" Value="Cascadia Mono, Consolas, Menlo, monospace" />
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="TextWrapping" Value="NoWrap" />
+      <Setter Property="LineHeight" Value="{x:Static ui:LayoutConverters.LogLineHeight}" />
+    </Style>
+    <Style Selector="TextBlock.logLine.error">
+      <Setter Property="Foreground" Value="#E5534B" />
+    </Style>
+  </Window.Styles>
+
+  <Panel>
+    <Panel IsVisible="{Binding IsSettingUp}">
+      <ui:SetupView DataContext="{Binding Setup}" />
+    </Panel>
+    <Grid RowDefinitions="Auto,*,Auto" Margin="16" IsVisible="{Binding !IsSettingUp}" RowSpacing="{x:Static ui:LayoutConverters.RowSpacing}">
+      <StackPanel Grid.Row="0" Spacing="6">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Text="{Binding OverallLabel}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap"
+                     Classes.overall="True"
+                     Classes.succeeded="{Binding IsSucceeded}"
+                     Classes.failed="{Binding IsFailed}"
+                     Classes.cancelled="{Binding IsCancelled}" />
+          <TextBlock Grid.Column="1" Text="{Binding OverallPercentText}" FontSize="16" Margin="12,0,0,0" />
+        </Grid>
+        <ProgressBar Minimum="0" Maximum="1" Value="{Binding OverallFraction}" Height="14" />
+        <TextBlock Text="{Binding ElapsedText}" Classes="muted" />
+      </StackPanel>
+
+      <Grid Grid.Row="1" x:Name="ListAndLog" RowDefinitions="Auto,*" RowSpacing="{x:Static ui:LayoutConverters.RowSpacing}">
+        <Border BorderThickness="1" BorderBrush="#40808080" CornerRadius="4" Padding="10,6" Grid.IsSharedSizeScope="True"
+                MaxHeight="{Binding Bounds.Height, ElementName=ListAndLog, Converter={x:Static ui:LayoutConverters.StepListMaxHeight}}">
+          <Grid RowDefinitions="Auto,*" RowSpacing="2">
+            <Grid x:Name="StepHeader" ColumnSpacing="16" Margin="{x:Static ui:LayoutConverters.StepHeaderMargin}">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="22" />
+                <ColumnDefinition Width="*" MinWidth="120" />
+                <ColumnDefinition Width="Auto" MinWidth="150" SharedSizeGroup="StepProgress" />
+                <ColumnDefinition Width="Auto" MinWidth="70" SharedSizeGroup="StepElapsed" />
+              </Grid.ColumnDefinitions>
+              <TextBlock Grid.Column="1" Text="Step" Classes="muted" />
+              <TextBlock Grid.Column="2" Text="Progress" Classes="muted" HorizontalAlignment="Right" />
+              <TextBlock Grid.Column="3" Text="Elapsed" Classes="muted" HorizontalAlignment="Right" />
+            </Grid>
+            <ScrollViewer Grid.Row="1" x:Name="StepScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                          ScrollViewer.AllowAutoHide="False">
+              <ItemsControl ItemsSource="{Binding Steps}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="ui:StepRowViewModel">
+                    <Panel Margin="0,1">
+                      <ProgressBar x:Name="StepFill" Classes="rowFill" Minimum="0" Maximum="1" Value="{Binding Fraction}"
+                                   IsHitTestVisible="False"
+                                   Classes.running="{Binding IsRunning}"
+                                   Classes.done="{Binding IsDone}"
+                                   Classes.failed="{Binding IsFailed}"
+                                   Classes.cancelled="{Binding IsCancelled}" />
+                      <Grid ColumnSpacing="16" Margin="{x:Static ui:LayoutConverters.StepRowMargin}">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="22" />
+                          <ColumnDefinition Width="*" MinWidth="120" />
+                          <ColumnDefinition Width="Auto" MinWidth="150" SharedSizeGroup="StepProgress" />
+                          <ColumnDefinition Width="Auto" MinWidth="70" SharedSizeGroup="StepElapsed" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="{Binding StatusGlyph}" Classes="status"
+                                   Classes.running="{Binding IsRunning}"
+                                   Classes.done="{Binding IsDone}"
+                                   Classes.failed="{Binding IsFailed}"
+                                   Classes.cancelled="{Binding IsCancelled}" />
+                        <TextBlock Grid.Column="1" Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Grid.Column="2" Text="{Binding CountText}" HorizontalAlignment="Right" />
+                        <TextBlock Grid.Column="3" Text="{Binding ElapsedText}" HorizontalAlignment="Right" />
+                      </Grid>
+                    </Panel>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </Grid>
+        </Border>
+
+        <Border Grid.Row="1" BorderThickness="1" BorderBrush="#40808080" MinHeight="{x:Static ui:LayoutConverters.LogMinHeight}"
+                CornerRadius="4" Padding="6,4" ClipToBounds="True">
+          <ScrollViewer x:Name="LogScroll" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                        ScrollViewer.AllowAutoHide="False">
+            <ItemsControl x:Name="LogItems" ItemsSource="{Binding LogLines}">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                  <VirtualizingStackPanel />
+                </ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="ui:LogLineViewModel">
+                  <TextBlock Text="{Binding Text}" Classes="logLine" Classes.error="{Binding IsError}" />
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </Border>
+      </Grid>
+
+      <StackPanel Grid.Row="2" Spacing="8">
+      <TextBlock x:Name="PlayErrorText" Text="{Binding PlayError}" Foreground="#E5534B" TextWrapping="Wrap" />
+      <TextBlock x:Name="LogFileLabel" Text="{Binding LogFileText}" Classes="muted" TextWrapping="Wrap"
+                 ToolTip.Tip="{Binding LogFileText}" IsVisible="{Binding LogFileText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+      <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="12">
+        <Button x:Name="OpenInstallFolderButton" Grid.Column="1" Content="Open install folder"
+                IsVisible="{Binding CanOpenInstallFolder}" Click="OnOpenInstallFolderClick" />
+        <Button x:Name="OpenLogButton" Grid.Column="2" Content="Open log"
+                IsVisible="{Binding CanOpenLog}" Click="OnOpenLogClick" />
+        <Button x:Name="PlayButton" Grid.Column="3" Content="Play" MinWidth="110" HorizontalContentAlignment="Center"
+                Classes="accent" IsVisible="{Binding CanPlay}" Click="OnPlayClick" />
+        <Button x:Name="ActionButton" Grid.Column="4" MinWidth="110" HorizontalContentAlignment="Center"
+                Content="{Binding ActionButtonText}" IsEnabled="{Binding ActionButtonEnabled}"
+                Click="OnActionButtonClick" />
+      </Grid>
+      </StackPanel>
+    </Grid>
+  </Panel>
+</Window>

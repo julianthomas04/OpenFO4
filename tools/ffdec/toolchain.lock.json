@@ -1,0 +1,207 @@
+{
+  "schema": 1,
+  "version": "26.2.1-openfo4.1",
+  "upstream": {
+    "url": "https://codeload.github.com/jindrapetrik/jpexs-decompiler/tar.gz/refs/tags/version26.2.1",
+    "sha256": "bc74ba4610df1da263f012011e1f45e3a8189427ee087f69d95f40c105a07d98",
+    "sourcePath": "libsrc/ffdec_lib/src",
+    "redistributeUpstreamArchive": false
+  },
+  "targetJava": 21,
+  "reviewStatus": "pending",
+  "dependencies": [
+    {
+      "file": "antlr-runtime-4.11.1.jar",
+      "sha256": "e06c6553c1ccc14d36052ec4b0fc6f13b808cf957b5b1dc3f61bf401996ada59",
+      "sourcePath": null,
+      "sourceReview": "source-rebuild required; source and license present",
+      "sourceArchive": {
+        "sha256": "6fa0efb711a152842ecda1d41ceab94fb2049f833e00e360e161ac0e7a3819fe",
+        "url": "https://repo.maven.apache.org/maven2/org/antlr/antlr4-runtime/4.11.1/antlr4-runtime-4.11.1-sources.jar",
+        "name": "antlr",
+        "file": "antlr4-runtime-4.11.1-sources.jar"
+      },
+      "sourceRoot": ".",
+      "licenseExpression": "BSD-3-Clause",
+      "notice": "licenses/ANTLR-BSD-3-Clause.txt"
+    },
+    {
+      "file": "avi.jar",
+      "sha256": "7b8da48be20447ca3a840ae1136541841e1a44915a6edf924d83529362bd40ff",
+      "sourcePath": "libsrc/avi",
+      "sourceReview": "source-rebuild required; source and license present",
+      "sourceRoot": "libsrc/avi/src",
+      "licenseExpression": "LGPL-3.0-only",
+      "notice": "libsrc/ffdec_lib/lib/avi.montemedia.license.txt"
+    },
+    {
+      "file": "ddsreader.jar",
+      "sha256": "b64bd5bbb4bad9092c4f4109795c41ce513b24f1fad9f6886492d976482b1603",
+      "sourcePath": null,
+      "sourceReview": "source-rebuild required; source and license present",
+      "sourceArchive": {
+        "sha256": "a4ecd248cff1b060b4b552d98290c007ac839e6809fb2887433837dbc2aceddd",
+        "url": "https://codeload.github.com/npedotnet/DDSReader/tar.gz/2a478378920ea13d8968ca967c68f5b257f55942",
+        "name": "ddsreader",
+        "file": "ddsreader-2a478378920ea13d8968ca967c68f5b257f55942.tar.gz"
+      },
+      "sourceRoot": "DDSReader-2a478378920ea13d8968ca967c68f5b257f55942/src/java",
+      "licenseExpression": "MIT",
+      "notice": "DDSReader-2a478378920ea13d8968ca967c68f5b257f55942/LICENSE"
+    },
+    {
+      "file": "decimal.jar",
+      "sha256": "feeb9f89f44cd6a921a9a4701358c8c63e3e677424fb2953ddba6e15872c0e91",
+      "sourcePath": "libsrc/decimal",
+      "sourceReview": "source-rebuild required; source and license present",
+      "sourceRoot": "libsrc/decimal/src",
+      "licenseExpression": "Apache-2.0",
+      "notice": "libsrc/ffdec_lib/lib/decimal.license.txt"
+    },
+    {
+      "file": "flacomdoc.jar",
+      "sha256": "fc0d7e4be9591c6e187258f1b2be6f798ce78831d22cb990ffbf95e99c8f85cf",
+      "sourcePath": null,
+      "sourceReview": "source-rebuild required; source and license present",
+      "sourceArchive": {
+        "sha256": "33003a3cb5ce352c587e18b788ecd82442b7995c6964e412dcf9a19fd75b1bc8",
+        "url": "https://codeload.github.com/jindrapetrik/flacomdoc/tar.gz/8ed4fbf1c6e63a65d54ab97842a16b1883971063",
+        "name": "flacomdoc",
+        "file": "flacomdoc-8ed4fbf1c6e63a65d54ab97842a16b1883971063.tar.gz"
+      },
+      "sourceRoot": "flacomdoc-8ed4fbf1c6e63a65d54ab97842a16b1883971063/src",
+      "licenseExpression": "LGPL-2.1-or-later",
+      "notice": "flacomdoc-8ed4fbf1c6e63a65d54ab97842a16b1883971063/LICENSE.md"
+    },
+    {
+      "file": "gif.jar",
+      "sha256": "e81c505f104689d4e8d4da2cba09db0a7a8c02c7f8d19de6ed194d8d2cff09bd",
+      "sourcePath": "libsrc/gif",
+      "sourceReview": "source-rebuild required; source and license present",
+      "sourceRoot": "libsrc/gif/src",
+      "licenseExpression": "CC-BY-3.0",
+      "notice": "libsrc/ffdec_lib/lib/gif.license.txt"
+    },
+    {
+      "file": "gifreader.jar",
+      "sha256": "2afdcb18d174476ef1e8550acb902ad0e998d6d6bbfb493bba4e7e6c5817f45b",
+      "sourcePath": "libsrc/gifreader",
+      "sourceReview": "source-rebuild required; source and license present",
+      "sourceRoot": "libsrc/gifreader/src",
+      "licenseExpression": "Apache-2.0",
+      "notice": "libsrc/ffdec_lib/lib/gifreader.license.txt"
+    },
+    {
+      "file": "gnujpdf.jar",
+      "sha256": "0bf30d0461399cc20225918aac02a6454970192caa850dabc317519008e9be5f",
+      "sourcePath": "libsrc/gnujpdf",
+      "sourceReview": "source-rebuild required; source and license present",
+      "sourceRoot": "libsrc/gnujpdf/src",
+      "licenseExpression": "LGPL-2.1-or-later",
+      "notice": "libsrc/ffdec_lib/lib/flacomdoc.license.txt"
+    },
+    {
+      "file": "jlayer-1.0.2.jar",
+      "sha256": "bf6286c69dabeadab49ba2b5e9322243c23722585faf52452c15593a14d20e36",
+      "sourcePath": "libsrc/jlayer-1.0.2",
+      "sourceReview": "source-rebuild required; source and license present",
+      "sourceRoot": "libsrc/jlayer-1.0.2/src/main/java",
+      "licenseExpression": "LGPL-2.1-or-later",
+      "notice": "libsrc/ffdec_lib/lib/jlayer.license.txt"
+    },
+    {
+      "file": "jpacker.jar",
+      "sha256": "4eaba3e39d3e8d0eb242534d56bda72b1bbca6599aa949a7876ff6fc2cbfce52",
+      "sourcePath": "libsrc/jpacker",
+      "sourceReview": "source-rebuild required; source and license present",
+      "sourceRoot": "libsrc/jpacker/src",
+      "licenseExpression": "MIT",
+      "notice": "libsrc/ffdec_lib/lib/jpacker.license.txt"
+    },
+    {
+      "file": "LZMA.jar",
+      "sha256": "2604dab00935023b183d82d9a5c5198ae34d40112c7524e75be20e4528798e95",
+      "sourcePath": "libsrc/LZMA",
+      "sourceReview": "source-rebuild required; source and license present",
+      "sourceRoot": "Java",
+      "sourceArchive": {
+        "name": "lzma",
+        "url": "https://www.7-zip.org/a/lzma2301.7z",
+        "file": "lzma2301.7z",
+        "sha256": "317dd834d6bbfd95433488b832e823cd3d4d420101436422c03af88507dd1370"
+      },
+      "licenseExpression": "LicenseRef-LZMA-Public-Domain",
+      "notice": "DOC/lzma-sdk.txt"
+    },
+    {
+      "file": "miterstroke.jar",
+      "sha256": "becca6da411463f872f69f48de2dc50d53974b888da09bae0b27096b9d4d1663",
+      "sourcePath": "libsrc/miterstroke",
+      "sourceReview": "source-rebuild required; source and license present",
+      "sourceRoot": "libsrc/miterstroke/src",
+      "licenseExpression": "GPL-2.0-only WITH Classpath-exception-2.0",
+      "notice": "libsrc/ffdec_lib/lib/miterstroke.license.txt"
+    },
+    {
+      "file": "nellymoser.jar",
+      "sha256": "bf12eb3a4c793e66b4e0c917aaa4091a6bd2b9da446c357f600f2da36f3c36e0",
+      "sourcePath": "libsrc/nellymoser",
+      "sourceReview": "source-rebuild required; source and license present",
+      "sourceRoot": "libsrc/nellymoser/src",
+      "licenseExpression": "LGPL-2.1-or-later",
+      "notice": "libsrc/ffdec_lib/lib/nellymoser.license.txt"
+    },
+    {
+      "file": "tga.jar",
+      "sha256": "43d6c7b688953ddc8a7c513b31c63b1597154e917d4e8222581fb7952c5af463",
+      "sourcePath": null,
+      "sourceReview": "source-rebuild required; source and license present",
+      "sourceArchive": {
+        "sha256": "a359e19273ecdd8dd4d05bf7062c694a8bf22e57ba98e8beb5393e7e411279c0",
+        "url": "https://codeload.github.com/tmyroadctfig/com.realityinteractive.imageio.tga/tar.gz/7d8cb05af9daf1ddd0b4d3f7ca37e7d9f9e04c25",
+        "name": "tga",
+        "file": "tga-7d8cb05af9daf1ddd0b4d3f7ca37e7d9f9e04c25.tar.gz"
+      },
+      "sourceRoot": "com.realityinteractive.imageio.tga-7d8cb05af9daf1ddd0b4d3f7ca37e7d9f9e04c25/src/main/java",
+      "licenseExpression": "LGPL-2.1-or-later",
+      "notice": "com.realityinteractive.imageio.tga-7d8cb05af9daf1ddd0b4d3f7ca37e7d9f9e04c25/license.txt"
+    },
+    {
+      "file": "tomlj-1.1.1.jar",
+      "sha256": "383b7c66966c42ee4913ec977a7b6573631866bddc5318ec4a6215b688dd0d6c",
+      "sourcePath": null,
+      "sourceReview": "source-rebuild required; source and license present",
+      "sourceArchive": {
+        "sha256": "533276104d58ebc92ce049c59a129717ce7daf0e9340969256fdb61f4f06f717",
+        "url": "https://repo.maven.apache.org/maven2/org/tomlj/tomlj/1.1.1/tomlj-1.1.1-sources.jar",
+        "name": "tomlj",
+        "file": "tomlj-1.1.1-sources.jar"
+      },
+      "sourceRoot": ".",
+      "licenseExpression": "Apache-2.0",
+      "notice": "licenses/TomlJ-Apache-2.0.txt"
+    },
+    {
+      "file": "ttf.jar",
+      "sha256": "25cb6f0bf447edd29c70bb061bf2d7d72e376cda5050252aac949546d3bbd0f4",
+      "sourcePath": "libsrc/ttf",
+      "sourceReview": "source-rebuild required; source and license present",
+      "sourceRoot": "libsrc/ttf/src",
+      "licenseExpression": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+      "notice": "libsrc/ffdec_lib/lib/ttf.doubletype.license.txt"
+    }
+  ],
+  "modifications": [
+    "2026-10-18: Original limited export adapter, Java21 build script, excluded GUI/SDK/native components",
+    "2026-10-18: JDK ImageIO replaces restricted CMYK reader; unsupported image/video/WebP conversion fails",
+    "2026-10-18: Unused WOFF/APNG support and unrelated executable/template resources removed",
+    "2026-10-18: Rebuild all retained dependency bytecode from pinned preferred-form sources; binary versions are source identities, not inferred originals",
+    "2026-10-18: Use official public-domain LZMA SDK23.01 Java sources; decoder sources match prior normalized Java; encoder/CLI differences documented",
+    "2026-10-18: Remove TomlJ compile-only checker annotations and JPacker optional CLI to avoid new build dependencies",
+    "2026-10-18: Monte AVI MJPEG reader selects the JDK standard JPEG ImageReader through public ImageIO rather than an inaccessible com.sun implementation",
+    "2026-10-18: Remove unused GNUJPDF import of jdk.internal.reflect.Reflection; no executable behavior changed",
+    "2026-10-18: Persist unsupported image/native-codec diagnostics across upstream catch handlers; export process fails even if rendering substitutes an error image",
+    "2026-10-18: Retain original .flex/.g4 lexer/grammar inputs beside generated Java in preferred-form source bundle",
+    "2026-10-18: Unsupported embedded video fails at actual toSVG/toImage rendering entrypoints; unused video does not block font or unrelated exports"
+  ]
+}

@@ -1,0 +1,62 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="using:AssetConverter.InstallerUi"
+             x:Class="AssetConverter.InstallerUi.SetupView"
+             x:DataType="ui:SetupViewModel">
+  <UserControl.Styles>
+    <Style Selector="TextBlock.error">
+      <Setter Property="Foreground" Value="#E5534B" />
+    </Style>
+  </UserControl.Styles>
+
+  <Grid RowDefinitions="*,Auto" Margin="24" RowSpacing="12" IsEnabled="{Binding CanEdit}">
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+    <StackPanel Spacing="20" MaxWidth="760" HorizontalAlignment="Stretch">
+      <StackPanel Spacing="4">
+        <TextBlock Text="Set up the installation" FontSize="20" FontWeight="SemiBold" />
+        <TextBlock Text="Choose where Fallout 4 is installed and the folder to install OpenFO4 in. OpenFO4 creates its own OpenFO4 folder there." Opacity="0.7" TextWrapping="Wrap" />
+      </StackPanel>
+
+      <StackPanel Spacing="6">
+        <TextBlock Text="Fallout 4 folder" FontWeight="SemiBold" />
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+          <TextBox x:Name="GameFolderBox" Text="{Binding GameFolder}" Watermark="Folder containing Fallout4.exe" />
+          <Button x:Name="BrowseGameFolderButton" Grid.Column="1" Content="Browse…" Click="OnBrowseGameFolderClick" />
+        </Grid>
+        <TextBlock x:Name="GameFolderErrorText" Text="{Binding GameFolderError}" Classes="error" TextWrapping="Wrap" />
+      </StackPanel>
+
+      <StackPanel Spacing="6" IsVisible="{Binding AsksForSettingsFolder}">
+        <TextBlock Text="Fallout 4 settings folder" FontWeight="SemiBold" />
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+          <TextBox x:Name="SettingsFolderBox" Text="{Binding SettingsFolder}" Watermark="Folder containing Fallout4Prefs.ini" />
+          <Button x:Name="BrowseSettingsFolderButton" Grid.Column="1" Content="Browse…" Click="OnBrowseSettingsFolderClick" />
+        </Grid>
+        <TextBlock x:Name="GameIniErrorText" Text="{Binding GameIniError}" Classes="error" TextWrapping="Wrap" />
+      </StackPanel>
+
+      <StackPanel Spacing="6">
+        <TextBlock Text="Install in" FontWeight="SemiBold" />
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+          <TextBox x:Name="InstallFolderBox" Text="{Binding InstallFolder}" Watermark="For example D:\Games" />
+          <Button x:Name="BrowseInstallFolderButton" Grid.Column="1" Content="Browse…" Click="OnBrowseInstallFolderClick" />
+        </Grid>
+        <TextBlock x:Name="InstallFolderErrorText" Text="{Binding InstallFolderError}" Classes="error" TextWrapping="Wrap" />
+        <TextBlock x:Name="InstallRootText" Text="{Binding InstallRootText}" Opacity="0.7" TextWrapping="Wrap" />
+      </StackPanel>
+
+      <TextBlock x:Name="StartErrorText" Text="{Binding StartError}" Classes="error" TextWrapping="Wrap" />
+
+      <CheckBox x:Name="KeepStagingBox" IsChecked="{Binding KeepStaging}"
+                Content="Keep temporary files (uses more storage, speeds up future installs)" />
+
+    </StackPanel>
+    </ScrollViewer>
+
+    <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="12">
+      <Button x:Name="CancelSetupButton" Content="Cancel" MinWidth="110" HorizontalContentAlignment="Center" Click="OnCancelClick" />
+      <Button x:Name="StartButton" Content="Install" MinWidth="110" HorizontalContentAlignment="Center"
+              IsEnabled="{Binding CanStart}" IsDefault="True" Click="OnStartClick" />
+    </StackPanel>
+  </Grid>
+</UserControl>

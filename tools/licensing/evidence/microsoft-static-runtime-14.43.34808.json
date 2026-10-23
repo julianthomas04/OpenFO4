@@ -1,0 +1,127 @@
+{
+  "schema": 1,
+  "scope": "Publisher/source-authority evidence for the identified Microsoft CRT portions incorporated in the engine, not the whole engine. Original engine Apache-2.0 and other component rights remain unchanged. No recipient component index or agreement scope is changed by this evidence.",
+  "policyPath": "tools/licensing/static-crt-inputs.json",
+  "policyBinding": "Match componentId/policyLibraryId, archive root, relative path and exact SHA256. The actual build-bound static input receipt is a separate mandatory gate.",
+  "components": [
+    {
+      "componentId": "native:msvc-libcmt",
+      "policyLibraryId": "msvc-libcmt",
+      "archiveRoot": "visualStudio",
+      "archivePath": "VC/Tools/MSVC/14.43.34808/lib/x64/libcmt.lib",
+      "archiveSha256": "2f85dcc9697707be63ce7842cfa4ad0dbc1fddabfcd1c4e6c0afcb372fdff83c",
+      "observedSelectedMemberCount": 43,
+      "observedSectionContributionCount": 130
+    },
+    {
+      "componentId": "native:msvc-libvcruntime",
+      "policyLibraryId": "msvc-libvcruntime",
+      "archiveRoot": "visualStudio",
+      "archivePath": "VC/Tools/MSVC/14.43.34808/lib/x64/libvcruntime.lib",
+      "archiveSha256": "e8060e3d69ea5303431e92cdbdff68b73f3a3739526db27f52b2e61897bf7b2e",
+      "observedSelectedMemberCount": 28,
+      "observedSectionContributionCount": 291
+    },
+    {
+      "componentId": "native:windows-sdk-libucrt",
+      "policyLibraryId": "sdk-libucrt",
+      "archiveRoot": "windowsSdk",
+      "archivePath": "Lib/10.0.22000.0/ucrt/x64/libucrt.lib",
+      "archiveSha256": "9990ab11a36ab720a5ad68e13c75eeebd2bc1841a66c45b034540aa65e1d7946",
+      "observedSelectedMemberCount": 248,
+      "observedSectionContributionCount": 1561
+    }
+  ],
+  "review": {
+    "native:msvc-libcmt": {
+      "status": "approved-reviewed-interpretation",
+      "reason": "Approved reviewed interpretation of the Community 2022 Section 4 application object-code distribution clause together with Microsoft Deployment in Visual C++ guidance, Static linking: library object code is linked directly into a single application binary without separately deploying Microsoft C++ library files. This approval covers only the identified MSVC 14.43.34808 archive portions incorporated as linker results, subject to the retained publisher and recipient conditions. The referenced REDIST list does not expressly enumerate these static archive paths; generic static-deployment guidance supplies the reviewed class-level connection. This is an interpretive conclusion, not new Microsoft permission or an unambiguous express REDIST enumeration.",
+      "citations": [
+        {
+          "path": "tools/licensing/licenses/native/microsoft-static-runtime/Visual-Studio-2022-Community-License-EN.txt",
+          "sha256": "a38d10afc3ef8fb2e64af972a9c64d998ef964de8101b9f7a59703f72fa3a5ab",
+          "section": "Section 4: Distributable Code; Right to Use and Distribute; Distributable List; Third Party Distribution; Distribution Requirements and Restrictions"
+        },
+        {
+          "path": "tools/licensing/licenses/native/microsoft-static-runtime/Deployment-in-Microsoft-Cpp.html",
+          "sha256": "152b8c40acb604a14e26c667079a6151f11de630b046880f4b3ab1d8847eae14",
+          "section": "Static linking (#static-linking)"
+        }
+      ],
+      "limits": "Limited to the exact component/archive identities above and actual selected-member build evidence. The list-definition connection retains interpretive uncertainty; this is not legal advice, a blanket Microsoft exemption, approval of raw library/source redistribution, or a substitute for recipient terms, vendor notices, conditions and final artifact checks."
+    },
+    "native:msvc-libvcruntime": {
+      "status": "approved-reviewed-interpretation",
+      "reason": "Approved reviewed interpretation of the Community 2022 Section 4 application object-code distribution clause together with Microsoft Deployment in Visual C++ guidance, Static linking: library object code is linked directly into a single application binary without separately deploying Microsoft C++ library files. This approval covers only the identified MSVC 14.43.34808 archive portions incorporated as linker results, subject to the retained publisher and recipient conditions. The referenced REDIST list does not expressly enumerate these static archive paths; generic static-deployment guidance supplies the reviewed class-level connection. This is an interpretive conclusion, not new Microsoft permission or an unambiguous express REDIST enumeration.",
+      "citations": [
+        {
+          "path": "tools/licensing/licenses/native/microsoft-static-runtime/Visual-Studio-2022-Community-License-EN.txt",
+          "sha256": "a38d10afc3ef8fb2e64af972a9c64d998ef964de8101b9f7a59703f72fa3a5ab",
+          "section": "Section 4: Distributable Code; Right to Use and Distribute; Distributable List; Third Party Distribution; Distribution Requirements and Restrictions"
+        },
+        {
+          "path": "tools/licensing/licenses/native/microsoft-static-runtime/Deployment-in-Microsoft-Cpp.html",
+          "sha256": "152b8c40acb604a14e26c667079a6151f11de630b046880f4b3ab1d8847eae14",
+          "section": "Static linking (#static-linking)"
+        }
+      ],
+      "limits": "Limited to the exact component/archive identities above and actual selected-member build evidence. The list-definition connection retains interpretive uncertainty; this is not legal advice, a blanket Microsoft exemption, approval of raw library/source redistribution, or a substitute for recipient terms, vendor notices, conditions and final artifact checks."
+    },
+    "native:windows-sdk-libucrt": {
+      "status": "approved-publisher-grant-and-list-scope",
+      "basis": "The complete installed SDK 10.0.22000.0 grant permits listed object code and requires distributing .lib only as linker results. The official Static LIB list explicitly covers Windows Kits/10/Lib/<version>/ucrt/x64, matching the selected archive.",
+      "limits": "This approval is limited to publisher grant/list evidence and exact archive identity. It does not claim historical pre/post-link capture, object/source reproducibility, publication readiness, or completed recipient agreement integration."
+    }
+  },
+  "actualEdition": {
+    "product": "Microsoft Visual Studio Community 2022",
+    "productVersion": "17.13.35919.96",
+    "msvcToolsVersion": "14.43.34808",
+    "linkExeFileVersion": "14.43.34809.0",
+    "sdkVersion": "10.0.22000.0",
+    "communityLicenseId": "VS_Comm_2022_ENU.1033",
+    "communityProductLicenseUrl": "https://visualstudio.microsoft.com/license-terms/vs2022-ga-community/"
+  },
+  "documents": [
+    {
+      "path": "tools/licensing/licenses/native/microsoft-static-runtime/Visual-Studio-2022-Community-License-EN.txt",
+      "sha256": "a38d10afc3ef8fb2e64af972a9c64d998ef964de8101b9f7a59703f72fa3a5ab",
+      "scope": "Complete publisher/developer Community 2022 agreement, extracted paragraph text; not an end-user IDE license requirement.",
+      "url": "https://visualstudio.microsoft.com/wp-content/uploads/2021/11/Visual-Studio-2022-Community-License-EN.docx"
+    },
+    {
+      "path": "tools/licensing/licenses/native/microsoft-static-runtime/Visual-Studio-2022-Redistribution.html",
+      "sha256": "22c07c097c3eaf8ec93a841b760e25ad75a40718f3ccc3d2f83cd8eeef68a324",
+      "scope": "Complete official Visual Studio 2022 redistribution list; does not explicitly name the two selected static MSVC library paths.",
+      "url": "https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution"
+    },
+    {
+      "path": "tools/licensing/licenses/native/microsoft-static-runtime/Deployment-in-Microsoft-Cpp.html",
+      "sha256": "152b8c40acb604a14e26c667079a6151f11de630b046880f4b3ab1d8847eae14",
+      "scope": "Complete official static-deployment documentation; supports deployment of linked applications without inventing an explicit REDIST path match.",
+      "url": "https://learn.microsoft.com/en-us/cpp/windows/deployment-in-visual-cpp?view=msvc-170"
+    },
+    {
+      "path": "tools/licensing/licenses/native/microsoft-static-runtime/Windows-SDK-10.0.22000.0-License.rtf",
+      "sha256": "0f4a26ac9dc50066f8a1bfeaaf3f092d1b9e4791df5487b9f3c31e7c3dc4d7f5",
+      "scope": "Complete raw installed SDK 10.0.22000.0 agreement; publisher/developer grant and conditions."
+    },
+    {
+      "path": "tools/licensing/licenses/native/microsoft-static-runtime/Windows-SDK-10.0.22000.0-License.extracted.txt",
+      "sha256": "ce661a18b3921a97ba6ab5e3bb943e2cd4eccf014411132c5f36a5d2589baf72",
+      "scope": "Complete extracted text of the raw installed SDK agreement; not a standalone recipient runtime form."
+    },
+    {
+      "path": "tools/licensing/licenses/native/microsoft-static-runtime/Windows-SDK-Redist.html",
+      "sha256": "3d55247a1150260b93281d5a2e41d219c334d52a461d45485e35ca5a9f731823",
+      "scope": "Complete official SDK redistribution list including Static LIB files and the matching ucrt/x64 directory.",
+      "url": "https://learn.microsoft.com/en-us/legal/windows-sdk/redist"
+    }
+  ],
+  "publisherAudience": "Visual Studio/SDK developer or permitted application distributor. Complete IDE/SDK product agreements are retained as publisher evidence, not imposed wholesale on ordinary application users.",
+  "msvcConditions": "Significant primary application functionality, protective distributor/external-end-user agreement, no Preview/Pre-release/Beta runtimes, Microsoft trademark restrictions and the defined Microsoft-source Excluded License restriction. The third-party distributor permission is distinct from ordinary recipient runtime-use rights.",
+  "sdkConditions": "Significant primary functionality; .lib code distributed only as linker results; protective distributor/external-end-user agreement; valid application copyright; publisher indemnity; preserving Microsoft notices; Microsoft-platform-only distribution; no malicious/deceptive/unlawful program; relevant trademark and Microsoft-source restrictions. Windows Performance Toolkit-specific provisions are not activated by this libucrt input.",
+  "sourceObligations": "No corresponding-source redistribution duty is asserted for these proprietary object-code inputs. Raw proprietary libraries, selected object bytes, PDB and CRT source are not included.",
+  "sanitization": "Only public/product-relative archive paths and document URLs are retained; developer account, workstation and private PDB build paths are omitted.",
+  "inspectionLimits": "Selected-member counts are inspection-time observations of the existing frozen engine, not a fresh source/build receipt. Actual final binary/member binding remains mandatory; ICF contribution spans do not uniquely attribute output bytes."
+}

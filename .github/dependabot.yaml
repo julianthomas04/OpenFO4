@@ -1,0 +1,18 @@
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/src/engine"
+    schedule:
+      interval: "weekly"
+    groups:
+      egui:
+        patterns:
+          - "egui*"
+  - package-ecosystem: "nuget"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

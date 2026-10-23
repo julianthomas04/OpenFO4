@@ -1,0 +1,111 @@
+{
+  "schema": 1,
+  "components": [
+    {
+      "id": "OpenFO4-original-and-retained-imports",
+      "version": "exact-release-source-commit",
+      "licenseExpression": "Apache-2.0",
+      "reviewStatus": "approved",
+      "role": "runtime",
+      "origin": {
+        "url": "https://github.com/julianthomas04/OpenFO4"
+      },
+      "modifications": "Original OpenFO4 code. Imported BA2Sharp, PyNifly, Bink2 and third-party packages are separately licensed and indexed; this record does not relicense those components.",
+      "licenseFiles": [
+        {
+          "path": "LICENSE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        }
+      ],
+      "sourceInputs": [
+        {
+          "path": "src/installer/python/fo4_collision_worker.py",
+          "sha256": "b7aa74fd82ed85506d0e958bd01af4e1384a30a71cbcd27597d125b6296dfd5f",
+          "pathExceptions": [
+            {
+              "path": "src/installer/python/fo4_collision_worker.py",
+              "sha256": "b7aa74fd82ed85506d0e958bd01af4e1384a30a71cbcd27597d125b6296dfd5f",
+              "rules": [
+                "translated-wgsl"
+              ],
+              "reason": "Original unchanged Apache-licensed Python collision-converter source. The translated-wgsl heuristic hits its leading documentation describing output geometry/schema; it contains program logic and documentation, not a converted shader or Bethesda asset."
+            }
+          ]
+        },
+        {
+          "path": "src/installer/file_converters/esm_schema.sql",
+          "sha256": "bc4a9e563440d1afdc4dcd5efeb41934e2d28a7d29ce9cbe6977383f4d73c9de"
+        },
+        {
+          "path": "src/installer/shader_translator/shader_manifest.json",
+          "sha256": "5c25f322998a1b4decbc0f674ebc5f1c594ed621f6997a9481c82f89312cbd52"
+        },
+        {
+          "path": "src/installer/packaging/THIRD_PARTY_NOTICES.txt",
+          "sha256": "20a7394911697fee781c957f006b95ab2ebddf287bef8328f822f7794a5e73a0"
+        },
+        {
+          "path": "src/engine/src/rendering/effects/shader.rs",
+          "sha256": "f44086a228e90e1702972c5f04eeab970fdfc1ea604a34315dbe2ede3b4a68ef",
+          "pathExceptions": [
+            {
+              "path": "src/engine/src/rendering/effects/shader.rs",
+              "sha256": "f44086a228e90e1702972c5f04eeab970fdfc1ea604a34315dbe2ede3b4a68ef",
+              "rules": [
+                "translated-wgsl"
+              ],
+              "reason": "Frozen source lines 536-539 explicitly identify the cfg(test) stubs module: Synthetic translated effect shaders for tests: same struct shapes, register globals and interface metadata as the real family, no shader logic. The heuristic at line 562 recognizes the intentional interface contract of these synthetic test strings. Exception restricted to this complete source hash and translated-wgsl rule."
+            }
+          ]
+        },
+        {
+          "path": "src/installer/BA2Sharp/BA2Util/DDS.cs",
+          "sha256": "d264cfb4aa5eaf81e0ef245b56d55b444889923df633d7492528321720cff162",
+          "pathExceptions": [
+            {
+              "path": "src/installer/BA2Sharp/BA2Util/DDS.cs",
+              "sha256": "d264cfb4aa5eaf81e0ef245b56d55b444889923df633d7492528321720cff162",
+              "rules": [
+                "encoded-blob"
+              ],
+              "reason": "Original independently rewritten DDS implementation has Apache-2.0 SPDX and OpenFO4 copyright headers. Flagged line 3 is the public Microsoft format/DXGI documentation URL; no encoded asset is present."
+            }
+          ]
+        },
+        {
+          "path": "tools/licensing/source-curation.json",
+          "sha256": "10f1c7365cac649aff83085a8384090daa4e09e7f9031f31b596f5606492a4cd",
+          "pathExceptions": [
+            {
+              "path": "tools/licensing/source-curation.json",
+              "sha256": "10f1c7365cac649aff83085a8384090daa4e09e7f9031f31b596f5606492a4cd",
+              "rules": [
+                "encoded-blob"
+              ],
+              "reason": "Reviewed source-curation policy metadata contains the identified long source-member paths, not encoded assets. This exception is bound only to these final complete policy bytes and the encoded-blob rule; the policy does not contain its own SHA256."
+            }
+          ]
+        }
+      ],
+      "runtimeFiles": [
+        {
+          "path": "src/installer/python/fo4_collision_worker.py",
+          "sha256": "b7aa74fd82ed85506d0e958bd01af4e1384a30a71cbcd27597d125b6296dfd5f"
+        },
+        {
+          "path": "src/installer/file_converters/esm_schema.sql",
+          "sha256": "bc4a9e563440d1afdc4dcd5efeb41934e2d28a7d29ce9cbe6977383f4d73c9de"
+        },
+        {
+          "path": "src/installer/shader_translator/shader_manifest.json",
+          "sha256": "5c25f322998a1b4decbc0f674ebc5f1c594ed621f6997a9481c82f89312cbd52"
+        },
+        {
+          "path": "THIRD_PARTY_NOTICES.txt",
+          "sha256": "5e7720d2e2bc1c5be8082d32e818e9c911a28ad63aab903772726e3b67b621e4"
+        }
+      ],
+      "reason": "Explicit original-resource allowlist, individually SHA256-bound; compiled outputs are separately bound to their compiler/source receipts."
+    }
+  ]
+}

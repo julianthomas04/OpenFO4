@@ -1,0 +1,194 @@
+{
+  "schema": 1,
+  "components": [
+    {
+      "id": "nuget:ini-parser-netstandard/2.5.2",
+      "licenseExpression": "MIT",
+      "reviewStatus": "approved",
+      "sourceRequired": false,
+      "licenseFiles": [
+        {
+          "path": "tools/licensing/licenses/nuget/rickyah-ini-parser-7a71b1fde478/LICENSE",
+          "sha256": "fda26a0d6e53a13085976f4b8758c7e43dc7260c7cb548c1a3999860ec2245fa",
+          "url": "https://raw.githubusercontent.com/rickyah/ini-parser/7a71b1fde47866f17dce97802b6110eb440f8d88/LICENSE"
+        }
+      ],
+      "attribution": {
+        "authors": "Ricardo Amores Hern\u00e1ndez"
+      },
+      "licenseEvidence": {
+        "basis": "Exact package nuspec declares this upstream license file; immutable file revision predates package publication.",
+        "packageRegistration": "https://api.nuget.org/v3/registration5-semver1/ini-parser-netstandard/2.5.2.json",
+        "packagePublishedAt": "2019-02-06T17:51:43.33+00:00",
+        "upstreamHistory": "https://api.github.com/repos/rickyah/ini-parser/commits?path=LICENSE&until=2019-02-06T17%3A51%3A43.33%2B00%3A00&per_page=1",
+        "licenseRevision": "7a71b1fde47866f17dce97802b6110eb440f8d88",
+        "licenseChangedAt": "2013-12-02T21:36:33Z"
+      }
+    },
+    {
+      "id": "nuget:IonKiwi.lz4.net/1.0.15",
+      "licenseExpression": "BSD-2-Clause",
+      "reviewStatus": "approved",
+      "sourceRequired": false,
+      "licenseFiles": [
+        {
+          "path": "tools/licensing/licenses/nuget/IonKiwi-lz4.net-cf847be3bb61/LZ4.LICENSE",
+          "sha256": "cd680953c2d0933069840846381b904ef2c02e4cfe6e40e89c4417876f10b2d2",
+          "url": "https://raw.githubusercontent.com/IonKiwi/lz4.net/cf847be3bb61d6b1a35eab667525cb902394d2c9/LZ4.LICENSE"
+        }
+      ],
+      "attribution": {
+        "authors": "Ewout van der Linden"
+      },
+      "licenseEvidence": {
+        "basis": "Exact package nuspec declares this upstream license file; immutable file revision predates package publication.",
+        "packageRegistration": "https://api.nuget.org/v3/registration5-semver1/ionkiwi.lz4.net/1.0.15.json",
+        "packagePublishedAt": "2019-10-20T20:44:57.57+00:00",
+        "upstreamHistory": "https://api.github.com/repos/IonKiwi/lz4.net/commits?path=LZ4.LICENSE&until=2019-10-20T20%3A44%3A57.57%2B00%3A00&per_page=1",
+        "licenseRevision": "cf847be3bb61d6b1a35eab667525cb902394d2c9",
+        "licenseChangedAt": "2015-01-01T12:27:28Z"
+      }
+    },
+    {
+      "id": "nuget:K4os.Compression.LZ4/1.3.8",
+      "licenseExpression": "MIT",
+      "reviewStatus": "approved",
+      "sourceRequired": false,
+      "licenseFiles": [
+        {
+          "path": "tools/licensing/licenses/nuget/MiloszKrajewski-K4os.Compression.LZ4-d7a92529615b/LICENSE",
+          "sha256": "ef5a021fc2ae3658f4ad8d2526c87fb2cf394285f47abfb784cf73a27ffd9522",
+          "url": "https://raw.githubusercontent.com/MiloszKrajewski/K4os.Compression.LZ4/d7a92529615b4efd0d9440e529b4d00c120b1e5d/LICENSE"
+        }
+      ],
+      "attribution": {
+        "authors": "Milosz Krajewski",
+        "copyright": "Milosz Krajewski"
+      },
+      "licenseEvidence": {
+        "basis": "Exact package nuspec declares this upstream license file; immutable file revision predates package publication.",
+        "packageRegistration": "https://api.nuget.org/v3/registration5-semver1/k4os.compression.lz4/1.3.8.json",
+        "packagePublishedAt": "2024-03-18T07:05:12.743+00:00",
+        "upstreamHistory": "https://api.github.com/repos/MiloszKrajewski/K4os.Compression.LZ4/commits?path=LICENSE&until=2024-03-18T07%3A05%3A12.743%2B00%3A00&per_page=1",
+        "licenseRevision": "d7a92529615b4efd0d9440e529b4d00c120b1e5d",
+        "licenseChangedAt": "2018-02-02T07:28:14Z"
+      }
+    },
+    {
+      "id": "nuget:K4os.Compression.LZ4.Streams/1.3.8",
+      "licenseExpression": "MIT",
+      "reviewStatus": "approved",
+      "sourceRequired": false,
+      "licenseFiles": [
+        {
+          "path": "tools/licensing/licenses/nuget/MiloszKrajewski-K4os.Compression.LZ4-d7a92529615b/LICENSE",
+          "sha256": "ef5a021fc2ae3658f4ad8d2526c87fb2cf394285f47abfb784cf73a27ffd9522",
+          "url": "https://raw.githubusercontent.com/MiloszKrajewski/K4os.Compression.LZ4/d7a92529615b4efd0d9440e529b4d00c120b1e5d/LICENSE"
+        }
+      ],
+      "attribution": {
+        "authors": "Milosz Krajewski",
+        "copyright": "Milosz Krajewski"
+      },
+      "licenseEvidence": {
+        "basis": "Exact package nuspec declares this upstream license file; immutable file revision predates package publication.",
+        "packageRegistration": "https://api.nuget.org/v3/registration5-semver1/k4os.compression.lz4.streams/1.3.8.json",
+        "packagePublishedAt": "2024-03-18T07:05:12.077+00:00",
+        "upstreamHistory": "https://api.github.com/repos/MiloszKrajewski/K4os.Compression.LZ4/commits?path=LICENSE&until=2024-03-18T07%3A05%3A12.077%2B00%3A00&per_page=1",
+        "licenseRevision": "d7a92529615b4efd0d9440e529b4d00c120b1e5d",
+        "licenseChangedAt": "2018-02-02T07:28:14Z"
+      }
+    },
+    {
+      "id": "nuget:K4os.Hash.xxHash/1.0.8",
+      "licenseExpression": "MIT",
+      "reviewStatus": "approved",
+      "sourceRequired": false,
+      "licenseFiles": [
+        {
+          "path": "tools/licensing/licenses/nuget/MiloszKrajewski-K4os.Hash.xxHash-920fd4b74537/LICENSE",
+          "sha256": "ef5a021fc2ae3658f4ad8d2526c87fb2cf394285f47abfb784cf73a27ffd9522",
+          "url": "https://raw.githubusercontent.com/MiloszKrajewski/K4os.Hash.xxHash/920fd4b74537c43f307a8bce4253a089140a155f/LICENSE"
+        }
+      ],
+      "attribution": {
+        "authors": "Milosz Krajewski",
+        "copyright": "Milosz Krajewski"
+      },
+      "licenseEvidence": {
+        "basis": "Exact package nuspec declares this upstream license file; immutable file revision predates package publication.",
+        "packageRegistration": "https://api.nuget.org/v3/registration5-semver1/k4os.hash.xxhash/1.0.8.json",
+        "packagePublishedAt": "2022-11-08T18:10:00.763+00:00",
+        "upstreamHistory": "https://api.github.com/repos/MiloszKrajewski/K4os.Hash.xxHash/commits?path=LICENSE&until=2022-11-08T18%3A10%3A00.763%2B00%3A00&per_page=1",
+        "licenseRevision": "920fd4b74537c43f307a8bce4253a089140a155f",
+        "licenseChangedAt": "2018-01-28T21:52:44Z"
+      }
+    },
+    {
+      "id": "nuget:Dapper/2.1.66",
+      "licenseExpression": "Apache-2.0",
+      "reviewStatus": "approved",
+      "sourceRequired": false,
+      "licenseFiles": [
+        {
+          "path": "tools/licensing/licenses/nuget/DapperLib-Dapper-bd4f75b512de/License.txt",
+          "sha256": "9148ebecf47ce49421b0adc69192384b0619bcdc22c67b8bb30d26882b8a7db9",
+          "url": "https://raw.githubusercontent.com/DapperLib/Dapper/bd4f75b512de3e00f2c2631d5309961a1ecfea23/License.txt"
+        },
+        {
+          "path": "LICENSE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        }
+      ],
+      "attribution": {
+        "authors": "Sam Saffron,Marc Gravell,Nick Craver",
+        "copyright": "2019 Stack Exchange, Inc."
+      },
+      "licenseEvidence": {
+        "basis": "Exact package nuspec SPDX grant and license text at its recorded repository source commit.",
+        "sourceRevision": "bd4f75b512de3e00f2c2631d5309961a1ecfea23"
+      }
+    },
+    {
+      "id": "nuget:Tmds.DBus.Protocol/0.21.3",
+      "licenseExpression": "MIT",
+      "reviewStatus": "approved",
+      "sourceRequired": false,
+      "licenseFiles": [
+        {
+          "path": "tools/licensing/licenses/nuget/tmds-Tmds.DBus-8cb04f66c330/COPYING",
+          "sha256": "aca3b49277abcc7886ccb2f115603a9f5b15fc3f96019a10c00f2974098b210c",
+          "url": "https://raw.githubusercontent.com/tmds/Tmds.DBus/8cb04f66c330b64244e996ff68f685f27f7381a0/COPYING"
+        }
+      ],
+      "attribution": {
+        "authors": "Tom Deseyn",
+        "copyright": "Tom Deseyn"
+      },
+      "licenseEvidence": {
+        "basis": "Exact package nuspec SPDX grant and license text at its recorded repository source commit.",
+        "sourceRevision": "8cb04f66c330b64244e996ff68f685f27f7381a0"
+      }
+    },
+    {
+      "id": "nuget:miniball-devel0/1.0.4",
+      "licenseExpression": "Apache-2.0",
+      "reviewStatus": "approved",
+      "sourceRequired": false,
+      "licenseFiles": [
+        {
+          "path": "LICENSE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        }
+      ],
+      "attribution": {
+        "authors": "Lorenzo Delana"
+      },
+      "licenseEvidence": {
+        "basis": "The shipped package nuspec expressly grants Apache-2.0; full standard license is supplied without inventing upstream copyright years.",
+        "metadataPath": "{nuget}/miniball-devel0/1.0.4/miniball-devel0.nuspec",
+        "metadataSha256": "65fbb295d875e69b65b872fe880fb491c9ba7f155748ab12534ca12c077aa2aa"
+      }
+    }
+  ]
+}

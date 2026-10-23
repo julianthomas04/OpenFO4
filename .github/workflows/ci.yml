@@ -1,0 +1,214 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+  DOTNET_NOLOGO: "true"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  repo-guard:
+    name: repo-guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: repo guard (no game-derived material in the tree)
+        run: python tools/repo_guard
+
+  rust-fmt:
+    name: rust-fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: cargo fmt --check
+        working-directory: src/engine
+        run: cargo fmt --all -- --check
+
+  rust-lint:
+    name: rust-lint
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/engine
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: cargo clippy
+        working-directory: src/engine
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+  rust-test:
+    name: rust-test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/engine
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: cargo test with coverage
+        working-directory: src/engine
+        env:
+          CARGO_PROFILE_DEV_DEBUG: line-tables-only
+        run: |
+          New-Item -ItemType Directory -Force ../../coverage/rust | Out-Null
+          cargo llvm-cov --locked --lcov --output-path ../../coverage/rust/lcov.info
+      - name: Coverage summary
+        if: ${{ !cancelled() }}
+        working-directory: src/engine
+        run: |
+          cargo llvm-cov report --summary-only | Tee-Object -FilePath ../../coverage/rust/summary.txt | Out-Null
+          $total = Select-String -Path ../../coverage/rust/summary.txt -Pattern '^TOTAL' | Select-Object -First 1
+          $cells = ($total.Line -split '\s+')
+          @(
+            '## Rust coverage (reported only, no target)'
+            ''
+            '| Regions | Functions | Lines |'
+            '| --- | --- | --- |'
+            "| $($cells[3]) | $($cells[6]) | $($cells[9]) |"
+            ''
+            '<details><summary>Per file</summary>'
+            ''
+            '```text'
+            (Get-Content ../../coverage/rust/summary.txt)
+            '```'
+            '</details>'
+          ) | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: rust-coverage
+          path: coverage/rust
+          if-no-files-found: warn
+
+  rust-deps:
+    name: rust-deps
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-machete
+      - name: cargo deny
+        working-directory: src/engine
+        run: cargo deny --locked check
+      - name: cargo machete
+        working-directory: src/engine
+        run: cargo machete
+
+  python:
+    name: python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: unittest (installer collision worker)
+        run: python -m unittest discover -s tests/installer_python -v
+      - name: unittest (repo guard)
+        run: python -m unittest discover -s tests/repo_guard -v
+
+  dotnet:
+    name: dotnet
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+      - name: Restore NuGet cache
+        id: nuget-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/packages*.lock.json', 'Directory.Build.props', 'global.json', '.config/dotnet-tools.json') }}
+          restore-keys: nuget-${{ runner.os }}-
+      - name: Restore
+        run: |
+          dotnet tool restore
+          dotnet restore OpenFO4.sln --locked-mode
+          dotnet restore tools/bink2-decoder/Bink2Decoder.csproj --locked-mode
+          dotnet restore src/installer/installer.csproj --locked-mode -r win-x64 -p:OpenFO4Package=true
+          dotnet restore tools/bink2-decoder/Bink2Decoder.csproj --locked-mode -r win-x64 -p:SelfContained=true -p:PublishSingleFile=true
+      - name: Save NuGet cache
+        if: ${{ github.ref == 'refs/heads/main' && steps.nuget-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.nuget/packages
+          key: ${{ steps.nuget-cache.outputs.cache-primary-key }}
+      - name: Format check
+        run: dotnet format OpenFO4.sln --no-restore --verify-no-changes
+      - name: Build (warnings are errors)
+        run: dotnet build OpenFO4.sln -c Release --no-restore -warnaserror
+      - name: Locate naga-cli (same version as the engine's naga)
+        run: |
+          $version = ./tools/naga_version.ps1
+          "NAGA_VERSION=$version" | Add-Content -Path $env:GITHUB_ENV
+          "NAGA_ROOT=$(Join-Path $HOME '.naga-cli')" | Add-Content -Path $env:GITHUB_ENV
+      - name: Restore naga-cli
+        id: naga-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.NAGA_ROOT }}
+          key: naga-cli-${{ runner.os }}-${{ env.NAGA_VERSION }}
+      - name: Install naga-cli
+        if: ${{ steps.naga-cache.outputs.cache-hit != 'true' }}
+        run: cargo install naga-cli --version $env:NAGA_VERSION --locked --root $env:NAGA_ROOT
+      - name: Export naga for the WGSL validation tests
+        run: |
+          $naga = Join-Path $env:NAGA_ROOT 'bin/naga.exe'
+          & $naga --version
+          "OPENFO4_NAGA=$naga" | Add-Content -Path $env:GITHUB_ENV
+      - name: Save naga-cli
+        if: ${{ steps.naga-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.NAGA_ROOT }}
+          key: ${{ steps.naga-cache.outputs.cache-primary-key }}
+      - name: Test with coverage
+        run: dotnet test OpenFO4.sln -c Release --no-build --collect:"XPlat Code Coverage" --results-directory coverage/dotnet/raw
+      - name: Coverage report
+        if: ${{ !cancelled() }}
+        run: |
+          dotnet tool run reportgenerator "-reports:coverage/dotnet/raw/**/coverage.cobertura.xml" "-targetdir:coverage/dotnet/report" "-reporttypes:MarkdownSummaryGithub;TextSummary;Cobertura"
+          "## C# coverage (reported only, no target)" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          Get-Content coverage/dotnet/report/SummaryGithub.md | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: dotnet-coverage
+          path: coverage/dotnet/report
+          if-no-files-found: warn

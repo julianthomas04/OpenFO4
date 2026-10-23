@@ -1,0 +1,33 @@
+root = true
+
+[*]
+charset = utf-8
+trim_trailing_whitespace = true
+
+[*.cs]
+indent_style = space
+indent_size = 4
+
+csharp_new_line_before_open_brace = all
+csharp_new_line_before_else = true
+csharp_new_line_before_catch = true
+csharp_new_line_before_finally = true
+csharp_style_namespace_declarations = block_scoped:suggestion
+dotnet_sort_system_directives_first = true
+
+[*.cs]
+# Native-format identifiers (DXGI enums, BA2 fields) and snake_case parameters are the repo convention; renaming ~180 members would be churn.
+dotnet_diagnostic.CA1707.severity = none
+
+# Keep in step with the eol=lf rules in .gitattributes.
+[src/installer/**.{cs,axaml,resx}]
+end_of_line = lf
+
+[src/installer/*.csproj]
+end_of_line = lf
+
+[tools/bink2-decoder/**.cs]
+end_of_line = lf
+
+[tools/bink2-decoder/*.csproj]
+end_of_line = lf

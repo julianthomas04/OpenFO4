@@ -1,0 +1,2756 @@
+{
+  "shaders": [
+    {
+      "name": "dof_coc",
+      "blob": 3666,
+      "stage": "fragment",
+      "bindings": [
+        {
+          "register": "cb2",
+          "name": "dof_cb2",
+          "group": 0,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t0",
+          "name": "dof_sharp",
+          "group": 0,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t2",
+          "name": "dof_depth",
+          "group": 0,
+          "binding": 3,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "dof_blur_h",
+      "blob": 3668,
+      "stage": "fragment",
+      "bindings": [
+        {
+          "register": "cb2",
+          "name": "dof_cb2",
+          "group": 0,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t0",
+          "name": "dof_blur_source",
+          "group": 0,
+          "binding": 5,
+          "external": true
+        },
+        {
+          "register": "s0",
+          "name": "dof_blur_sampler",
+          "group": 0,
+          "binding": 6,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "dof_blur_diag",
+      "blob": 3670,
+      "stage": "fragment",
+      "bindings": [
+        {
+          "register": "cb2",
+          "name": "dof_cb2",
+          "group": 0,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t0",
+          "name": "dof_blur_source",
+          "group": 0,
+          "binding": 5,
+          "external": true
+        },
+        {
+          "register": "s0",
+          "name": "dof_blur_sampler",
+          "group": 0,
+          "binding": 6,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "dof_resolve",
+      "blob": 3672,
+      "stage": "fragment",
+      "bindings": [
+        {
+          "register": "cb2",
+          "name": "dof_cb2",
+          "group": 0,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t0",
+          "name": "dof_sharp",
+          "group": 0,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t1",
+          "name": "dof_blurred",
+          "group": 0,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "t2",
+          "name": "dof_depth",
+          "group": 0,
+          "binding": 3,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "dof_resolve_fogged",
+      "blob": 3674,
+      "stage": "fragment",
+      "bindings": [
+        {
+          "register": "cb2",
+          "name": "dof_cb2",
+          "group": 0,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t0",
+          "name": "dof_sharp",
+          "group": 0,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t1",
+          "name": "dof_blurred",
+          "group": 0,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "t2",
+          "name": "dof_depth",
+          "group": 0,
+          "binding": 3,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "ssr_raytrace_vs",
+      "blob": 3881,
+      "stage": "vertex",
+      "bindings": []
+    },
+    {
+      "name": "ssr_raytrace_ps",
+      "blob": 3882,
+      "stage": "fragment",
+      "bindings": [
+        {
+          "register": "cb0",
+          "name": "ssr_raytrace_cb0",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t0",
+          "name": "ssr_hiz",
+          "group": 1,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t1",
+          "name": "ssr_ray_anchor",
+          "group": 1,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "t2",
+          "name": "ssr_ray_view_z",
+          "group": 1,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t3",
+          "name": "ssr_scene_color",
+          "group": 0,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "s1",
+          "name": "ssr_point_sampler",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s2",
+          "name": "ssr_point_sampler",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s3",
+          "name": "ssr_scene_sampler",
+          "group": 0,
+          "binding": 2,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "ssr_blur_h_vs",
+      "blob": 3883,
+      "stage": "vertex",
+      "bindings": [
+        {
+          "register": "cb0",
+          "name": "ssr_blur_cb0",
+          "group": 0,
+          "binding": 0,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "ssr_blur_v_vs",
+      "blob": 3885,
+      "stage": "vertex",
+      "bindings": [
+        {
+          "register": "cb0",
+          "name": "ssr_blur_cb0",
+          "group": 0,
+          "binding": 0,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "ssr_blur_ps",
+      "blob": 3884,
+      "stage": "fragment",
+      "bindings": [
+        {
+          "register": "t0",
+          "name": "ssr_blur_source",
+          "group": 0,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "s0",
+          "name": "ssr_blur_sampler",
+          "group": 0,
+          "binding": 2,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "ssr_hiz_camera_cs",
+      "blob": 3860,
+      "stage": "compute",
+      "bindings": [
+        {
+          "register": "cb0",
+          "name": "ssr_linear_z",
+          "group": 0,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t0",
+          "name": "ssr_hiz_depth",
+          "group": 0,
+          "binding": 0,
+          "external": true,
+          "texture_override": "depth"
+        },
+        {
+          "register": "u0",
+          "name": "ssr_hiz_mip0",
+          "group": 0,
+          "binding": 2,
+          "external": true,
+          "uav_format": "r32float"
+        },
+        {
+          "register": "u1",
+          "name": "ssr_hiz_mip1",
+          "group": 0,
+          "binding": 3,
+          "external": true,
+          "uav_format": "r32float"
+        },
+        {
+          "register": "u2",
+          "name": "ssr_hiz_mip2",
+          "group": 0,
+          "binding": 4,
+          "external": true,
+          "uav_format": "r32float"
+        }
+      ]
+    },
+    {
+      "name": "ssr_hiz_mips_cs",
+      "blob": 3861,
+      "stage": "compute",
+      "bindings": [
+        {
+          "register": "t0",
+          "name": "ssr_hiz_mip2_in",
+          "group": 0,
+          "binding": 5,
+          "external": true
+        },
+        {
+          "register": "u0",
+          "name": "ssr_hiz_mip3",
+          "group": 0,
+          "binding": 6,
+          "external": true,
+          "uav_format": "r32float"
+        },
+        {
+          "register": "u1",
+          "name": "ssr_hiz_mip4",
+          "group": 0,
+          "binding": 7,
+          "external": true,
+          "uav_format": "r32float"
+        }
+      ]
+    },
+    {
+      "name": "water_vs_basic",
+      "blob": 1952,
+      "stage": "vertex",
+      "bindings": [
+        {
+          "register": "cb12",
+          "name": "water_frame.cb12",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb1",
+          "name": "geometry.vs_cb1",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb2",
+          "name": "geometry.vs_cb2",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "water_vs_wading",
+      "blob": 1973,
+      "stage": "vertex",
+      "bindings": [
+        {
+          "register": "cb12",
+          "name": "water_frame.cb12",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb1",
+          "name": "geometry.vs_cb1",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb2",
+          "name": "geometry.vs_cb2",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "water_vs_lod",
+      "blob": 2021,
+      "stage": "vertex",
+      "bindings": [
+        {
+          "register": "cb12",
+          "name": "water_frame.cb12",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb1",
+          "name": "geometry.vs_cb1",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb2",
+          "name": "geometry.vs_cb2",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "water_vs_lod_ssr",
+      "blob": 2024,
+      "stage": "vertex",
+      "bindings": [
+        {
+          "register": "cb12",
+          "name": "water_frame.cb12",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb1",
+          "name": "geometry.vs_cb1",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb2",
+          "name": "geometry.vs_cb2",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "water_vs_underwater",
+      "blob": 2035,
+      "stage": "vertex",
+      "bindings": [
+        {
+          "register": "cb12",
+          "name": "water_frame.cb12",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb1",
+          "name": "geometry.vs_cb1",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb2",
+          "name": "geometry.vs_cb2",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "water_vs_position",
+      "blob": 2052,
+      "stage": "vertex",
+      "bindings": [
+        {
+          "register": "cb12",
+          "name": "water_frame.cb12",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb1",
+          "name": "geometry.vs_cb1",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb2",
+          "name": "geometry.vs_cb2",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "water_vs_ray_setup",
+      "blob": 2001,
+      "stage": "vertex",
+      "bindings": [
+        {
+          "register": "cb12",
+          "name": "water_frame.cb12",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb1",
+          "name": "geometry.vs_cb1",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb2",
+          "name": "geometry.vs_cb2",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "water_vs_ray_setup_wading",
+      "blob": 2009,
+      "stage": "vertex",
+      "bindings": [
+        {
+          "register": "cb12",
+          "name": "water_frame.cb12",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb1",
+          "name": "geometry.vs_cb1",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb2",
+          "name": "geometry.vs_cb2",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "water_vs_ray_setup_lod",
+      "blob": 2023,
+      "stage": "vertex",
+      "bindings": [
+        {
+          "register": "cb12",
+          "name": "water_frame.cb12",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb1",
+          "name": "geometry.vs_cb1",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb2",
+          "name": "geometry.vs_cb2",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "water_ps_depth",
+      "blob": 2072,
+      "stage": "fragment",
+      "bindings": [
+        {
+          "register": "cb0",
+          "name": "water_frame.cb0",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb12",
+          "name": "water_frame.cb12",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb1",
+          "name": "geometry.ps_cb1",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb2",
+          "name": "geometry.ps_cb2",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t1",
+          "name": "scene_color",
+          "group": 0,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t7",
+          "name": "scene_depth",
+          "group": 0,
+          "binding": 1,
+          "external": true,
+          "texture_override": "depth"
+        },
+        {
+          "register": "s1",
+          "name": "scene_sampler",
+          "group": 0,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s7",
+          "name": "scene_depth_sampler",
+          "group": 0,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t2",
+          "name": "ripple_texture",
+          "group": 1,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t9",
+          "name": "ssr_sharp",
+          "group": 1,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "t10",
+          "name": "ssr_blurred",
+          "group": 1,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t11",
+          "name": "water_mask",
+          "group": 1,
+          "binding": 5,
+          "external": true
+        },
+        {
+          "register": "s2",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s9",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s10",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "t4",
+          "name": "normal_layer_1",
+          "group": 2,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t5",
+          "name": "normal_layer_2",
+          "group": 2,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t6",
+          "name": "normal_layer_3",
+          "group": 2,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s4",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s5",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s6",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "water_ps_depth_interior",
+      "blob": 2118,
+      "stage": "fragment",
+      "bindings": [
+        {
+          "register": "cb0",
+          "name": "water_frame.cb0",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb12",
+          "name": "water_frame.cb12",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb1",
+          "name": "geometry.ps_cb1",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb2",
+          "name": "geometry.ps_cb2",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t1",
+          "name": "scene_color",
+          "group": 0,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t7",
+          "name": "scene_depth",
+          "group": 0,
+          "binding": 1,
+          "external": true,
+          "texture_override": "depth"
+        },
+        {
+          "register": "s1",
+          "name": "scene_sampler",
+          "group": 0,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s7",
+          "name": "scene_depth_sampler",
+          "group": 0,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t2",
+          "name": "ripple_texture",
+          "group": 1,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t9",
+          "name": "ssr_sharp",
+          "group": 1,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "t10",
+          "name": "ssr_blurred",
+          "group": 1,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t11",
+          "name": "water_mask",
+          "group": 1,
+          "binding": 5,
+          "external": true
+        },
+        {
+          "register": "s2",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s9",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s10",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "t4",
+          "name": "normal_layer_1",
+          "group": 2,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t5",
+          "name": "normal_layer_2",
+          "group": 2,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t6",
+          "name": "normal_layer_3",
+          "group": 2,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s4",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s5",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s6",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "water_ps_refraction",
+      "blob": 2054,
+      "stage": "fragment",
+      "bindings": [
+        {
+          "register": "cb0",
+          "name": "water_frame.cb0",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb12",
+          "name": "water_frame.cb12",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb1",
+          "name": "geometry.ps_cb1",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb2",
+          "name": "geometry.ps_cb2",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t1",
+          "name": "scene_color",
+          "group": 0,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t7",
+          "name": "scene_depth",
+          "group": 0,
+          "binding": 1,
+          "external": true,
+          "texture_override": "depth"
+        },
+        {
+          "register": "s1",
+          "name": "scene_sampler",
+          "group": 0,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s7",
+          "name": "scene_depth_sampler",
+          "group": 0,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t2",
+          "name": "ripple_texture",
+          "group": 1,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t9",
+          "name": "ssr_sharp",
+          "group": 1,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "t10",
+          "name": "ssr_blurred",
+          "group": 1,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t11",
+          "name": "water_mask",
+          "group": 1,
+          "binding": 5,
+          "external": true
+        },
+        {
+          "register": "s2",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s9",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s10",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "t4",
+          "name": "normal_layer_1",
+          "group": 2,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t5",
+          "name": "normal_layer_2",
+          "group": 2,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t6",
+          "name": "normal_layer_3",
+          "group": 2,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s4",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s5",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s6",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "water_ps_lod",
+      "blob": 2119,
+      "stage": "fragment",
+      "bindings": [
+        {
+          "register": "cb0",
+          "name": "water_frame.cb0",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb12",
+          "name": "water_frame.cb12",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb1",
+          "name": "geometry.ps_cb1",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb2",
+          "name": "geometry.ps_cb2",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t1",
+          "name": "scene_color",
+          "group": 0,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t7",
+          "name": "scene_depth",
+          "group": 0,
+          "binding": 1,
+          "external": true,
+          "texture_override": "depth"
+        },
+        {
+          "register": "s1",
+          "name": "scene_sampler",
+          "group": 0,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s7",
+          "name": "scene_depth_sampler",
+          "group": 0,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t2",
+          "name": "ripple_texture",
+          "group": 1,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t9",
+          "name": "ssr_sharp",
+          "group": 1,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "t10",
+          "name": "ssr_blurred",
+          "group": 1,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t11",
+          "name": "water_mask",
+          "group": 1,
+          "binding": 5,
+          "external": true
+        },
+        {
+          "register": "s2",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s9",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s10",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "t4",
+          "name": "normal_layer_1",
+          "group": 2,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t5",
+          "name": "normal_layer_2",
+          "group": 2,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t6",
+          "name": "normal_layer_3",
+          "group": 2,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s4",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s5",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s6",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "water_ps_lod_ssr",
+      "blob": 2122,
+      "stage": "fragment",
+      "bindings": [
+        {
+          "register": "cb0",
+          "name": "water_frame.cb0",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb12",
+          "name": "water_frame.cb12",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb1",
+          "name": "geometry.ps_cb1",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb2",
+          "name": "geometry.ps_cb2",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t1",
+          "name": "scene_color",
+          "group": 0,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t7",
+          "name": "scene_depth",
+          "group": 0,
+          "binding": 1,
+          "external": true,
+          "texture_override": "depth"
+        },
+        {
+          "register": "s1",
+          "name": "scene_sampler",
+          "group": 0,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s7",
+          "name": "scene_depth_sampler",
+          "group": 0,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t2",
+          "name": "ripple_texture",
+          "group": 1,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t9",
+          "name": "ssr_sharp",
+          "group": 1,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "t10",
+          "name": "ssr_blurred",
+          "group": 1,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t11",
+          "name": "water_mask",
+          "group": 1,
+          "binding": 5,
+          "external": true
+        },
+        {
+          "register": "s2",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s9",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s10",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "t4",
+          "name": "normal_layer_1",
+          "group": 2,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t5",
+          "name": "normal_layer_2",
+          "group": 2,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t6",
+          "name": "normal_layer_3",
+          "group": 2,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s4",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s5",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s6",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "water_ps_underwater",
+      "blob": 2133,
+      "stage": "fragment",
+      "bindings": [
+        {
+          "register": "cb0",
+          "name": "water_frame.cb0",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb12",
+          "name": "water_frame.cb12",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb1",
+          "name": "geometry.ps_cb1",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb2",
+          "name": "geometry.ps_cb2",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t1",
+          "name": "scene_color",
+          "group": 0,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t7",
+          "name": "scene_depth",
+          "group": 0,
+          "binding": 1,
+          "external": true,
+          "texture_override": "depth"
+        },
+        {
+          "register": "s1",
+          "name": "scene_sampler",
+          "group": 0,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s7",
+          "name": "scene_depth_sampler",
+          "group": 0,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t2",
+          "name": "ripple_texture",
+          "group": 1,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t9",
+          "name": "ssr_sharp",
+          "group": 1,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "t10",
+          "name": "ssr_blurred",
+          "group": 1,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t11",
+          "name": "water_mask",
+          "group": 1,
+          "binding": 5,
+          "external": true
+        },
+        {
+          "register": "s2",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s9",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s10",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "t4",
+          "name": "normal_layer_1",
+          "group": 2,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t5",
+          "name": "normal_layer_2",
+          "group": 2,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t6",
+          "name": "normal_layer_3",
+          "group": 2,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s4",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s5",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s6",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "water_ps_depth_fog",
+      "blob": 2146,
+      "stage": "fragment",
+      "bindings": [
+        {
+          "register": "cb0",
+          "name": "water_frame.cb0",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb12",
+          "name": "water_frame.cb12",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb1",
+          "name": "geometry.ps_cb1",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb2",
+          "name": "geometry.ps_cb2",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t1",
+          "name": "scene_color",
+          "group": 0,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t7",
+          "name": "scene_depth",
+          "group": 0,
+          "binding": 1,
+          "external": true,
+          "texture_override": "depth"
+        },
+        {
+          "register": "s1",
+          "name": "scene_sampler",
+          "group": 0,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s7",
+          "name": "scene_depth_sampler",
+          "group": 0,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t2",
+          "name": "ripple_texture",
+          "group": 1,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t9",
+          "name": "ssr_sharp",
+          "group": 1,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "t10",
+          "name": "ssr_blurred",
+          "group": 1,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t11",
+          "name": "water_mask",
+          "group": 1,
+          "binding": 5,
+          "external": true
+        },
+        {
+          "register": "s2",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s9",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s10",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "t4",
+          "name": "normal_layer_1",
+          "group": 2,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t5",
+          "name": "normal_layer_2",
+          "group": 2,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t6",
+          "name": "normal_layer_3",
+          "group": 2,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s4",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s5",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s6",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "water_ps_mask_surface",
+      "blob": 2136,
+      "stage": "fragment",
+      "bindings": [
+        {
+          "register": "cb0",
+          "name": "water_frame.cb0",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb12",
+          "name": "water_frame.cb12",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb1",
+          "name": "geometry.ps_cb1",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb2",
+          "name": "geometry.ps_cb2",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t1",
+          "name": "scene_color",
+          "group": 0,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t7",
+          "name": "scene_depth",
+          "group": 0,
+          "binding": 1,
+          "external": true,
+          "texture_override": "depth"
+        },
+        {
+          "register": "s1",
+          "name": "scene_sampler",
+          "group": 0,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s7",
+          "name": "scene_depth_sampler",
+          "group": 0,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t2",
+          "name": "ripple_texture",
+          "group": 1,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t9",
+          "name": "ssr_sharp",
+          "group": 1,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "t10",
+          "name": "ssr_blurred",
+          "group": 1,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t11",
+          "name": "water_mask",
+          "group": 1,
+          "binding": 5,
+          "external": true
+        },
+        {
+          "register": "s2",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s9",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s10",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "t4",
+          "name": "normal_layer_1",
+          "group": 2,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t5",
+          "name": "normal_layer_2",
+          "group": 2,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t6",
+          "name": "normal_layer_3",
+          "group": 2,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s4",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s5",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s6",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "water_ps_mask_wading",
+      "blob": 2139,
+      "stage": "fragment",
+      "bindings": [
+        {
+          "register": "cb0",
+          "name": "water_frame.cb0",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb12",
+          "name": "water_frame.cb12",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb1",
+          "name": "geometry.ps_cb1",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb2",
+          "name": "geometry.ps_cb2",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t1",
+          "name": "scene_color",
+          "group": 0,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t7",
+          "name": "scene_depth",
+          "group": 0,
+          "binding": 1,
+          "external": true,
+          "texture_override": "depth"
+        },
+        {
+          "register": "s1",
+          "name": "scene_sampler",
+          "group": 0,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s7",
+          "name": "scene_depth_sampler",
+          "group": 0,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t2",
+          "name": "ripple_texture",
+          "group": 1,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t9",
+          "name": "ssr_sharp",
+          "group": 1,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "t10",
+          "name": "ssr_blurred",
+          "group": 1,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t11",
+          "name": "water_mask",
+          "group": 1,
+          "binding": 5,
+          "external": true
+        },
+        {
+          "register": "s2",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s9",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s10",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "t4",
+          "name": "normal_layer_1",
+          "group": 2,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t5",
+          "name": "normal_layer_2",
+          "group": 2,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t6",
+          "name": "normal_layer_3",
+          "group": 2,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s4",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s5",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s6",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "water_ps_ray_setup",
+      "blob": 2100,
+      "stage": "fragment",
+      "bindings": [
+        {
+          "register": "cb0",
+          "name": "water_frame.cb0",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb12",
+          "name": "water_frame.cb12",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb1",
+          "name": "geometry.ps_cb1",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb2",
+          "name": "geometry.ps_cb2",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t1",
+          "name": "scene_color",
+          "group": 0,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t7",
+          "name": "scene_depth",
+          "group": 0,
+          "binding": 1,
+          "external": true,
+          "texture_override": "depth"
+        },
+        {
+          "register": "s1",
+          "name": "scene_sampler",
+          "group": 0,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s7",
+          "name": "scene_depth_sampler",
+          "group": 0,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t2",
+          "name": "ripple_texture",
+          "group": 1,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t9",
+          "name": "ssr_sharp",
+          "group": 1,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "t10",
+          "name": "ssr_blurred",
+          "group": 1,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t11",
+          "name": "water_mask",
+          "group": 1,
+          "binding": 5,
+          "external": true
+        },
+        {
+          "register": "s2",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s9",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s10",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "t4",
+          "name": "normal_layer_1",
+          "group": 2,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t5",
+          "name": "normal_layer_2",
+          "group": 2,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t6",
+          "name": "normal_layer_3",
+          "group": 2,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s4",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s5",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s6",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "water_ps_ray_setup_wading",
+      "blob": 2107,
+      "stage": "fragment",
+      "bindings": [
+        {
+          "register": "cb0",
+          "name": "water_frame.cb0",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb12",
+          "name": "water_frame.cb12",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb1",
+          "name": "geometry.ps_cb1",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb2",
+          "name": "geometry.ps_cb2",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t1",
+          "name": "scene_color",
+          "group": 0,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t7",
+          "name": "scene_depth",
+          "group": 0,
+          "binding": 1,
+          "external": true,
+          "texture_override": "depth"
+        },
+        {
+          "register": "s1",
+          "name": "scene_sampler",
+          "group": 0,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s7",
+          "name": "scene_depth_sampler",
+          "group": 0,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t2",
+          "name": "ripple_texture",
+          "group": 1,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t9",
+          "name": "ssr_sharp",
+          "group": 1,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "t10",
+          "name": "ssr_blurred",
+          "group": 1,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t11",
+          "name": "water_mask",
+          "group": 1,
+          "binding": 5,
+          "external": true
+        },
+        {
+          "register": "s2",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s9",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s10",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "t4",
+          "name": "normal_layer_1",
+          "group": 2,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t5",
+          "name": "normal_layer_2",
+          "group": 2,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t6",
+          "name": "normal_layer_3",
+          "group": 2,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s4",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s5",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s6",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "water_ps_ray_setup_lod",
+      "blob": 2121,
+      "stage": "fragment",
+      "bindings": [
+        {
+          "register": "cb0",
+          "name": "water_frame.cb0",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb12",
+          "name": "water_frame.cb12",
+          "group": 1,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb1",
+          "name": "geometry.ps_cb1",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "cb2",
+          "name": "geometry.ps_cb2",
+          "group": 3,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t1",
+          "name": "scene_color",
+          "group": 0,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t7",
+          "name": "scene_depth",
+          "group": 0,
+          "binding": 1,
+          "external": true,
+          "texture_override": "depth"
+        },
+        {
+          "register": "s1",
+          "name": "scene_sampler",
+          "group": 0,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s7",
+          "name": "scene_depth_sampler",
+          "group": 0,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t2",
+          "name": "ripple_texture",
+          "group": 1,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t9",
+          "name": "ssr_sharp",
+          "group": 1,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "t10",
+          "name": "ssr_blurred",
+          "group": 1,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "t11",
+          "name": "water_mask",
+          "group": 1,
+          "binding": 5,
+          "external": true
+        },
+        {
+          "register": "s2",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s9",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "s10",
+          "name": "linear_clamp",
+          "group": 1,
+          "binding": 4,
+          "external": true
+        },
+        {
+          "register": "t4",
+          "name": "normal_layer_1",
+          "group": 2,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t5",
+          "name": "normal_layer_2",
+          "group": 2,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "t6",
+          "name": "normal_layer_3",
+          "group": 2,
+          "binding": 2,
+          "external": true
+        },
+        {
+          "register": "s4",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s5",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        },
+        {
+          "register": "s6",
+          "name": "normal_sampler",
+          "group": 2,
+          "binding": 3,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "disp_fullscreen_vs",
+      "blob": 3774,
+      "stage": "vertex",
+      "bindings": []
+    },
+    {
+      "name": "disp_tex_offset_ps",
+      "blob": 3775,
+      "stage": "fragment",
+      "bindings": [
+        {
+          "register": "cb2",
+          "name": "constants",
+          "group": 0,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t0",
+          "name": "state",
+          "group": 0,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "s0",
+          "name": "point_sampler",
+          "group": 0,
+          "binding": 2,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "disp_splat_vs",
+      "blob": 3776,
+      "stage": "vertex",
+      "bindings": [
+        {
+          "register": "cb2",
+          "name": "constants",
+          "group": 0,
+          "binding": 0,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "disp_splat_ps",
+      "blob": 3777,
+      "stage": "fragment",
+      "bindings": []
+    },
+    {
+      "name": "disp_step_vs",
+      "blob": 3780,
+      "stage": "vertex",
+      "bindings": []
+    },
+    {
+      "name": "disp_step_ps",
+      "blob": 3781,
+      "stage": "fragment",
+      "bindings": [
+        {
+          "register": "cb2",
+          "name": "constants",
+          "group": 0,
+          "binding": 0,
+          "external": true
+        },
+        {
+          "register": "t0",
+          "name": "state",
+          "group": 0,
+          "binding": 1,
+          "external": true
+        },
+        {
+          "register": "s0",
+          "name": "linear_sampler",
+          "group": 0,
+          "binding": 3,
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "grass_vs",
+      "blob": 2383,
+      "stage": "vertex",
+      "bindings": [
+        {
+          "register": "cb1",
+          "name": "grass_cb1",
+          "group": 3,
+          "binding": 10,
+          "external": true
+        },
+        {
+          "register": "cb2",
+          "name": "grass_cb2",
+          "group": 3,
+          "binding": 11,
+          "external": true
+        },
+        {
+          "register": "cb12",
+          "name": "grass_cb12",
+          "group": 3,
+          "binding": 12,
+          "external": true
+        }
+      ]
+    }
+  ],
+  "families": [
+    {
+      "family": "effect",
+      "fxp_group": 4,
+      "name": "effect_{stage}_{descriptor:x8}",
+      "vertex_count": 474,
+      "pixel_count": 968,
+      "bindings": {
+        "vertex": [
+          {
+            "register": "cb12",
+            "name": "effect_frame.cb12",
+            "external": true
+          },
+          {
+            "register": "cb0",
+            "name": "effect_frame.vs_cb0",
+            "external": true
+          },
+          {
+            "register": "cb1",
+            "name": "effect_draw.vs_cb1",
+            "external": true
+          },
+          {
+            "register": "cb2",
+            "name": "effect_draw.vs_cb2",
+            "external": true
+          },
+          {
+            "register": "cb11",
+            "name": "effect_draw.vs_cb11",
+            "external": true
+          },
+          {
+            "register": "cb10",
+            "name": "effect_bones.cb10",
+            "external": true
+          },
+          {
+            "register": "t8",
+            "name": "effect_vtx_t8",
+            "external": true
+          },
+          {
+            "register": "t9",
+            "name": "effect_vtx_t9",
+            "external": true
+          },
+          {
+            "register": "t10",
+            "name": "effect_vtx_t10",
+            "external": true
+          },
+          {
+            "register": "t11",
+            "name": "effect_vtx_t11",
+            "external": true
+          }
+        ],
+        "fragment": [
+          {
+            "register": "cb0",
+            "name": "effect_frame.ps_cb0",
+            "external": true
+          },
+          {
+            "register": "cb1",
+            "name": "effect_draw.ps_cb1",
+            "external": true
+          },
+          {
+            "register": "cb2",
+            "name": "effect_draw.ps_cb2",
+            "external": true
+          },
+          {
+            "register": "cb12",
+            "name": "effect_frame.cb12",
+            "external": true
+          },
+          {
+            "register": "t0",
+            "name": "effect_t0",
+            "external": true
+          },
+          {
+            "register": "t1",
+            "name": "effect_t1",
+            "external": true
+          },
+          {
+            "register": "t2",
+            "name": "effect_t2",
+            "external": true
+          },
+          {
+            "register": "t3",
+            "name": "effect_t3",
+            "external": true,
+            "texture_override": "depth"
+          },
+          {
+            "register": "t4",
+            "name": "effect_t4",
+            "external": true
+          },
+          {
+            "register": "t5",
+            "name": "effect_t5",
+            "external": true
+          },
+          {
+            "register": "t6",
+            "name": "effect_t6",
+            "external": true
+          },
+          {
+            "register": "t7",
+            "name": "effect_t7",
+            "external": true
+          },
+          {
+            "register": "t8",
+            "name": "effect_t8",
+            "external": true
+          },
+          {
+            "register": "s0",
+            "name": "effect_s0",
+            "external": true
+          },
+          {
+            "register": "s1",
+            "name": "effect_s1",
+            "external": true
+          },
+          {
+            "register": "s2",
+            "name": "effect_s2",
+            "external": true
+          },
+          {
+            "register": "s3",
+            "name": "effect_s3",
+            "external": true
+          },
+          {
+            "register": "s4",
+            "name": "effect_s4",
+            "external": true
+          },
+          {
+            "register": "s5",
+            "name": "effect_s5",
+            "external": true
+          },
+          {
+            "register": "s6",
+            "name": "effect_s6",
+            "external": true
+          },
+          {
+            "register": "s7",
+            "name": "effect_s7",
+            "external": true
+          },
+          {
+            "register": "s8",
+            "name": "effect_s8",
+            "external": true
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+<Project>
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <AnalysisMode>Recommended</AnalysisMode>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <NuGetLockFilePath>$(MSBuildProjectDirectory)/packages.lock.json</NuGetLockFilePath>
+    <NuGetLockFilePath Condition="'$(OpenFO4Package)' == 'true' or '$(PublishSingleFile)' == 'true'">$(MSBuildProjectDirectory)/packages.release.lock.json</NuGetLockFilePath>
+    <RestoreLockedMode Condition="'$(RestoreLockedMode)' == '' and Exists('$(NuGetLockFilePath)')">true</RestoreLockedMode>
+    <RuntimeFrameworkVersion>8.0.32</RuntimeFrameworkVersion>
+  </PropertyGroup>
+</Project>

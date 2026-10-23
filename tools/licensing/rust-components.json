@@ -1,0 +1,168 @@
+{
+  "schema": 1,
+  "components": [
+    {
+      "id": "native:rust-standard-library",
+      "version": "1.95.0 (59807616e1fa2540724bfbac14d7976d7e4a3860)",
+      "licenseExpression": "LicenseRef-Rust-Standard-Library-Notices",
+      "reviewStatus": "approved",
+      "role": "runtime",
+      "origin": {
+        "url": "https://github.com/rust-lang/rust",
+        "revision": "59807616e1fa2540724bfbac14d7976d7e4a3860",
+        "distribution": {
+          "version": "1.95.0 (59807616e 2026-04-14)",
+          "url": "https://static.rust-lang.org/dist/2026-04-16/rust-std-1.95.0-x86_64-pc-windows-msvc.tar.xz",
+          "sha256": "7c659bdc88646e7e1befa370881bd311be87b26f006933a28b40dcab2f7cc832"
+        }
+      },
+      "modifications": "none; installed Rust standard library. The vendor copyright inventory specifies Apache-2.0 OR MIT and per-file/dependency exceptions; full inventory and all accompanying reference licence texts are retained conservatively, without claiming other-target entries were linked.",
+      "sourceRequired": false,
+      "licenseFiles": [
+        {
+          "path": "tools/licensing/licenses/native/rust-1.95.0/COPYRIGHT-library.html",
+          "sha256": "90567e2718bf7fd65a71a3a43c5596488e80e5f51ed02bfea6fec54458b5f3d1",
+          "installedOrigin": {
+            "path": "share/doc/rust/COPYRIGHT-library.html",
+            "sha256": "90567e2718bf7fd65a71a3a43c5596488e80e5f51ed02bfea6fec54458b5f3d1"
+          }
+        },
+        {
+          "path": "tools/licensing/licenses/native/rust-1.95.0/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "installedOrigin": {
+            "path": "share/doc/rust/licenses/Apache-2.0.txt",
+            "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+          }
+        },
+        {
+          "path": "tools/licensing/licenses/native/rust-1.95.0/BSD-2-Clause.txt",
+          "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df",
+          "installedOrigin": {
+            "path": "share/doc/rust/licenses/BSD-2-Clause.txt",
+            "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df"
+          }
+        },
+        {
+          "path": "tools/licensing/licenses/native/rust-1.95.0/CC-BY-SA-4.0.txt",
+          "sha256": "23ee78c8bae49cf08ea2f0c84945c66b987ebe4520881fb51b3dad4fb43d07c2",
+          "installedOrigin": {
+            "path": "share/doc/rust/licenses/CC-BY-SA-4.0.txt",
+            "sha256": "23ee78c8bae49cf08ea2f0c84945c66b987ebe4520881fb51b3dad4fb43d07c2"
+          }
+        },
+        {
+          "path": "tools/licensing/licenses/native/rust-1.95.0/GCC-exception-3.1.txt",
+          "sha256": "a3966c9410ef94a1efbfa9ec04e9c1994026a70623fbf0885ce36737bfba3b54",
+          "installedOrigin": {
+            "path": "share/doc/rust/licenses/GCC-exception-3.1.txt",
+            "sha256": "a3966c9410ef94a1efbfa9ec04e9c1994026a70623fbf0885ce36737bfba3b54"
+          }
+        },
+        {
+          "path": "tools/licensing/licenses/native/rust-1.95.0/GPL-2.0-only.txt",
+          "sha256": "54b212ba1f97f6948fa5486239ab505dd820b02e50cbfd296b4062c8609a70af",
+          "installedOrigin": {
+            "path": "share/doc/rust/licenses/GPL-2.0-only.txt",
+            "sha256": "54b212ba1f97f6948fa5486239ab505dd820b02e50cbfd296b4062c8609a70af"
+          }
+        },
+        {
+          "path": "tools/licensing/licenses/native/rust-1.95.0/GPL-3.0-or-later.txt",
+          "sha256": "05315fce6c35f79b8a35454828995fa26336f235895ac64557abc028f4ffcea2",
+          "installedOrigin": {
+            "path": "share/doc/rust/licenses/GPL-3.0-or-later.txt",
+            "sha256": "05315fce6c35f79b8a35454828995fa26336f235895ac64557abc028f4ffcea2"
+          }
+        },
+        {
+          "path": "tools/licensing/licenses/native/rust-1.95.0/ISC.txt",
+          "sha256": "0ff61769b238634e042ab759dddfd104a8e69d091e3600ae3410e401a6164381",
+          "installedOrigin": {
+            "path": "share/doc/rust/licenses/ISC.txt",
+            "sha256": "0ff61769b238634e042ab759dddfd104a8e69d091e3600ae3410e401a6164381"
+          }
+        },
+        {
+          "path": "tools/licensing/licenses/native/rust-1.95.0/LLVM-exception.txt",
+          "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e",
+          "installedOrigin": {
+            "path": "share/doc/rust/licenses/LLVM-exception.txt",
+            "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e"
+          }
+        },
+        {
+          "path": "tools/licensing/licenses/native/rust-1.95.0/MIT.txt",
+          "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0",
+          "installedOrigin": {
+            "path": "share/doc/rust/licenses/MIT.txt",
+            "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+          }
+        },
+        {
+          "path": "tools/licensing/licenses/native/rust-1.95.0/NCSA.txt",
+          "sha256": "39cb0234065c92b9e6cee3830cbb52b1aa289aa8fe9ba2e66730fec5cf05c630",
+          "installedOrigin": {
+            "path": "share/doc/rust/licenses/NCSA.txt",
+            "sha256": "39cb0234065c92b9e6cee3830cbb52b1aa289aa8fe9ba2e66730fec5cf05c630"
+          }
+        },
+        {
+          "path": "tools/licensing/licenses/native/rust-1.95.0/OFL-1.1.txt",
+          "sha256": "8eea8287e5876b539670cadb82e99f9a7afddec6f6730811be1daf25d2e9bcfd",
+          "installedOrigin": {
+            "path": "share/doc/rust/licenses/OFL-1.1.txt",
+            "sha256": "8eea8287e5876b539670cadb82e99f9a7afddec6f6730811be1daf25d2e9bcfd"
+          }
+        },
+        {
+          "path": "tools/licensing/licenses/native/rust-1.95.0/Unicode-3.0.txt",
+          "sha256": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443",
+          "installedOrigin": {
+            "path": "share/doc/rust/licenses/Unicode-3.0.txt",
+            "sha256": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443"
+          }
+        }
+      ],
+      "sourceInputs": [],
+      "runtimeFiles": []
+    },
+    {
+      "id": "native:rust-compiler-builtins",
+      "version": "0.1.160 (Rust 1.95.0 sysroot)",
+      "licenseExpression": "MIT AND (Apache-2.0 WITH LLVM-exception) AND (MIT OR Apache-2.0)",
+      "reviewStatus": "approved",
+      "role": "runtime",
+      "origin": {
+        "url": "https://github.com/rust-lang/rust/tree/59807616e1fa2540724bfbac14d7976d7e4a3860/library/compiler-builtins",
+        "distribution": {
+          "version": "1.95.0 (59807616e 2026-04-14)",
+          "url": "https://static.rust-lang.org/dist/2026-04-16/rust-src-1.95.0.tar.xz",
+          "sha256": "67b09138c8db96afc4bbfc69ea771ac9a091fd777698acb43f6dfd9fb7dea363"
+        }
+      },
+      "modifications": "none; compiler_builtins supplied by the selected Rust sysroot. This is separate from Cargo libm and other registry packages. Exact vendor manifest and complete compound grant retained.",
+      "sourceRequired": false,
+      "licenseFiles": [
+        {
+          "path": "tools/licensing/licenses/native/rust-1.95.0/compiler-builtins-LICENSE.txt",
+          "sha256": "ab6eec6caf0fa5775e411c7a8bc6a45c4ef2956b0980b157ab74fc5cd62a928b",
+          "installedOrigin": {
+            "path": "lib/rustlib/src/rust/library/compiler-builtins/LICENSE.txt",
+            "sha256": "ab6eec6caf0fa5775e411c7a8bc6a45c4ef2956b0980b157ab74fc5cd62a928b"
+          }
+        },
+        {
+          "path": "tools/licensing/licenses/native/rust-1.95.0/compiler-builtins-Cargo.toml",
+          "sha256": "4d434596c0576fd1454e2de88f826d91518688fa2c3c46fff75c1f31471c4b01",
+          "installedOrigin": {
+            "path": "lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins/Cargo.toml",
+            "sha256": "4d434596c0576fd1454e2de88f826d91518688fa2c3c46fff75c1f31471c4b01"
+          }
+        }
+      ],
+      "sourceInputs": [],
+      "runtimeFiles": []
+    }
+  ]
+}

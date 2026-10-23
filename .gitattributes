@@ -1,0 +1,41 @@
+# These evidence bytes are SHA256-pinned. Preserve them on every checkout.
+/LICENSE -text
+/tools/licensing/licenses/** -text
+/tools/ffdec/** -text
+/src/engine/Cargo.lock -text
+/src/installer/packages.lock.json -text
+/src/installer/packages.release.lock.json -text
+/tests/installer.Tests/packages.lock.json -text
+/tools/bink2-decoder/packages.lock.json -text
+/tools/bink2-decoder/packages.release.lock.json -text
+/tools/librempeg/toolchain.lock.json -text
+/tools/bink2-decoder/LICENSE -text
+/tools/bink2-decoder/COPYING.LGPLv2.1 -text
+/tools/bink2-decoder/THIRD_PARTY_NOTICES.md -text
+
+# Compiler/resource inputs must have the same bytes in Git archives and builds.
+/src/installer/**/*.cs text eol=lf
+/src/installer/**/*.axaml text eol=lf
+/src/installer/**/*.resx text eol=lf
+/src/installer/*.csproj text eol=lf
+/tools/bink2-decoder/**/*.cs text eol=lf
+/tools/bink2-decoder/*.csproj text eol=lf
+/Directory.Build.props text eol=lf
+/global.json text eol=lf
+
+# Preserve pinned imported helper bytes; keep release tooling reproducible.
+/third_party/pynifly/** -text
+/tools/licensing/*.py text eol=lf
+/tools/licensing/*.ps1 text eol=lf
+/tools/licensing/evidence/** -text
+/src/engine/**/*.rs text eol=lf
+/src/engine/**/*.toml text eol=lf
+/src/engine/**/*.wgsl text eol=lf
+/src/engine/**/*.json text eol=lf
+/tools/licensing/*.json -text
+/src/installer/BA2Sharp/SOURCE.md -text
+/src/installer/python/*.py text eol=lf
+/src/installer/file_converters/esm_schema.sql text eol=lf
+/src/installer/shader_translator/shader_manifest.json text eol=lf
+/src/installer/packaging/THIRD_PARTY_NOTICES.txt text eol=lf
+/build-release.ps1 text eol=lf

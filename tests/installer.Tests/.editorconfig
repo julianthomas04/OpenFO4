@@ -1,0 +1,3 @@
+[*.cs]
+# Test data is written inline; hoisting every InlineData / expected array into a static field hurts readability.
+dotnet_diagnostic.CA1861.severity = none
