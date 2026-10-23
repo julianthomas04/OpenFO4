@@ -104,7 +104,7 @@ mod tests {
         let capacity = pool.draws()[0].vertices.capacity();
         pool.clear();
         pool.push_with(&Arc::new(stub_material()), |draw| {
-            assert!(draw.vertices.is_empty());
+            assert_eq!(draw.vertices, []);
             assert_eq!(draw.vertices.capacity(), capacity);
         });
         assert_eq!(pool.draws().len(), 1);

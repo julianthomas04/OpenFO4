@@ -783,7 +783,7 @@ mod tests {
             ]
         );
         let clean = GameIni::from_texts(["iMinGrassSize=40\n"]);
-        assert!(ignored_settings(&clean).is_empty());
+        assert_eq!(ignored_settings(&clean), []);
     }
 
     #[test]

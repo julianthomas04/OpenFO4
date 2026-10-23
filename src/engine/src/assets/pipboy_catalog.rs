@@ -767,7 +767,7 @@ mod tests {
         let ItemDetails::Weapon(stats) = &build_items(&[bat]).unwrap()[0].details else {
             panic!("not a weapon");
         };
-        assert!(stats.damage.is_empty());
+        assert_eq!(stats.damage, []);
         assert_eq!(stats.ammo_name, None);
     }
 
@@ -896,6 +896,6 @@ mod tests {
         library
             .require_marker_clips(map.markers.iter().map(|marker| marker.marker_type))
             .unwrap();
-        assert!(!catalog.items.is_empty());
+        assert_ne!(catalog.items, []);
     }
 }

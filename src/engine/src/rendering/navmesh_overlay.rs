@@ -474,6 +474,6 @@ mod tests {
 
     #[test]
     fn empty_world_has_no_lines() {
-        assert!(build_lines(&NavWorld::new()).is_empty());
+        assert_eq!(build_lines(&NavWorld::new()), []);
     }
 }

@@ -846,7 +846,7 @@ mod tests {
             player_ready: true,
             ..Readiness::default()
         };
-        assert!(run_load(&mut flow, 50, player_only).is_empty());
+        assert_eq!(run_load(&mut flow, 50, player_only), []);
         assert_eq!(flow.phase(), Phase::Loading);
     }
 

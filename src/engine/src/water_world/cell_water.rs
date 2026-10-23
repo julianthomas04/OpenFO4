@@ -171,6 +171,6 @@ mod tests {
             &cells,
             &chain(),
         );
-        assert!(surfaces.is_empty());
+        assert_eq!(surfaces, []);
     }
 }

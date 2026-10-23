@@ -128,7 +128,7 @@ mod tests {
         let owners = owners(&inv, "part-b");
         let named: Vec<_> = owners.iter().map(|(i, n)| (i.name.as_str(), *n)).collect();
         assert_eq!(named, [("item-a", 4), ("item-b", 6)]);
-        assert!(super::owners(&inv, "part-c").is_empty());
+        assert_eq!(super::owners(&inv, "part-c"), []);
     }
 
     #[test]

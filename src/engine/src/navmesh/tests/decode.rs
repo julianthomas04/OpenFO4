@@ -100,7 +100,7 @@ fn triangles_neighbours_and_flags_pass_through() {
     assert_eq!(source.triangles, vec![[0, 1, 2], [0, 2, 3]]);
     assert_eq!(source.neighbours, vec![[-1, 1, -1], [0, -1, -1]]);
     assert_eq!(source.flags, vec![PREFERRED, WATER]);
-    assert!(source.edge_links.is_empty());
+    assert_eq!(source.edge_links, []);
 }
 
 const QUAD_VERTICES: [[f32; 3]; 4] = [
@@ -151,7 +151,7 @@ fn an_unreferenced_link_is_ignored() {
     let mut record = quad();
     record.edge_link_count = 1;
     record.edge_links = vec![0, 0, 0, 0, 1, 0, 0, 0];
-    assert!(decode(&record).unwrap().edge_links.is_empty());
+    assert_eq!(decode(&record).unwrap().edge_links, []);
 }
 
 #[test]
@@ -233,7 +233,7 @@ fn every_blob_length_is_checked_against_its_count() {
 fn empty_blobs_decode_to_an_empty_source_that_the_mesh_rejects() {
     let record = record(&[], &[], &[], &[]);
     let source = decode(&record).unwrap();
-    assert!(source.triangles.is_empty());
+    assert_eq!(source.triangles, [] as [[u16; 3]; 0]);
     assert!(NavMesh::new(source).is_err());
 }
 

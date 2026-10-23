@@ -497,7 +497,7 @@ fn the_list_is_tinted_with_the_hud_colour_throughout() {
             .is_empty(),
         "no red or blue anywhere: every element is multiplied with the HUD green"
     );
-    assert!(!pixels.positions_where(|[_, g, _]| g == 255).is_empty());
+    assert_ne!(pixels.positions_where(|[_, g, _]| g == 255), []);
 }
 
 /// The extreme pixels `(left, right, top, bottom)` of `lit`.

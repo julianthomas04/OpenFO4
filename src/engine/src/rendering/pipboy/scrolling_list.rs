@@ -1033,7 +1033,7 @@ mod tests {
         let layout = layout(10);
         let view = ListView::new(&layout, 8);
         assert_eq!(view.rows(0), [(0, 0.0), (1, 30.0), (2, 60.0)]);
-        assert!(ListView::new(&layout, 0).rows(0).is_empty());
+        assert_eq!(ListView::new(&layout, 0).rows(0), []);
     }
 
     #[test]

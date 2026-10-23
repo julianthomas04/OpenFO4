@@ -149,7 +149,7 @@ fn a_stack_up_to_the_threshold_drops_one_at_once_and_a_bigger_one_asks_how_many(
     let mut page = drawn(InventoryCategory::Weapons, &mut harness, &model);
     harness.send(&mut page, &model, NavInput::Hint(drop));
     assert!(page.is_modal());
-    assert!(harness.take_actions().is_empty());
+    assert_eq!(harness.take_actions(), []);
     harness.send(&mut page, &model, NavInput::PrevSubTab);
     harness.send(&mut page, &model, NavInput::Hint(HintKey::Enter));
     assert_eq!(
@@ -172,7 +172,7 @@ fn cancelling_the_quantity_prompt_drops_nothing() {
     harness.send(&mut page, &model, NavInput::Hint(drop));
     harness.send(&mut page, &model, NavInput::Hint(HintKey::Tab));
     assert!(!page.is_modal());
-    assert!(harness.take_actions().is_empty());
+    assert_eq!(harness.take_actions(), []);
 }
 
 #[test]
@@ -220,7 +220,7 @@ fn the_favourite_key_closes_the_menu_it_opened() {
     harness.send(&mut page, &model, NavInput::Hint(key));
     harness.send(&mut page, &model, NavInput::Hint(key));
     assert!(!page.is_modal());
-    assert!(harness.take_actions().is_empty());
+    assert_eq!(harness.take_actions(), []);
 }
 
 fn junk(id: u32) -> InventoryItem {
@@ -317,6 +317,6 @@ fn the_installed_layout_resolves_every_inventory_key() {
     assert!((layout.favourites.close_delay_seconds - 0.45).abs() < 1e-6);
     assert!(layout.owners_area.height() > 0.0);
     assert!(layout.hints.drop.chars().all(|c| c != '$'));
-    assert!(!layout.hints.sort(SortMode::Weight).is_empty());
+    assert_ne!(layout.hints.sort(SortMode::Weight), "");
     assert!(layout.card.spacing.is_finite());
 }

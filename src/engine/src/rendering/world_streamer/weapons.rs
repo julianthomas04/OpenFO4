@@ -595,7 +595,7 @@ mod tests {
             Some(connect_info(path))
         });
         assert_eq!(placed.skip, Some(Skip::NoCollider));
-        assert!(placed.parts.is_empty());
+        assert_eq!(placed.parts, []);
         assert_eq!(
             placed.trace_line("R"),
             "weapon_trace ref=R base=004822:Fallout4.esm edid=10mm parts=0 meshes=0 colliders=0 mass=0.000 body=none unmatched=[] unresolved=[] no_root=0 skipped=no_collider"

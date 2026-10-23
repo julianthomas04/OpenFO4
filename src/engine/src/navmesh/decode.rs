@@ -123,7 +123,9 @@ fn decode_vertices(record: &NavMeshRecord) -> Result<Vec<Vec3>, DecodeError> {
     )?;
     Ok(record
         .vertices
-        .chunks_exact(VERTEX_STRIDE)
+        .as_chunks::<VERTEX_STRIDE>()
+        .0
+        .iter()
         .map(|v| position_to_engine(le_f32(&v[0..4]), le_f32(&v[4..8]), le_f32(&v[8..12])))
         .collect())
 }
@@ -137,7 +139,9 @@ fn decode_raw_edge_links(record: &NavMeshRecord) -> Result<Vec<RawEdgeLink>, Dec
     )?;
     Ok(record
         .edge_links
-        .chunks_exact(EDGE_LINK_STRIDE)
+        .as_chunks::<EDGE_LINK_STRIDE>()
+        .0
+        .iter()
         .map(|link| RawEdgeLink {
             link_type: u32::from(link[0]),
             target_form_id: le_u32(&link[4..8]),
@@ -165,7 +169,13 @@ fn decode_triangles(
     let mut neighbours = Vec::with_capacity(record.triangle_count);
     let mut flags = Vec::with_capacity(record.triangle_count);
     let mut edge_links = Vec::new();
-    for (index, bytes) in record.triangles.chunks_exact(TRIANGLE_STRIDE).enumerate() {
+    for (index, bytes) in record
+        .triangles
+        .as_chunks::<TRIANGLE_STRIDE>()
+        .0
+        .iter()
+        .enumerate()
+    {
         let triangle_flags = le_u16(&bytes[12..14]);
         let mut edges = [
             le_i16(&bytes[6..8]),
@@ -215,7 +225,9 @@ fn decode_door_links(record: &NavMeshRecord) -> Result<Vec<DoorLinkSource>, Deco
     )?;
     Ok(record
         .door_links
-        .chunks_exact(DOOR_LINK_STRIDE)
+        .as_chunks::<DOOR_LINK_STRIDE>()
+        .0
+        .iter()
         .map(|door| DoorLinkSource {
             triangle: le_u16(&door[0..2]),
             door_ref_form_id: le_u32(&door[2..6]),

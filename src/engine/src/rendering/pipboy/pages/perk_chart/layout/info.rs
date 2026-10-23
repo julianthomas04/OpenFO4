@@ -207,8 +207,8 @@ mod tests {
     #[test]
     fn the_menus_words_are_resolved_through_the_translation_table() {
         let info = info();
-        assert!(!info.confirm_prompt.is_empty());
-        assert!(!info.requirements_not_met.is_empty());
+        assert_ne!(info.confirm_prompt, "");
+        assert_ne!(info.requirements_not_met, "");
         assert_ne!(info.confirm_prompt, info.requirements_not_met);
     }
 

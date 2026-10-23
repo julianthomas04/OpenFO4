@@ -911,8 +911,10 @@ mod tests {
         )?;
         Some(
             texels
-                .chunks_exact(4)
-                .map(|texel| f32::from_le_bytes([texel[0], texel[1], texel[2], texel[3]]))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|texel| f32::from_le_bytes(*texel))
                 .collect(),
         )
     }
@@ -1132,7 +1134,9 @@ mod tests {
             },
         );
         bytes
-            .chunks_exact(8)
+            .as_chunks::<8>()
+            .0
+            .iter()
             .map(|texel| {
                 let channel = |index: usize| {
                     f16_bits_to_f32(u16::from_le_bytes([texel[index * 2], texel[index * 2 + 1]]))

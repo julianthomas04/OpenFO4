@@ -312,14 +312,14 @@ mod tests {
         let mut clock = FootstepClock::default();
         let output = clock.update(&moving());
         assert!(output.tags.is_empty() && output.gait.is_none());
-        assert!(run(&mut clock, &moving(), 120, 1).is_empty());
+        assert_eq!(run(&mut clock, &moving(), 120, 1), []);
     }
 
     #[test]
     fn standing_still_is_silent_and_starting_to_move_restarts_the_cycle() {
         let mut clock = installed();
         run(&mut clock, &moving(), 10, 1);
-        assert!(run(&mut clock, &standing(), 40, 11).is_empty());
+        assert_eq!(run(&mut clock, &standing(), 40, 11), []);
         let events = run(&mut clock, &moving(), 25, 51);
         assert_eq!(events, vec![(56, FootRight), (71, FootLeft)]);
     }
@@ -386,7 +386,7 @@ mod tests {
     fn airborne_ticks_are_silent_and_a_brief_flicker_keeps_the_stride() {
         let mut clock = installed();
         run(&mut clock, &moving(), 4, 1);
-        assert!(run(&mut clock, &airborne(), 3, 5).is_empty());
+        assert_eq!(run(&mut clock, &airborne(), 3, 5), []);
         // Phase kept at 4 ticks: the right mark (0.09 s) comes at the 6th moving tick overall.
         assert_eq!(run(&mut clock, &moving(), 3, 8), vec![(9, FootRight)]);
     }
@@ -399,7 +399,7 @@ mod tests {
             completed: false,
             ..moving()
         };
-        assert!(run(&mut clock, &paused, 3, 5).is_empty());
+        assert_eq!(run(&mut clock, &paused, 3, 5), []);
         assert_eq!(run(&mut clock, &moving(), 7, 8), vec![(13, FootRight)]);
     }
 
@@ -413,7 +413,7 @@ mod tests {
             ..moving()
         };
         assert_eq!(run(&mut clock, &launch, 1, 5), vec![(5, JumpUp)]);
-        assert!(run(&mut clock, &airborne(), 30, 6).is_empty());
+        assert_eq!(run(&mut clock, &airborne(), 30, 6), []);
         let after = run(&mut clock, &moving(), 12, 36);
         assert_eq!(after, vec![(40, JumpDown), (41, FootRight)]);
     }
@@ -432,9 +432,9 @@ mod tests {
         let mut clock = installed();
         run(&mut clock, &moving(), 1, 1);
         run(&mut clock, &airborne(), 20, 2);
-        assert!(run(&mut clock, &standing(), 2, 22).is_empty());
-        assert!(run(&mut clock, &airborne(), 1, 24).is_empty());
-        assert!(run(&mut clock, &standing(), 8, 25).is_empty());
+        assert_eq!(run(&mut clock, &standing(), 2, 22), []);
+        assert_eq!(run(&mut clock, &airborne(), 1, 24), []);
+        assert_eq!(run(&mut clock, &standing(), 8, 25), []);
     }
 
     #[test]
@@ -458,7 +458,7 @@ mod tests {
         };
         run(&mut clock, &paused, 1, 1);
         run(&mut clock, &airborne(), 20, 2);
-        assert!(run(&mut clock, &standing(), 10, 22).is_empty());
+        assert_eq!(run(&mut clock, &standing(), 10, 22), []);
     }
 
     #[test]
@@ -466,7 +466,7 @@ mod tests {
         let mut clock = installed();
         run(&mut clock, &standing(), 1, 1);
         run(&mut clock, &airborne(), COYOTE_TICKS, 2);
-        assert!(run(&mut clock, &standing(), 10, 20).is_empty());
+        assert_eq!(run(&mut clock, &standing(), 10, 20), []);
     }
 
     #[test]

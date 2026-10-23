@@ -332,7 +332,7 @@ mod tests {
         };
         let entries = apparel_entries(&own, Some(&other));
         assert!(matches!(&entries[0], CardEntry::Multi { chips, .. } if chips.len() == 1));
-        assert!(apparel_entries(&own, None).is_empty());
+        assert_eq!(apparel_entries(&own, None), []);
     }
 
     #[test]

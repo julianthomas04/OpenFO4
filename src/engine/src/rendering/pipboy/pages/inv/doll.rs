@@ -465,7 +465,7 @@ mod tests {
         };
         let torso = slot_resists(&inventory, DollSlot::Torso);
         assert_eq!(torso.len(), 1);
-        assert!(slot_resists(&inventory, DollSlot::LeftLeg).is_empty());
+        assert_eq!(slot_resists(&inventory, DollSlot::LeftLeg), []);
         assert_eq!(slot_resists(&inventory, DollSlot::Helmet).len(), 1);
     }
 

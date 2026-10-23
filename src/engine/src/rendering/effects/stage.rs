@@ -894,7 +894,7 @@ mod tests {
 
     #[test]
     fn no_draws_have_no_order() {
-        assert!(draw_order(&[]).is_empty());
+        assert_eq!(draw_order(&[]), [] as [usize; 0]);
     }
 
     fn view() -> EffectView {

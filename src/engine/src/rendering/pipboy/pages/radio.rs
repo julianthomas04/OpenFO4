@@ -557,6 +557,6 @@ mod tests {
         assert_eq!(page.hints(&snapshot(&tuned)).len(), 1);
         let empty = model(Vec::new(), None);
         harness.draw(&mut page, &empty);
-        assert!(page.hints(&snapshot(&empty)).is_empty());
+        assert_eq!(page.hints(&snapshot(&empty)), []);
     }
 }

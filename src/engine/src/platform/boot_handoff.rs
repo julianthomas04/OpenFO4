@@ -101,7 +101,7 @@ mod tests {
                 ("fell back to defaults".to_owned(), ToastType::Warning),
             ]
         );
-        assert!(toasts.is_empty());
+        assert_eq!(toasts, []);
     }
 
     #[test]

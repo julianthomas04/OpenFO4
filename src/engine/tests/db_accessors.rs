@@ -120,17 +120,17 @@ fn every_accessor_query_runs_against_the_real_schema() {
     assert!(db.get_lighting_templates().unwrap().is_empty());
     assert!(db.get_static_collections().unwrap().is_empty());
     assert!(db.get_worldspaces().unwrap().is_empty());
-    assert!(db.get_perks().unwrap().is_empty());
-    assert!(db.get_perk_chart().unwrap().is_empty());
-    assert!(db.get_special_attributes().unwrap().is_empty());
-    assert!(db.get_items().unwrap().is_empty());
-    assert!(db.get_map_markers("ws").unwrap().is_empty());
+    assert_eq!(db.get_perks().unwrap(), []);
+    assert_eq!(db.get_perk_chart().unwrap(), []);
+    assert_eq!(db.get_special_attributes().unwrap(), []);
+    assert_eq!(db.get_items().unwrap(), []);
+    assert_eq!(db.get_map_markers("ws").unwrap(), []);
     assert_eq!(db.get_worldspace_map_image("ws").unwrap(), None);
-    assert!(db.get_waters().unwrap().is_empty());
-    assert!(db.get_placed_water_refs("c").unwrap().is_empty());
-    assert!(db.get_cells_with_placed_water(5).unwrap().is_empty());
+    assert_eq!(db.get_waters().unwrap(), []);
+    assert_eq!(db.get_placed_water_refs("c").unwrap(), []);
+    assert_eq!(db.get_cells_with_placed_water(5).unwrap(), []);
     assert!(db.get_exterior_cell_waters("w").unwrap().is_empty());
-    assert!(db.get_lod_water_quads("w").unwrap().is_empty());
+    assert_eq!(db.get_lod_water_quads("w").unwrap(), []);
     assert!(db.get_landscape_textures().unwrap().is_empty());
     assert!(db.get_base_material_swaps().unwrap().is_empty());
     assert!(db.get_material_swap_entries().unwrap().is_empty());
@@ -1741,7 +1741,7 @@ fn lod_water_quads_are_the_rows_of_the_worldspace_ordered_by_cell() {
         .map(|quad| (quad.cell_x, quad.cell_y, quad.height))
         .collect();
     assert_eq!(cells, [(-2, 3, 450.0), (-2, 4, 1300.0), (3, -1, 450.0)]);
-    assert!(db.get_lod_water_quads("NONE").unwrap().is_empty());
+    assert_eq!(db.get_lod_water_quads("NONE").unwrap(), []);
 }
 
 #[test]
@@ -2282,7 +2282,7 @@ fn map_markers_are_filtered_by_worldspace_and_carry_raw_type_flags_and_position(
     assert_eq!((sanctuary.marker_type, sanctuary.flags), (11, 0x03));
     assert_eq!(sanctuary.position, [-80768.0, 88175.0, 12.5]);
     assert_eq!(sanctuary.worldspace, COMMONWEALTH);
-    assert!(db.get_map_markers("NONE").unwrap().is_empty());
+    assert_eq!(db.get_map_markers("NONE").unwrap(), []);
 }
 
 #[test]
@@ -2352,10 +2352,10 @@ fn a_database_without_the_pipboy_tables_reports_the_groups_absent_and_reads_noth
     assert!(!schema.worldspace_map_image_column_present);
 
     let db = client(conn);
-    assert!(db.get_special_attributes().unwrap().is_empty());
-    assert!(db.get_perks().unwrap().is_empty());
-    assert!(db.get_perk_chart().unwrap().is_empty());
-    assert!(db.get_map_markers(COMMONWEALTH).unwrap().is_empty());
+    assert_eq!(db.get_special_attributes().unwrap(), []);
+    assert_eq!(db.get_perks().unwrap(), []);
+    assert_eq!(db.get_perk_chart().unwrap(), []);
+    assert_eq!(db.get_map_markers(COMMONWEALTH).unwrap(), []);
     assert_eq!(db.get_worldspace_map_image(COMMONWEALTH).unwrap(), None);
     assert!(
         db.get_items().unwrap().is_empty(),
@@ -2525,12 +2525,7 @@ fn all_navmeshes_span_every_cell() {
 fn a_cell_without_navmeshes_yields_no_rows() {
     let conn = navmesh_connection();
     insert(&conn, "navigation_meshes", &navmesh_row("N1", 1, "CELL_A"));
-    assert!(
-        client(conn)
-            .get_navmeshes_for_cell("CELL_Z")
-            .unwrap()
-            .is_empty()
-    );
+    assert_eq!(client(conn).get_navmeshes_for_cell("CELL_Z").unwrap(), []);
 }
 
 #[test]
@@ -2544,7 +2539,7 @@ fn the_catalog_of_a_stale_database_is_empty_and_not_an_error() {
     let catalog =
         openfo4::assets::pipboy_catalog::load_pipboy_catalog(&client(stale_pipboy_connection()))
             .unwrap();
-    assert!(catalog.perks.is_empty());
+    assert_eq!(catalog.perks, []);
     assert!(catalog.world_map.is_none());
     assert_eq!(catalog, openfo4::sim::pipboy::PipBoyCatalog::default());
 }
@@ -2691,8 +2686,8 @@ fn databases_without_navmesh_geometry_columns_load_no_navmeshes() {
     insert(&conn, "navigation_meshes", &[("form_key", text("OLD"))]);
     let db = client(conn);
     assert!(!db.schema().navmesh_columns_present);
-    assert!(db.get_navmeshes_for_cell("CELL_A").unwrap().is_empty());
-    assert!(db.get_all_navmeshes().unwrap().is_empty());
+    assert_eq!(db.get_navmeshes_for_cell("CELL_A").unwrap(), []);
+    assert_eq!(db.get_all_navmeshes().unwrap(), []);
 }
 
 #[test]

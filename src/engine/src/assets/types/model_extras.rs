@@ -647,7 +647,7 @@ mod tests {
         let extras = ModelExtras::from_document(&document(&hidden_document()));
         assert_eq!(extras.addon_nodes.len(), 1);
         assert_eq!(extras.addon_nodes[0].node_name, "Visible");
-        assert!(extras.lights.is_empty());
+        assert_eq!(extras.lights, []);
     }
 
     #[test]
@@ -672,7 +672,7 @@ mod tests {
         let doc = json!({"asset": {"version": "2.0"}, "nodes": [
             {"name": "Bad", "extras": {"damage_stage": {"min": "x"}}}]});
         let extras = ModelExtras::from_document(&document(&doc));
-        assert!(extras.damage_stages.is_empty());
+        assert_eq!(extras.damage_stages, []);
         assert!(matches!(
             extras.rejected[0].error,
             ExtrasError::Invalid {
@@ -745,7 +745,7 @@ mod tests {
         let doc = json!({"asset": {"version": "2.0"}, "nodes": [
             {"name": "Bad", "extras": {"connect_parents": {"v": 1, "points": [{"name": 3}]}}}]});
         let extras = ModelExtras::from_document(&document(&doc));
-        assert!(extras.connect_parents.is_empty());
+        assert_eq!(extras.connect_parents, []);
         assert!(matches!(
             extras.rejected[0].error,
             ExtrasError::Invalid {

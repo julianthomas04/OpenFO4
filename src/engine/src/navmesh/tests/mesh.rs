@@ -23,7 +23,7 @@ fn builds_valid_mesh_with_queries() {
     assert_eq!(mesh.bounds().min, Vec3::ZERO);
     assert_eq!(mesh.bounds().max, Vec3::new(2.0, 0.0, 2.0));
     assert_eq!(mesh.door_refs(1), [0xD00]);
-    assert!(mesh.door_refs(0).is_empty());
+    assert_eq!(mesh.door_refs(0), [] as [u32; 0]);
 }
 
 #[test]

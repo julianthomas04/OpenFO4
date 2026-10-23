@@ -180,7 +180,7 @@ mod tests {
     #[test]
     fn draining_an_empty_queue_applies_nothing() {
         let mut queue = DeferredQueue::<&'static str>::new();
-        assert!(drain(&mut queue, BUDGET, ONE_ADD).is_empty());
+        assert_eq!(drain(&mut queue, BUDGET, ONE_ADD), []);
     }
 
     #[test]
@@ -219,7 +219,7 @@ mod tests {
         queue.push_physics_center((1, 0), 2);
         queue.clear();
         assert!(queue.is_empty());
-        assert!(drain(&mut queue, Duration::MAX, ONE_ADD).is_empty());
+        assert_eq!(drain(&mut queue, Duration::MAX, ONE_ADD), []);
     }
 
     #[test]

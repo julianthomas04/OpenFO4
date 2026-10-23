@@ -550,7 +550,7 @@ mod tests {
         let mut model = empty_model();
         let id = add(&mut model, aid("Cram", 20.0, None));
         model.apply(PipBoyAction::Use(id)).unwrap();
-        assert!(model.character.effects.is_empty());
+        assert_eq!(model.character.effects, []);
     }
 
     #[test]
@@ -721,7 +721,7 @@ mod tests {
                 count: 1,
             })
             .unwrap();
-        assert!(model.inventory.items.is_empty());
+        assert_eq!(model.inventory.items, []);
     }
 
     #[test]
@@ -905,7 +905,7 @@ mod tests {
         model.apply(tag()).unwrap();
         assert_eq!(model.inventory.tagged_components, ["Steel"]);
         model.apply(tag()).unwrap();
-        assert!(model.inventory.tagged_components.is_empty());
+        assert_eq!(model.inventory.tagged_components, [] as [String; 0]);
     }
 
     #[test]

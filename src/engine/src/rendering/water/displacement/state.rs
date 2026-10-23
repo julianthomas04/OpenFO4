@@ -570,7 +570,7 @@ mod tests {
         state.frame(&input);
         input.actors = &[(1, None)];
         let plan = state.frame(&input);
-        assert!(plan.splats.is_empty());
+        assert_eq!(plan.splats, []);
     }
 
     #[test]

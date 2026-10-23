@@ -300,7 +300,11 @@ mod tests {
             let pixels = read_after_black_pass(&device, &queue, size);
             assert_eq!(pixels.len(), (size.width * size.height * 4) as usize);
             assert!(
-                pixels.chunks_exact(4).all(|texel| texel == [0, 0, 0, 0xFF]),
+                pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .all(|texel| *texel == [0, 0, 0, 0xFF]),
                 "{size:?}"
             );
         }

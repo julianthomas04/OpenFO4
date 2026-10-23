@@ -905,8 +905,8 @@ mod tests {
     #[test]
     fn a_near_plane_of_one_bethesda_unit_switches_to_the_two_unit_reference() {
         let row = frame_constants(&frame_uniform(), 0.1).ps_cb0[0];
-        // k = 1 - 0.1 / 0.2 = 0.5.
-        assert_eq!(row, Vec4::new(0.0, 0.5 * (1.0 + 1e-6), -0.5, 0.0));
+        let k = 1.0 - 0.1 / 0.2;
+        assert_eq!(row, Vec4::new(0.0, k * (1.0 + 1e-6), -0.5, 0.0));
     }
 
     /// `scene_depth / s = Y / ((1 - depth) * Z + Yc)` as the pixel stage evaluates it.

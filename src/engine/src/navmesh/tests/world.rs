@@ -63,7 +63,7 @@ fn unload_defers_links_and_reload_restores_them() {
     let report = world.remove(B).unwrap();
     assert_eq!(report.links_deferred, 1);
     assert_eq!(world.pending_link_count(), 1);
-    assert!(external_targets(&world, A, 2).is_empty());
+    assert_eq!(external_targets(&world, A, 2), []);
     assert!(!world.is_valid(stale));
 
     let (_, b) = linked_pair(A, B);
@@ -84,7 +84,7 @@ fn dangling_link_stays_pending_and_is_not_an_error() {
             .link((0, 1), 0, 0xDEAD, (0, 0)),
     );
     assert_eq!((report.linked, report.deferred), (0, 1));
-    assert!(report.rejected.is_empty());
+    assert_eq!(report.rejected, []);
     assert_eq!(world.pending_link_count(), 1);
     world.remove(A).unwrap();
     assert_eq!(world.pending_link_count(), 0);
@@ -102,7 +102,7 @@ fn link_to_missing_target_triangle_is_reported_as_rejected() {
     );
     assert_eq!(report.rejected.len(), 1);
     assert_eq!(report.rejected[0].source_form_id, A);
-    assert!(external_targets(&world, A, 0).is_empty());
+    assert_eq!(external_targets(&world, A, 0), []);
 }
 
 #[test]

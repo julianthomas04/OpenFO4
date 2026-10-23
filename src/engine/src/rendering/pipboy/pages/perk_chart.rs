@@ -243,7 +243,7 @@ mod tests {
         let mut page = chart_page();
 
         harness.send(&mut page, &model, NavInput::Clicked(card_centre(IRON_FIST)));
-        assert!(harness.take_actions().is_empty());
+        assert_eq!(harness.take_actions(), []);
         harness.send(&mut page, &model, NavInput::Hint(HintKey::Enter));
 
         assert_eq!(

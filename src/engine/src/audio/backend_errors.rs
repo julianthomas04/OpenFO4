@@ -121,11 +121,11 @@ mod tests {
     #[test]
     fn discarded_errors_are_reported_when_the_total_grows() {
         let mut reporter = BackendErrorReporter::default();
-        assert!(reporter.lines([], 0).is_empty());
+        assert_eq!(reporter.lines([], 0), [] as [String; 0]);
         let lines = reporter.lines([], 7);
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains("7 dropped in total"), "{lines:?}");
-        assert!(reporter.lines([], 7).is_empty());
-        assert!(!reporter.lines([], 9).is_empty());
+        assert_eq!(reporter.lines([], 7), [] as [String; 0]);
+        assert_ne!(reporter.lines([], 9), [] as [String; 0]);
     }
 }

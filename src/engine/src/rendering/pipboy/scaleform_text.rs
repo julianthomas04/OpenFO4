@@ -480,7 +480,7 @@ mod tests {
     fn empty_text_paints_nothing() {
         let (painted, shapes) = paint(|p| paint_field(p, &geometry(100.0, 20.0), "", style()));
         assert_close(painted.rect.width(), 0.0);
-        assert!(shapes.is_empty());
+        assert_eq!(shapes, []);
     }
 
     #[test]

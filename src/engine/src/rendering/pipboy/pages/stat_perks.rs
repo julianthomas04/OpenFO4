@@ -423,7 +423,7 @@ mod tests {
 
     #[test]
     fn a_single_rank_perk_has_no_stars() {
-        assert!(stars().positions(1).is_empty());
+        assert_eq!(stars().positions(1), []);
     }
 
     #[test]

@@ -632,7 +632,9 @@ fn decode_points(blob: &[u8], row: &str) -> anyhow::Result<Vec<(f32, f32)>> {
     );
     let coordinate = |bytes: &[u8]| f32::from_le_bytes(bytes.try_into().expect("4-byte slice"));
     Ok(blob
-        .chunks_exact(POINT_BYTES)
+        .as_chunks::<POINT_BYTES>()
+        .0
+        .iter()
         .map(|pair| {
             let (x, y) = pair.split_at(COORDINATE_BYTES);
             (coordinate(x), coordinate(y))
@@ -785,7 +787,7 @@ mod tests {
         );
         let public = &catalog.music_types[1];
         assert_eq!((public.priority, public.fade_seconds), (70, 6.0));
-        assert!(public.tracks.is_empty());
+        assert_eq!(public.tracks, [] as [String; 0]);
     }
 
     #[test]
@@ -1004,7 +1006,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::float_cmp, reason = "stored and read back bit-exactly")]
     fn loads_regions_with_decoded_polygons_and_globals() {
         let conn = connection();
         music_type(&conn, "00AA:Fallout4.esm", "MUSzExplore", 90, 12.0);

@@ -686,17 +686,17 @@ mod tests {
         world.set_loaded([loaded(0, 0, 100.0)]);
         world.set_loaded([]);
         assert!(!world.has_cell_surface((0, 0)));
-        assert!(world.cell_surfaces().is_empty());
+        assert_eq!(world.cell_surfaces(), []);
     }
 
     #[test]
     fn interiors_and_empty_worlds_have_no_cell_surfaces() {
         let mut interior = WaterWorld::with_interior(cell(true, CellWaterHeight::Unset, None));
         interior.set_loaded([loaded(0, 0, 0.0)]);
-        assert!(interior.cell_surfaces().is_empty());
+        assert_eq!(interior.cell_surfaces(), []);
         let mut empty = WaterWorld::new("");
         empty.set_loaded([loaded(0, 0, 0.0)]);
-        assert!(empty.cell_surfaces().is_empty());
+        assert_eq!(empty.cell_surfaces(), []);
     }
 
     /// Against a converted database: `OPENFO4_DB=<data.db> cargo test
