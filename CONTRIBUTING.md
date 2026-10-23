@@ -33,7 +33,7 @@ Small bug fixes, documentation improvements, and other straightforward changes g
 ## 3. Development Setup
 ### Prerequisites
 - Windows 11. This project is designed to be developed on and for this OS.
-- Rust 1.95.0 (stable toolchain, with `rustfmt` and `clippy`)
+- Rust 1.99.1 (stable toolchain, with `rustfmt` and `clippy`)
 - .NET SDK 8.0.426
 - Git
 - PowerShell >= 7.0.0.
