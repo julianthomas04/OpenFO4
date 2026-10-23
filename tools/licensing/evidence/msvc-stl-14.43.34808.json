@@ -1,0 +1,242 @@
+{
+  "schema": 1,
+  "componentId": "native:msvc-stl",
+  "policyLibraryId": "msvc-libcpmt",
+  "status": "approved-source-and-grant-review",
+  "scope": "The nine identified Microsoft STL source implementations selected from libcpmt.lib. Original engine code remains Apache-2.0. This evidence does not license unrelated MSVC startup/runtime/UCRT code, approve publication, or broaden recipient proprietary-runtime terms.",
+  "upstream": {
+    "repository": "https://github.com/microsoft/STL",
+    "tag": "vs-2022-17.13",
+    "tagObject": "be74a0b71c1e06d8b519db96d027df011890fe40",
+    "commit": "5e0ddadefd38b9ab50f2b8772ad4cb001133fd9d",
+    "releaseTagUrl": "https://api.github.com/repos/microsoft/STL/git/tags/be74a0b71c1e06d8b519db96d027df011890fe40"
+  },
+  "toolchain": {
+    "product": "Visual Studio Community 2022",
+    "msvcToolsVersion": "14.43.34808",
+    "architecture": "x64",
+    "libraryPath": "VC/Tools/MSVC/14.43.34808/lib/x64/libcpmt.lib",
+    "librarySha256": "a7a0fb19610249d3bcc876e6e5f76a1fb25018858ef75aa1b58a399f2b06f749"
+  },
+  "inspectionReference": {
+    "engineSha256": "517087dcbd8b9ac0a8b8b23c7688522f6da7153de7ee50c042af2937560e3e94",
+    "pdbSha256": "954d93c4a9d8db54568a162a1f6cefd1a440255b4eff31f367d64b10fdc5eb89",
+    "pdbGuid": "77b85806-3c15-47a3-969d-285227aa0112",
+    "pdbAge": 1,
+    "evidenceStatus": "inspection-time-existing-frozen-binary",
+    "limitations": "This reference is an exploratory observation, not a historical pre/post-link receipt. The build pipeline must bind the actual final executable and selected object members separately. PDB contribution spans do not uniquely attribute output bytes under ICF. Private host paths are omitted."
+  },
+  "sourcePackageCorroboration": {
+    "packageId": "Microsoft.VC.14.43.17.13.CRT.Source.base",
+    "version": "14.43.34808",
+    "manifestSha256": "6d77605362032f406cbed912b644edb231e225bf709070928ebd881a64cbc755",
+    "scope": "All nine installed source hashes equal their installed package manifest entries and pinned public source bytes. No proprietary archives or object bytes are included."
+  },
+  "selectedMembers": [
+    {
+      "member": "asan_noop.obj",
+      "sanitizedPdbMemberName": "stl/msbuild/stl_base/mt/libcpmt_mt_kernel32.vcxproj/objr/amd64/asan_noop.obj",
+      "objectSha256": "43ea7149cc30ae9fd0a4f97fe58018d061e6567b9701758deff3e2abb9ca5cf7",
+      "sectionContributionCount": 1,
+      "contributionSpanBytes": 2,
+      "source": {
+        "path": "stl/src/asan_noop.cpp",
+        "url": "https://raw.githubusercontent.com/microsoft/STL/5e0ddadefd38b9ab50f2b8772ad4cb001133fd9d/stl/src/asan_noop.cpp",
+        "sha256": "82a31fe0d8e15cf5ae304f2901a5a2cea7888dcbbdc3c926b530b10a782b83ab"
+      },
+      "installedSourcePath": "VC/Tools/MSVC/14.43.34808/crt/src/stl/asan_noop.cpp",
+      "installedSourceSha256": "82a31fe0d8e15cf5ae304f2901a5a2cea7888dcbbdc3c926b530b10a782b83ab",
+      "installedSourceEqualsPublicSourceByteForByte": true,
+      "installedSourcePackageManifestHashMatch": true,
+      "licenseExpression": "Apache-2.0 WITH LLVM-exception"
+    },
+    {
+      "member": "mutex.obj",
+      "sanitizedPdbMemberName": "stl/msbuild/stl_base/mt/libcpmt_mt_kernel32.vcxproj/objr/amd64/mutex.obj",
+      "objectSha256": "f435d139a1a66ab1c403b7f825b71113733e6baa2dc3e8b6803bdc4a642ffbb4",
+      "sectionContributionCount": 0,
+      "contributionSpanBytes": 0,
+      "source": {
+        "path": "stl/src/mutex.cpp",
+        "url": "https://raw.githubusercontent.com/microsoft/STL/5e0ddadefd38b9ab50f2b8772ad4cb001133fd9d/stl/src/mutex.cpp",
+        "sha256": "24516cead9c2e36f326404e96f937495ffacf9dd617253438be97140504211a0"
+      },
+      "installedSourcePath": "VC/Tools/MSVC/14.43.34808/crt/src/stl/mutex.cpp",
+      "installedSourceSha256": "24516cead9c2e36f326404e96f937495ffacf9dd617253438be97140504211a0",
+      "installedSourceEqualsPublicSourceByteForByte": true,
+      "installedSourcePackageManifestHashMatch": true,
+      "licenseExpression": "Apache-2.0 WITH LLVM-exception"
+    },
+    {
+      "member": "stdhndlr.obj",
+      "sanitizedPdbMemberName": "stl/msbuild/stl_base/mt/libcpmt_mt_kernel32.vcxproj/objr/amd64/stdhndlr.obj",
+      "objectSha256": "fbd31d11a759a34d890cb5a84037ab18af69b84da3aa4ef3c1e2a09ec1251016",
+      "sectionContributionCount": 2,
+      "contributionSpanBytes": 88,
+      "source": {
+        "path": "stl/src/stdhndlr.cpp",
+        "url": "https://raw.githubusercontent.com/microsoft/STL/5e0ddadefd38b9ab50f2b8772ad4cb001133fd9d/stl/src/stdhndlr.cpp",
+        "sha256": "de0f276140e870d4a44dce6e5ddb86f0102138e64b5ef287ffa2861dda71a2aa"
+      },
+      "installedSourcePath": "VC/Tools/MSVC/14.43.34808/crt/src/stl/stdhndlr.cpp",
+      "installedSourceSha256": "de0f276140e870d4a44dce6e5ddb86f0102138e64b5ef287ffa2861dda71a2aa",
+      "installedSourceEqualsPublicSourceByteForByte": true,
+      "installedSourcePackageManifestHashMatch": true,
+      "licenseExpression": "Apache-2.0 WITH LLVM-exception"
+    },
+    {
+      "member": "syserror.obj",
+      "sanitizedPdbMemberName": "stl/msbuild/stl_base/mt/libcpmt_mt_kernel32.vcxproj/objr/amd64/syserror.obj",
+      "objectSha256": "e9c5e0fe4b12b8aca8ed2e653a7a4942a66fb8a01086ff16de26651f26569234",
+      "sectionContributionCount": 72,
+      "contributionSpanBytes": 3240,
+      "source": {
+        "path": "stl/src/syserror.cpp",
+        "url": "https://raw.githubusercontent.com/microsoft/STL/5e0ddadefd38b9ab50f2b8772ad4cb001133fd9d/stl/src/syserror.cpp",
+        "sha256": "d6e145ea36a226449f67445705879d54137583c75b5aefa26ac2e6369c5fce7f"
+      },
+      "installedSourcePath": "VC/Tools/MSVC/14.43.34808/crt/src/stl/syserror.cpp",
+      "installedSourceSha256": "d6e145ea36a226449f67445705879d54137583c75b5aefa26ac2e6369c5fce7f",
+      "installedSourceEqualsPublicSourceByteForByte": true,
+      "installedSourcePackageManifestHashMatch": true,
+      "licenseExpression": "Apache-2.0 WITH LLVM-exception"
+    },
+    {
+      "member": "syserror_import_lib.obj",
+      "sanitizedPdbMemberName": "stl/msbuild/stl_base/mt/libcpmt_mt_kernel32.vcxproj/objr/amd64/syserror_import_lib.obj",
+      "objectSha256": "455ab442a98bed129239df5fa96971bdbed73d96400cf8f3c16eb90f46e5d04c",
+      "sectionContributionCount": 1,
+      "contributionSpanBytes": 256,
+      "source": {
+        "path": "stl/src/syserror_import_lib.cpp",
+        "url": "https://raw.githubusercontent.com/microsoft/STL/5e0ddadefd38b9ab50f2b8772ad4cb001133fd9d/stl/src/syserror_import_lib.cpp",
+        "sha256": "f599a0373e932d1ca56573ef576eed4f9eb0fa15dcf22175aa2136176ae6d987"
+      },
+      "installedSourcePath": "VC/Tools/MSVC/14.43.34808/crt/src/stl/syserror_import_lib.cpp",
+      "installedSourceSha256": "f599a0373e932d1ca56573ef576eed4f9eb0fa15dcf22175aa2136176ae6d987",
+      "installedSourceEqualsPublicSourceByteForByte": true,
+      "installedSourcePackageManifestHashMatch": true,
+      "licenseExpression": "Apache-2.0 WITH LLVM-exception"
+    },
+    {
+      "member": "thread0.obj",
+      "sanitizedPdbMemberName": "stl/msbuild/stl_base/mt/libcpmt_mt_kernel32.vcxproj/objr/amd64/thread0.obj",
+      "objectSha256": "1117267aefec4be0ea4cb47e661bfa3a14d6d2bbca09f643d38dcbac36a1ced1",
+      "sectionContributionCount": 19,
+      "contributionSpanBytes": 596,
+      "source": {
+        "path": "stl/src/thread0.cpp",
+        "url": "https://raw.githubusercontent.com/microsoft/STL/5e0ddadefd38b9ab50f2b8772ad4cb001133fd9d/stl/src/thread0.cpp",
+        "sha256": "03d828d78b24847bb9e2e961a45ee8a69d8d2b523286319115deafa48d8121f0"
+      },
+      "installedSourcePath": "VC/Tools/MSVC/14.43.34808/crt/src/stl/thread0.cpp",
+      "installedSourceSha256": "03d828d78b24847bb9e2e961a45ee8a69d8d2b523286319115deafa48d8121f0",
+      "installedSourceEqualsPublicSourceByteForByte": true,
+      "installedSourcePackageManifestHashMatch": true,
+      "licenseExpression": "Apache-2.0 WITH LLVM-exception"
+    },
+    {
+      "member": "winapisupp.obj",
+      "sanitizedPdbMemberName": "stl/msbuild/stl_base/mt/libcpmt_mt_kernel32.vcxproj/objr/amd64/winapisupp.obj",
+      "objectSha256": "fd93e1581571314f25ddc0c791d8d616f70ad4d640e10b3993cd28fd2c2ffe0c",
+      "sectionContributionCount": 6,
+      "contributionSpanBytes": 171,
+      "source": {
+        "path": "stl/src/winapisupp.cpp",
+        "url": "https://raw.githubusercontent.com/microsoft/STL/5e0ddadefd38b9ab50f2b8772ad4cb001133fd9d/stl/src/winapisupp.cpp",
+        "sha256": "d9c2c22c826b02af9778e0730c8cc25124fc57f567757b34413d36930fc50927"
+      },
+      "installedSourcePath": "VC/Tools/MSVC/14.43.34808/crt/src/stl/winapisupp.cpp",
+      "installedSourceSha256": "d9c2c22c826b02af9778e0730c8cc25124fc57f567757b34413d36930fc50927",
+      "installedSourceEqualsPublicSourceByteForByte": true,
+      "installedSourcePackageManifestHashMatch": true,
+      "licenseExpression": "Apache-2.0 WITH LLVM-exception"
+    },
+    {
+      "member": "xthrow.obj",
+      "sanitizedPdbMemberName": "stl/msbuild/stl_base/mt/libcpmt_mt_kernel32.vcxproj/objr/amd64/xthrow.obj",
+      "objectSha256": "25b0bba23888e7e75f83aaf6b62883adca04ed553fde60f2e4010ec042dccb2e",
+      "sectionContributionCount": 0,
+      "contributionSpanBytes": 0,
+      "source": {
+        "path": "stl/src/xthrow.cpp",
+        "url": "https://raw.githubusercontent.com/microsoft/STL/5e0ddadefd38b9ab50f2b8772ad4cb001133fd9d/stl/src/xthrow.cpp",
+        "sha256": "3ccfb997e859dec52c856939ccc5ed9043487d75dafe289f0ad3760d2090b77f"
+      },
+      "installedSourcePath": "VC/Tools/MSVC/14.43.34808/crt/src/stl/xthrow.cpp",
+      "installedSourceSha256": "3ccfb997e859dec52c856939ccc5ed9043487d75dafe289f0ad3760d2090b77f",
+      "installedSourceEqualsPublicSourceByteForByte": true,
+      "installedSourcePackageManifestHashMatch": true,
+      "licenseExpression": "Apache-2.0 WITH LLVM-exception"
+    },
+    {
+      "member": "xtime.obj",
+      "sanitizedPdbMemberName": "stl/msbuild/stl_base/mt/libcpmt_mt_kernel32.vcxproj/objr/amd64/xtime.obj",
+      "objectSha256": "75c5299d3086b6143a8efd59b1ae93923f4c66fc094340589d067e6dbc7c7138",
+      "sectionContributionCount": 0,
+      "contributionSpanBytes": 0,
+      "source": {
+        "path": "stl/src/xtime.cpp",
+        "url": "https://raw.githubusercontent.com/microsoft/STL/5e0ddadefd38b9ab50f2b8772ad4cb001133fd9d/stl/src/xtime.cpp",
+        "sha256": "174bc0b1e3f1189c4fc6ac5ccd846219d63c40a373b474f675e22bae4417cfab"
+      },
+      "installedSourcePath": "VC/Tools/MSVC/14.43.34808/crt/src/stl/xtime.cpp",
+      "installedSourceSha256": "174bc0b1e3f1189c4fc6ac5ccd846219d63c40a373b474f675e22bae4417cfab",
+      "installedSourceEqualsPublicSourceByteForByte": true,
+      "installedSourcePackageManifestHashMatch": true,
+      "licenseExpression": "Apache-2.0 WITH LLVM-exception"
+    }
+  ],
+  "selectedMemberCount": 9,
+  "membersWithPositiveSectionContributions": 6,
+  "sectionContributionCount": 101,
+  "licenseFiles": [
+    {
+      "path": "tools/licensing/licenses/native/msvc-stl/LICENSE.txt",
+      "sha256": "1fc6b6db121d4555d8f661937d7f6013693cd8fd67495d5e5d98c1d18fb83eda",
+      "url": "https://raw.githubusercontent.com/microsoft/STL/5e0ddadefd38b9ab50f2b8772ad4cb001133fd9d/LICENSE.txt"
+    },
+    {
+      "path": "tools/licensing/licenses/native/msvc-stl/NOTICE.txt",
+      "sha256": "11dee60b182033b92dfcce5344093eb05e009e2c0339ce551f5667b3838c8223",
+      "url": "https://raw.githubusercontent.com/microsoft/STL/5e0ddadefd38b9ab50f2b8772ad4cb001133fd9d/NOTICE.txt"
+    },
+    {
+      "path": "tools/licensing/licenses/native/msvc-stl/Kempf-2001.txt",
+      "sha256": "18ffef57b44436a80736fdcb5558936d0c72396aa5c6ed41d562aa135c42525e",
+      "url": "https://raw.githubusercontent.com/microsoft/STL/5e0ddadefd38b9ab50f2b8772ad4cb001133fd9d/stl/inc/xthreads.h",
+      "selection": "Complete unaltered William E. Kempf derived-source copyright/permission comment, also identical in xtimec.h; final LF added."
+    }
+  ],
+  "additionalNotices": [
+    {
+      "name": "William E. Kempf 2001 thread-support header permission notice",
+      "publicPaths": [
+        "stl/inc/xthreads.h",
+        "stl/inc/xtimec.h"
+      ],
+      "directMemberIncludes": [
+        "thread0.obj",
+        "mutex.obj",
+        "xtime.obj"
+      ],
+      "positiveContributionMembers": [
+        "thread0.obj"
+      ],
+      "noticeLocation": "NOTICE.txt",
+      "handling": "Retain complete matching NOTICE.txt, including the Kempf copyright and permission notice in supporting documentation. No LLVM exception waiver is assumed for independently applicable third-party notices.",
+      "licenseExpression": "LicenseRef-William-E-Kempf-2001",
+      "completeGrantFile": "tools/licensing/licenses/native/msvc-stl/Kempf-2001.txt",
+      "basis": "The exact header states that this file is derived from software bearing the following restrictions, followed by an independent permission requiring copyright and permission notices in copies/supporting documentation. Treat this as an additional grant, not merely Apache attribution."
+    }
+  ],
+  "sourceLimits": [
+    "The member-specific source identities, installed package hashes and public-source license headers are established. This is not a reproducible rebuild or blanket license for every member in libcpmt.lib.",
+    "winapisupp includes CRT allocation/declaration and Windows SDK headers; separately accounted VC startup/runtime/UCRT inputs retain their own licensing evidence.",
+    "syserror and syserror_import_lib are independently represented actual object members; do not discard either because their source files can include one another.",
+    "asan_noop.cpp expressly carries the STL Apache-2.0 WITH LLVM-exception header; no unrelated sanitizer-runtime license is inferred from its filename."
+  ],
+  "pendingSeparateIssue": "The specific Community Distributable Code list interpretation for libcmt.lib/libvcruntime.lib remains separate. No Microsoft proprietary permission or release approval is declared here.",
+  "licenseExpression": "Apache-2.0 WITH LLVM-exception AND LicenseRef-William-E-Kempf-2001",
+  "reviewScope": "Independent review verified the source/grant evidence, installed/public source hashes, nine-member mapping and full notices. This does not claim object/source reproducibility, satisfy the final-build binding gate, resolve separate proprietary CRT authority, or approve publication."
+}

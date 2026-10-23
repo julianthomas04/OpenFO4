@@ -1,0 +1,892 @@
+{
+  "schema": 1,
+  "scope": "Source packaging exclusions and required link materializations.",
+  "sourceFilters": [
+    {
+      "archive": "build/cache/legal-sources/cpython-bzip2-1.0.8.tar.gz",
+      "archiveSha256": "ab8d1b0cc087c20d4c32c0e4fcf7d0c733a95da12cedc6d63b3f0a9af07427e2",
+      "member": "cpython-source-deps-bzip2-1.0.8/manual.ps",
+      "sha256": "18d0971311ef13e62463acb888435bade35748523341d45a26ec6fcad5c1c69b",
+      "pattern": "cpython-source-deps-bzip2-1.0.8/manual.ps",
+      "reason": "Exact generated manual.ps is not required by Makefile all/libbz2.a/install targets. Preserve manual.xml, entities.xml, xmlproc.sh and manual HTML/source. Makefile manual.ps target regenerates it from MANUAL_SRCS."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/src/demo/share/jfc/J2Ddemo/fonts/A.ttf",
+      "sha256": "48547eff5159bfe7c740034578aee60513a62d84a7c59bcbfd2c59e7eb55dd6c",
+      "pattern": "jdk21u-1c417fbfc2f7/src/demo/share/jfc/J2Ddemo/fonts/A.ttf",
+      "reason": "make/Main.gmk demos: demos-jdk is separate from images: product-images; CompileDemos.gmk alone reads src/demo. Images.gmk copies demo output only if already built, from support/demos/image. This exact A.ttf font is not an input to building runtime modules/jmods or product-images. Retain demo Java source; exclude this standalone unknown-license font."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/hotspot/jtreg/gc/logging/testcases.jar",
+      "sha256": "51b3b0b34e9840252865a39d9d32f075da4fe9fe4139e875c0c2a10a8145d5cf",
+      "pattern": "jdk21u-1c417fbfc2f7/test/hotspot/jtreg/gc/logging/testcases.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/hotspot/jtreg/runtime/ClassFile/JsrRewritingTestCase.jar",
+      "sha256": "e3aeff7874c08761954b25cc2c0a84d1ca90335b2df9284efad3f7be3a7e3cbe",
+      "pattern": "jdk21u-1c417fbfc2f7/test/hotspot/jtreg/runtime/ClassFile/JsrRewritingTestCase.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/hotspot/jtreg/runtime/ClassFile/testcase.jar",
+      "sha256": "90233a3428f18e49d24ea1ae843b4f4cc1cc20174ec7553744256fb12369999f",
+      "pattern": "jdk21u-1c417fbfc2f7/test/hotspot/jtreg/runtime/ClassFile/testcase.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/awt/font/Rotate/A.ttf",
+      "sha256": "48547eff5159bfe7c740034578aee60513a62d84a7c59bcbfd2c59e7eb55dd6c",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/awt/font/Rotate/A.ttf",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/awt/FontClass/CreateFont/A.ttf",
+      "sha256": "48547eff5159bfe7c740034578aee60513a62d84a7c59bcbfd2c59e7eb55dd6c",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/awt/FontClass/CreateFont/A.ttf",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/awt/print/MissedFontFamilyName/SampleFontMissedFontFamily.ttf",
+      "sha256": "8a070443e9ebc098a03809c5bdf0fb989dd0480745c3b33fc22558c6fc120a27",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/awt/print/MissedFontFamilyName/SampleFontMissedFontFamily.ttf",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/awt/print/PrinterJob/CustomFont/A.ttf",
+      "sha256": "48547eff5159bfe7c740034578aee60513a62d84a7c59bcbfd2c59e7eb55dd6c",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/awt/print/PrinterJob/CustomFont/A.ttf",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/beans/Introspector/7064279/test.jar",
+      "sha256": "f0aaec4860d7881824b11e94eca70819475a9459fef3a6fba3f7de0b9912730a",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/beans/Introspector/7064279/test.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/beans/XMLDecoder/4676532/test.jar",
+      "sha256": "f0aaec4860d7881824b11e94eca70819475a9459fef3a6fba3f7de0b9912730a",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/beans/XMLDecoder/4676532/test.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/io/Serializable/maskSyntheticModifier/Foo.class",
+      "sha256": "5dd44c45b834ebd6405160fb6925e48c010c5950ffbfc774835224574ff80903",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/io/Serializable/maskSyntheticModifier/Foo.class",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/Class/EnumPoseur.class",
+      "sha256": "e5eb6bac1baf3273ef4fc30b36f3adeb55d12f0a6957d51cedd29fafa12eda61",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/Class/EnumPoseur.class",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/Class/forName/classes/0.class",
+      "sha256": "d145a65b3c37be6281688bcd1177be69140325dddcda9ef34e87dde18e07b628",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/Class/forName/classes/0.class",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/Class/forName/classes/3.class",
+      "sha256": "cca15787f29c4fe603bbb6fcaf3ebe01212dc9b5f75124feb99f25fc7d914e7a",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/Class/forName/classes/3.class",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/Class/forName/classes/comma.class",
+      "sha256": "cb1a5d588a475bc7934f371fc9f60c254aab79f8a1addefcb802f4013bc20ef6",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/Class/forName/classes/comma.class",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/Class/forName/classes/hyphen.class",
+      "sha256": "954d23cf4bd8d1c79e997ed52f0735f57caece489d3783639e3f4a989c0020e1",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/Class/forName/classes/hyphen.class",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/Class/forName/classes/left-square.class",
+      "sha256": "c9169692145f201ad8a49a74443e65d7b021b24c0285e294adfef4b56e9eeb00",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/Class/forName/classes/left-square.class",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/Class/forName/classes/period.class",
+      "sha256": "4d2e6e33ec395e8844e2daca6695f79ea86239caf367b91d9b5d56f138a22487",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/Class/forName/classes/period.class",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/Class/forName/classes/plus.class",
+      "sha256": "d1e30af53ac1a412f6406ba56aff6a426487dba793219a26f6f1f8914f34681c",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/Class/forName/classes/plus.class",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/Class/forName/classes/right-square.class",
+      "sha256": "b5ee587b77bd20b6b7903e9fff7d9d9761b018bd63a0a72c9ccc6d628e9abdd3",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/Class/forName/classes/right-square.class",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/Class/forName/classes/semicolon.class",
+      "sha256": "28103e2fec001f8700b97ba2c103a291dfb3e2536d988e5df8e130bc87257fda",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/Class/forName/classes/semicolon.class",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/Class/forName/classes/Z.class",
+      "sha256": "5660321f839f5669f620e48649a273353b1e5f12fe4bd23b08ee22e96046c78d",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/Class/forName/classes/Z.class",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/ClassLoader/findSystemClass/java/lang/Object.class",
+      "sha256": "8cb9882371e6d421b205b9fe58490152ef20b0d18a036339d2c127472d640387",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/ClassLoader/findSystemClass/java/lang/Object.class",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/instrument/PremainClass/Agent.jar",
+      "sha256": "1edd0f2cb116e453f29104ed66dfd08fe7c5a368fc47e75070d7c8bfa54a363f",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/lang/instrument/PremainClass/Agent.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/net/Socket/OldSocketImpl.jar",
+      "sha256": "0bc1caed740b8925d3e91a7af12151a1c93064b434989e82ee36ac1c6d4dda73",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/net/Socket/OldSocketImpl.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/net/URLClassLoader/extdir/extention.jar",
+      "sha256": "c13691c52a6960ec80fb831f5390391671ff33abdc6d3ab3ef9498f9f953f185",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/net/URLClassLoader/extdir/extention.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/net/URLClassLoader/getresourceasstream/test.jar",
+      "sha256": "f4662c00df5bff5a970685bd836eb5875f0156dafcb088160c744f1ad10979c5",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/net/URLClassLoader/getresourceasstream/test.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/net/URLClassLoader/jars/class_path_test_classpath.jar",
+      "sha256": "24bbd272bdf80226de01aa51d5a1311047638c418aaf79523d5c012290a9be87",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/net/URLClassLoader/jars/class_path_test_classpath.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/net/URLClassLoader/jars/class_path_test.jar",
+      "sha256": "694a69bb1793cd98b7a33bd347cb8bd3c4a6691d78976ca587335ca911145ff4",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/net/URLClassLoader/jars/class_path_test.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/net/URLClassLoader/sealing/b.jar",
+      "sha256": "cbe69ac15d4a3caeee29790d194dc87e3321766c5b25a79e2d88424c70b984e3",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/net/URLClassLoader/sealing/b.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/net/URLConnection/6212146/test.jar",
+      "sha256": "6fe22cbbbd164d5e232ae8ccb6ea351c4219f4eba15330673d6c31582a08a105",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/net/URLConnection/6212146/test.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/net/URLConnection/jars/test.jar",
+      "sha256": "5d8b01a2c6f08c7fe702cb88f6b63435a7be46ebf2655814c2fa2e551a0ea758",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/net/URLConnection/jars/test.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/security/ProtectionDomain/AllPerm.jar",
+      "sha256": "aeeec0b3def88c7491422d36b991864dae782b97f65ea5bb260b61473bdafd73",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/security/ProtectionDomain/AllPerm.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/security/Security/ClassLoaderDeadlock/Deadlock.jar",
+      "sha256": "f63ea192fcd70bfa9d29b245974787b386c5b24cd4044335a7ee2557d588a988",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/security/Security/ClassLoaderDeadlock/Deadlock.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/util/jar/JarEntry/test.jar",
+      "sha256": "2cef5662ecfb8d65dadcae6ae2d9f695a177f40afcd83eb446d6420b0e9667ab",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/util/jar/JarEntry/test.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/util/jar/JarFile/bogus-signerinfo-attr.jar",
+      "sha256": "2be7220eb0a439ae0b44ff6574588452ce8a651ac4569a311025735dd6e647fb",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/util/jar/JarFile/bogus-signerinfo-attr.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/util/jar/JarFile/no-manifest.jar",
+      "sha256": "c2e15669727b3be3deace600c76188fc6f5745bbf76faf8ad7963114aa06dc96",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/util/jar/JarFile/no-manifest.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/util/jar/JarFile/Signed.jar",
+      "sha256": "12b03d81841a8892420e00b782a2e14a9e50e7edaed540ae99d0a21827972a11",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/util/jar/JarFile/Signed.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/util/jar/JarFile/test.jar",
+      "sha256": "431f995319b4dc5080e11e091e4f60883c1debbd8e68b50151e32e4bccfe0200",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/util/jar/JarFile/test.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/util/jar/JarInputStream/BadSignedJar.jar",
+      "sha256": "ecba633500a9b87e4395a79e4cf6f0d7bc8e855d5b1f04f071ddbaedcbac0f75",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/util/jar/JarInputStream/BadSignedJar.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/util/jar/JarInputStream/signed.jar",
+      "sha256": "fd1923a1982cbc6b3f59c51a8d6cc2ab805948bbe22dbaa4db802438a16f945f",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/util/jar/JarInputStream/signed.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/util/zip/input.jar",
+      "sha256": "bf95e8248a619e2e847ff074d6a62b97d4e5e66e08fb885b6a6a4d46a1f9bf09",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/util/zip/input.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/util/zip/pkware123456789012345.zip",
+      "sha256": "5729625acdc63c02478c452691331569f12b2b9522fac9dd6c5fbfec80fd75a3",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/util/zip/pkware123456789012345.zip",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/util/zip/test.zip",
+      "sha256": "ff77375d44c1d613372264524caa57671bdfe492fa87730405d557602b9008dc",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/util/zip/test.zip",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/java/util/zip/ZipEntry/input.jar",
+      "sha256": "b17d95f103ee5dea9160ceabdf729fafbf95be9b21cae0c3b7929918cc164325",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/java/util/zip/ZipEntry/input.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/javax/crypto/SecretKeyFactory/evilprov.jar",
+      "sha256": "d65a910f5c7275bb1100906b6204ae38b77c0a5eeac7986eae6af68a391ff4c4",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/javax/crypto/SecretKeyFactory/evilprov.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/javax/crypto/SecretKeyFactory/P1.jar",
+      "sha256": "4aca80c190e01a79d620fcffd3825f0e80ed9a22a78da43577fa5f108012e574",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/javax/crypto/SecretKeyFactory/P1.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/javax/crypto/SecretKeyFactory/P2.jar",
+      "sha256": "0adcb7d7ec03c40cbaa3e1835b206e98c05c64728a6e43ad862f34c8698ee89b",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/javax/crypto/SecretKeyFactory/P2.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/javax/management/loading/LibraryLoader/native.jar",
+      "sha256": "f7b4434a5fc74938bccec6fb35f0c731664b5e0669adb36ada5d31cdb5457792",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/javax/management/loading/LibraryLoader/native.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/jdk/internal/loader/URLClassPath/testclasses.jar",
+      "sha256": "70800eb8f3886a62a7991f4e7ad23590d5df2b7a454d83561e4a8d0d1c5dac0a",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/jdk/internal/loader/URLClassPath/testclasses.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/sun/misc/Hello.class",
+      "sha256": "140e79db72b8f814693dd9fcc3356f436ac6349bbef72e1752b00da9ee81583d",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/sun/misc/Hello.class",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/sun/net/www/protocol/jar/bar.jar",
+      "sha256": "5f986d1f90e5ddf905a521f8834549e50d1c62c2750f54a60971442daea9920b",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/sun/net/www/protocol/jar/bar.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/sun/net/www/protocol/jar/foo.jar",
+      "sha256": "b2c2103d89d03e505c1b46c32ae205a3da7b2a085ac487503d454adc3adb9887",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/sun/net/www/protocol/jar/foo.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/sun/net/www/protocol/jar/foo1.jar",
+      "sha256": "5cc82c78bc78d527ecc6e089e43177902b48e6e29ca1aaed35633d565867a7ce",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/sun/net/www/protocol/jar/foo1.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/sun/net/www/protocol/jar/foo2.jar",
+      "sha256": "2c521c1fd4a52018b9f99097284326ceb59eeaa718484f50eed11dbbab70dcdf",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/sun/net/www/protocol/jar/foo2.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/sun/net/www/protocol/jar/resource.jar",
+      "sha256": "e003f3db52b7280e873636dc23ba6edf8cfcebe4878741175594a0ce178027bf",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/sun/net/www/protocol/jar/resource.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/sun/security/pkcs11/KeyStore/loader.jar",
+      "sha256": "ab9e854fb92d2c677d8eabd513b812d9671aeaf78c4083540f220d86dd95b218",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/sun/security/pkcs11/KeyStore/loader.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/sun/security/provider/PolicyParser/ExtDirsA/a.jar",
+      "sha256": "414c5dc778995f21c9d138b6fc91ce1b07ddad2ccbb7fcb45526b3e2576490b7",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/sun/security/provider/PolicyParser/ExtDirsA/a.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/sun/security/provider/PolicyParser/ExtDirsB/b.jar",
+      "sha256": "5e33edd9be3e6a510dd5c33883dbf1360d189a031e8c07539000e8e9076a9e80",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/sun/security/provider/PolicyParser/ExtDirsB/b.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/sun/security/tools/jarsigner/AlgOptions.jar",
+      "sha256": "77f0b51f0dbfe5628013c5e98b01a6743f8d0b1185d2ca9d8eb0f52dbba50241",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/sun/security/tools/jarsigner/AlgOptions.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/sun/security/tools/jarsigner/JarSigning_RU.jar",
+      "sha256": "65ce317dc0af06d07d3fbf02735b29a2e33c9dcf161eace8625b2110c17b52ca",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/sun/security/tools/jarsigner/JarSigning_RU.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/sun/security/tools/jarsigner/JavaApplication1.jar",
+      "sha256": "7e2a96e2fae9784038861ea205e6589cd609481215a921c79bcb6748d5eea9e5",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/sun/security/tools/jarsigner/JavaApplication1.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/sun/security/tools/jarsigner/oldsig/A.class",
+      "sha256": "2daa156fa6b0609129fdd7d37f846fe8316c84aac92bfa3739e9bee18833590a",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/sun/security/tools/jarsigner/oldsig/A.class",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/sun/security/tools/jarsigner/oldsig/A.jar",
+      "sha256": "f948504596d563a5ec1a9d7192b0a97aa3ffba2eab05d706efb7cb75c68ec640",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/sun/security/tools/jarsigner/oldsig/A.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz",
+      "archiveSha256": "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f",
+      "member": "jdk21u-1c417fbfc2f7/test/jdk/tools/launcher/UnicodeTest.jar",
+      "sha256": "2eaf9e0f455822daba818530903620487353233fa61c634b87894eb46243a3b3",
+      "pattern": "jdk21u-1c417fbfc2f7/test/jdk/tools/launcher/UnicodeTest.jar",
+      "reason": "make/Main.gmk declares images: product-images and product-images: jdk-image symbols-image exploded-image. test-image is a separate target, and test-* depends on jdk-image/test-image, not the reverse. Retain all production source/build scripts; this exact test fixture is not a product-images prerequisite."
+    },
+    {
+      "archive": "build/cache/legal-sources/dotnet-runtime-8.0.32.tar.gz",
+      "archiveSha256": "8e360aff5f39823f185d0e769b511abc2d14271ba86fa0f6023e42ebb8532e88",
+      "member": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/Common/tests/Data/TinyAssembly.dll",
+      "sha256": "1f76a2e47ddeebdc51e59dee277c54a024d81f561f19cc8b9dffc889175cdf17",
+      "pattern": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/Common/tests/Data/TinyAssembly.dll",
+      "reason": "eng/Subsets.props separates libs.tests (tests.proj, Test=true) from product clr/libs.sfx/libs.oob/host/packs. libs.pretest references platform runners/externals, not these fixture assemblies. Production System.Reflection.Metadata, FileVersionInfo and Private.Xml src projects explicitly compile source; these exact tests/Resources or Common/tests DLL/EXE fixtures are not product inputs. Preserve all source projects and test source."
+    },
+    {
+      "archive": "build/cache/legal-sources/dotnet-runtime-8.0.32.tar.gz",
+      "archiveSha256": "8e360aff5f39823f185d0e769b511abc2d14271ba86fa0f6023e42ebb8532e88",
+      "member": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Diagnostics.FileVersionInfo/tests/System.Diagnostics.FileVersionInfo.Tests/NativeConsoleApp.exe",
+      "sha256": "acf0c93cfd6cc671e37319f21f2cd20d0244b3e57c35473f99a1d7e3dca2a7b8",
+      "pattern": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Diagnostics.FileVersionInfo/tests/System.Diagnostics.FileVersionInfo.Tests/NativeConsoleApp.exe",
+      "reason": "eng/Subsets.props separates libs.tests (tests.proj, Test=true) from product clr/libs.sfx/libs.oob/host/packs. libs.pretest references platform runners/externals, not these fixture assemblies. Production System.Reflection.Metadata, FileVersionInfo and Private.Xml src projects explicitly compile source; these exact tests/Resources or Common/tests DLL/EXE fixtures are not product inputs. Preserve all source projects and test source."
+    },
+    {
+      "archive": "build/cache/legal-sources/dotnet-runtime-8.0.32.tar.gz",
+      "archiveSha256": "8e360aff5f39823f185d0e769b511abc2d14271ba86fa0f6023e42ebb8532e88",
+      "member": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Diagnostics.FileVersionInfo/tests/System.Diagnostics.FileVersionInfo.Tests/NativeLibrary.dll",
+      "sha256": "d2c58435491f74cb3fd338cbdfcbeba4466fab7359cccacc73dde36fe44b15ad",
+      "pattern": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Diagnostics.FileVersionInfo/tests/System.Diagnostics.FileVersionInfo.Tests/NativeLibrary.dll",
+      "reason": "eng/Subsets.props separates libs.tests (tests.proj, Test=true) from product clr/libs.sfx/libs.oob/host/packs. libs.pretest references platform runners/externals, not these fixture assemblies. Production System.Reflection.Metadata, FileVersionInfo and Private.Xml src projects explicitly compile source; these exact tests/Resources or Common/tests DLL/EXE fixtures are not product inputs. Preserve all source projects and test source."
+    },
+    {
+      "archive": "build/cache/legal-sources/dotnet-runtime-8.0.32.tar.gz",
+      "archiveSha256": "8e360aff5f39823f185d0e769b511abc2d14271ba86fa0f6023e42ebb8532e88",
+      "member": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Diagnostics.FileVersionInfo/tests/System.Diagnostics.FileVersionInfo.Tests/SecondNativeLibrary.dll",
+      "sha256": "dad65419ce6c7451506ccae339cbe2ce362de7873b7c286d84cfa1b287acdda3",
+      "pattern": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Diagnostics.FileVersionInfo/tests/System.Diagnostics.FileVersionInfo.Tests/SecondNativeLibrary.dll",
+      "reason": "eng/Subsets.props separates libs.tests (tests.proj, Test=true) from product clr/libs.sfx/libs.oob/host/packs. libs.pretest references platform runners/externals, not these fixture assemblies. Production System.Reflection.Metadata, FileVersionInfo and Private.Xml src projects explicitly compile source; these exact tests/Resources or Common/tests DLL/EXE fixtures are not product inputs. Preserve all source projects and test source."
+    },
+    {
+      "archive": "build/cache/legal-sources/dotnet-runtime-8.0.32.tar.gz",
+      "archiveSha256": "8e360aff5f39823f185d0e769b511abc2d14271ba86fa0f6023e42ebb8532e88",
+      "member": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Private.Xml/tests/Xslt/TestFiles/TestData/xsltc/baseline/pft8.dll",
+      "sha256": "068cf2fb0642b67fa6daae724ece6bd195dfcc2d12ffe4fd50c81fa11da2c09a",
+      "pattern": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Private.Xml/tests/Xslt/TestFiles/TestData/xsltc/baseline/pft8.dll",
+      "reason": "eng/Subsets.props separates libs.tests (tests.proj, Test=true) from product clr/libs.sfx/libs.oob/host/packs. libs.pretest references platform runners/externals, not these fixture assemblies. Production System.Reflection.Metadata, FileVersionInfo and Private.Xml src projects explicitly compile source; these exact tests/Resources or Common/tests DLL/EXE fixtures are not product inputs. Preserve all source projects and test source."
+    },
+    {
+      "archive": "build/cache/legal-sources/dotnet-runtime-8.0.32.tar.gz",
+      "archiveSha256": "8e360aff5f39823f185d0e769b511abc2d14271ba86fa0f6023e42ebb8532e88",
+      "member": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Private.Xml/tests/Xslt/TestFiles/TestData/xsltc/baseline/sft36.dll",
+      "sha256": "609366e663671a7e9eb35f7ecd15c25f5e6333fa788616c5291394bac56ac01d",
+      "pattern": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Private.Xml/tests/Xslt/TestFiles/TestData/xsltc/baseline/sft36.dll",
+      "reason": "eng/Subsets.props separates libs.tests (tests.proj, Test=true) from product clr/libs.sfx/libs.oob/host/packs. libs.pretest references platform runners/externals, not these fixture assemblies. Production System.Reflection.Metadata, FileVersionInfo and Private.Xml src projects explicitly compile source; these exact tests/Resources or Common/tests DLL/EXE fixtures are not product inputs. Preserve all source projects and test source."
+    },
+    {
+      "archive": "build/cache/legal-sources/dotnet-runtime-8.0.32.tar.gz",
+      "archiveSha256": "8e360aff5f39823f185d0e769b511abc2d14271ba86fa0f6023e42ebb8532e88",
+      "member": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Interop/IndexerWithByRefParam.dll",
+      "sha256": "0c141f5acc4f13970cbcb7ce0f79e549c52e1cb8add0f50181ad1fd1a58d3c94",
+      "pattern": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Interop/IndexerWithByRefParam.dll",
+      "reason": "eng/Subsets.props separates libs.tests (tests.proj, Test=true) from product clr/libs.sfx/libs.oob/host/packs. libs.pretest references platform runners/externals, not these fixture assemblies. Production System.Reflection.Metadata, FileVersionInfo and Private.Xml src projects explicitly compile source; these exact tests/Resources or Common/tests DLL/EXE fixtures are not product inputs. Preserve all source projects and test source."
+    },
+    {
+      "archive": "build/cache/legal-sources/dotnet-runtime-8.0.32.tar.gz",
+      "archiveSha256": "8e360aff5f39823f185d0e769b511abc2d14271ba86fa0f6023e42ebb8532e88",
+      "member": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Interop/Interop.Mock01.Impl.dll",
+      "sha256": "7938a67043ce74bc1ae97da170fdb589bbad22e85d1f57bcc0e7e19d098182cd",
+      "pattern": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Interop/Interop.Mock01.Impl.dll",
+      "reason": "eng/Subsets.props separates libs.tests (tests.proj, Test=true) from product clr/libs.sfx/libs.oob/host/packs. libs.pretest references platform runners/externals, not these fixture assemblies. Production System.Reflection.Metadata, FileVersionInfo and Private.Xml src projects explicitly compile source; these exact tests/Resources or Common/tests DLL/EXE fixtures are not product inputs. Preserve all source projects and test source."
+    },
+    {
+      "archive": "build/cache/legal-sources/dotnet-runtime-8.0.32.tar.gz",
+      "archiveSha256": "8e360aff5f39823f185d0e769b511abc2d14271ba86fa0f6023e42ebb8532e88",
+      "member": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Interop/Interop.Mock01.dll",
+      "sha256": "41c01a773fc50962579eb36889399b45d5b2816e5d01c895fbfe96d2bdd01ceb",
+      "pattern": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Interop/Interop.Mock01.dll",
+      "reason": "eng/Subsets.props separates libs.tests (tests.proj, Test=true) from product clr/libs.sfx/libs.oob/host/packs. libs.pretest references platform runners/externals, not these fixture assemblies. Production System.Reflection.Metadata, FileVersionInfo and Private.Xml src projects explicitly compile source; these exact tests/Resources or Common/tests DLL/EXE fixtures are not product inputs. Preserve all source projects and test source."
+    },
+    {
+      "archive": "build/cache/legal-sources/dotnet-runtime-8.0.32.tar.gz",
+      "archiveSha256": "8e360aff5f39823f185d0e769b511abc2d14271ba86fa0f6023e42ebb8532e88",
+      "member": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Interop/OtherAccessors.dll",
+      "sha256": "e83e35173ce9a9c2dd0878354ceeca19316bdbf417f8c0568e8e429fe6b5e98a",
+      "pattern": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Interop/OtherAccessors.dll",
+      "reason": "eng/Subsets.props separates libs.tests (tests.proj, Test=true) from product clr/libs.sfx/libs.oob/host/packs. libs.pretest references platform runners/externals, not these fixture assemblies. Production System.Reflection.Metadata, FileVersionInfo and Private.Xml src projects explicitly compile source; these exact tests/Resources or Common/tests DLL/EXE fixtures are not product inputs. Preserve all source projects and test source."
+    },
+    {
+      "archive": "build/cache/legal-sources/dotnet-runtime-8.0.32.tar.gz",
+      "archiveSha256": "8e360aff5f39823f185d0e769b511abc2d14271ba86fa0f6023e42ebb8532e88",
+      "member": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Misc/Debug.dll",
+      "sha256": "4dbfe14b0be0d75a8ef6c87d3d844c4cf144c62d37254ceb11690567529960df",
+      "pattern": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Misc/Debug.dll",
+      "reason": "eng/Subsets.props separates libs.tests (tests.proj, Test=true) from product clr/libs.sfx/libs.oob/host/packs. libs.pretest references platform runners/externals, not these fixture assemblies. Production System.Reflection.Metadata, FileVersionInfo and Private.Xml src projects explicitly compile source; these exact tests/Resources or Common/tests DLL/EXE fixtures are not product inputs. Preserve all source projects and test source."
+    },
+    {
+      "archive": "build/cache/legal-sources/dotnet-runtime-8.0.32.tar.gz",
+      "archiveSha256": "8e360aff5f39823f185d0e769b511abc2d14271ba86fa0f6023e42ebb8532e88",
+      "member": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Misc/Deterministic.dll",
+      "sha256": "f00485719cd2e97e2fc40b0d46b842519059c071ac559cd58e03796fc37873bd",
+      "pattern": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Misc/Deterministic.dll",
+      "reason": "eng/Subsets.props separates libs.tests (tests.proj, Test=true) from product clr/libs.sfx/libs.oob/host/packs. libs.pretest references platform runners/externals, not these fixture assemblies. Production System.Reflection.Metadata, FileVersionInfo and Private.Xml src projects explicitly compile source; these exact tests/Resources or Common/tests DLL/EXE fixtures are not product inputs. Preserve all source projects and test source."
+    },
+    {
+      "archive": "build/cache/legal-sources/dotnet-runtime-8.0.32.tar.gz",
+      "archiveSha256": "8e360aff5f39823f185d0e769b511abc2d14271ba86fa0f6023e42ebb8532e88",
+      "member": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Misc/EmptyType.dll",
+      "sha256": "12c5c26971e4006656f0b830f35cb0eefe053640acd6fc365c3db26d31e9f595",
+      "pattern": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Misc/EmptyType.dll",
+      "reason": "eng/Subsets.props separates libs.tests (tests.proj, Test=true) from product clr/libs.sfx/libs.oob/host/packs. libs.pretest references platform runners/externals, not these fixture assemblies. Production System.Reflection.Metadata, FileVersionInfo and Private.Xml src projects explicitly compile source; these exact tests/Resources or Common/tests DLL/EXE fixtures are not product inputs. Preserve all source projects and test source."
+    },
+    {
+      "archive": "build/cache/legal-sources/dotnet-runtime-8.0.32.tar.gz",
+      "archiveSha256": "8e360aff5f39823f185d0e769b511abc2d14271ba86fa0f6023e42ebb8532e88",
+      "member": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Misc/Members.dll",
+      "sha256": "632d89a6028dc5f145c9ee479c43778dd4b1ace9a89ffde6e1e14eecced9e62c",
+      "pattern": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Misc/Members.dll",
+      "reason": "eng/Subsets.props separates libs.tests (tests.proj, Test=true) from product clr/libs.sfx/libs.oob/host/packs. libs.pretest references platform runners/externals, not these fixture assemblies. Production System.Reflection.Metadata, FileVersionInfo and Private.Xml src projects explicitly compile source; these exact tests/Resources or Common/tests DLL/EXE fixtures are not product inputs. Preserve all source projects and test source."
+    },
+    {
+      "archive": "build/cache/legal-sources/dotnet-runtime-8.0.32.tar.gz",
+      "archiveSha256": "8e360aff5f39823f185d0e769b511abc2d14271ba86fa0f6023e42ebb8532e88",
+      "member": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Misc/SatelliteAssembly.resources.dll",
+      "sha256": "792f321918dc5b3dc2463d00d2b2bbd3f35af5a89fa5b058bcd7a2d206318b6f",
+      "pattern": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Misc/SatelliteAssembly.resources.dll",
+      "reason": "eng/Subsets.props separates libs.tests (tests.proj, Test=true) from product clr/libs.sfx/libs.oob/host/packs. libs.pretest references platform runners/externals, not these fixture assemblies. Production System.Reflection.Metadata, FileVersionInfo and Private.Xml src projects explicitly compile source; these exact tests/Resources or Common/tests DLL/EXE fixtures are not product inputs. Preserve all source projects and test source."
+    },
+    {
+      "archive": "build/cache/legal-sources/dotnet-runtime-8.0.32.tar.gz",
+      "archiveSha256": "8e360aff5f39823f185d0e769b511abc2d14271ba86fa0f6023e42ebb8532e88",
+      "member": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Misc/Signed.exe",
+      "sha256": "4b20cdb995a721f917bda4deb309b930712e41df977905d91e637e35bd90c1dc",
+      "pattern": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Misc/Signed.exe",
+      "reason": "eng/Subsets.props separates libs.tests (tests.proj, Test=true) from product clr/libs.sfx/libs.oob/host/packs. libs.pretest references platform runners/externals, not these fixture assemblies. Production System.Reflection.Metadata, FileVersionInfo and Private.Xml src projects explicitly compile source; these exact tests/Resources or Common/tests DLL/EXE fixtures are not product inputs. Preserve all source projects and test source."
+    },
+    {
+      "archive": "build/cache/legal-sources/dotnet-runtime-8.0.32.tar.gz",
+      "archiveSha256": "8e360aff5f39823f185d0e769b511abc2d14271ba86fa0f6023e42ebb8532e88",
+      "member": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Namespace/NamespaceForwardedCS.dll",
+      "sha256": "33e77ff6b3804a64c5c87f1a44894ba9ed1de26ff4ad780cfd02e6b9b3354a7d",
+      "pattern": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Namespace/NamespaceForwardedCS.dll",
+      "reason": "eng/Subsets.props separates libs.tests (tests.proj, Test=true) from product clr/libs.sfx/libs.oob/host/packs. libs.pretest references platform runners/externals, not these fixture assemblies. Production System.Reflection.Metadata, FileVersionInfo and Private.Xml src projects explicitly compile source; these exact tests/Resources or Common/tests DLL/EXE fixtures are not product inputs. Preserve all source projects and test source."
+    },
+    {
+      "archive": "build/cache/legal-sources/dotnet-runtime-8.0.32.tar.gz",
+      "archiveSha256": "8e360aff5f39823f185d0e769b511abc2d14271ba86fa0f6023e42ebb8532e88",
+      "member": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Namespace/NamespaceTests.dll",
+      "sha256": "29b8aa1102b5e9a53c28956281e5aaed6a663a522ba05da4900789d1b3cc9992",
+      "pattern": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/Namespace/NamespaceTests.dll",
+      "reason": "eng/Subsets.props separates libs.tests (tests.proj, Test=true) from product clr/libs.sfx/libs.oob/host/packs. libs.pretest references platform runners/externals, not these fixture assemblies. Production System.Reflection.Metadata, FileVersionInfo and Private.Xml src projects explicitly compile source; these exact tests/Resources or Common/tests DLL/EXE fixtures are not product inputs. Preserve all source projects and test source."
+    },
+    {
+      "archive": "build/cache/legal-sources/dotnet-runtime-8.0.32.tar.gz",
+      "archiveSha256": "8e360aff5f39823f185d0e769b511abc2d14271ba86fa0f6023e42ebb8532e88",
+      "member": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/NetModule/AppCS.exe",
+      "sha256": "f55220af096793a234d4bbb67e5abe25e5579dca88c790b0c082ebf9f50b85e7",
+      "pattern": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/NetModule/AppCS.exe",
+      "reason": "eng/Subsets.props separates libs.tests (tests.proj, Test=true) from product clr/libs.sfx/libs.oob/host/packs. libs.pretest references platform runners/externals, not these fixture assemblies. Production System.Reflection.Metadata, FileVersionInfo and Private.Xml src projects explicitly compile source; these exact tests/Resources or Common/tests DLL/EXE fixtures are not product inputs. Preserve all source projects and test source."
+    },
+    {
+      "archive": "build/cache/legal-sources/dotnet-runtime-8.0.32.tar.gz",
+      "archiveSha256": "8e360aff5f39823f185d0e769b511abc2d14271ba86fa0f6023e42ebb8532e88",
+      "member": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/PortablePdbs/Documents.Embedded.dll",
+      "sha256": "22b3d3ec389064a43a44bbb37fac3c06aa00949fb96f97c14d4eb219f107911c",
+      "pattern": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/PortablePdbs/Documents.Embedded.dll",
+      "reason": "eng/Subsets.props separates libs.tests (tests.proj, Test=true) from product clr/libs.sfx/libs.oob/host/packs. libs.pretest references platform runners/externals, not these fixture assemblies. Production System.Reflection.Metadata, FileVersionInfo and Private.Xml src projects explicitly compile source; these exact tests/Resources or Common/tests DLL/EXE fixtures are not product inputs. Preserve all source projects and test source."
+    },
+    {
+      "archive": "build/cache/legal-sources/dotnet-runtime-8.0.32.tar.gz",
+      "archiveSha256": "8e360aff5f39823f185d0e769b511abc2d14271ba86fa0f6023e42ebb8532e88",
+      "member": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/PortablePdbs/Documents.dll",
+      "sha256": "dca54ce6c3a3a6cccdc93fa060d018752502d0ef940fefa2a96a1f237b2ce5a8",
+      "pattern": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/libraries/System.Reflection.Metadata/tests/Resources/PortablePdbs/Documents.dll",
+      "reason": "eng/Subsets.props separates libs.tests (tests.proj, Test=true) from product clr/libs.sfx/libs.oob/host/packs. libs.pretest references platform runners/externals, not these fixture assemblies. Production System.Reflection.Metadata, FileVersionInfo and Private.Xml src projects explicitly compile source; these exact tests/Resources or Common/tests DLL/EXE fixtures are not product inputs. Preserve all source projects and test source."
+    },
+    {
+      "componentId": "native:python",
+      "archive": "build/cache/legal-sources/Python-3.13.16.tar.xz",
+      "archiveSha256": "f4b1bfb3c79b5bb11b8d228a12504163b4c0dab4d679828d8f5f26b6cb6ab35d",
+      "member": "Python-3.13.16/Lib/test/archivetestdata/recursion.tar",
+      "sha256": "d80f55ac66a2570c8a19d2b1dad7c057cf4c944d9c2f8adaf5bf6c8539881e13",
+      "allowedRules": [],
+      "disposition": "exclude",
+      "licenseExpression": "PSF-2.0",
+      "category": "optional-upstream-python-archive-test-fixture",
+      "reason": "Exact Lib/test tar/ZIP namespace/archive parser fixture, including deliberately invalid recursion headers and nonregular entry tests. Exclude only this fixture from the curated source asset; no claim that upstream distribution is prohibited. Runtime/build source is retained.",
+      "sourceRequirementReason": "Python PSF source distribution does not impose copyleft corresponding-source delivery. These optional test datasets are absent from the pinned embeddable runtime stdlib and are not inputs in PCbuild/pythoncore.vcxproj; test_tarfile/test_namespace_pkgs provide their test-only use. Preserve full interpreter production source and all applicable notices.",
+      "proofGroup": "python-optional-test-fixtures"
+    },
+    {
+      "componentId": "native:python",
+      "archive": "build/cache/legal-sources/Python-3.13.16.tar.xz",
+      "archiveSha256": "f4b1bfb3c79b5bb11b8d228a12504163b4c0dab4d679828d8f5f26b6cb6ab35d",
+      "member": "Python-3.13.16/Lib/test/archivetestdata/testtar.tar",
+      "sha256": "760200dda3cfdff2cd31d8ab6c806794f3770faa465e7eae00a1cb3a2fbcbe3a",
+      "allowedRules": [],
+      "disposition": "exclude",
+      "licenseExpression": "PSF-2.0",
+      "category": "optional-upstream-python-archive-test-fixture",
+      "reason": "Exact Lib/test tar/ZIP namespace/archive parser fixture, including deliberately invalid recursion headers and nonregular entry tests. Exclude only this fixture from the curated source asset; no claim that upstream distribution is prohibited. Runtime/build source is retained.",
+      "sourceRequirementReason": "Python PSF source distribution does not impose copyleft corresponding-source delivery. These optional test datasets are absent from the pinned embeddable runtime stdlib and are not inputs in PCbuild/pythoncore.vcxproj; test_tarfile/test_namespace_pkgs provide their test-only use. Preserve full interpreter production source and all applicable notices.",
+      "proofGroup": "python-optional-test-fixtures"
+    },
+    {
+      "componentId": "native:python",
+      "archive": "build/cache/legal-sources/Python-3.13.16.tar.xz",
+      "archiveSha256": "f4b1bfb3c79b5bb11b8d228a12504163b4c0dab4d679828d8f5f26b6cb6ab35d",
+      "member": "Python-3.13.16/Lib/test/archivetestdata/testtar.tar.xz",
+      "sha256": "89e0326292b96a5700582a37ebf3d8ba60f1d136772b5cd15b2c2ae653fda188",
+      "allowedRules": [],
+      "disposition": "exclude",
+      "licenseExpression": "PSF-2.0",
+      "category": "optional-upstream-python-archive-test-fixture",
+      "reason": "Exact Lib/test tar/ZIP namespace/archive parser fixture, including deliberately invalid recursion headers and nonregular entry tests. Exclude only this fixture from the curated source asset; no claim that upstream distribution is prohibited. Runtime/build source is retained.",
+      "sourceRequirementReason": "Python PSF source distribution does not impose copyleft corresponding-source delivery. These optional test datasets are absent from the pinned embeddable runtime stdlib and are not inputs in PCbuild/pythoncore.vcxproj; test_tarfile/test_namespace_pkgs provide their test-only use. Preserve full interpreter production source and all applicable notices.",
+      "proofGroup": "python-optional-test-fixtures"
+    },
+    {
+      "componentId": "native:python",
+      "archive": "build/cache/legal-sources/Python-3.13.16.tar.xz",
+      "archiveSha256": "f4b1bfb3c79b5bb11b8d228a12504163b4c0dab4d679828d8f5f26b6cb6ab35d",
+      "member": "Python-3.13.16/Lib/test/archivetestdata/zip_cp437_header.zip",
+      "sha256": "e2cdb56febb5106607bf5f9b92b2b7a9516814e7650139cfe46f6b36bfcfa327",
+      "allowedRules": [],
+      "disposition": "exclude",
+      "licenseExpression": "PSF-2.0",
+      "category": "optional-upstream-python-archive-test-fixture",
+      "reason": "Exact Lib/test tar/ZIP namespace/archive parser fixture, including deliberately invalid recursion headers and nonregular entry tests. Exclude only this fixture from the curated source asset; no claim that upstream distribution is prohibited. Runtime/build source is retained.",
+      "sourceRequirementReason": "Python PSF source distribution does not impose copyleft corresponding-source delivery. These optional test datasets are absent from the pinned embeddable runtime stdlib and are not inputs in PCbuild/pythoncore.vcxproj; test_tarfile/test_namespace_pkgs provide their test-only use. Preserve full interpreter production source and all applicable notices.",
+      "proofGroup": "python-optional-test-fixtures"
+    },
+    {
+      "componentId": "native:python",
+      "archive": "build/cache/legal-sources/Python-3.13.16.tar.xz",
+      "archiveSha256": "f4b1bfb3c79b5bb11b8d228a12504163b4c0dab4d679828d8f5f26b6cb6ab35d",
+      "member": "Python-3.13.16/Lib/test/archivetestdata/zipdir.zip",
+      "sha256": "19cb87050b0fb410da3b88df752c2e1bdaeec77ac052b04febef31a68823cfcb",
+      "allowedRules": [],
+      "disposition": "exclude",
+      "licenseExpression": "PSF-2.0",
+      "category": "optional-upstream-python-archive-test-fixture",
+      "reason": "Exact Lib/test tar/ZIP namespace/archive parser fixture, including deliberately invalid recursion headers and nonregular entry tests. Exclude only this fixture from the curated source asset; no claim that upstream distribution is prohibited. Runtime/build source is retained.",
+      "sourceRequirementReason": "Python PSF source distribution does not impose copyleft corresponding-source delivery. These optional test datasets are absent from the pinned embeddable runtime stdlib and are not inputs in PCbuild/pythoncore.vcxproj; test_tarfile/test_namespace_pkgs provide their test-only use. Preserve full interpreter production source and all applicable notices.",
+      "proofGroup": "python-optional-test-fixtures"
+    },
+    {
+      "componentId": "native:python",
+      "archive": "build/cache/legal-sources/Python-3.13.16.tar.xz",
+      "archiveSha256": "f4b1bfb3c79b5bb11b8d228a12504163b4c0dab4d679828d8f5f26b6cb6ab35d",
+      "member": "Python-3.13.16/Lib/test/archivetestdata/zipdir_backslash.zip",
+      "sha256": "afdfa1f139c91c2b486f3a4a931bef18e08883fc5f5c81975f5bd19cf92e6d1f",
+      "allowedRules": [],
+      "disposition": "exclude",
+      "licenseExpression": "PSF-2.0",
+      "category": "optional-upstream-python-archive-test-fixture",
+      "reason": "Exact Lib/test tar/ZIP namespace/archive parser fixture, including deliberately invalid recursion headers and nonregular entry tests. Exclude only this fixture from the curated source asset; no claim that upstream distribution is prohibited. Runtime/build source is retained.",
+      "sourceRequirementReason": "Python PSF source distribution does not impose copyleft corresponding-source delivery. These optional test datasets are absent from the pinned embeddable runtime stdlib and are not inputs in PCbuild/pythoncore.vcxproj; test_tarfile/test_namespace_pkgs provide their test-only use. Preserve full interpreter production source and all applicable notices.",
+      "proofGroup": "python-optional-test-fixtures"
+    },
+    {
+      "componentId": "native:python",
+      "archive": "build/cache/legal-sources/Python-3.13.16.tar.xz",
+      "archiveSha256": "f4b1bfb3c79b5bb11b8d228a12504163b4c0dab4d679828d8f5f26b6cb6ab35d",
+      "member": "Python-3.13.16/Lib/test/test_importlib/namespace_pkgs/missing_directory.zip",
+      "sha256": "2507eab0cb7a594b25fb2fc1c6a0b0f27af53d1980ba358d4e0c1b1dc32a9e63",
+      "allowedRules": [],
+      "disposition": "exclude",
+      "licenseExpression": "PSF-2.0",
+      "category": "optional-upstream-python-archive-test-fixture",
+      "reason": "Exact Lib/test tar/ZIP namespace/archive parser fixture, including deliberately invalid recursion headers and nonregular entry tests. Exclude only this fixture from the curated source asset; no claim that upstream distribution is prohibited. Runtime/build source is retained.",
+      "sourceRequirementReason": "Python PSF source distribution does not impose copyleft corresponding-source delivery. These optional test datasets are absent from the pinned embeddable runtime stdlib and are not inputs in PCbuild/pythoncore.vcxproj; test_tarfile/test_namespace_pkgs provide their test-only use. Preserve full interpreter production source and all applicable notices.",
+      "proofGroup": "python-optional-test-fixtures"
+    },
+    {
+      "componentId": "native:python",
+      "archive": "build/cache/legal-sources/Python-3.13.16.tar.xz",
+      "archiveSha256": "f4b1bfb3c79b5bb11b8d228a12504163b4c0dab4d679828d8f5f26b6cb6ab35d",
+      "member": "Python-3.13.16/Lib/test/test_importlib/namespace_pkgs/nested_portion1.zip",
+      "sha256": "9d6e1c27870cb53512a2e29ab03e61c25188ebed57e933ee5ce4e749d72c0a87",
+      "allowedRules": [],
+      "disposition": "exclude",
+      "licenseExpression": "PSF-2.0",
+      "category": "optional-upstream-python-archive-test-fixture",
+      "reason": "Exact Lib/test tar/ZIP namespace/archive parser fixture, including deliberately invalid recursion headers and nonregular entry tests. Exclude only this fixture from the curated source asset; no claim that upstream distribution is prohibited. Runtime/build source is retained.",
+      "sourceRequirementReason": "Python PSF source distribution does not impose copyleft corresponding-source delivery. These optional test datasets are absent from the pinned embeddable runtime stdlib and are not inputs in PCbuild/pythoncore.vcxproj; test_tarfile/test_namespace_pkgs provide their test-only use. Preserve full interpreter production source and all applicable notices.",
+      "proofGroup": "python-optional-test-fixtures"
+    },
+    {
+      "componentId": "native:python",
+      "archive": "build/cache/legal-sources/Python-3.13.16.tar.xz",
+      "archiveSha256": "f4b1bfb3c79b5bb11b8d228a12504163b4c0dab4d679828d8f5f26b6cb6ab35d",
+      "member": "Python-3.13.16/Lib/test/test_importlib/namespace_pkgs/top_level_portion1.zip",
+      "sha256": "42376ede22fbd49cd23ecb7fcd690206b53e5304c1c75fcf36358ab8acdda62a",
+      "allowedRules": [],
+      "disposition": "exclude",
+      "licenseExpression": "PSF-2.0",
+      "category": "optional-upstream-python-archive-test-fixture",
+      "reason": "Exact Lib/test tar/ZIP namespace/archive parser fixture, including deliberately invalid recursion headers and nonregular entry tests. Exclude only this fixture from the curated source asset; no claim that upstream distribution is prohibited. Runtime/build source is retained.",
+      "sourceRequirementReason": "Python PSF source distribution does not impose copyleft corresponding-source delivery. These optional test datasets are absent from the pinned embeddable runtime stdlib and are not inputs in PCbuild/pythoncore.vcxproj; test_tarfile/test_namespace_pkgs provide their test-only use. Preserve full interpreter production source and all applicable notices.",
+      "proofGroup": "python-optional-test-fixtures"
+    },
+    {
+      "componentId": "nuget:Loqui/2.71.0-alpha.1",
+      "archive": "build/cache/legal-sources/Loqui-d6f6662fb1751f273717626cabfb60d3c78d3e0c.zip",
+      "archiveSha256": "74effcc8080e6bdf926653d315b50577afb4503a8d5a892efa25e59babcb23b6",
+      "member": "Loqui-d6f6662fb1751f273717626cabfb60d3c78d3e0c/Visual Studio Templates/Loqui Object.zip",
+      "sha256": "ba96b08e75a87c29d272c3d432b0b3f7b98aed944c12742c6086d8fd66c39050",
+      "allowedRules": [],
+      "disposition": "exclude",
+      "licenseExpression": "GPL-3.0-only",
+      "category": "optional-visual-studio-item-template",
+      "reason": "Exact optional CSharp Visual Studio item-template ZIP contains a shell Loqui XML template, its IDE manifest and a 44KB __TemplateIcon.ico whose independent image origin is not established. Narrowly exclude this IDE convenience archive instead of asserting the root source grant proves ownership of all embedded art. This is not a prohibition finding.",
+      "sourceRequirementReason": "The manifest explicitly identifies Type=Item and describes creating a shell XML source. None of the seven csproj/props/targets/sln build files references this template directory/archive. Production Loqui/library/generator sources and actual XML inputs remain retained; the IDE new-item convenience template is not required to build or modify those components.",
+      "proofGroup": "loqui-optional-ide-template"
+    }
+  ],
+  "materializedLinks": [
+    {
+      "archive": "build/cache/legal-sources/dotnet-runtime-8.0.32.tar.gz",
+      "archiveSha256": "8e360aff5f39823f185d0e769b511abc2d14271ba86fa0f6023e42ebb8532e88",
+      "path": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/native/external/libunwind/README.md",
+      "target": "README",
+      "resolvedTargetMember": "runtime-b9a49e4a6d3a444a3685e318c74a7892d01873f7/src/native/external/libunwind/README",
+      "targetSha256": "b60afc66f723644c5c1ed13b4da78291b9a9c3725f3565328f9595618f5df3fe",
+      "reason": "Contained upstream documentation/licence alias to a verified regular source member. Materialize byte-for-byte as a regular file; preserves notice or README without filesystem link or path escape."
+    },
+    {
+      "findingIndex": 271,
+      "member": "Reloaded.Memory-2c31a5e84aa06dbe8e22ed3859b79d8729618fb2/src/.editorconfig",
+      "sha256": "d967d6c1c7c40692ce02128e3da9d49e5d1d797dd22d2da4ddbb8674434a1aa0",
+      "allowedRules": [],
+      "disposition": "materialize-pinned-target",
+      "reviewStatus": "reviewed-exact-content-only",
+      "archive": "build/cache/legal-sources/Reloaded.Memory-2c31a5e84aa06dbe8e22ed3859b79d8729618fb2.zip",
+      "archiveSha256": "5e6bccfba07bab69bac9f05bc153d271b39bc1d593d94b4c2079d7a136121aa7",
+      "componentId": "nuget:Reloaded.Memory/9.4.1",
+      "licenseExpression": "GPL-3.0",
+      "target": "Reloaded.Project.Configurations/.editorconfig",
+      "targetRevision": "38db64b2a6c6952a66e1fe00cd344bc2f31c4b70",
+      "targetGitBlob": "86d37002fa73d24018ba71cf5f8e9b8174dfd71b",
+      "reason": "The ZIP member is a nonencrypted UNIX symlink, mode 0120777, to the pinned build-configuration submodule. Preserve source by materializing the verified exact .editorconfig target from that submodule as a regular file. Do not dereference an unpinned target. Complete required NuGet.Build.props and Directory.Build.props source must accompany the component.",
+      "sourceEvidence": "build/reloaded-config-pinned-source-evidence.json",
+      "integrationRequired": "Owner must add the pinned submodule archive, GPL notice and unpack/build instructions; materialize this link only against the verified included regular target. Not a blanket linked-entry exemption.",
+      "targetSha256": "adbc5347cc41e36b7003a1b9b8b702c1da1c62b73ce0f3c178e3a125a4d4e40d",
+      "targetArchive": "build/cache/legal-sources/Reloaded.Project.Configurations-38db64b2a6c6952a66e1fe00cd344bc2f31c4b70.zip",
+      "targetArchiveSha256": "eb85c59134e4a17701c7c1186df13d82e308ce099f12d4bcd64e60c3a906882c",
+      "archiveEvidence": "build/reloaded-config-pinned-archive-evidence.json",
+      "sourceBuildProof": "Pinned build material retrieved and every regular archive file verified against the exact Git tree. Owner integration and actual corresponding-source/build receipt verification remain required; no passing build is claimed.",
+      "archiveEvidenceSha256": "e0853f0aadeee9d23c771023f5f50e5260d3e0a8394a0916426f1b0aad520be6",
+      "requiredPackageIconGrant": {
+        "path": "build/reloaded-config-pinned-archive-evidence.json",
+        "section": "requiredPackageIconGrant",
+        "sha256": "e0853f0aadeee9d23c771023f5f50e5260d3e0a8394a0916426f1b0aad520be6"
+      },
+      "resolvedTargetMember": "Reloaded.Memory-2c31a5e84aa06dbe8e22ed3859b79d8729618fb2/src/Reloaded.Project.Configurations/.editorconfig",
+      "additionalSource": {
+        "url": "https://codeload.github.com/Reloaded-Project/Reloaded.Project.Configurations/zip/38db64b2a6c6952a66e1fe00cd344bc2f31c4b70",
+        "path": "build/cache/legal-sources/Reloaded.Project.Configurations-38db64b2a6c6952a66e1fe00cd344bc2f31c4b70.zip",
+        "sha256": "eb85c59134e4a17701c7c1186df13d82e308ce099f12d4bcd64e60c3a906882c",
+        "stripPrefix": "Reloaded.Project.Configurations-38db64b2a6c6952a66e1fe00cd344bc2f31c4b70",
+        "destination": "Reloaded.Memory-2c31a5e84aa06dbe8e22ed3859b79d8729618fb2/src/Reloaded.Project.Configurations",
+        "revision": "38db64b2a6c6952a66e1fe00cd344bc2f31c4b70"
+      },
+      "path": "Reloaded.Memory-2c31a5e84aa06dbe8e22ed3859b79d8729618fb2/src/.editorconfig"
+    }
+  ]
+}

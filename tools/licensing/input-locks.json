@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "files": {
+    "src/engine/Cargo.lock": "5363b1207ed5adc98a9893c4dbd486c60ab9b4d65c5d4a9125ed4ee62ee504cc",
+    "src/installer/packages.lock.json": "ca94a7101c86fd9ff57aeccf7deeedfd3bbe26e4192693e5db9877107633745f",
+    "src/installer/packages.release.lock.json": "0d007f1b030a198f1edd62974eb792de294f5a4dd2aa511b3d844c046bf8755f",
+    "tests/installer.Tests/packages.lock.json": "5d890855c3e4abd720f75c4c6016eff7f7c7e2f49e670e67fc527b9d297af67e",
+    "tools/bink2-decoder/packages.lock.json": "eadea5a9d191cf8d282e162cffe83e72d13d8a12e5d41f4368d49a8d10e06117",
+    "tools/bink2-decoder/packages.release.lock.json": "15093409300eca261c601706f160d5d1fa0d224544d4d6cd270c1e2922e81a05",
+    "tools/ffdec/toolchain.lock.json": "c92fc51be2e9437ea83841125b80c93739b0032fd554ccad007c38ee5e2b19cb",
+    "tools/librempeg/toolchain.lock.json": "ca214ae357066ebbe8d00e79d776187870440386c1c757f78647e3c28cc2f993"
+  }
+}

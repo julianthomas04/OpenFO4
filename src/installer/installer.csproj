@@ -1,0 +1,63 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- A Windows GUI app: double-clicking opens no console. The headless and dev modes attach to the parent terminal's console at start (logging/parent_console.cs). -->
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <Copyright>Copyright 2026 Julian Thomas and OpenFO4 contributors</Copyright>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- The release build stamps -p:Version (the version string of build-release.ps1); the default marks a dev build. BA2Sharp's own AssemblyInfo.cs is not compiled so the installer carries one version. -->
+    <Version Condition="'$(Version)' == ''">0.0.0-dev</Version>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+    <!-- The installer is a 32-thread batch converter: server GC's per-core
+         heaps remove the workstation-GC serialization that otherwise
+         dominates allocation-heavy parallel phases (NIF->GLB, ESM load).
+         Override per-run with DOTNET_gcServer=0/1 for A/B benchmarks. -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <GarbageCollectionAdaptationMode>1</GarbageCollectionAdaptationMode>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <TieredPgo>true</TieredPgo>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+  </PropertyGroup>
+
+  <!-- build-release.ps1 passes -p:OpenFO4Package=true: one self-contained single-file win-x64 exe. A dev build, run or test is unaffected. -->
+  <PropertyGroup Condition="'$(OpenFO4Package)' == 'true'">
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="BA2Sharp/Properties/AssemblyInfo.cs" />
+  </ItemGroup>
+
+  <!-- The payload (tools, data files and game) the packaged installer unpacks at run time; the script builds the zip and names its content hash. -->
+  <ItemGroup Condition="'$(PayloadZip)' != ''">
+    <EmbeddedResource Include="$(PayloadZip)" LogicalName="OpenFO4.Payload.zip" />
+    <EmbeddedResource Include="$(PayloadIdFile)" LogicalName="OpenFO4.Payload.id" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.3.22" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.22" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.22" />
+    <PackageReference Include="Dapper" Version="2.1.66" />
+    <PackageReference Include="IonKiwi.lz4.net" Version="1.0.15" NoWarn="NU1701" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.1" />
+    <PackageReference Include="Mutagen.Bethesda" Version="0.50.1" />
+    <PackageReference Include="nifly" Version="0.1.0" />
+    <PackageReference Include="Npgsql" Version="9.0.3" />
+    <PackageReference Include="Pfim" Version="0.11.4" />
+    <PackageReference Include="SharpGLTF.Toolkit" Version="1.0.5" />
+    <PackageReference Include="SharpZipLib" Version="1.4.2" />
+    <!-- Pins the native SQLite past GHSA-2m69-gcr7-jv3q (lib.e_sqlite3 <= 2.1.11); Microsoft.Data.Sqlite 10 still pulls 2.1.11. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
+    <PackageReference Include="System.Drawing.Common" Version="8.0.8" />
+  </ItemGroup>
+</Project>

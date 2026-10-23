@@ -1,0 +1,557 @@
+{
+  "schema": 2,
+  "status": "five-file-recipient-bundle-ready-for-integration",
+  "publicationReady": false,
+  "publicationReadinessReason": "Recipient forms and audience separation are complete. Final release integration, exact artifact inventory, protective recipient agreement verification, and parent-scheduled curated Java/FFDec smoke remain to be verified; this is not an artifact publication certificate.",
+  "termsFile": "build/MICROSOFT_RUNTIME_TERMS.review.txt",
+  "termsFileSha256": "36e4f8938b06c2a12317362fce49cbecbe2f6c54ec0644dc1ab5de0b2e28ca9a",
+  "publisherReferenceFile": "build/MICROSOFT_RUNTIME_PUBLISHER_REFERENCE.review.txt",
+  "publisherReferenceFileSha256": "3fc7d098f02c74bc0d18dee6fbefbdf6e7a62ce5bff5e01a28271857333365f5",
+  "encoding": "UTF-8 without BOM; LF newlines",
+  "scope": "Microsoft proprietary distributable files only; no additional conditions on original/GPL/Apache/.NET-MIT or other separately licensed code.",
+  "audienceMapping": [
+    {
+      "path": "runtime/python/vcruntime140.dll",
+      "sha256": "d1f4225df2cd877dbf130d5668a021dce3f94118455ff5ec952061c30afc9ce7",
+      "fileVersion": "14.51.36247.0",
+      "recipientText": [
+        "A1",
+        "A3"
+      ],
+      "publisherReference": [
+        "B2"
+      ]
+    },
+    {
+      "path": "runtime/python/vcruntime140_1.dll",
+      "sha256": "a7146c08f89fe5b04541ab507cdb59ff7b44534d4ba3c668a426c6450a03434e",
+      "fileVersion": "14.51.36247.0",
+      "recipientText": [
+        "A1",
+        "A3"
+      ],
+      "publisherReference": [
+        "B2"
+      ]
+    },
+    {
+      "path": "runtime/jre/bin/msvcp140.dll",
+      "sha256": "a4c2229bdc2a2a630acdc095b4d86008e5c3e3bc7773174354f3da4f5beb9cde",
+      "fileVersion": "14.40.33810.0",
+      "recipientText": [
+        "A2"
+      ],
+      "publisherReference": [
+        "B1"
+      ]
+    },
+    {
+      "path": "runtime/jre/bin/vcruntime140.dll",
+      "sha256": "02c6aa0e6e624411a9f19b0360a7865ab15908e26024510e5c38a9c08362c35a",
+      "fileVersion": "14.40.33810.0",
+      "recipientText": [
+        "A2"
+      ],
+      "publisherReference": [
+        "B1"
+      ]
+    },
+    {
+      "path": "runtime/jre/bin/vcruntime140_1.dll",
+      "sha256": "7dd9aa02e271c68ca6d5f18d651d23a15d7259715af43326578f7dde27f37637",
+      "fileVersion": "14.40.33810.0",
+      "recipientText": [
+        "A2"
+      ],
+      "publisherReference": [
+        "B1"
+      ]
+    }
+  ],
+  "excludedJreSdkFiles": [
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-console-l1-1-0.dll",
+      "sha256": "88ace577a9c51061cb7d1a36babbbefa48212fadc838ffde98fdfff60de18386",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-console-l1-2-0.dll",
+      "sha256": "c062477ad3bfdc57b0cc402179637a214dab5045c8d644592c7decca7d18aa50",
+      "explicitSdkAllowlistMatch": false
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-datetime-l1-1-0.dll",
+      "sha256": "1bd81dfd19204b44662510d9054852fb77c9f25c1088d647881c9b976cc16818",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-debug-l1-1-0.dll",
+      "sha256": "591358eb4d1531e9563ee0813e4301c552ce364c912ce684d16576eabf195dc3",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-errorhandling-l1-1-0.dll",
+      "sha256": "d56ce7b1cd76108ad6c137326ec694a14c99d48c3d7b0ace8c3ff4d9bcee3ce8",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-fibers-l1-1-0.dll",
+      "sha256": "91d249d7bc0e38ef6bcb17158b1fdc6dd8888dc086615c9b8b750b87e52a5fb3",
+      "explicitSdkAllowlistMatch": false
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-fibers-l1-1-1.dll",
+      "sha256": "fc9d86cec621383eab636ebc87ddd3f5c19a3cb2a33d97be112c051d0b275429",
+      "explicitSdkAllowlistMatch": false
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-file-l1-1-0.dll",
+      "sha256": "1ca895aba4e7435563a6b43e85eba67a0f8c74aa6a6a94d0fc48fa35535e2585",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-file-l1-2-0.dll",
+      "sha256": "4cadbc0c39da7c6722206fdcebd670abe5b8d261e7b041dd94f9397a89d1990d",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-file-l2-1-0.dll",
+      "sha256": "93c624b366ba16c643fc8933070a26f03b073ad0cf7f80173266d67536c61989",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-handle-l1-1-0.dll",
+      "sha256": "39095f59c41d76ec81bb2723d646fde4c148e7cc3402f4980d2ade95cb9c84f9",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-heap-l1-1-0.dll",
+      "sha256": "8f105771b236dbcb859de271f0a6822ce1cb79c36988dd42c9e3f6f55c5f7eb9",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-interlocked-l1-1-0.dll",
+      "sha256": "53b25e753ca785bf8b695d89dde5818a318890211dc992a89146f16658f0b606",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-kernel32-legacy-l1-1-1.dll",
+      "sha256": "a9b13a1cd1b8c19b0c6b4afcd5bb0dd29c0e2288231ac9e6db8510094ce68ba6",
+      "explicitSdkAllowlistMatch": false
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-libraryloader-l1-1-0.dll",
+      "sha256": "7f39ba298b41e4963047341288cab36b6a241835ee11ba4ad70f44dacd40906c",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-localization-l1-2-0.dll",
+      "sha256": "6ee44dd0d8510dc024c9f7c79b1b9fa88c987b26b6beb6653ddd11751c34e5dc",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-memory-l1-1-0.dll",
+      "sha256": "0512a35316ec9180437f86696a84c5c06a7e4e82e050055a656e5bf9fca206f9",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-namedpipe-l1-1-0.dll",
+      "sha256": "c05f1fffe3b5a2738ea54ce9485cca026fb9635f982626fba1e1dcc531897273",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-processenvironment-l1-1-0.dll",
+      "sha256": "c4eca98c3c67b6395d5b005b00ac1eb0318b86b23aa71035a44c2b1602befba9",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-processthreads-l1-1-0.dll",
+      "sha256": "5ccb89e93d67bc3288d4e84649c5346e66e15e3d7cd65d989daf3f4cb584be9a",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-processthreads-l1-1-1.dll",
+      "sha256": "4ad565a8ba3ef0ea8ab87221ad11f83ee0bc844ce236607958406663b407333e",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-profile-l1-1-0.dll",
+      "sha256": "7809160932f44e59b021699f5bc68799eb7293ee1fa926d6fcca3c3445302e61",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-rtlsupport-l1-1-0.dll",
+      "sha256": "9dc1e91e71c7c054854bd1487cb4e6946d82c9f463430f1c4e8d1471005172b1",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-string-l1-1-0.dll",
+      "sha256": "60fc31d2a0c634412f529dba76af3b9bf991352877c6dae528186d3935704cfd",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-synch-l1-1-0.dll",
+      "sha256": "3a72b4f29f39a265d32ad12f0ce15dbf60129c840e10d84d427829ede45e78ad",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-synch-l1-2-0.dll",
+      "sha256": "efc1e4460984a73cf47a3def033af1c8f3b1dbc1a56cd27781d3aacf3e3330cb",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-sysinfo-l1-1-0.dll",
+      "sha256": "b203d862ddef1dd62bf623fc866c7f7a9c317c1c2ae30d1f52cb41f955b5698e",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-sysinfo-l1-2-0.dll",
+      "sha256": "2703635d835396afd0f138d7c73751afe7e33a24f4225d08c1690b0a371932c0",
+      "explicitSdkAllowlistMatch": false
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-timezone-l1-1-0.dll",
+      "sha256": "33f4fddc181066fce06b2227bded813f95e94ed1f3d785e982c6b6b56c510c57",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-core-util-l1-1-0.dll",
+      "sha256": "6eda016742a6171205a387a14b3c0b331841567740376f56768f8c151724207d",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-crt-conio-l1-1-0.dll",
+      "sha256": "b762061b688aae679afe788904d2c9970f74a7dac98f3b42463d08f25e483d3f",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-crt-convert-l1-1-0.dll",
+      "sha256": "ebb2ae5535a64f65daeab8235585114fc9dd2cf1a49f5852d446250b998b6ae4",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-crt-environment-l1-1-0.dll",
+      "sha256": "17d63275d00bdd8670422b95bd264c532998e0a1b041079e54fce4b6b7a55819",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-crt-filesystem-l1-1-0.dll",
+      "sha256": "9a9e2a65a281644e368d0f272b95ba5f6b445d1c35910d06056c5ebeb77402db",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-crt-heap-l1-1-0.dll",
+      "sha256": "bab9ac3ec83e380ae51e4295ef3bf2c738627812d3a49d1e713661abbc8dc57a",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-crt-locale-l1-1-0.dll",
+      "sha256": "bd14c67ea28e21d6257ad780a37122c9b5773f69e693f5db6bffaee4d839526e",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-crt-math-l1-1-0.dll",
+      "sha256": "606d66d82db562ea7979179d06486a0f94d079941d26b80a1e2c49d29959df6f",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-crt-multibyte-l1-1-0.dll",
+      "sha256": "95f49efbe8107786733fa7c474025cf3fee0ac632f240367b296c736d06572aa",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-crt-private-l1-1-0.dll",
+      "sha256": "1bc82bed6143d2bf1b6b08a7809f4a5e29317d6fddd338a7da3c0223522e4bbf",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-crt-process-l1-1-0.dll",
+      "sha256": "f6156b1020380ec4f0e48577ebedaaef5fb1ab1f337d8b4e72e6a33a7567a9cc",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-crt-runtime-l1-1-0.dll",
+      "sha256": "c5902934d026d7e15fbe9917d474f3322846a41a25e66f4b2b1f758801879f4b",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-crt-stdio-l1-1-0.dll",
+      "sha256": "a9c5a153d8c0286f9b41a2b1c65854ad9e6471b8755b7de87bae4470e60bcab6",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-crt-string-l1-1-0.dll",
+      "sha256": "25b8f83a7767211b11132775a0e27a45aa4ec8ab4e6572599f9c172ae3606b40",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-crt-time-l1-1-0.dll",
+      "sha256": "7c7f6393f06de11750adb09cc5698ae55cd9fb27b2e51e207286feb1b5b2b156",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/api-ms-win-crt-utility-l1-1-0.dll",
+      "sha256": "d8ba5f17b9ffcbf3aeaf3fa1da226832d2fa90f81acce0cd669464e76ce434ac",
+      "explicitSdkAllowlistMatch": true
+    },
+    {
+      "path": "runtime/jre/bin/ucrtbase.dll",
+      "sha256": "2e5fb14b7bf8540278f3614a12f0226e56a7cc9e64b81cbd976c6fcf2f71cbfb",
+      "explicitSdkAllowlistMatch": true
+    }
+  ],
+  "excludedJreSdkFileCount": 46,
+  "verbatimClauseMapping": [
+    {
+      "id": "A1",
+      "audience": "Python package redistributors and their recipients",
+      "applicability": "Python Windows build and its identified Microsoft runtime files",
+      "source": {
+        "archive": "build/cache/python-3.13.16-embeddable-amd64.zip",
+        "archiveSha256": "589dc1e9d02549ca5f680710307ff9b77f6e3ffc4aa3efccd7fa54eeeafac94b",
+        "member": "LICENSE.txt",
+        "memberSha256": "62bec384df47b0328307db41455ff6ea2559e5546b394ac69148561b21703120"
+      },
+      "sourceParagraphIndices0Based": null,
+      "selection": "Complete section from heading Additional Conditions for this Windows binary build through or by other licenses as marked.; CRLF normalized to LF only.",
+      "verbatimTextSha256": "e1c3f7327503bae86aacbe5ff5c12d26ce2160673e248fb0dd8284b878c5724a",
+      "beginMarker": "BEGIN VERBATIM VENDOR TEXT: A1",
+      "endMarker": "END VERBATIM VENDOR TEXT: A1",
+      "outputTextLines1Based": {
+        "first": 18,
+        "last": 55
+      },
+      "outputFile": "build/MICROSOFT_RUNTIME_TERMS.review.txt"
+    },
+    {
+      "id": "A2",
+      "audience": "Microsoft runtime end users; not publisher redistribution authority",
+      "applicability": "Three listed VC14.40.33810.0 JRE runtime files",
+      "source": {
+        "path": "build/cache/legal-notices/msvc-runtime/Visual-C-Runtime-2015-2022-License-1.docx",
+        "url": "https://visualstudio.microsoft.com/wp-content/uploads/2021/09/Visual-C-Runtime-2015-2022-License-1.docx",
+        "sha256": "f1e3d56ceb2ad68aae0711b910375009e651ac5530fa0760f0dea6e81e54fae1"
+      },
+      "sourceParagraphIndices0Based": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33
+      ],
+      "selection": null,
+      "verbatimTextSha256": "7e96c27c67ef3e7cabc55e1dee05727e67d261f3944155a816a07dbf9b78fb1d",
+      "beginMarker": "BEGIN VERBATIM VENDOR TEXT: A2",
+      "endMarker": "END VERBATIM VENDOR TEXT: A2",
+      "outputTextLines1Based": {
+        "first": 61,
+        "last": 94
+      },
+      "outputFile": "build/MICROSOFT_RUNTIME_TERMS.review.txt"
+    },
+    {
+      "id": "A3",
+      "audience": "Microsoft V14 runtime end users; not publisher redistribution authority",
+      "applicability": "Two listed Python VC14.51.36247.0 runtime files, redistributed with the unchanged Python Windows build",
+      "source": {
+        "path": "build/cache/legal-notices/msvc-runtime/Visual-C-V14-License-Redistributable_and_Runtime_ENU.docx",
+        "url": "https://visualstudio.microsoft.com/wp-content/uploads/2025/10/Visual-C-V14-License-Redistributable_and_Runtime_ENU.docx",
+        "sha256": "08651651a7602fc7c0e2763de0fde1ff9f868df2780597cd1775ee9d6441c783",
+        "officialProductPage": "https://visualstudio.microsoft.com/license-terms/vs2026-ga-visualcpp-v14-redist-runtime/",
+        "extractedTextPath": "build/cache/legal-notices/msvc-runtime/Visual-C-V14-License-Redistributable_and_Runtime_ENU.txt",
+        "extractedTextSha256": "923d8b11a03c277d59f3262727abc7e422158f5243a5565d67d5c270c6b05e3c"
+      },
+      "sourceParagraphIndices0Based": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50
+      ],
+      "selection": "Complete document; each DOCX paragraph text retained in document order, including empty paragraphs and Canadian French clauses. Formatting represented as LF-separated paragraphs.",
+      "verbatimTextSha256": "3dfd057b91025067c08bd73c3cb0e6f712f76b6198b54413e14365d529f17ea6",
+      "beginMarker": "BEGIN VERBATIM VENDOR TEXT: A3",
+      "endMarker": "END VERBATIM VENDOR TEXT: A3",
+      "outputFile": "build/MICROSOFT_RUNTIME_TERMS.review.txt",
+      "outputTextLines1Based": {
+        "first": 100,
+        "last": 150
+      }
+    },
+    {
+      "id": "B1",
+      "audience": "Publisher/developer and authorized application distributors",
+      "applicability": "JRE VC2022 redistributable provenance",
+      "source": {
+        "path": "build/cache/legal-notices/msvc-runtime/Visual-Studio-2022-Community-License-EN.docx",
+        "url": "https://visualstudio.microsoft.com/wp-content/uploads/2021/11/Visual-Studio-2022-Community-License-EN.docx",
+        "sha256": "41a207b10c8ab91d0d2f10a854715f73dca54509581692d2fe179aa3ffcb8540"
+      },
+      "sourceParagraphIndices0Based": [
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48
+      ],
+      "selection": null,
+      "verbatimTextSha256": "43e5839221005d58f3cab5769e3554e8cd436df925019e0ec5bfb22c11f011ca",
+      "beginMarker": "BEGIN VERBATIM VENDOR TEXT: B1",
+      "endMarker": "END VERBATIM VENDOR TEXT: B1",
+      "outputTextLines1Based": {
+        "first": 16,
+        "last": 27
+      },
+      "outputFile": "build/MICROSOFT_RUNTIME_PUBLISHER_REFERENCE.review.txt"
+    },
+    {
+      "id": "B2",
+      "audience": "Original publisher/developer and authorized application distributors",
+      "applicability": "Reference for Python upstream third-party-distribution chain; no assertion of a local VS2026 entitlement",
+      "source": {
+        "path": "build/cache/legal-notices/msvc-runtime/Visual_Studio_2026-License-Community_ENU.docx",
+        "url": "https://visualstudio.microsoft.com/wp-content/uploads/2025/10/Visual_Studio_2026-License-Community_ENU.docx",
+        "sha256": "02ac07637f4a513a807cd3721c7620433fc483bc049d25784b0c10c54b05e1fb"
+      },
+      "sourceParagraphIndices0Based": [
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63
+      ],
+      "selection": null,
+      "verbatimTextSha256": "a3df7e8f23dc80e54dfbe453ddaa2dfae0a2adfaf8214d212cae4203adc18eca",
+      "beginMarker": "BEGIN VERBATIM VENDOR TEXT: B2",
+      "endMarker": "END VERBATIM VENDOR TEXT: B2",
+      "outputTextLines1Based": {
+        "first": 33,
+        "last": 46
+      },
+      "outputFile": "build/MICROSOFT_RUNTIME_PUBLISHER_REFERENCE.review.txt"
+    }
+  ],
+  "legalBlockers": [],
+  "correctedPriorAssessment": [
+    "The earlier blanket C1 conflict was withdrawn: publisher redistribution grants and recipient runtime-use licenses address different rights and audiences. A runtime end-user distribution prohibition does not cancel a separately licensed publisher grant. No general recipient redistribution right is asserted.",
+    "The earlier C2 SDK-recipient-terms question no longer applies to the retained loose Microsoft files after all 46 JRE UCRT/API-set DLLs are omitted. Complete JRE legal notices remain required.",
+    "The earlier C3 blanket legal-review gate was withdrawn. The grants require protective recipient/distributor agreement but prescribe no particular graphical or command-line consent implementation. Publisher duties remain publisher duties; source text is not rewritten."
+  ],
+  "remainingConditions": [
+    "Integrate and make the exact applicable recipient terms accessible before scoped agreement; verify the final packaged installer obtains agreement before installing the Microsoft files.",
+    "Retain the exact Microsoft file hashes, upstream Python notice, complete vendor runtime documents, publisher grants and relevant allowed-file evidence.",
+    "Do not claim that the GPL or another open-source license authorizes unrestricted redistribution of Microsoft proprietary files. Any further distributor must have its own applicable permission and meet its conditions.",
+    "Do not replace, alter, or redistribute the two Python VC14.51 files separately from the unchanged Python Windows build under this pass-through evidence.",
+    "Run the parent-scheduled Java/FFDec smoke after omitting all 46 exact JRE UCRT/API-set files, and verify the final payload and source inventory."
+  ],
+  "assentRequirementSourceClauses": [
+    "B1 paragraph 44 (0-based original DOCX paragraph index)",
+    "B2 paragraph 57 (0-based original DOCX paragraph index)",
+    "A1 upstream Python Windows notice"
+  ],
+  "publisherAllowedLists": [
+    {
+      "path": "build/cache/legal-notices/msvc-runtime/Visual-Studio-2022-Redistribution.html",
+      "url": "https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution",
+      "sha256": "22c07c097c3eaf8ec93a841b760e25ad75a40718f3ccc3d2f83cd8eeef68a324",
+      "bytes": 62616
+    },
+    {
+      "path": "build/cache/legal-notices/msvc-runtime/Visual-Studio-2026-Redistribution.html",
+      "url": "https://learn.microsoft.com/en-us/visualstudio/releases/2026/redistribution",
+      "sha256": "d9016045dd3b14190c12c8809382d57a8ea00f62e9ee98229072a0530eab315b"
+    }
+  ],
+  "nonAuthorityWarning": "A2/A3 are recipient runtime-use terms, not publisher redistribution authority; B1/B2 are separate publisher/developer references, not whole-product IDE licenses imposed on application users."
+}

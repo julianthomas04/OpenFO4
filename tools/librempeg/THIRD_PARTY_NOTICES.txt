@@ -1,0 +1,39 @@
+Librempeg
+https://github.com/librempeg/librempeg
+Source commit: 395e8d99bed806c77b188f77599f25ee82f8f3bd
+The Bink2 decoder is distributed under GNU GPL version 3 or later. Other selected
+components retain the licenses stated in their source files. The ffmpeg command
+line program includes AGPL components and is built with --enable-agpl; the
+combined executable is licensed under GNU AGPL version 3 or later. See
+licenses/Librempeg-AGPLv3.txt, licenses/Librempeg-GPLv3.txt and the complete source
+archive for the individual component notices.
+
+x264
+https://code.videolan.org/videolan/x264
+Source mirror: https://github.com/mirror/x264
+Source commit: 0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee
+The selected x264 library is distributed under GNU GPL version 2 or later and is
+combined here under GNU GPL version 3 or later. See licenses/x264-COPYING.txt and
+the complete source archive. No commercial x264 license is asserted.
+
+Effective licence of the bundle
+The combination of the AGPL version 3 or later ffmpeg program and GPL x264 is
+distributed under the GNU AGPL version 3 or later, with the GPL version 3
+obligations for x264 retained. The complete corresponding source is in source/.
+
+Build/runtime components
+The locked MSYS2 UCRT64 toolchain supplies GCC and the MinGW-w64 Windows runtime.
+Runtime license texts, including applicable GCC runtime exceptions, are retained
+in licenses/toolchain-runtime. The exact package versions and archive SHA256
+values are recorded in build-info/toolchain.lock.json. Source/build scripts for
+the selected codecs accompany this bundle; any additional linked runtime or DLL
+requires its license/source obligations to be checked before redistribution.
+
+The separate executable interface does not remove the obligations attached to
+the executable itself. Recipients must retain the license notices and receive
+the complete corresponding source and build scripts alongside distributed tools.
+AGPL section 13 additionally requires a corresponding-source offer to remote
+users when a modified version supports interaction through a computer network.
+Codec patent rights are not granted by the GPL notices; this covers the AAC encoder and the Bink audio decoder as well as x264.
+
+No original or converted Bethesda game assets are distributed in this bundle.

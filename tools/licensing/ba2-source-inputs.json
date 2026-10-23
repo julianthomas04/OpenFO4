@@ -1,0 +1,148 @@
+{
+  "schema": 1,
+  "baseline": {
+    "path": "build/cache/legal-sources/BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c.zip",
+    "url": "https://codeload.github.com/AlexxEG/BSA_Browser/zip/a2ce9d89ba39cccef8f9203414e78d8e5174647c",
+    "sha256": "1f4627c89e36f67954ecf65006cd76a4df979bdffc24f45bd09d7a29e2b52482",
+    "revision": "a2ce9d89ba39cccef8f9203414e78d8e5174647c"
+  },
+  "selectedMembers": [
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/LICENSE",
+      "path": "LICENSE",
+      "sha256": "c61f12da7cdad526bdcbed47a4c0a603e60dbbfdaf8b66933cd088e9132c303f"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/README.md",
+      "path": "README.md",
+      "sha256": "b8f09f8d0fad6e11b3f98501137112679e6e579f91e9298370e984c1a63331d4"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/Archive.cs",
+      "path": "Sharp.BSA.BA2/Archive.cs",
+      "sha256": "37cb0ba6df915f4260cab22ad4e8c0f31d29de352e8e1655429b98642230e46a"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/ArchiveEntry.cs",
+      "path": "Sharp.BSA.BA2/ArchiveEntry.cs",
+      "sha256": "da13f036a78df839cf675d84e1466ab41538c274317484bf380be56de025b8ed"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/BA2Util/BA2.cs",
+      "path": "Sharp.BSA.BA2/BA2Util/BA2.cs",
+      "sha256": "a53d284646770e333a48d9424c42d23ac43a48aad549ed769219ea5e711ac763"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/BA2Util/BA2Enums.cs",
+      "path": "Sharp.BSA.BA2/BA2Util/BA2Enums.cs",
+      "sha256": "914f81e8fcb4fa0f2b57771558589493bfc7e77916455de412c78b9274b82ec1"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/BA2Util/BA2FileEntry.cs",
+      "path": "Sharp.BSA.BA2/BA2Util/BA2FileEntry.cs",
+      "sha256": "c7cd007bfc888f2b387111a3b8e8d44c9f251cb26fd67a9a9c34f8e6b5609c58"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/BA2Util/BA2GNFEntry.cs",
+      "path": "Sharp.BSA.BA2/BA2Util/BA2GNFEntry.cs",
+      "sha256": "702730dad818fe006494eaf6481e0d3fb6c6f0a9c213dd0da01c55fd427da0ed"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/BA2Util/BA2Header.cs",
+      "path": "Sharp.BSA.BA2/BA2Util/BA2Header.cs",
+      "sha256": "0bd498fb5a4551afe87c6870280381580ebcb5c7f2e453e24f71e856786d2a6e"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/BA2Util/BA2TextureChunk.cs",
+      "path": "Sharp.BSA.BA2/BA2Util/BA2TextureChunk.cs",
+      "sha256": "b5294b2608b94a45d840c0d4d9015276b0b45f79b5d4c76e4d8b98b8ca5b3778"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/BA2Util/BA2TextureEntry.cs",
+      "path": "Sharp.BSA.BA2/BA2Util/BA2TextureEntry.cs",
+      "sha256": "7e22d548c0089af3d59b7c66cb5c87c8b908d456d4f6bda2b792790e31bfe2a7"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/BSAUtil/BSA.cs",
+      "path": "Sharp.BSA.BA2/BSAUtil/BSA.cs",
+      "sha256": "8f4504b4851e1884ecc050c561a6750a59f6ef8e7687bec910e4989042ac6de4"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/BSAUtil/BSAFileEntry.cs",
+      "path": "Sharp.BSA.BA2/BSAUtil/BSAFileEntry.cs",
+      "sha256": "b33addde28fce895ace949f5250adddeecb9cb0a421485f0a38df58257537b1a"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/BSAUtil/BSAFileInfo.cs",
+      "path": "Sharp.BSA.BA2/BSAUtil/BSAFileInfo.cs",
+      "sha256": "57826d6c19222a83684a6281baf7c4a66ecf9fe7f12826b405a7ac95d9a9201d"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/BSAUtil/BSAFolderInfo.cs",
+      "path": "Sharp.BSA.BA2/BSAUtil/BSAFolderInfo.cs",
+      "sha256": "fcc7038cb0fe631d4c2afbbf0ea1b168be0c5ce14a11c69bbbdff5d049099486"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/BSAUtil/BSAHeader.cs",
+      "path": "Sharp.BSA.BA2/BSAUtil/BSAHeader.cs",
+      "sha256": "d2637cc92e4444290f4d63a9dc1552e002513d20e388b54401242a20b70bc676"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/BSAUtil/BSAHeaderMW.cs",
+      "path": "Sharp.BSA.BA2/BSAUtil/BSAHeaderMW.cs",
+      "sha256": "108e8667df45ebd8251488dd2a7da4c994933dcc88f57e84dc20c36374a3977f"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/BSAUtil/DAT2FileEntry.cs",
+      "path": "Sharp.BSA.BA2/BSAUtil/DAT2FileEntry.cs",
+      "sha256": "910d9e186a0d429569deee11ec232d71b1274472622be9135c74ffd30df49a19"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/Enums/ArchiveTypes.cs",
+      "path": "Sharp.BSA.BA2/Enums/ArchiveTypes.cs",
+      "sha256": "4dbe53b7f2f1ea31114fe6e39e96f7d58273cc674611accfd50e1f8c454d4bce"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/Extensions/BinaryStreamExtensions.cs",
+      "path": "Sharp.BSA.BA2/Extensions/BinaryStreamExtensions.cs",
+      "sha256": "23766114e064b8388fc72cc39d367a5e127f56ba052af6ec1033ffd5b7187dc8"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/Extensions/StreamExtensions.cs",
+      "path": "Sharp.BSA.BA2/Extensions/StreamExtensions.cs",
+      "sha256": "4f7dc1882be0a52acf504c3abc2399ccfb188bbd8091b9db26613f77027a6f0f"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/Properties/AssemblyInfo.cs",
+      "path": "Sharp.BSA.BA2/Properties/AssemblyInfo.cs",
+      "sha256": "6dc7b57241d029098b78a702e2ec0ed2d461f2a46d941959236ff4693b4efd74"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/SharedExtractParams.cs",
+      "path": "Sharp.BSA.BA2/SharedExtractParams.cs",
+      "sha256": "e2d5654b02956ad95e575b61fb7794014e1d888553e76f7f8c590d4ddc7edd5f"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/Utils/CompressionUtils.cs",
+      "path": "Sharp.BSA.BA2/Utils/CompressionUtils.cs",
+      "sha256": "bdc555eb6ae579cc194a5d751920d8ce404c26fb444de496ad948ab71564494e"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/Utils/MorrowindNameTable.cs",
+      "path": "Sharp.BSA.BA2/Utils/MorrowindNameTable.cs",
+      "sha256": "e0835605378a04196b4c128f644efa3d47276e73850cde0da0802e67f40d14f3"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/Utils/PathUtils.cs",
+      "path": "Sharp.BSA.BA2/Utils/PathUtils.cs",
+      "sha256": "877934f5852e464915b3cffa53fcf9c131110ed279d959784469a1bce1f74dd3"
+    },
+    {
+      "member": "BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c/Sharp.BSA.BA2/Utils/StreamUtils.cs",
+      "path": "Sharp.BSA.BA2/Utils/StreamUtils.cs",
+      "sha256": "6cec5aff13dcef845426614e259d7d577003ca0ad02290277196cd7d4dbad5ff"
+    }
+  ],
+  "excludedRestrictedDdsPath": "Sharp.BSA.BA2/BA2Util/DDS.cs",
+  "preferredSource": "Current modified BA2Sharp sources plus independent Apache-2.0 DDS.cs and the complete installer project/build inputs are in OpenFO4-preferred-source.zip. This selected upstream baseline is provenance evidence, not a standalone build."
+}

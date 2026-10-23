@@ -1,0 +1,65 @@
+src/engine/target
+
+coverage/
+
+# Python
+__pycache__/
+*.pyc
+
+# AI
+.agents.local
+.claude
+AGENTS.local.md
+
+# Simple guard against committing game assets
+## Original formats
+*.nif
+*.dds
+*.ba2
+*.bsa
+*.esm
+*.esp
+*.esl
+*.hkx
+*.fxp
+*.pex
+*.psc
+*.swf
+*.xwm
+*.fuz
+*.lip
+*.bk2
+*.btr
+*.bto
+*.lod
+*.tri
+*.obj
+*.ssf
+*.sclp
+*.hko
+*.uvd
+*.strings
+*.dlstrings
+*.ilstrings
+
+## Converted formats
+*.dxbc
+*.asm
+*.glb
+*.colbin
+*.flac
+*.svgz
+*.mp4
+
+# Generated files
+src/installer/bin
+src/installer/obj
+tests/installer.Tests/bin
+tests/installer.Tests/obj
+tests/installer.Tests/TestResults
+/build/
+
+# Misc
+.vscode
+*.lscache
+.obsidian/

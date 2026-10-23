@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "curationSha256": "10f1c7365cac649aff83085a8384090daa4e09e7f9031f31b596f5606492a4cd",
+  "archives": {
+    "503fa789355f698a42429354af62e6911bd4e336a9477949cc867510da8c1e0f": {
+      "path": "build/cache/legal-sources/temurin-jdk21u-1c417fbfc2f7.tar.gz.preferred.zip",
+      "name": "temurin-jdk21u-1c417fbfc2f7.tar.gz.preferred.zip",
+      "sha256": "9fdbbcee1621554dee950d278a695e18bb1c53c19cb6c993395cba93f32e423d"
+    },
+    "8e360aff5f39823f185d0e769b511abc2d14271ba86fa0f6023e42ebb8532e88": {
+      "path": "build/cache/legal-sources/dotnet-runtime-8.0.32.tar.gz.preferred.zip",
+      "name": "dotnet-runtime-8.0.32.tar.gz.preferred.zip",
+      "sha256": "172a8a5b703f4c08802ab2fc04726546caf6507d3481fbffe71996a2c5ad37c0"
+    },
+    "ab8d1b0cc087c20d4c32c0e4fcf7d0c733a95da12cedc6d63b3f0a9af07427e2": {
+      "path": "build/cache/legal-sources/cpython-bzip2-1.0.8.tar.gz.preferred.zip",
+      "name": "cpython-bzip2-1.0.8.tar.gz.preferred.zip",
+      "sha256": "b668f8bcc8743c12116cb4b820cc42d9c9dfb5c1cb6f63c85499d2947ff29dea"
+    },
+    "74effcc8080e6bdf926653d315b50577afb4503a8d5a892efa25e59babcb23b6": {
+      "path": "build/cache/legal-sources/Loqui-d6f6662fb1751f273717626cabfb60d3c78d3e0c.zip.preferred.zip",
+      "name": "Loqui-d6f6662fb1751f273717626cabfb60d3c78d3e0c.zip.preferred.zip",
+      "sha256": "cff7801da86f225ec4041981e4605eb17690b95b70b81b8b31d31638883e5c35"
+    },
+    "f4b1bfb3c79b5bb11b8d228a12504163b4c0dab4d679828d8f5f26b6cb6ab35d": {
+      "path": "build/cache/legal-sources/Python-3.13.16.tar.xz.preferred.zip",
+      "name": "Python-3.13.16.tar.xz.preferred.zip",
+      "sha256": "95831c0e476e571f01a2386f3ddecc71958d5cd27cf32d3c4498cace0d763c79"
+    },
+    "5e6bccfba07bab69bac9f05bc153d271b39bc1d593d94b4c2079d7a136121aa7": {
+      "path": "build/cache/legal-sources/Reloaded.Memory-2c31a5e84aa06dbe8e22ed3859b79d8729618fb2.zip.preferred.zip",
+      "name": "Reloaded.Memory-2c31a5e84aa06dbe8e22ed3859b79d8729618fb2.zip.preferred.zip",
+      "sha256": "e9577e4551626d66d28caac3d4992a2b1fb4c8f52b4df72eab6d4084ad4f3ddf"
+    }
+  }
+}

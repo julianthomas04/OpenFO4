@@ -1,0 +1,50 @@
+# Exceptions to tools/repo_guard. Each entry names the paths it covers, the rules it waives and a technical reason.
+# Keep entries as narrow as possible; an entry that waives nothing makes the guard fail so stale ones get removed.
+
+[[allow]]
+paths = [
+    "src/installer/shader_translator/wgsl/**",
+    "tests/installer.Tests/shader_translator/**",
+    "tests/installer.Tests/support/wgsl_lint.cs",
+]
+rules = ["translated-wgsl"]
+justification = "The translator's own source and tests: they contain the emitter's identifier templates and assertions on them, not emitted shaders."
+
+[[allow]]
+paths = [
+    "src/engine/src/rendering/shaders/composed/displacement.rs",
+    "src/engine/src/rendering/shaders/composed/grass.rs",
+    "src/engine/src/rendering/shaders/composed/ssr.rs",
+]
+rules = ["translated-wgsl"]
+justification = "Hand-written #[cfg(test)] stubs() that give the shader composer an entry point with the translated signature and a trivial body, so composition can be tested without installed translated shaders."
+
+[[allow]]
+paths = ["tools/repo_guard/text_rules.py", "tests/repo_guard/**"]
+rules = ["translated-wgsl"]
+justification = "The guard's own fingerprint patterns and the unit tests that feed those patterns to it."
+
+[[allow]]
+paths = ["src/engine/src/platform/placeholder.jpg"]
+rules = ["unexpected-binary"]
+justification = "Generated checkerboard image (commit 88c736c8) embedded as the window icon."
+
+[[allow]]
+paths = ["src/engine/src/rendering/effects/shader.rs"]
+rules = ["translated-wgsl"]
+justification = "Hand-written #[cfg(test)] mesh effect shaders with the translated signature, so effect pipeline composition can be tested without installed translated shaders."
+
+[[allow]]
+paths = ["src/installer/BA2Sharp/BA2Util/DDS.cs"]
+rules = ["encoded-blob"]
+justification = "A source comment linking dxgiformat.h by commit-pinned GitHub URL; the 40-hex commit id plus the path forms the run."
+
+[[allow]]
+paths = ["tools/licensing/licenses/native/microsoft-static-runtime/**"]
+rules = ["encoded-blob"]
+justification = "Microsoft's license documents as published: a TLSH page-hash meta tag in the HTML pages and a hex-encoded embedded object in the RTF."
+
+[[allow]]
+paths = ["tools/licensing/reviewed-packages.json"]
+rules = ["oversized-text"]
+justification = "Generated licence review manifest: one entry with licence file hashes per reviewed dependency package."

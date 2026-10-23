@@ -1,0 +1,1198 @@
+{
+  "schema": 1,
+  "sources": [
+    {
+      "url": "https://github.com/Mutagen-Modding/Mutagen/archive/85487e220c105d95dba2c110a2ec216400d19cec.zip",
+      "path": "build/cache/legal-sources/Mutagen-85487e220c105d95dba2c110a2ec216400d19cec.zip",
+      "sha256": "2f4b6f2994a96bc57f978fa4eebd1ec3b07d3c405438e60f6bb20d0574ed7b97",
+      "unreviewedAssetPaths": [
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Archives/test.bsa",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Pex/Actor.pex",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Pex/ActorBase-F04.pex",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Pex/Art.pex",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Pex/FormType.pex",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Pex/Game.pex",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Pex/ObjectReference.pex",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Pex/Outfit.pex",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Pex/SmoothCamMCM.pex",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Pex/SoulGem.pex",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Pex/nwsFollowerMCMExScript.pex",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Pex/nwsFollowerMCMScript.pex",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Plugins/Analysis/OrphanedDeepGroups.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Plugins/Analysis/SkyrimTypical.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Plugins/Binary/Headers/ModHeaderOverflow",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Plugins/Binary/Headers/SmallOblivionMod.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/IIdentifierLinkCache.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/ILinkCache.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/ImmutableLoadOrderLinkCache.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/ImmutableModLinkCache.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/Internal/DepthCache.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/Internal/ImmutableLoadOrderLinkCacheCategory.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/Internal/ImmutableLoadOrderLinkCacheContextCategory.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/Internal/ImmutableLoadOrderLinkCacheSimpleContextCategory.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/Internal/ImmutableModLinkCacheCategory.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/Internal/ImmutableModLinkCacheContextCategory.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/Internal/ImmutableModLinkCacheSimpleContextCategory.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/Internal/InternalImmutableLoadOrderLinkCache.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/Internal/InternalImmutableModLinkCache.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/Internal/LinkCacheItem.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/MutableLoadOrderLinkCache.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/MutableModLinkCache.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/OverrideMaskRegistrations.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/LinkCachePreferences.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/ModContext.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/ResolveTarget.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Fallout4/Plugins/Cache/Internals/Fallout4OverrideMaskRegistration.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Oblivion/Plugins/Cache/Internals/OverrideMaskRegistration.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Skyrim/Plugins/Cache/Internals/OverrideMaskRegistration.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Starfield/Plugins/Cache/Internal/StarfieldOverrideMaskRegistration.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Core/CountDisagreesWithReality.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Core/CountMissing.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Fallout4/LeveledItems.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Fallout4/LeveledItemsOverflow.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Fallout4/ObjectModificationNoData.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Fallout4/SubgraphOutOfOrder.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Oblivion/Region/OblivionRegion.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Oblivion/malformedstringlists.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Oblivion/oblivion_override.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Oblivion/oblivion_test.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Oblivion/stringlists.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/Bod2Length12With42.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/Bod2Length12With43.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/Bod2Length12With44.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/Bod2Length8With42.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/Bod2Length8With43.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/Bod2Length8With44Normal.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/BodtLength12With42.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/BodtLength12With43Normal.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/BodtLength12With44.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/BodtLength8With42.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/BodtLength8With43.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/BodtLength8With44.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/ConditionWithTwoStrings.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/DuplicateMasterListing.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/PlacedObjectReflectedWaterMissingData.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/RaceHeadPartDanglingMarker.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/Region/SoundRegionDataWithNoSecondSubrecord.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/SkyrimPerkFunctionParametersTypeNone.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/VoiceTypeTestPlugin.esm",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/size_overflow_test.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/skyrim_override.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/skyrim_test.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/subobject_size_overflow_test.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Starfield/DuplicateMasterListing.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Starfield/Traversals.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Starfield/UnknownCondition.esp",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/ALinkingTests.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/DirectFormLinkContextResolveTests.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/DirectFormLinkResolvesTests.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/DirectModLinkingTests.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/EdidLinkResolvesTests.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/FormLinkDirectResolveAllContextsTests.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/FormLinkDirectResolveAllTests.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/FormLinkDirectResolveContextTests.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/FormLinkLoadOrderResolveAllContextsTests.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/FormLinkLoadOrderResolveAllTests.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/Helpers/AContextRetriever.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/Helpers/LinkCacheStyle.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/Helpers/LinkingTestInit.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/Implementations/ImmutableDirectTests.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/Implementations/ImmutableOverlayTests.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/Implementations/MutableDirectTests.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/Implementations/MutableOverlayTests.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/LinkCacheApiTests.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/LoadOrderFormLinkResolvesTests.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/LoadOrderLinkingTests.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/ParallelTests.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/ResolveIdentifiersTests.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/SpecificIssueTests.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/SubtypeLinkingTests.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/WarmupCachingTests.cs",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/ModContextTests.cs"
+      ],
+      "excludedFiles": [
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Archives/test.bsa",
+          "sha256": "b3c773f13927c4062bf2c970c4afb1914e3c55943a7fdff3b4ba7ce680681d85",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Pex/Actor.pex",
+          "sha256": "6231390f958d48a65291e997a23b4b8be4209f8484228af50f49353715278059",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Pex/ActorBase-F04.pex",
+          "sha256": "ce0020815b2be47b8422acc1d69de51bd8e165d955b1998ca7b2702e452e02f9",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Pex/Art.pex",
+          "sha256": "01b5e2e6e6d9916a069037109c57b1a4c8980a3e72ee8461c438e7e2e028cdca",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Pex/FormType.pex",
+          "sha256": "3422af681c2a4679fbc3c0e837a20cebcafd899419f5b0f0f59c13d0846bdd7a",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Pex/Game.pex",
+          "sha256": "3ad3c690d7ff5029d7cf502420437ebd219b88fa78a0c9fff6446afd05e3e997",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Pex/ObjectReference.pex",
+          "sha256": "961cf29a1dfe1a3894981c859626825004503976314b7d87e06eb1c00abddf18",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Pex/Outfit.pex",
+          "sha256": "ce3d60c46d13cc57b3b75307e20874c4764220d82a5d820ac81c0012ac78a362",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Pex/SmoothCamMCM.pex",
+          "sha256": "56a0ce7ec733f55293669a7b00659b279ffb768cdce2ad33d33f76e7a26aa4cd",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Pex/SoulGem.pex",
+          "sha256": "db6cb6957433e7bc9de0aa7bb2faef3efd5afe0897c5973b4da3fb04b86f6485",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Pex/nwsFollowerMCMExScript.pex",
+          "sha256": "cb4275e6665cb691910fe20de6d888bd8db6a9d3cfbfbc9b8d2e3057c8df848e",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Pex/nwsFollowerMCMScript.pex",
+          "sha256": "c69008773b28845ef4b684f7be94b851ec6040a1d17165e3a34b93e45997b2af",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Plugins/Analysis/OrphanedDeepGroups.esp",
+          "sha256": "88d517c728d9917c304c947a0291e6fe89dcf178c229c01def91489e18735aca",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Plugins/Analysis/SkyrimTypical.esp",
+          "sha256": "2028ea665f94b206225e4a08c4026dcb87033d43404bd6c34013b2a3bbde6517",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Plugins/Binary/Headers/ModHeaderOverflow",
+          "sha256": "05eb69719ef970f3598c4b0f7e59a054f1dd43aab0900618ff01fea606ee05b6",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core.UnitTests/Plugins/Binary/Headers/SmallOblivionMod.esp",
+          "sha256": "81f691e2b1a3cb9556c2395804df47874495a781234debcbf8edd84ec29ad4c9",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Core/CountDisagreesWithReality.esp",
+          "sha256": "acc593a48a58ede032c1b2dd6b55c73d60a1b6c47e66efecd9954f081a6385ae",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Core/CountMissing.esp",
+          "sha256": "aa15d1a6e695d20dd26d2dd71cd34866c3d5c0a4796a5cdcd27e8d484cf929cc",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Fallout4/LeveledItems.esp",
+          "sha256": "6c98896f460d912d72f1568b97bc299ccb8dc178636989675effffdc5a821427",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Fallout4/LeveledItemsOverflow.esp",
+          "sha256": "93b592fc4c952f312ce02ca7bc03680853e8326f9d11350e732649c4a4d07be6",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Fallout4/ObjectModificationNoData.esp",
+          "sha256": "0fd1b9a2f776aedd9b0bdaa8f44c274592725c6b5f4600253a161fc2ca1f7f9f",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Fallout4/SubgraphOutOfOrder.esp",
+          "sha256": "d1d9ab13c071bb17f2ffd8f1f9d696219f398eb4f64ea1ef1237e71552f5cfeb",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Oblivion/Region/OblivionRegion.esp",
+          "sha256": "75d30e5c870c7428045373ea8748ed1851d6ec3674f87faeace5f2967cf6299a",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Oblivion/malformedstringlists.esp",
+          "sha256": "d95d88fe439ab5a9844a5694881b3fb8802a5d1a6475c1dc87803dbfd4d47bd8",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Oblivion/oblivion_override.esp",
+          "sha256": "a9f907065199758ceaa8b8af67e090d0ee18bdf28371360b108c58eaeff5c942",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Oblivion/oblivion_test.esp",
+          "sha256": "2845bcb32609e580f4b568bc26d3e37d1fa5c040fb2ca3ed2e5e84557a99c112",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Oblivion/stringlists.esp",
+          "sha256": "216715ddf797f9cfcc751d09c384893a5e112f3a7cbd4050c4b0b3a3d1c54a3b",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/Bod2Length12With42.esp",
+          "sha256": "23b95ef05c56e1ecae53ddb7ac45c2a01efed022ad77b270152bca0b254d0fdc",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/Bod2Length12With43.esp",
+          "sha256": "8e39c7285c5cac7cdcd195f8cb2d6fcb03ddb52fa145e6eb0f5620e8f2e5bc86",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/Bod2Length12With44.esp",
+          "sha256": "ecffe54ff9008f11bbcfda4848c238b62a1a7e635f15b3b73b9e53bd03598454",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/Bod2Length8With42.esp",
+          "sha256": "cfae5123d9ff368488c6d38d74fe8e08ede09b060fd87aba7281bfd36d4c6df6",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/Bod2Length8With43.esp",
+          "sha256": "362789e3f5b700b390544a6deb791dcf616731b66cfa5d7b2f3cac57c131c736",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/Bod2Length8With44Normal.esp",
+          "sha256": "3e7dd1f8f058af5f87b506856fb33be7181f5981c97fadcd41c9fb93d9554edb",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/BodtLength12With42.esp",
+          "sha256": "e99020122262a15e9a3a33c348be785c2eb127572b572fc1bcd085056cc8e14a",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/BodtLength12With43Normal.esp",
+          "sha256": "9d2a14445659d629dea857e8dc597f035f40f135e0ddaa5f4b93af34b8ef1076",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/BodtLength12With44.esp",
+          "sha256": "4b78ee153ee08f476c86cc4e66c5dc55146c95c18f9e640e459bb999f9d049c7",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/BodtLength8With42.esp",
+          "sha256": "271d12c392496e34cdcd6829f4ecebc28a6f837ad0fdd719e41d8cb97f201351",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/BodtLength8With43.esp",
+          "sha256": "c040e40a89a0df7c52286b528908eeb82605630f7e59293de708bbec1e18550b",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/BodyTemplate/BodtLength8With44.esp",
+          "sha256": "320220eebf05dd10c9b60f30c5a3553adc8eeb8978cbe45c98cb21211715139f",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/ConditionWithTwoStrings.esp",
+          "sha256": "ba6172bb536bfbe9d5991beea0f85dc54e568807b3294df7ce2702fbb06e1388",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/DuplicateMasterListing.esp",
+          "sha256": "d9eb24b4a3063d662f5e47abb0fb825eaa04e0346b9cd1da8495b4d8af762e8b",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/PlacedObjectReflectedWaterMissingData.esp",
+          "sha256": "479fc2d6c6c97969ba4ece20565bb643224c8aae20e3e10536d5a0cae4641602",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/RaceHeadPartDanglingMarker.esp",
+          "sha256": "2f9e58152c92d404f52f46ee6d69cf52a556e4b56b8d8ab049fa72d1258f8677",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/Region/SoundRegionDataWithNoSecondSubrecord.esp",
+          "sha256": "c14c131a56be2a492093558632486c17a6ce865b7a8dd73a1fd934b23f5e05d2",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/SkyrimPerkFunctionParametersTypeNone.esp",
+          "sha256": "27141b2f5f1ec3d2fdda60843bbb7f88b22c9978b30db130aa30a92fe8344f38",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/VoiceTypeTestPlugin.esm",
+          "sha256": "97383f7d99aff10e35dfc6f8799bf7a0b1fa0caf8c009d7f19914ca242fa2118",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/size_overflow_test.esp",
+          "sha256": "f148ea98137ea707744c93fa682642a183aadaf094fe24381ebfb5ac26f17611",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/skyrim_override.esp",
+          "sha256": "5ffb4b672569898d0049f3fec7e7e4cc9e463d317f8aee53a20932721203cf5e",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/skyrim_test.esp",
+          "sha256": "e092c467ed55f2aaa00ff84900538f192a277c7f7452c3077e76dee5bb3baf69",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Skyrim/subobject_size_overflow_test.esp",
+          "sha256": "6572a884a1814582de44280b8087dc7c3dc58d25652f1a86974747c471c33ffc",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Starfield/DuplicateMasterListing.esp",
+          "sha256": "ed1d901bccbc7a81fc11bc1ec2cea050202c8f24330fe05d9dbc2a3dfe153336",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Starfield/Traversals.esp",
+          "sha256": "7cb231b4c6bc9567b5d2d8ffa34449069dce2ee10b6aa45d3e0c3d79eb4bb504",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Testing/Files/Starfield/UnknownCondition.esp",
+          "sha256": "30d12996a97b72a968a7092d18151d448bd32fa40ded07686d431fe32ef2e971",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        }
+      ],
+      "pathExceptions": [
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/IIdentifierLinkCache.cs",
+          "sha256": "04ce36b9ca338075bdf87153a43285aaa33d7d3591a0d548b4875e8fcc2b6567",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/ILinkCache.cs",
+          "sha256": "119c1ef42ecafb59b128ab4d09e19c086244b29f4e08800680c269e3c77c46f5",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/ImmutableLoadOrderLinkCache.cs",
+          "sha256": "ac7e2ff3ab92f9474d9463f782c0c824f3ec21daa58b0de4cb288fc8d4f032aa",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/ImmutableModLinkCache.cs",
+          "sha256": "0cf6f914262ca0d82bc4e0a0105579e446e09d32f03171acf6528a6421b0619a",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/Internal/DepthCache.cs",
+          "sha256": "faf33ba2034b17fe5d1d6dfe607442f5d3bc3a8082dacb48e4b972cb402dcaa9",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/Internal/ImmutableLoadOrderLinkCacheCategory.cs",
+          "sha256": "c2b9dcc051d0882644a3c003707582e62119d516ff4a3ea3925a7897afe265c1",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/Internal/ImmutableLoadOrderLinkCacheContextCategory.cs",
+          "sha256": "f313902174188ad46f30aefdef0c4f0f1f69a6c921f60e4e55ac33193f7f0462",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/Internal/ImmutableLoadOrderLinkCacheSimpleContextCategory.cs",
+          "sha256": "b8ea0c559418971aed180b1882d50ef3ace1514354de5371cad903b58558891e",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/Internal/ImmutableModLinkCacheCategory.cs",
+          "sha256": "bc0a0f779db377958a520121e0a7c27f62ef0b150eb7c65fc4dc76ef897dc9e0",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/Internal/ImmutableModLinkCacheContextCategory.cs",
+          "sha256": "520780487636d30a6476247f96e311bcaa72eae957ae763b7185d3d3c6451b86",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/Internal/ImmutableModLinkCacheSimpleContextCategory.cs",
+          "sha256": "b1932fde12e736674b40399ff3ab6875a3a528885f234346141599c23efe28f1",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/Internal/InternalImmutableLoadOrderLinkCache.cs",
+          "sha256": "e413d0c1ca3ae7af7e1f299888de7a57428182981794228de5389d3db05f4e44",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/Internal/InternalImmutableModLinkCache.cs",
+          "sha256": "f2bbd49859fc2595975b2e494dba90458479f8735f2c96d3538594f789fe93aa",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/Internal/LinkCacheItem.cs",
+          "sha256": "20233b14ba5e67d8728e6318d9e84df487b3291c3aead612707e08c2662319dd",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/MutableLoadOrderLinkCache.cs",
+          "sha256": "1efc4e1f3fdde56390202029469effbcd4c4b4c34b08bbc96a3612bc49ba326e",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/Implementations/MutableModLinkCache.cs",
+          "sha256": "32fa6c18b8d1705ec977c4998e4d6096ca1dd5088b643a015414e2716dde6147",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/Internals/OverrideMaskRegistrations.cs",
+          "sha256": "b7da28841ee057d90ed29eabc5193b6ee0e8979ea0d2af43836d5d5e40d7ad28",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/LinkCachePreferences.cs",
+          "sha256": "f876f3a7730f79840b3044380a34e68b62f6421a2ef30fe644aeaddf19f37e2b",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/ModContext.cs",
+          "sha256": "11f946cb8bbef19123ffd739b14c773180be12a8b0957d67d2639c5789001810",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Plugins/Cache/ResolveTarget.cs",
+          "sha256": "7decee801a0fc45ff646209219b420694845b87482aa29e8e05bb4626832d89d",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Fallout4/Plugins/Cache/Internals/Fallout4OverrideMaskRegistration.cs",
+          "sha256": "6a821a43e60bacc1f0c9ed39499ff46c7a265d3038090e098cb8e34535b79668",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Oblivion/Plugins/Cache/Internals/OverrideMaskRegistration.cs",
+          "sha256": "7e94f3ccf5c71e488aaf010d330b73918432b8049695c65aced423726018c506",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Skyrim/Plugins/Cache/Internals/OverrideMaskRegistration.cs",
+          "sha256": "11da18b5acfb3d08239659dc42cc29762d7ad48c5dc13dd03bae72ec3ac28e20",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Starfield/Plugins/Cache/Internal/StarfieldOverrideMaskRegistration.cs",
+          "sha256": "ab41ff3ed5b3d1e85b0ccf68d5216f28363f81b8fbea0652977e5b8cbb2b1169",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/ALinkingTests.cs",
+          "sha256": "da4099fcd6b4d61656266c1ec58e4446f931069ffbe515b96b25f6e8ddb3fe36",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/DirectFormLinkContextResolveTests.cs",
+          "sha256": "0c666ae5bec057a76344f029bc32515619077a8431c0d5efeb26597a6b297ed5",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/DirectFormLinkResolvesTests.cs",
+          "sha256": "1999927054b00d45efbbbb70befcccf47f12a2cfc46d8cf824bf6fb691c90616",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/DirectModLinkingTests.cs",
+          "sha256": "03a14d33c2411251afefc5db2450f8f32f674564e0db3833655cbaddeb8e005e",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/EdidLinkResolvesTests.cs",
+          "sha256": "2190903056cd272cab46efc00d049632227ccbee11547a2ef1edb90ca10b25fd",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/FormLinkDirectResolveAllContextsTests.cs",
+          "sha256": "7824567d7ed4dc59ad6858b5abc870095957d79d1572f25c5d41a082f98ec279",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/FormLinkDirectResolveAllTests.cs",
+          "sha256": "a39123b794cd5df4fe7c31642066b5cd9c16bf9d33a4e1695311d059c8080909",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/FormLinkDirectResolveContextTests.cs",
+          "sha256": "17fdc02fc6fb297d041a2ed80f0e3a89982c90cd32082ff647e23ef71d21a34f",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/FormLinkLoadOrderResolveAllContextsTests.cs",
+          "sha256": "2dce0548c6a900d3660d80afe6d903513eccfe7670ac1e5ade6824847aa325f3",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/FormLinkLoadOrderResolveAllTests.cs",
+          "sha256": "09290143643c422478e2b880bd6f72381f6dbab4cbc8e7b3d352cc6e248fb4c3",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/Helpers/AContextRetriever.cs",
+          "sha256": "6d7de840a1cc411cdb0cecfecfb6315dab5a4956465bb7398559dd65cb50d631",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/Helpers/LinkCacheStyle.cs",
+          "sha256": "dd6d24b80ab46e0c9808dc779db9374ebb6054a75336723db78a1500dfec6f75",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/Helpers/LinkingTestInit.cs",
+          "sha256": "87b37ecfceb8dba73d76c313a785955be30087e5af89470df9eedeb6916056d2",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/Implementations/ImmutableDirectTests.cs",
+          "sha256": "2a332510aaba7a5b824ee1d19ac372e1d87c14f4796e02ce8fc2bc2719340d2c",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/Implementations/ImmutableOverlayTests.cs",
+          "sha256": "f4b7a571493b03f878cf33b8b42c259e39b2a1005b264b873930dfe35cf7f9c3",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/Implementations/MutableDirectTests.cs",
+          "sha256": "e1ba56511117596681850f60351d9ecc0e25bc28063d53778f16f095a3313443",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/Implementations/MutableOverlayTests.cs",
+          "sha256": "fc336f7e8fa49e4858ac7cfe64acbcbbb4162e8f17ab8eec9e5854160a31818e",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/LinkCacheApiTests.cs",
+          "sha256": "428d604c6021826246c30a4e2f52f274a94c2c5b040046dcb8218479d2049f62",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/LoadOrderFormLinkResolvesTests.cs",
+          "sha256": "35f82a96f7a976effd11f9c2c7fb2b3cf219f22c8d701faa6371b6225a31896c",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/LoadOrderLinkingTests.cs",
+          "sha256": "fc06cfb4da57d79f58e15de70cafe9653ed5b001866557b4e65c27428547bf2b",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/ParallelTests.cs",
+          "sha256": "20c4c969c496028efffd54f2abd0d7811b07a4e17903acdc38da325d4f2a0129",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/ResolveIdentifiersTests.cs",
+          "sha256": "4e177c704a6e71d496052fece944461863f492fdda7e951295d1146a51875374",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/SpecificIssueTests.cs",
+          "sha256": "22fa2374cd81a9387254e53b53d6c88e95ba744294684a10fb1c4a9f791231a8",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/SubtypeLinkingTests.cs",
+          "sha256": "d37acf480d39d93aa1e1ff9bde0e18dd86ebb6642c54bdf3feadbddcdfd7aebc",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/Linking/WarmupCachingTests.cs",
+          "sha256": "8b3df2d4219e141822014c55f46686b08d4b73189b928091df80fb3feaad2b14",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        },
+        {
+          "path": "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.UnitTests/Plugins/Cache/ModContextTests.cs",
+          "sha256": "d02567af0178657df4e7bab0769716112b1714ae54c405b24739bc9ec7142f4f",
+          "rules": [
+            "forbidden-directory"
+          ],
+          "reason": "Pinned upstream C# source uses a source directory named Cache; not extracted game data."
+        }
+      ],
+      "preparedSha256": "a285bde7cd85b9fe7389052308dec5c5abea4b1eebbb8672313d9de8c6694b19",
+      "projectReferenceClosure": [
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Core/Mutagen.Bethesda.Core.csproj",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Fallout4/Mutagen.Bethesda.Fallout4.csproj",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Kernel/Mutagen.Bethesda.Kernel.csproj",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Oblivion/Mutagen.Bethesda.Oblivion.csproj",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Skyrim/Mutagen.Bethesda.Skyrim.csproj",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda.Starfield/Mutagen.Bethesda.Starfield.csproj",
+        "Mutagen-85487e220c105d95dba2c110a2ec216400d19cec/Mutagen.Bethesda/Mutagen.Bethesda.csproj"
+      ],
+      "buildValidation": "Production library projects built successfully from the filtered preferred source, including the supplemental Nifly generator input. This verifies source usability; it is not a bit-identical package rebuild claim.",
+      "buildProof": {
+        "result": "passed",
+        "upstreamSha256": "2f4b6f2994a96bc57f978fa4eebd1ec3b07d3c405438e60f6bb20d0574ed7b97",
+        "preparedSha256": "a285bde7cd85b9fe7389052308dec5c5abea4b1eebbb8672313d9de8c6694b19",
+        "projects": [
+          "Mutagen.Bethesda.csproj",
+          "NiflySharp.csproj"
+        ]
+      }
+    },
+    {
+      "url": "https://github.com/Nexus-Mods/NexusMods.Paths/archive/6c7b575e96d712056e7c75cd366ac17e55925dbf.zip",
+      "path": "build/cache/legal-sources/NexusMods.Paths-6c7b575e96d712056e7c75cd366ac17e55925dbf.zip",
+      "sha256": "319b269a770e03246241bc8698275f18ce01904514cdd4c86d78221186e00880",
+      "unreviewedAssetPaths": []
+    },
+    {
+      "url": "https://github.com/Noggog/CSharpExt/archive/cf5fada76ae73c3e2078d2349077c20fb18bce2e.zip",
+      "path": "build/cache/legal-sources/CSharpExt-cf5fada76ae73c3e2078d2349077c20fb18bce2e.zip",
+      "sha256": "072975aec710586d0873da3b0a5da325921b137eae1339e5189344310d4d4f07",
+      "unreviewedAssetPaths": []
+    },
+    {
+      "url": "https://github.com/Noggog/Loqui/archive/d6f6662fb1751f273717626cabfb60d3c78d3e0c.zip",
+      "path": "build/cache/legal-sources/Loqui-d6f6662fb1751f273717626cabfb60d3c78d3e0c.zip",
+      "sha256": "74effcc8080e6bdf926653d315b50577afb4503a8d5a892efa25e59babcb23b6",
+      "unreviewedAssetPaths": []
+    },
+    {
+      "url": "https://github.com/Reloaded-Project/Reloaded.Memory/archive/2c31a5e84aa06dbe8e22ed3859b79d8729618fb2.zip",
+      "path": "build/cache/legal-sources/Reloaded.Memory-2c31a5e84aa06dbe8e22ed3859b79d8729618fb2.zip",
+      "sha256": "5e6bccfba07bab69bac9f05bc153d271b39bc1d593d94b4c2079d7a136121aa7",
+      "unreviewedAssetPaths": []
+    },
+    {
+      "url": "https://github.com/erri120/GameFinder/archive/bb462fbf9babae29375e29ec6833d8b595b3ab27.zip",
+      "path": "build/cache/legal-sources/GameFinder-bb462fbf9babae29375e29ec6833d8b595b3ab27.zip",
+      "sha256": "828846edb275a16186c02f6a13f36390ce7b25f30cc81753cd1395ddb607f766",
+      "unreviewedAssetPaths": []
+    },
+    {
+      "url": "https://github.com/ousnius/NiflySharp/archive/78ff33463d3fdc8570cbd29f19387609d2362e61.zip",
+      "path": "build/cache/legal-sources/NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61.zip",
+      "sha256": "11efec00d5133c64565d2154359be64c9c8ea59248773e19612754744da8463d",
+      "unreviewedAssetPaths": [
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/CreateAndSave_SE.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/DeepGraph.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/FixBSXFlags_AddExtEmit.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/FixBSXFlags_RemoveExtEmit.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/FixShaderFlags_AddEnvMap.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/FixShaderFlags_RemoveEnvMap.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_Animated_FO76.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_Animated_LE.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_FurnitureCollision_SE.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_LooseBlocks_SE.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_MultiBound_SE.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_NoNiSkinDataWeights_SE.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_OrderedNode_SE.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_RootNonZero_LE.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_SkinnedDynamic_SE.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_Skinned_FO4.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_Skinned_LE.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_Skinned_OB.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_Skinned_SE.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_Skinned_SF.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_Static_FO4.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_Static_FO4_132.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_Static_FO4_139.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_Static_SE.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/Optimize_Dynamic_LE_to_SE.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/Optimize_Dynamic_SE_to_LE.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/Optimize_LE_to_SE.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/Optimize_SE_to_LE.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/RemoveBlock.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/UnionBV.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.0.0.5/11/11/Skinned.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/DeepGraph.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/FixBSXFlags_AddExtEmit.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/FixBSXFlags_RemoveExtEmit.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/FixShaderFlags_AddEnvMap.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/FixShaderFlags_RemoveEnvMap.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/FurnitureCollision.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/LooseBlocks.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/MultiBound.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/NoNiSkinDataWeights.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/OrderedNode.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/Skinned.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/SkinnedDynamic.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/Static.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/UnionBV.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/130/Skinned.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/130/Static.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/132/Static.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/139/Static.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/155/Animated.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/172/Skinned.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/83/Animated.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/83/RootNonZero.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/83/Skinned.nif",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/83/SkinnedDynamic.nif"
+      ],
+      "excludedFiles": [
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/CreateAndSave_SE.nif",
+          "sha256": "dcbb1b72b1472b0973865e39ae51cb2e437010ff1280296b2b7fd050c684bb3e",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/DeepGraph.nif",
+          "sha256": "5f7b36ebd923b59fe6b93d958356bf9361a6632c82a0be18b973153075736912",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/FixBSXFlags_AddExtEmit.nif",
+          "sha256": "8f08443c063d41f0b699f98ec79d4cf470eb48ead69a73e2884cdb7f6a29ad73",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/FixBSXFlags_RemoveExtEmit.nif",
+          "sha256": "42cd2e0e4cdc813554740e75c99bcd8814c30df71a5b6cd4e7e7a162fbfd51f4",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/FixShaderFlags_AddEnvMap.nif",
+          "sha256": "9c361808a960cb62dfbf04273e4f4fcd6e2a3fe146bd07cc6349e9743c1b20c9",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/FixShaderFlags_RemoveEnvMap.nif",
+          "sha256": "8d883259f085b643c75919f7e86348d7eb8647ae5a8f327e95a8a43cbe1afb9b",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_Animated_FO76.nif",
+          "sha256": "08f449ef52209edfa51d768aa950dd65bd1a990077ef933c7c0b918d4394ccc2",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_Animated_LE.nif",
+          "sha256": "2b41cb227eddefb558bcdbdf2ac074ea8ff59e745fad0b064e49485b050c5c63",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_FurnitureCollision_SE.nif",
+          "sha256": "360497dba886f3029a6c753154dcbe66124bb1f3153614a8a7c7276af6c68884",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_LooseBlocks_SE.nif",
+          "sha256": "03e3e480c184b356920e1e7e40ce2319745d08f2278f30e61a4f54c137a7e75c",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_MultiBound_SE.nif",
+          "sha256": "ca004e638973c89a85279bde823a507577a0b355556d59f7c8c7095fb9fc9348",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_NoNiSkinDataWeights_SE.nif",
+          "sha256": "df0161e730e8c46d640eef7407592e5675be0225a448e29fbc70ea26d9bb0ae1",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_OrderedNode_SE.nif",
+          "sha256": "b4cf25028abb1ce8c8b7bea2a529fd348120df70429d07947d75a6b716af7765",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_RootNonZero_LE.nif",
+          "sha256": "4aeb39492f39f4044f505f05bab04779de4babe4dbb3e3f9ed1766f93f3715ec",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_SkinnedDynamic_SE.nif",
+          "sha256": "ea5fa08c575d0941521f40a8cf3cd506278682e8fb583cacad48cb6ff12f403b",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_Skinned_FO4.nif",
+          "sha256": "2264baffc2f4aa62ccb99ec6e1dd262ef41603f8c269e90d62f593bc3e4f7b3d",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_Skinned_LE.nif",
+          "sha256": "8d0867db46fcf258884c092fede86b88dbf9828d1e869eb758021dcf3ea14533",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_Skinned_OB.nif",
+          "sha256": "4729486ae67ba5782cb7121eb057065184c3777c04c91db721826fb285d5ac4d",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_Skinned_SE.nif",
+          "sha256": "17d09b29bb9bcb32d1e9a4d09ff51683852beab4c43d44e2f24bad3344ebd6a5",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_Skinned_SF.nif",
+          "sha256": "e073eaddd61950a6429a2185c41d25685f78e3fe291d44b4b66534c1d736b87b",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_Static_FO4.nif",
+          "sha256": "44804db1857c98b87b8a6ad6f3d7ad4f9f7781c7c6ca652aa24408ca8b328f90",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_Static_FO4_132.nif",
+          "sha256": "f9c10e70d39f63fa2da42a0cb36bcc782fdbb32d195ba21061296c5d20428305",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_Static_FO4_139.nif",
+          "sha256": "a2c3ff6c6b1b65e672e98ebdd50f9341f8aafabf74d1a9773b645a3784297d5c",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/LoadAndSave_Static_SE.nif",
+          "sha256": "8a7066ac6e0936bf8c99dbc3c6b692be4eb4156e30eb17bddd4997da08ca2683",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/Optimize_Dynamic_LE_to_SE.nif",
+          "sha256": "6a256e6ace000ab402bf2f8f6779b9bbf18b065b23d4597f6391c41b788e9ac3",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/Optimize_Dynamic_SE_to_LE.nif",
+          "sha256": "8d6f5dd6d7e517e17f7bd525767bce44294f5cfc4a2ffbf3e43a14f5ec9e3fd7",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/Optimize_LE_to_SE.nif",
+          "sha256": "339f8ee9a8511b7bb1b3674440b520e7113aa3e5ac229616c1d38839c3791893",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/Optimize_SE_to_LE.nif",
+          "sha256": "8d6f5dd6d7e517e17f7bd525767bce44294f5cfc4a2ffbf3e43a14f5ec9e3fd7",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/RemoveBlock.nif",
+          "sha256": "c5a07e8628ac192d979b280a47805d5d144e01c27deba5182b8249b9e24739cc",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/Expected/UnionBV.nif",
+          "sha256": "f1df3ed1bf48a387628feb5610c55fb533374722599da59fe447cc2db0a7c9c4",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.0.0.5/11/11/Skinned.nif",
+          "sha256": "4729486ae67ba5782cb7121eb057065184c3777c04c91db721826fb285d5ac4d",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/DeepGraph.nif",
+          "sha256": "5f7b36ebd923b59fe6b93d958356bf9361a6632c82a0be18b973153075736912",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/FixBSXFlags_AddExtEmit.nif",
+          "sha256": "d03f1b940d7631666290fb7e8db493032214060f7e0693661b70076170844ab5",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/FixBSXFlags_RemoveExtEmit.nif",
+          "sha256": "b0621ca295c1b5d523004282283d258810ad2e7ffa05087813bb534beded82e3",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/FixShaderFlags_AddEnvMap.nif",
+          "sha256": "ae5b55e4bf5f40bffbff6b6d9c252295ecdc7e2998612c436833cd1cdad617f6",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/FixShaderFlags_RemoveEnvMap.nif",
+          "sha256": "275c04733a0930c3cff62819d6c1e0afefbd771f40f5bbee551652fd4e94f6f9",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/FurnitureCollision.nif",
+          "sha256": "360497dba886f3029a6c753154dcbe66124bb1f3153614a8a7c7276af6c68884",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/LooseBlocks.nif",
+          "sha256": "a0b5a0c09f592e3f2793e116b7fccc2fb13e53ecedab75fb7ebfadc0cd803b5a",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/MultiBound.nif",
+          "sha256": "ca004e638973c89a85279bde823a507577a0b355556d59f7c8c7095fb9fc9348",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/NoNiSkinDataWeights.nif",
+          "sha256": "d735c9d64af6cc9939bd20519e08855fdc2a5dc4bf198d74d86a6f68dc5da30c",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/OrderedNode.nif",
+          "sha256": "b4cf25028abb1ce8c8b7bea2a529fd348120df70429d07947d75a6b716af7765",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/Skinned.nif",
+          "sha256": "17d09b29bb9bcb32d1e9a4d09ff51683852beab4c43d44e2f24bad3344ebd6a5",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/SkinnedDynamic.nif",
+          "sha256": "ea5fa08c575d0941521f40a8cf3cd506278682e8fb583cacad48cb6ff12f403b",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/Static.nif",
+          "sha256": "8a7066ac6e0936bf8c99dbc3c6b692be4eb4156e30eb17bddd4997da08ca2683",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/100/UnionBV.nif",
+          "sha256": "f1df3ed1bf48a387628feb5610c55fb533374722599da59fe447cc2db0a7c9c4",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/130/Skinned.nif",
+          "sha256": "2264baffc2f4aa62ccb99ec6e1dd262ef41603f8c269e90d62f593bc3e4f7b3d",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/130/Static.nif",
+          "sha256": "44804db1857c98b87b8a6ad6f3d7ad4f9f7781c7c6ca652aa24408ca8b328f90",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/132/Static.nif",
+          "sha256": "f9c10e70d39f63fa2da42a0cb36bcc782fdbb32d195ba21061296c5d20428305",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/139/Static.nif",
+          "sha256": "a2c3ff6c6b1b65e672e98ebdd50f9341f8aafabf74d1a9773b645a3784297d5c",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/155/Animated.nif",
+          "sha256": "532ba98828b11e08cd803f6a8e02792e8bb60d70c50ead7afc97722afca93764",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/172/Skinned.nif",
+          "sha256": "e073eaddd61950a6429a2185c41d25685f78e3fe291d44b4b66534c1d736b87b",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/83/Animated.nif",
+          "sha256": "fe1734f17986c4f648b3693f13311f630a750fb9ab44a85f7cbd13fa4bba2f52",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/83/RootNonZero.nif",
+          "sha256": "baf277e409731098900992fc87a505a48563e902d0542f35ca92969bcb7ebf3e",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/83/Skinned.nif",
+          "sha256": "8d0867db46fcf258884c092fede86b88dbf9828d1e869eb758021dcf3ea14533",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        },
+        {
+          "path": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Test/Assets/V20.2.0.7/12/83/SkinnedDynamic.nif",
+          "sha256": "8d6f5dd6d7e517e17f7bd525767bce44294f5cfc4a2ffbf3e43a14f5ec9e3fd7",
+          "reason": "Unneeded game-format test fixture; excluded from the production library source package."
+        }
+      ],
+      "pathExceptions": [],
+      "additionalSources": [
+        {
+          "url": "https://codeload.github.com/ousnius/nifxml/zip/e18445870f177b374ecaf30e62af2a5f36e9fae7",
+          "path": "build/cache/legal-sources/nifxml-e18445870f177b374ecaf30e62af2a5f36e9fae7.zip",
+          "sha256": "b8ebb08dafab46815e9ba3d685ada0c0c8badfa777700beed275767341ddbc32",
+          "stripPrefix": "nifxml-e18445870f177b374ecaf30e62af2a5f36e9fae7",
+          "destination": "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/nifxml"
+        }
+      ],
+      "preparedSha256": "77a85da4248f83526a007bd2c83b7e3de52a0ef55e1697b98cee7ceb9ffc3caf",
+      "projectReferenceClosure": [
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp.Generator/NiflySharp.Generator.csproj",
+        "NiflySharp-78ff33463d3fdc8570cbd29f19387609d2362e61/NiflySharp/NiflySharp.csproj"
+      ],
+      "buildValidation": "Production library projects built successfully from the filtered preferred source, including the supplemental Nifly generator input. This verifies source usability; it is not a bit-identical package rebuild claim.",
+      "buildProof": {
+        "result": "passed",
+        "upstreamSha256": "11efec00d5133c64565d2154359be64c9c8ea59248773e19612754744da8463d",
+        "preparedSha256": "77a85da4248f83526a007bd2c83b7e3de52a0ef55e1697b98cee7ceb9ffc3caf",
+        "projects": [
+          "Mutagen.Bethesda.csproj",
+          "NiflySharp.csproj"
+        ]
+      }
+    }
+  ]
+}

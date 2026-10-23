@@ -1,0 +1,146 @@
+{
+  "schema": 1,
+  "components": [
+    {
+      "id": "import:ba2sharp",
+      "version": "review-baseline-a2ce9d89ba39cccef8f9203414e78d8e5174647c",
+      "licenseExpression": "GPL-3.0-only",
+      "reviewStatus": "approved",
+      "role": "runtime",
+      "origin": {
+        "url": "https://github.com/AlexxEG/BSA_Browser",
+        "revision": "a2ce9d89ba39cccef8f9203414e78d8e5174647c",
+        "revisionRole": "source review baseline, not an exact original-import claim"
+      },
+      "modifications": "Modified in 2026 by OpenFO4 contributors; defensive reads/errors, nullable annotations, stream buffers, culture-independent strings, property and texture handling, and provenance notices. Independent Apache-2.0 BA2Util/DDS.cs is excluded.",
+      "licenseFiles": [
+        {
+          "path": "tools/licensing/licenses/ba2sharp/LICENSE",
+          "sha256": "c61f12da7cdad526bdcbed47a4c0a603e60dbbfdaf8b66933cd088e9132c303f"
+        },
+        {
+          "path": "src/installer/BA2Sharp/SOURCE.md",
+          "sha256": "689bafb444ed8ca536e227ceb56ef65bb1b9620bbb982e99bb136b17eb5cf79c"
+        }
+      ],
+      "sourceInputs": [
+        {
+          "path": "src/installer/BA2Sharp/Archive.cs",
+          "sha256": "681d058811bfbe5db5b8f60573cca0ffbd96f5f24916a45fc5021c7300ea6bb6"
+        },
+        {
+          "path": "src/installer/BA2Sharp/ArchiveEntry.cs",
+          "sha256": "b26614ef92d9df0d88a8f0f7a5c1a26dd89a02b1e099115b832c328d242ae91d"
+        },
+        {
+          "path": "src/installer/BA2Sharp/BA2Util/BA2.cs",
+          "sha256": "e48d4316c3f06781abf1702e7d0b722b4cd37bb252fe7fdf9232dd9543c07103"
+        },
+        {
+          "path": "src/installer/BA2Sharp/BA2Util/BA2Enums.cs",
+          "sha256": "4ba619230d5be7f6afa1d5c835a467a17f9109d78445c2b8ad8ced532e722163"
+        },
+        {
+          "path": "src/installer/BA2Sharp/BA2Util/BA2FileEntry.cs",
+          "sha256": "e0b5eb3c63c7b7aa2287f113d4b9a4f95cfe716cfcc2f323519a4e1e0aa14b9f"
+        },
+        {
+          "path": "src/installer/BA2Sharp/BA2Util/BA2GNFEntry.cs",
+          "sha256": "51fcc5eac865c324b28353531d3ab234aa6aa2ec5a19051c23398313c54dfe60"
+        },
+        {
+          "path": "src/installer/BA2Sharp/BA2Util/BA2Header.cs",
+          "sha256": "4865cffc54d75eb2f72c202baf0a023c253b5e34ad21f5b0f5c018036b425c80"
+        },
+        {
+          "path": "src/installer/BA2Sharp/BA2Util/BA2TextureChunk.cs",
+          "sha256": "8f1936404fa3f1a658011eaab57e84564bb51482bf99593fa9607555e8fc1800"
+        },
+        {
+          "path": "src/installer/BA2Sharp/BA2Util/BA2TextureEntry.cs",
+          "sha256": "9c83ce0f8b831b680f3fcc741fa161cacbf3c0ee8164c03fb2c61784e7276067"
+        },
+        {
+          "path": "src/installer/BA2Sharp/BSAUtil/BSA.cs",
+          "sha256": "60ca3a9960a6a428ced69b5a6f179fb09fb1c7327b5a971ffd2093d8f9c251b0"
+        },
+        {
+          "path": "src/installer/BA2Sharp/BSAUtil/BSAFileEntry.cs",
+          "sha256": "7f4dfcf2f044a3887eaffc80138be266856782fc57ac66b42c70b913da7d8cd1"
+        },
+        {
+          "path": "src/installer/BA2Sharp/BSAUtil/BSAFileInfo.cs",
+          "sha256": "086ac18e9bf66995bca7efdeed94db55b83e340e68faedc27e1da781c7b3efc9"
+        },
+        {
+          "path": "src/installer/BA2Sharp/BSAUtil/BSAFolderInfo.cs",
+          "sha256": "e31b8ce22756097e0727b7fc982f621dd62bf22e7017ab15ad1a05fa7ac82f3d"
+        },
+        {
+          "path": "src/installer/BA2Sharp/BSAUtil/BSAHeader.cs",
+          "sha256": "eea8bcf0fe6f81520c818d4c83facf6ae507317065641b911bfeaa88e5b64eb1"
+        },
+        {
+          "path": "src/installer/BA2Sharp/BSAUtil/BSAHeaderMW.cs",
+          "sha256": "c3096fe72299764c9caf7e84002d04f0e4df3c51b5aa273dc5fb30098de796c0"
+        },
+        {
+          "path": "src/installer/BA2Sharp/BSAUtil/DAT2FileEntry.cs",
+          "sha256": "1e7d09053af21da0ce4f9c29b4c24de336f332df48791127a04686895669cc08"
+        },
+        {
+          "path": "src/installer/BA2Sharp/Enums/ArchiveTypes.cs",
+          "sha256": "2aa74d1e7f569d154a3d8ed8c2a6ee15c149ed3db50f2c7d226a976c45924e84"
+        },
+        {
+          "path": "src/installer/BA2Sharp/Extensions/BinaryStreamExtensions.cs",
+          "sha256": "6cb1096248feda6912b6fb960cd6690ff233b09fd111073c2f789f4e079fe81c"
+        },
+        {
+          "path": "src/installer/BA2Sharp/Extensions/StreamExtensions.cs",
+          "sha256": "6a93b179f9940917ae8cc2cc1e694c9782a11fb33fdc0cd006398ead57b01ce7"
+        },
+        {
+          "path": "src/installer/BA2Sharp/Properties/AssemblyInfo.cs",
+          "sha256": "76832536d93e920cd933629ed4437854dd2b8c24ab5ed6b48cf5dea01ce0fac4"
+        },
+        {
+          "path": "src/installer/BA2Sharp/SharedExtractParams.cs",
+          "sha256": "2e581a80381ed88ccfa70b287b7ad15fde5cc4909f68f9cf0ed5e44f52b6862f"
+        },
+        {
+          "path": "src/installer/BA2Sharp/Utils/CompressionUtils.cs",
+          "sha256": "10bba0d12051aa02151083fb8a802f58a92f5c7e9b1d7572764d244a23304638"
+        },
+        {
+          "path": "src/installer/BA2Sharp/Utils/MorrowindNameTable.cs",
+          "sha256": "e8a70751414ddced6365f42b8ed868573328bd8a125f7983763ad9b90e90418f"
+        },
+        {
+          "path": "src/installer/BA2Sharp/Utils/PathUtils.cs",
+          "sha256": "a7fb2bd4430e62e65fe5c4ae5e0a88a326a5cf961fe72f4cf9b8cdc685cb3607"
+        },
+        {
+          "path": "src/installer/BA2Sharp/Utils/StreamUtils.cs",
+          "sha256": "3fc5cd1733e93b66f5c667e4fd0b8e785c4d9346c82a7e50516d4c4c48835bb2"
+        },
+        {
+          "path": "src/installer/BA2Sharp/SOURCE.md",
+          "sha256": "689bafb444ed8ca536e227ceb56ef65bb1b9620bbb982e99bb136b17eb5cf79c"
+        },
+        {
+          "path": "build/cache/legal-sources/openfo4-ba2sharp-selected-source.zip",
+          "sha256": "7b3bc637970cc6cd1feef77fa087a781200aa47b520e1986a7b8bd081f7b7f45",
+          "provenance": {
+            "path": "build/cache/legal-sources/BSA_Browser-a2ce9d89ba39cccef8f9203414e78d8e5174647c.zip",
+            "url": "https://codeload.github.com/AlexxEG/BSA_Browser/zip/a2ce9d89ba39cccef8f9203414e78d8e5174647c",
+            "sha256": "1f4627c89e36f67954ecf65006cd76a4df979bdffc24f45bd09d7a29e2b52482",
+            "revision": "a2ce9d89ba39cccef8f9203414e78d8e5174647c"
+          }
+        }
+      ],
+      "runtimeFiles": [],
+      "reason": "The modified preferred source, original GPL grant/credits and exact selected upstream provenance are retained; restricted historical DDS declarations are excluded."
+    }
+  ]
+}

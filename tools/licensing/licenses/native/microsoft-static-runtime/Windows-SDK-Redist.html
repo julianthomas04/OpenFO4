@@ -1,0 +1,835 @@
+ <!DOCTYPE html>
+		<html
+			class="layout layout-single    contentpage show-breadcrumb default-focus"
+			lang="en-us"
+			dir="ltr"
+			data-authenticated="false"
+			data-auth-status-determined="false"
+			data-target="docs"
+			x-ms-format-detection="none"
+		>
+			
+		<head>
+			<title>Windows SDK redist lists | Microsoft Learn</title>
+			<meta charset="utf-8" />
+			<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+			<meta name="color-scheme" content="light dark" />
+
+			<meta name="description" content="These are the redist.txt lists referenced in the EULA for the Windows SDK" />
+			<link rel="canonical" href="https://learn.microsoft.com/en-us/legal/windows-sdk/redist" /> 
+
+			<!-- Non-customizable open graph and sharing-related metadata -->
+			<meta name="twitter:card" content="summary_large_image" />
+			<meta name="twitter:site" content="@MicrosoftLearn" />
+			<meta property="og:type" content="website" />
+			<meta property="og:image:alt" content="Microsoft Learn" />
+			<meta property="og:image" content="https://learn.microsoft.com/en-us/media/open-graph-image.png" />
+			<!-- Page specific open graph and sharing-related metadata -->
+			<meta property="og:title" content="Windows SDK redist lists" />
+			<meta property="og:url" content="https://learn.microsoft.com/en-us/legal/windows-sdk/redist" />
+			<meta property="og:description" content="These are the redist.txt lists referenced in the EULA for the Windows SDK" />
+			<meta name="platform_id" content="266b8e3d-14a8-60ca-3b58-05fa41fb434d" /> 
+			<meta name="locale" content="en-us" />
+			 
+			<meta name="uhfHeaderId" content="MSDocsHeader-Windows" />
+
+			<meta name="page_type" content="content" />
+
+			<!--page specific meta tags-->
+			
+
+			<!-- custom meta tags -->
+			
+		<meta name="breadcrumb_path" content="/legal/bread/toc.json" />
+	
+		<meta name="ms.topic" content="legal" />
+	
+		<meta name="keywords" content="redist, sdk" />
+	
+		<meta name="author" content="QuinnRadich" />
+	
+		<meta name="ms.author" content="quradic" />
+	
+		<meta name="ms.date" content="2024-10-21T00:00:00Z" />
+	
+		<meta name="ms.service" content="legal" />
+	
+		<meta name="ms.subservice" content="uwp" />
+	
+		<meta name="ROBOTS" content="NOINDEX" />
+	
+		<meta name="document_id" content="d62eba6c-ae20-0bde-9096-c86a61c96a0b" />
+	
+		<meta name="document_version_independent_id" content="2ac21393-8a8b-012a-8add-3cebe8528ec8" />
+	
+		<meta name="updated_at" content="2024-10-30T22:28:00Z" />
+	
+		<meta name="original_content_git_url" content="https://github.com/MicrosoftDocs/DocsLegal-pr/blob/live/DocsLegal/windows-sdk/redist.md" />
+	
+		<meta name="gitcommit" content="https://github.com/MicrosoftDocs/DocsLegal-pr/blob/5517c932e1189e1d731dc4a24ae8f6b2fdf38bd4/DocsLegal/windows-sdk/redist.md" />
+	
+		<meta name="git_commit_id" content="5517c932e1189e1d731dc4a24ae8f6b2fdf38bd4" />
+	
+		<meta name="site_name" content="Docs" />
+	
+		<meta name="depot_name" content="MSDN.DocsLegal" />
+	
+		<meta name="schema" content="Conceptual" />
+	
+		<meta name="toc_rel" content="../toc.json" />
+	
+		<meta name="feedback_system" content="None" />
+	
+		<meta name="feedback_product_url" content="" />
+	
+		<meta name="feedback_help_link_type" content="" />
+	
+		<meta name="feedback_help_link_url" content="" />
+	
+		<meta name="word_count" content="966" />
+	
+		<meta name="asset_id" content="windows-sdk/redist" />
+	
+		<meta name="moniker_range_name" content="" />
+	
+		<meta name="item_type" content="Content" />
+	
+		<meta name="source_path" content="DocsLegal/windows-sdk/redist.md" />
+	
+		<meta name="github_feedback_content_git_url" content="https://github.com/MicrosoftDocs/DocsLegal-pr/blob/live/DocsLegal/windows-sdk/redist.md" />
+	
+		<meta name="markdown_url" content="https://learn.microsoft.com/en-us/legal/windows-sdk/redist?accept=text/markdown" />
+	 
+
+			<!-- Apply persisted/system theme before first paint to prevent wrong-theme flash when scripts are deferred. -->
+			<script id="theme-preference">
+				(function () {
+			try {
+				var stored = localStorage.getItem('theme');
+				var theme = /^(light|dark|high-contrast)$/.test(stored)
+					? stored
+					: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+				document.documentElement.classList.add('theme-' + theme);
+			} catch (e) {}
+		})();;
+			</script>
+
+			<script id="atlas-layout-preferences">
+				(function () {
+			try {
+				var state = JSON.parse(localStorage.getItem('atlas-layout-preferences') || '{}');
+				var view = state["ContentPage"] || {};
+				var excludesKey = "";
+				var blocked = {};
+				if (excludesKey) {
+					var exclusions = JSON.parse(localStorage.getItem('atlas-layout-exclusions') || '{}');
+					if (Object.prototype.hasOwnProperty.call(exclusions, excludesKey)) {
+						var scoped = exclusions[excludesKey];
+						if (scoped) {
+							if (typeof scoped === 'object') blocked = scoped;
+						}
+					}
+				}
+				var html = document.documentElement;
+				for (var c in view) {
+					if (Object.prototype.hasOwnProperty.call(blocked, c)) continue;
+					if (view[c]) html.classList.add(c);
+					else html.classList.remove(c);
+				}
+			} catch (e) {}
+		})();;
+			</script>
+
+			<!-- assets and js globals -->
+			
+			<link rel="stylesheet" href="/static/assets/0.4.03574.8308-9505b1c8/styles/site.css" />
+			
+			<script src="https://wcpstatic.microsoft.com/mscc/lib/v2/wcp-consent.js"></script>
+			<!-- Keep this URL in sync with oneDSScriptSelector in instrumentation/one-ds.ts. -->
+			<script async src="https://js.monitor.azure.com/scripts/c/ms.jsll-4.min.js"></script>
+			
+
+			<!-- msdocs global object -->
+			<script id="msdocs-script">
+		var msDocs = {
+  "environment": {
+    "accessLevel": "online",
+    "azurePortalHostname": "portal.azure.com",
+    "reviewFeatures": false,
+    "supportLevel": "production",
+    "systemContent": true,
+    "siteName": "learn",
+    "legacyHosting": false
+  },
+  "data": {
+    "contentLocale": "en-us",
+    "contentDir": "ltr",
+    "userLocale": "en-us",
+    "userDir": "ltr",
+    "pageTemplate": "ContentPage",
+    "layoutStateStorageKey": "ContentPage",
+    "brand": "",
+    "context": {},
+    "standardFeedback": false,
+    "showFeedbackReport": false,
+    "feedbackHelpLinkType": "",
+    "feedbackHelpLinkUrl": "",
+    "feedbackSystem": "None",
+    "feedbackGitHubRepo": "",
+    "feedbackProductUrl": "",
+    "extendBreadcrumb": false,
+    "isEditDisplayable": false,
+    "isPrivateUnauthorized": false,
+    "hideViewSource": false,
+    "isPermissioned": false,
+    "hasRecommendations": false
+  },
+  "functions": {}
+};;
+	</script>
+
+			<!-- base scripts, msdocs global should be before this -->
+			<script
+				src="/static/assets/0.4.03574.8308-9505b1c8/scripts/en-us/index-docs.js"
+				async
+			></script>
+			
+
+			<!-- json-ld -->
+			
+		</head>
+	
+			<body
+				id="body"
+				data-bi-name="body"
+				class="layout-body "
+				lang="en-us"
+				dir="ltr"
+			>
+				<header class="layout-body-header background-color-body-medium">
+		<div class="header-holder has-default-focus">
+			
+		<a
+			href="#main"
+			
+			style="z-index: 1070"
+			class="outline-color-text visually-hidden-until-focused position-fixed inner-focus focus-visible top-0 left-0 right-0 padding-xs text-align-center background-color-body"
+			
+		>
+			Skip to main content
+		</a>
+	
+
+			<div hidden id="cookie-consent-holder" data-test-id="cookie-consent-container"></div>
+			<!-- Unsupported browser warning -->
+			<div
+				id="unsupported-browser"
+				style="background-color: white; color: black; padding: 16px; border-bottom: 1px solid grey;"
+				hidden
+			>
+				<div style="max-width: 800px; margin: 0 auto;">
+					<p style="font-size: 24px">This browser is no longer supported.</p>
+					<p style="font-size: 16px; margin-top: 16px;">
+						Upgrade to Microsoft Edge to take advantage of the latest features, security updates, and technical support.
+					</p>
+					<div style="margin-top: 12px;">
+						<a
+							href="https://go.microsoft.com/fwlink/p/?LinkID=2092881 "
+							style="background-color: #0078d4; border: 1px solid #0078d4; color: white; padding: 6px 12px; border-radius: 2px; display: inline-block;"
+						>
+							Download Microsoft Edge
+						</a>
+						<a
+							href="https://learn.microsoft.com/en-us/lifecycle/faq/internet-explorer-microsoft-edge"
+							style="background-color: white; padding: 6px 12px; border: 1px solid #505050; color: #171717; border-radius: 2px; display: inline-block;"
+						>
+							More info about Internet Explorer and Microsoft Edge
+						</a>
+					</div>
+				</div>
+			</div>
+			<!-- site header -->
+			<div
+				id="ms--site-header"
+				data-test-id="site-header-wrapper"
+				itemscope="itemscope"
+				itemtype="http://schema.org/Organization"
+			>
+				<div
+					id="ms--mobile-nav"
+					class="site-header display-none-tablet padding-inline-none gap-none"
+					data-bi-name="mobile-header"
+					data-test-id="mobile-header"
+				></div>
+				<div
+					id="ms--primary-nav"
+					class="site-header display-none display-flex-tablet"
+					data-bi-name="L1-header"
+					data-test-id="primary-header"
+				></div>
+				<div
+					id="ms--secondary-nav"
+					class="site-header display-none display-flex-tablet"
+					data-bi-name="L2-header"
+					data-test-id="secondary-header"
+					
+				></div>
+			</div>
+			
+		<!-- banner -->
+		<div data-banner>
+			<div id="disclaimer-holder"></div>
+			
+		</div>
+		<!-- banner end -->
+	
+		</div>
+	</header>
+				 
+
+				<main
+					id="main"
+					role="main"
+					class="layout-body-main "
+					data-bi-name="content"
+					lang="en-us"
+					dir="ltr"
+				>
+					
+			<div data-main-column class="content is-reading-width margin-top-md margin-inline-auto padding-inline-xs padding-bottom-sm">
+				<h1 id="redisttxt">REDIST.TXT</h1> <p>UPDATED 10/21/2024</p>
+<p>Below are separate “REDIST.TXT lists” referenced in the “Distributable Code” section of the Microsoft Software License Terms for the Microsoft Windows Software Development Kit for Windows 10 indicated below.</p>
+<p>If you have a validly licensed copy of such software, you may copy and distribute the unmodified object code form of the files listed below, subject to the software's License Terms and to the additional terms or conditions that are indicated below.</p>
+<h3 id="static-lib-files">Static LIB files</h3>
+<p>Subject to the license terms for the software, the .lib files under the following directories may be distributed unmodified when built as part of your program:</p>
+<ul>
+<li>Program Files\Windows Kits\10\Lib\&lt;version&gt;\um\x86</li>
+<li>Program Files\Windows Kits\10\Lib\&lt;version&gt;\um\x64</li>
+<li>Program Files\Windows Kits\10\Lib\&lt;version&gt;\um\arm</li>
+<li>Program Files\Windows Kits\10\Lib\&lt;version&gt;\um\arm64</li>
+<li>Program Files\Windows Kits\10\Lib\&lt;version&gt;\ucrt\x86</li>
+<li>Program Files\Windows Kits\10\Lib\&lt;version&gt;\ucrt\x64</li>
+<li>Program Files\Windows Kits\10\Lib\&lt;version&gt;\ucrt\arm</li>
+<li>Program Files\Windows Kits\10\Lib\&lt;version&gt;\ucrt\arm64</li>
+</ul>
+<p>Where &lt;version&gt; is the publically released version of the SDK, for example: 10.0.10586.0 and 10.0.10240.0.</p>
+<h3 id="binaries">Binaries</h3>
+<p>Subject to the license terms for the software, the following .exe &amp; .dll files may be distributed unmodified as part of your program (note that there are additional restrictions for some of the files below):</p>
+<ul>
+<li>Program Files\Windows Kits\10\Windows Performance Toolkit\KernelTraceControl.dll</li>
+<li>Program Files \Windows Kits\10\Windows Performance Toolkit\WindowsPerformanceRecorderControl.dll</li>
+</ul>
+<p>The following files may be distributed with your Universal Windows app or Classic Windows applications:</p>
+<ul>
+<li>Program Files\Windows Kits\10\Redist\MBN\x64\microsoft.mbn.dll</li>
+<li>Program Files\Windows Kits\10\Redist\MBN\x86\microsoft.mbn.dll</li>
+<li>Program Files\Windows Kits\10\Redist\MBN\arm\microsoft.mbn.dll</li>
+<li>Program Files\Windows Kits\10\Redist\MBN\arm64\microsoft.mbn.dll</li>
+</ul>
+<p>These files may only be redistributed with your Classic Windows applications.  They may not be redistributed with any Universal Windows apps.</p>
+<ul>
+<li>Program Files\Windows Kits\10\Redist\D3D\x64\d3dcompiler_47.dll</li>
+<li>Program Files\Windows Kits\10\Redist\D3D\x64\d3dcsx_47.dll</li>
+<li>Program Files\Windows Kits\10\Redist\D3D\x64\dxcompiler.dll</li>
+<li>Program Files\Windows Kits\10\Redist\D3D\x64\dxil.dll</li>
+<li>Program Files\Windows Kits\10\Redist\D3D\x86\d3dcompiler_47.dll</li>
+<li>Program Files\Windows Kits\10\Redist\D3D\x86\d3dcsx_47.dll</li>
+<li>Program Files\Windows Kits\10\Redist\D3D\x86\dxcompiler.dll</li>
+<li>Program Files\Windows Kits\10\Redist\D3D\x86\dxil.dll</li>
+</ul>
+<p>These files may only be redistributed with your Classic Windows applications.  They may not be redistributed with any Universal Windows apps.</p>
+<ul>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-console-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-datetime-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-debug-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-errorhandling-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-file-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-file-l1-2-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-file-l2-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-handle-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-heap-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-interlocked-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-libraryloader-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-localization-l1-2-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-memory-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-namedpipe-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-processenvironment-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-processthreads-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-processthreads-l1-1-1.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-profile-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-rtlsupport-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-string-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-synch-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-synch-l1-2-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-sysinfo-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-timezone-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-core-util-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-crt-conio-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-crt-convert-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-crt-environment-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-crt-filesystem-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-crt-heap-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-crt-locale-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-crt-math-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-crt-multibyte-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-crt-private-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-crt-process-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-crt-runtime-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-crt-stdio-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-crt-string-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-crt-time-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\api-ms-win-crt-utility-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\arm\ucrtbase.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-console-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-datetime-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-debug-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-errorhandling-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-file-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-file-l1-2-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-file-l2-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-handle-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-heap-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-interlocked-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-libraryloader-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-localization-l1-2-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-memory-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-namedpipe-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-processenvironment-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-processthreads-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-processthreads-l1-1-1.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-profile-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-rtlsupport-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-string-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-synch-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-synch-l1-2-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-sysinfo-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-timezone-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-core-util-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-crt-conio-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-crt-convert-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-crt-environment-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-crt-filesystem-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-crt-heap-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-crt-locale-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-crt-math-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-crt-multibyte-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-crt-private-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-crt-process-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-crt-runtime-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-crt-stdio-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-crt-string-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-crt-time-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\api-ms-win-crt-utility-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x64\ucrtbase.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-console-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-datetime-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-debug-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-errorhandling-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-file-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-file-l1-2-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-file-l2-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-handle-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-heap-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-interlocked-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-libraryloader-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-localization-l1-2-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-memory-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-namedpipe-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-processenvironment-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-processthreads-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-processthreads-l1-1-1.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-profile-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-rtlsupport-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-string-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-synch-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-synch-l1-2-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-sysinfo-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-timezone-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-core-util-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-crt-conio-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-crt-convert-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-crt-environment-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-crt-filesystem-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-crt-heap-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-crt-locale-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-crt-math-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-crt-multibyte-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-crt-private-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-crt-process-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-crt-runtime-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-crt-stdio-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-crt-string-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-crt-time-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\api-ms-win-crt-utility-l1-1-0.dll</li>
+<li>Program Files\Windows Kits\10\Redist\ucrt\DLLs\x86\ucrtbase.dll</li>
+</ul>
+<h3 id="universal-crt-msu-files">Universal CRT MSU files</h3>
+<p>The Universal CRT MSU files can be downloaded from the following location:  <a href="https://go.microsoft.com/fwlink/?LinkId=718052" data-linktype="external">https://go.microsoft.com/fwlink/?LinkId=718052</a></p>
+<p>These files may only be redistributed unmodified with your setup program for your Classic Windows applications.  They may not be redistributed with any Universal Windows apps.</p>
+<ul>
+<li>Windows8.1-KB3118401-x64.msu</li>
+<li>Windows8.1-KB3118401-x86.msu</li>
+<li>Windows8.1-KB3118401-arm.msu</li>
+<li>Windows8-RT-KB3118401-x64.msu</li>
+<li>Windows8-RT-KB3118401-x86.msu</li>
+<li>Windows8-RT-KB3118401-arm.msu</li>
+<li>Windows6.1-KB3118401-x64.msu</li>
+<li>Windows6.1-KB3118401-x86.msu</li>
+<li>Windows6.0-KB3118401-x64.msu</li>
+<li>Windows6.0-KB3118401-x86.msu</li>
+</ul>
+<p>If you need an earlier version of these files, they can be located here:  <a href="https://support.microsoft.com/kb/2999226" data-linktype="external">https://support.microsoft.com/kb/2999226</a></p>
+<h3 id="windows-performance-toolkit">Windows Performance Toolkit</h3>
+<p>The following files may only be distributed unmodified, as a package, as part of your program:</p>
+<ul>
+<li>Program Files\Windows Kits\10\Windows Performance Toolkit\Redistributables\WPTarm-arm_en-us.msi</li>
+<li>Program Files\Windows Kits\10\Windows Performance Toolkit\Redistributables\WPTx64-x86_en-us.msi</li>
+<li>Program Files\Windows Kits\10\Windows Performance Toolkit\Redistributables\WPTx86-x86_en-us.msi</li>
+</ul>
+<h3 id="debugging-tools-for-windows">Debugging Tools for Windows</h3>
+<p>You may distribute these files as part of your program.</p>
+<ul>
+<li>Dbgeng.dll</li>
+<li>Dbgcore.dll</li>
+<li>Dbgmodel.dll</li>
+<li>Dbghelp.dll</li>
+<li>Srcsrv.dll</li>
+<li>Symsrv.dll</li>
+<li>Symchk.exe</li>
+<li>Symbolcheck.dll</li>
+<li>Symstore.exe</li>
+<li>Program Files\Windows Kits\10\Debuggers\Redist\X86 Debuggers and Tools-x86_en-us.msi</li>
+<li>Program Files\Windows Kits\10\Debuggers\Redist\X64 Debuggers and Tools-x64_en-us.msi</li>
+<li>App Verifier</li>
+</ul>
+<p>The following files may only be distributed unmodified, as a package, as part of your program:</p>
+<ul>
+<li>Program Files\Application Verifier\vrfauto.dll</li>
+<li>Program Files\Application Verifier\vrfauto.h</li>
+<li>Program Files\Application Verifier\vrfauto.idl</li>
+</ul>
+<p>In order to acquire the following MSIs, you must download the software and select the appropriate features from the feature selection screen.  The MSIs can be found in the Installers folder in the location where you downloaded the software.</p>
+<ul>
+<li>Application Verifier x64 External Package-x64_en-us.msi</li>
+<li>Application Verifier x86 External Package-x86_en-us.msi</li>
+</ul>
+<h3 id="windows-packaging-tools">Windows Packaging Tools</h3>
+<p>The following files may only be distributed unmodified, as a package, and as part of your program for the use of packing, unpacking, bundling, and unbundling of msix and msixbundle files.</p>
+<ul>
+<li>Appxpackaging.dll</li>
+<li>AppxPackaging.dll.mui</li>
+<li>AppxSip.dll</li>
+<li>ComparePackage.exe</li>
+<li>MakeAppx.exe</li>
+<li>MakePri.exe</li>
+<li>Microsoft.ComparePackage.Lib.dll</li>
+<li>Microsoft.PackageEditor.Lib.dll</li>
+<li>Microsoft.Packaging.SDKUtils.dll</li>
+<li>Microsoft.Windows.Build.Appx.AppxPackaging.dll.manifest</li>
+<li>Microsoft.Windows.Build.Appx.AppxSip.dll.manifest</li>
+<li>Microsoft.Windows.Build.Appx.OpcServices.dll.manifest</li>
+<li>Microsoft.Windows.Build.Signing.mssign32.dll.manifest</li>
+<li>Microsoft.Windows.Build.Signing.wintrust.dll.manifest</li>
+<li>msisip.dll</li>
+<li>Mssign32.dll</li>
+<li>OpcServices.dll</li>
+<li>PackageEditor.exe</li>
+<li>SignTool.exe</li>
+<li>SignTool.exe.manifest</li>
+<li>Wintrust.dll</li>
+<li>Wintrust.dll.ini</li>
+</ul>
+<h3 id="microsoftwindowssdknetref">Microsoft.Windows.SDK.NET.Ref</h3>
+<p>The files included in the Microsoft.Windows.SDK.NET.Ref Nuget package (<a href="https://www.nuget.org/packages/Microsoft.windows.sdk.net.ref" data-linktype="external">https://www.nuget.org/packages/Microsoft.windows.sdk.net.ref</a>) may be distributed unmodified as a NuGet package, or as part of your program in order to enable your application to call WinRT Apis (<a href="/en-us/windows/apps/desktop/modernize/desktop-to-uwp-enhance" data-linktype="absolute-path">https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/desktop-to-uwp-enhance</a>).</p>
+<ul>
+<li>./analyzers/dotnet/cs/WinRT.SourceGenerator.dll</li>
+<li>./data/frameworkList.xml</li>
+<li>./data/RuntimeList.xml</li>
+<li>./lib/net8.0/Microsoft.Windows.SDK.NET.dll</li>
+<li>./lib/net8.0/Microsoft.Windows.SDK.NET.xml</li>
+<li>./lib/net8.0/Microsoft.Windows.UI.Xaml.dll</li>
+<li>./lib/net8.0/Microsoft.Windows.UI.Xaml.xml</li>
+<li>./lib/net8.0//WinRT.Runtime.dll</li>
+<li>./winmd/*.winmd</li>
+<li>./lib/net6.0/Microsoft.Windows.SDK.NET.dll</li>
+<li>./lib/net6.0/Microsoft.Windows.SDK.NET.xml</li>
+<li>./lib/net6.0/WinRT.Runtime.dll</li>
+</ul>
+
+			</div>
+		
+				</main>
+				  <div class="layout-body-footer " data-bi-name="layout-footer">
+		<footer
+			id="footer"
+			data-test-id="footer"
+			data-bi-name="footer"
+			class="footer-layout padding-xs padding-sm-desktop has-default-focus border-top"
+			role="contentinfo"
+		>
+			<div class="display-flex gap-xs flex-wrap-wrap is-full-height padding-right-lg-desktop">
+				
+		<a
+			data-mscc-ic="false"
+			href="#"
+			data-bi-name="select-locale"
+			class="locale-selector-link flex-shrink-0 button button-sm button-clear external-link-indicator"
+			id=""
+			title=""
+			><span class="icon" aria-hidden="true"
+				><span class="docon docon-world"></span></span
+			><span class="local-selector-link-text">en-us</span></a
+		>
+	 <div class="ccpa-privacy-link" data-ccpa-privacy-link hidden>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://aka.ms/yourcaliforniaprivacychoices"
+			data-bi-name="your-privacy-choices"
+			class="button button-sm button-clear flex-shrink-0 external-link-indicator"
+			id=""
+			title=""
+			>
+		<svg
+			xmlns="http://www.w3.org/2000/svg"
+			viewBox="0 0 30 14"
+			xml:space="preserve"
+			height="16"
+			width="43"
+			aria-hidden="true"
+			focusable="false"
+		>
+			<path
+				d="M7.4 12.8h6.8l3.1-11.6H7.4C4.2 1.2 1.6 3.8 1.6 7s2.6 5.8 5.8 5.8z"
+				style="fill-rule:evenodd;clip-rule:evenodd;fill:#fff"
+			></path>
+			<path
+				d="M22.6 0H7.4c-3.9 0-7 3.1-7 7s3.1 7 7 7h15.2c3.9 0 7-3.1 7-7s-3.2-7-7-7zm-21 7c0-3.2 2.6-5.8 5.8-5.8h9.9l-3.1 11.6H7.4c-3.2 0-5.8-2.6-5.8-5.8z"
+				style="fill-rule:evenodd;clip-rule:evenodd;fill:#06f"
+			></path>
+			<path
+				d="M24.6 4c.2.2.2.6 0 .8L22.5 7l2.2 2.2c.2.2.2.6 0 .8-.2.2-.6.2-.8 0l-2.2-2.2-2.2 2.2c-.2.2-.6.2-.8 0-.2-.2-.2-.6 0-.8L20.8 7l-2.2-2.2c-.2-.2-.2-.6 0-.8.2-.2.6-.2.8 0l2.2 2.2L23.8 4c.2-.2.6-.2.8 0z"
+				style="fill:#fff"
+			></path>
+			<path
+				d="M12.7 4.1c.2.2.3.6.1.8L8.6 9.8c-.1.1-.2.2-.3.2-.2.1-.5.1-.7-.1L5.4 7.7c-.2-.2-.2-.6 0-.8.2-.2.6-.2.8 0L8 8.6l3.8-4.5c.2-.2.6-.2.9 0z"
+				style="fill:#06f"
+			></path>
+		</svg>
+	
+			<span>Your Privacy Choices</span></a
+		>
+	
+	</div>
+				<div class="flex-shrink-0">
+		<div class="dropdown has-caret-up">
+			<button
+				data-test-id="theme-selector-button"
+				class="dropdown-trigger button button-clear button-sm inner-focus theme-dropdown-trigger"
+				aria-controls="{{ themeMenuId }}"
+				aria-haspopup="true"
+				aria-expanded="false"
+				data-bi-name="theme"
+			>
+				<span class="icon" aria-hidden="true"><span class="docon docon-sun"></span></span>
+				<span>Theme</span>
+				<span class="icon expanded-indicator" aria-hidden="true">
+					<span class="docon docon-chevron-down-light"></span>
+				</span>
+			</button>
+			<div class="dropdown-menu" id="{{ themeMenuId }}" role="menu">
+				<ul class="theme-selector padding-xxs" data-test-id="theme-dropdown-menu" role="none">
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="light"
+							tabindex="-1"
+						>
+							<span class="theme-light margin-right-xxs">
+								<span
+									class="theme-selector-icon border display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> Light </span>
+						</button>
+					</li>
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="dark"
+							tabindex="-1"
+						>
+							<span class="theme-dark margin-right-xxs">
+								<span
+									class="border theme-selector-icon display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> Dark </span>
+						</button>
+					</li>
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="high-contrast"
+							tabindex="-1"
+						>
+							<span class="theme-high-contrast margin-right-xxs">
+								<span
+									class="border theme-selector-icon display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> High contrast </span>
+						</button>
+					</li>
+				</ul>
+			</div>
+		</div>
+	</div>
+			</div>
+			<ul class="links" data-bi-name="footerlinks">
+				<li class="manage-cookies-holder" hidden=""></li>
+				<li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/principles-for-ai-generated-content"
+			data-bi-name="aiDisclaimer"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>AI Disclaimer</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/previous-versions/"
+			data-bi-name="archivelink"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Previous Versions</a
+		>
+	
+	</li> <li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://techcommunity.microsoft.com/t5/microsoft-learn-blog/bg-p/MicrosoftLearnBlog"
+			data-bi-name="bloglink"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Blog</a
+		>
+	
+	</li> <li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/contribute"
+			data-bi-name="contributorGuide"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Contribute</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://go.microsoft.com/fwlink/?LinkId=521839"
+			data-bi-name="privacy"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Privacy</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://go.microsoft.com/fwlink/?linkid=2259814"
+			data-bi-name="consumer-health-privacy"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Consumer Health Privacy</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/legal/termsofuse"
+			data-bi-name="termsofuse"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Terms of Use</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://www.microsoft.com/legal/intellectualproperty/Trademarks/"
+			data-bi-name="trademarks"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Trademarks</a
+		>
+	
+	</li>
+				<li>&copy; Microsoft 2026</li>
+			</ul>
+		</footer>
+	</footer>
+			</body>
+		</html>

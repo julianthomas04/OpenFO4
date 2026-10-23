@@ -1,0 +1,56 @@
+OpenFO4 installer - third-party components
+==========================================
+
+Original OpenFO4 code is Apache-2.0; imported and derived components retain their own licenses. The combined installer is
+distributed under GPL-3.0. Copyright 2026 Julian Thomas and OpenFO4 contributors.
+
+The installer carries the components below and unpacks them for its own use. Each keeps its own licence; the full licence texts
+ship inside the unpacked folders named here (under %LOCALAPPDATA%\OpenFO4\installer\<version>-<id>\). The generated
+legal\COMPONENT_INDEX.txt lists the exact component versions, license evidence, source origins and modifications.
+
+Python {{PYTHON}} (embeddable package)             runtime\python\
+    Licence: Python Software Foundation License (PSF-2.0), permitting redistribution in binary form. The text, with the licences of
+    Python itself is runtime\python\LICENSE.txt. Additional native-library notices are retained in legal\components\;
+    do not assume the main Python license includes every bundled native dependency.
+    Source: https://www.python.org/downloads/ and https://github.com/python/cpython
+
+Eclipse Temurin {{JAVA}}                   runtime\jre\
+    Licence: GNU General Public License version 2 with the Classpath Exception, which permits redistribution and linking with
+    programs under other licences. The texts are in runtime\jre\legal\.
+    Source code of this build: https://github.com/adoptium/jdk21u at 1c417fbfc2f7, with temurin-build at
+    e6ba7dec3d07654074559310376a3ae89da5f4ac. The complete runtime\jre\legal\ tree is preserved.
+    Microsoft Visual C++ runtime files (vcruntime140*.dll, msvcp140.dll) inside it are redistributable under the Microsoft
+    Visual Studio licence terms.
+
+JPEXS Free Flash Decompiler (ffdec)                third_party\ffdec\
+    Licence: GNU General Public License version 3 (third_party\ffdec\license.txt). It runs as a separate program on the bundled
+    Java and extracts the game's UI fonts and animations.
+    Source: https://github.com/jindrapetrik/jpexs-decompiler
+
+Librempeg (ffmpeg.exe)                             third_party\librempeg\
+    Licence: GNU General Public License version 3 and GNU Affero General Public License version 3 (third_party\librempeg\licenses\).
+    It runs as a separate program and converts the game's sound and music to FLAC; its notices are third_party\librempeg\THIRD_PARTY_NOTICES.txt.
+    Source: https://github.com/librempeg/librempeg
+
+Bink2 decoder (Bink2Decoder.exe)                   third_party\bink2-decoder\
+    Licence: GNU General Public License version 3 or later (third_party\bink2-decoder\LICENSE); parts derive from LGPL-2.1-or-later sources (COPYING.LGPLv2.1).
+    It runs as a separate program and decodes the game's Bink2 videos, which Librempeg encodes to H.264; see THIRD_PARTY_NOTICES.md and DECODER_SOURCES.md beside it.
+    Source: tools\bink2-decoder in the matching source asset below, with pinned upstream sources and build instructions.
+
+PyNifly (bhk_autounpack.py)                        third_party\pynifly\
+    Licence: GNU General Public License version 3 (third_party\pynifly\LICENSE). Decodes Havok collision data.
+    Source: https://github.com/BadDogSkyrim/PyNifly
+
+The installer program uses .NET, Avalonia UI, SkiaSharp, HarfBuzzSharp, SQLite, Mutagen and other packages. Their individual
+licenses and retained notices are indexed in legal\COMPONENT_INDEX.txt. The self-contained .NET runtime's actual runtime-pack
+LICENSE.TXT and THIRD-PARTY-NOTICES.TXT accompany both .NET programs; source-repository MIT labels do not replace binary notices.
+
+The game executable is installed into the folder you choose.
+
+Matching source download
+------------------------
+Download OpenFO4-<version>-sources.zip from Assets on the same GitHub release as the normal installer. The release notes link
+that source asset near the bottom. OpenFO4-<version>-release-manifest.json pairs the installer and source archive by SHA256 and
+source commit. The source archive contains preferred source, retained licenses, build scripts, and required dependency sources;
+it is a separate download and is not embedded in the normal installer. Build SDKs are documented prerequisites; no complete
+compiler/SDK source closure is claimed.

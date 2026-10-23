@@ -1,0 +1,212 @@
+{
+  "schema": 1,
+  "librempeg": {
+    "manifestSha256": "83d2aa348414bbdd38cf8533f51c2cef48978d92a2519f555a6b5b20abb2920f",
+    "files": [
+      {
+        "file": "ffmpeg.exe",
+        "sha256": "34f993870da200bdcab7ecd3f69dba2d132229d0ea2b8b7a093d44de43e2a881"
+      },
+      {
+        "file": "ffprobe.exe",
+        "sha256": "143adfee058ae462cf169f94bc203a76d51de86b030c68ac6fd6dbb922ccedef"
+      },
+      {
+        "file": "THIRD_PARTY_NOTICES.txt",
+        "sha256": "eee5456cd38f870bb511ae884b1bcb9f00958b89ccefb3fce124030d2944b879"
+      },
+      {
+        "file": "build-info\\build.ps1",
+        "sha256": "fe977cb72c41ca48e327b647951514656729c1d9109cd0e8eb43c96833caf67e"
+      },
+      {
+        "file": "build-info\\build.sh",
+        "sha256": "500c6d51f04d9586978690577bac2f7c336275ca1b7c19ca3f6816f4fe2a1e6e"
+      },
+      {
+        "file": "build-info\\ffmpeg-buildconf.txt",
+        "sha256": "f85d475ceca60bfc0dd25f5c48d136402b82ff3e437b0b4ddecf82159a4a5a23"
+      },
+      {
+        "file": "build-info\\ffmpeg-decoders.txt",
+        "sha256": "b5bf047834ea171bbdc98ba91a0fc513faaf5ad5e5b836307c3bd0342f4df7da"
+      },
+      {
+        "file": "build-info\\ffmpeg-encoders.txt",
+        "sha256": "20a6446576518e1981c0f2a21859f49a48a6e6b18dc82b5d42b10d6320e6ee3d"
+      },
+      {
+        "file": "build-info\\ffmpeg-imports.txt",
+        "sha256": "ca0a23dc957b2fa1bf6c768e7f2c5197c163a5afa55786711274b7ff900fa864"
+      },
+      {
+        "file": "build-info\\ffmpeg-version.txt",
+        "sha256": "d104a37c1f895c99686fc7c12879effbaf00eff3b253f2a7009abe72dffae8dc"
+      },
+      {
+        "file": "build-info\\ffprobe-imports.txt",
+        "sha256": "6de78238c612db92303b20ad23d7d7fa75f9111b142742557607f9a77fdc5039"
+      },
+      {
+        "file": "build-info\\README.md",
+        "sha256": "10d6ec5f2a7d6ab03258e0214c4f78ad2a292b6470e50a9857452a26d40d1d8d"
+      },
+      {
+        "file": "build-info\\resolve.ps1",
+        "sha256": "8294801941ef2be00543f64d83acc7b8932c1c4dab2e1f60d0f10c889bf72ce3"
+      },
+      {
+        "file": "build-info\\THIRD_PARTY_NOTICES.txt",
+        "sha256": "eee5456cd38f870bb511ae884b1bcb9f00958b89ccefb3fce124030d2944b879"
+      },
+      {
+        "file": "build-info\\toolchain.lock.json",
+        "sha256": "ca214ae357066ebbe8d00e79d776187870440386c1c757f78647e3c28cc2f993"
+      },
+      {
+        "file": "licenses\\Librempeg-AGPLv3.txt",
+        "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0"
+      },
+      {
+        "file": "licenses\\Librempeg-GPLv3.txt",
+        "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+      },
+      {
+        "file": "licenses\\x264-COPYING.txt",
+        "sha256": "32b1062f7da84967e7019d01ab805935caa7ab7321a7ced0e30ebe75e5df1670"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\binutils\\COPYING",
+        "sha256": "231f7edcc7352d7734a96eef0b8030f77982678c516876fcb81e25b32d68564c"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\binutils\\COPYING.LIB",
+        "sha256": "56bdea73b6145ef6ac5259b3da390b981d840c24cb03b8e1cbc678de7ecfa18d"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\binutils\\COPYING3",
+        "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\binutils\\COPYING3.LIB",
+        "sha256": "a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\crt\\COPYING",
+        "sha256": "99a69660981156c21336fdb5661f89341b013c94e4bf9e1c7467b4745718397f"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\crt\\COPYING.MinGW-w64-runtime.txt",
+        "sha256": "1db8da07b436c68833c0673ffee3d9fcb2526047f3820b81661865dfedc79a1f"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\crt\\COPYING.MinGW-w64.txt",
+        "sha256": "f38e6194bd3bfa1b654f118e5acefe0aead437bbe669eee43957ccc65a7127f1"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\gcc\\COPYING.RUNTIME",
+        "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\gcc\\COPYING3",
+        "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\gettext-runtime\\COPYING",
+        "sha256": "7ef2cdfe58e0c0460657b6598b49af29d4e03c1e41cbaf0e1da1eb8ad74b95d0"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\gettext-runtime\\intl\\COPYING.LIB",
+        "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\gettext-runtime\\libasprintf\\COPYING",
+        "sha256": "03133addae5b99a6148c538300e6d97074453089be1423b741bd081f18e2b298"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\gettext-runtime\\libasprintf\\COPYING.LIB",
+        "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\headers\\COPYING",
+        "sha256": "99a69660981156c21336fdb5661f89341b013c94e4bf9e1c7467b4745718397f"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\headers\\COPYING.MinGW-w64-runtime.txt",
+        "sha256": "1db8da07b436c68833c0673ffee3d9fcb2526047f3820b81661865dfedc79a1f"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\headers\\COPYING.MinGW-w64.txt",
+        "sha256": "f38e6194bd3bfa1b654f118e5acefe0aead437bbe669eee43957ccc65a7127f1"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\headers\\ddk-readme.txt",
+        "sha256": "8d8f9924e4ea5466932000bdb9a4104da1d8ca3e4c979bb8207225522ba63826"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\libgcc\\COPYING.RUNTIME",
+        "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\libgcc\\COPYING3",
+        "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\libiconv\\COPYING",
+        "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\libiconv\\COPYING.LIB",
+        "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\libiconv\\README",
+        "sha256": "4ae66e61d1c6593c84c47105b368d579bcee1af566dbb959ec63a0c48425dcf4"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\libiconv\\libcharset\\COPYING.LIB",
+        "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\libstdc++\\COPYING.RUNTIME",
+        "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\libstdc++\\COPYING3",
+        "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\libwinpthread\\COPYING",
+        "sha256": "63263614cdd29f2f93cba85e992f041b31f9fc7b4033692f31269489a8a1b177"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\nasm\\LICENSE",
+        "sha256": "7436a7c46b6e4d969b41e1ce387885ae4ced25710662189ff2983665253729ac"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\tzdata\\LICENSE",
+        "sha256": "0613408568889f5739e5ae252b722a2659c02002839ad970a63dc5e9174b27cf"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\winpthreads\\COPYING",
+        "sha256": "63263614cdd29f2f93cba85e992f041b31f9fc7b4033692f31269489a8a1b177"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\zlib\\LICENSE",
+        "sha256": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2"
+      },
+      {
+        "file": "licenses\\toolchain-runtime\\zstd\\LICENSE",
+        "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
+      },
+      {
+        "file": "source\\librempeg-395e8d99bed806c77b188f77599f25ee82f8f3bd.tar.gz",
+        "sha256": "2712569a8321faab9b57f860a24794b62ac35c400e5f4fa286292a1d7fe6dc61"
+      },
+      {
+        "file": "source\\x264-0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee.tar.gz",
+        "sha256": "d0967a1348c85dfde363bb52610403be898171493100561efa0dd05d5fd1ae50"
+      }
+    ]
+  }
+}

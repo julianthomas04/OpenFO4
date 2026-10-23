@@ -1,0 +1,86 @@
+{
+  "schema": 1,
+  "target": "x86_64-pc-windows-msvc",
+  "legalReviewStatus": "unresolved-evidence-only",
+  "visualStudioProductLine": "2022",
+  "msvcToolsVersion": "14.43.34808",
+  "windowsSdkVersion": "10.0.22000.0",
+  "libraries": [
+    {
+      "id": "msvc-libcmt",
+      "root": "visualStudio",
+      "path": "VC/Tools/MSVC/14.43.34808/lib/x64/libcmt.lib",
+      "sha256": "2f85dcc9697707be63ce7842cfa4ad0dbc1fddabfcd1c4e6c0afcb372fdff83c",
+      "origin": "static-object-archive",
+      "componentId": "native:msvc-libcmt"
+    },
+    {
+      "id": "msvc-libvcruntime",
+      "root": "visualStudio",
+      "path": "VC/Tools/MSVC/14.43.34808/lib/x64/libvcruntime.lib",
+      "sha256": "e8060e3d69ea5303431e92cdbdff68b73f3a3739526db27f52b2e61897bf7b2e",
+      "origin": "static-object-archive",
+      "componentId": "native:msvc-libvcruntime"
+    },
+    {
+      "id": "sdk-libucrt",
+      "root": "windowsSdk",
+      "path": "Lib/10.0.22000.0/ucrt/x64/libucrt.lib",
+      "sha256": "9990ab11a36ab720a5ad68e13c75eeebd2bc1841a66c45b034540aa65e1d7946",
+      "origin": "static-object-archive",
+      "componentId": "native:windows-sdk-libucrt"
+    },
+    {
+      "id": "msvc-libcpmt",
+      "root": "visualStudio",
+      "path": "VC/Tools/MSVC/14.43.34808/lib/x64/libcpmt.lib",
+      "sha256": "a7a0fb19610249d3bcc876e6e5f76a1fb25018858ef75aa1b58a399f2b06f749",
+      "origin": "static-object-archive",
+      "componentId": "native:msvc-stl",
+      "sourceEvidence": {
+        "path": "tools/licensing/evidence/msvc-stl-14.43.34808.json",
+        "sha256": "6802b283b5e916682977616ddeca3ec14641546095a13c46a1f4c5990c599669"
+      }
+    }
+  ],
+  "linker": {
+    "root": "visualStudio",
+    "path": "VC/Tools/MSVC/14.43.34808/bin/HostX64/x64/link.exe",
+    "fileVersion": "14.43.34809.0",
+    "sha256": "3f406586bc6468f1857e499ff3c89151a96f1eac954895131e0f3bcf14f0dfaa"
+  },
+  "importLibraries": [
+    {
+      "id": "sdk-import-kernel32",
+      "root": "windowsSdk",
+      "path": "Lib/10.0.22000.0/um/x64/kernel32.lib",
+      "sha256": "330c66f4f60c28522500cedfa23f12e72c124d62606553bc64dcbc955801d8fc",
+      "origin": "system-dll-import-library",
+      "moduleNames": [
+        "KERNEL32.dll",
+        "Import:KERNEL32.dll"
+      ]
+    },
+    {
+      "id": "sdk-import-user32",
+      "root": "windowsSdk",
+      "path": "Lib/10.0.22000.0/um/x64/user32.lib",
+      "sha256": "d6d6dba4c1d9d683e05bafbb28bce0aa8366c978fb031e0a749fe44c6da58d8c",
+      "origin": "system-dll-import-library",
+      "moduleNames": [
+        "USER32.dll",
+        "Import:USER32.dll"
+      ]
+    },
+    {
+      "id": "sdk-import-ntdll",
+      "root": "windowsSdk",
+      "path": "Lib/10.0.22000.0/um/x64/ntdll.lib",
+      "sha256": "3b5f05cc1b8a1ad180111e68cbf42995f1de53af0180c0fcbaa3e2cea66deab9",
+      "origin": "system-dll-import-library",
+      "moduleNames": [
+        "Import:ntdll.dll"
+      ]
+    }
+  ]
+}
