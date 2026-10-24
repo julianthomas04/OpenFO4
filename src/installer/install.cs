@@ -60,6 +60,31 @@ if (args.Length > 0 && InstallerPaths.IsPackaged && !args[0].StartsWith("--", St
     Environment.ExitCode = InstallSession.ExitFailed;
     return;
 }
+if (args.Length > 0 && !args[0].StartsWith("--", StringComparison.Ordinal))
+{
+    // Every dev subcommand takes the headless install's --install-dir and --game-dir; omitted, they stay the development defaults.
+    try
+    {
+        var target = DevCommandLocations.Resolve(args, Environment.GetEnvironmentVariable, fo4Location, InstallerPaths.DevInstallFolder);
+        locations = target.Locations;
+        args = target.Arguments;
+    }
+    catch (LaunchArgumentException ex)
+    {
+        Console.Error.WriteLine($"ERROR: {ex.Message}");
+        Environment.ExitCode = InstallSession.ExitFailed;
+        return;
+    }
+    fo4Location = locations.Fo4Location;
+    stagingRoot = locations.StagingRoot;
+    assetsRoot = locations.AssetsRoot;
+    meshesOut = locations.MeshesOut;
+    texturesOut = locations.TexturesOut;
+    dataOut = locations.DataOut;
+    fontsOut = locations.FontsOut;
+    pipboyArtOut = locations.PipboyArtOut;
+    uiLayoutOut = locations.UiLayoutOut;
+}
 if (args.Length > 0)
 {
     switch (args[0])
