@@ -32,12 +32,28 @@ namespace InstallerTests.Nif
         public BSTriShape AddShape(NiNode parent, string name, Vector3[] positions, Triangle[] triangles, TexCoord[]? uvs = null,
             Vector3[]? normals = null, Vector3? translation = null, Matrix33? rotation = null, float scale = 1f)
         {
+            var shape = CreateShape(name, positions, triangles, uvs, normals, translation, rotation, scale);
+            Attach(parent, shape);
+            return shape;
+        }
+
+        /// <summary>A shape that no node lists as a child, as the topmost block of its own hierarchy.</summary>
+        public BSTriShape AddRootShape(string name, Vector3[] positions, Triangle[] triangles, Vector3? translation = null, Matrix33? rotation = null,
+            float scale = 1f)
+        {
+            var shape = CreateShape(name, positions, triangles, null, null, translation, rotation, scale);
+            Nif.AddBlock(shape);
+            return shape;
+        }
+
+        private static BSTriShape CreateShape(string name, Vector3[] positions, Triangle[] triangles, TexCoord[]? uvs, Vector3[]? normals,
+            Vector3? translation, Matrix33? rotation, float scale)
+        {
             var shape = new BSTriShape { Name = new NiStringRef(name) };
             shape.Create(NiVersion.GetFO4(), positions.ToList(), triangles.ToList(),
                 (uvs ?? positions.Select(_ => new TexCoord(0f, 0f)).ToArray()).ToList(),
                 (normals ?? positions.Select(_ => Vector3.UnitZ).ToArray()).ToList());
             SetTransform(shape, translation ?? Vector3.Zero, rotation ?? Identity(), scale);
-            Attach(parent, shape);
             return shape;
         }
 

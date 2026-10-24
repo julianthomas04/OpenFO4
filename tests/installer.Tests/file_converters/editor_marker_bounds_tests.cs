@@ -55,6 +55,16 @@ namespace InstallerTests
         }
 
         [Fact]
+        public void AMarkerShapeOutsideAnyNodeKeepsItsVerticesAsTheConverterDoes()
+        {
+            var scene = new NifSceneBuilder();
+            scene.AddRootShape("EditorMarker", Corners(new Vector3(-64, -8, 0), new Vector3(64, 8, 192)), OneTriangle,
+                translation: new Vector3(500, 0, 0), rotation: NifSceneBuilder.AboutZ(90), scale: 3f);
+
+            Assert.Equal(Box(new Vector3(-64, -8, 0), new Vector3(64, 8, 192)), EditorMarkerBounds.Compute(scene.Nif));
+        }
+
+        [Fact]
         public void ARotationTurnsThePointsTheWayTheConverterReadsIt()
         {
             var scene = new NifSceneBuilder();

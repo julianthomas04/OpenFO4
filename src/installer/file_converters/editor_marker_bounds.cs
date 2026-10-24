@@ -7,8 +7,8 @@ namespace AssetConverter
 {
     /// <summary>
     /// The extent of a model's editor-marker geometry: the shapes whose name contains "EditorMarker", which the game never renders but
-    /// uses as volumes (an automatic door's trigger). Coordinates are NIF model space, Bethesda units, Z-up, below the root node
-    /// (whose own transform the converter ignores as well).
+    /// uses as volumes (an automatic door's trigger). Coordinates are NIF model space, Bethesda units, Z-up, below the topmost block
+    /// (whose own transform the converter ignores as well, whether it is the root node or a shape outside any node).
     /// </summary>
     internal static class EditorMarkerBounds
     {
@@ -63,7 +63,7 @@ namespace AssetConverter
             return parents;
         }
 
-        /// <summary>The object's own transform first, then each ancestor's, leaving out the root.</summary>
+        /// <summary>The object's own transform first, then each ancestor's, leaving out the topmost block's.</summary>
         private static List<NiAVObject> TransformChain(NifFile nif, Dictionary<int, int> parents, int block)
         {
             var chain = new List<NiAVObject>();
@@ -75,7 +75,7 @@ namespace AssetConverter
                 if (!parents.TryGetValue(current, out int parent)) break;
                 current = parent;
             }
-            if (chain.Count > 1) chain.RemoveAt(chain.Count - 1);
+            chain.RemoveAt(chain.Count - 1);
             return chain;
         }
 
