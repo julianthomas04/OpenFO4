@@ -11,7 +11,7 @@ use super::bake::{BakedCellColliders, CachedShape, RagdollBake, ShapeKey, build_
 use super::collider_user_data::{
     ColliderTag, pack_grid, pack_path, pack_ref, unpack_path, unpack_ref,
 };
-use super::collision::{CellColliderBatch, ObjectColliderGroup, Placement};
+use super::collision::{CellColliderBatch, ObjectColliderGroup, Placement, TerrainCollision};
 use super::commands::KinematicPose;
 use super::dynamic_body::{
     DYN_ANGULAR_DAMPING, DYN_LINEAR_DAMPING, ENGINE_UNITS_PER_METER, GRAVITY_DYN, body_builder,
@@ -193,9 +193,10 @@ impl<'a> GroupSlots<'a> {
 pub(crate) struct PhysicsContext {
     pub world: PhysicsWorld,
     cell_colliders: HashMap<CellGrid, Vec<ColliderHandle>>,
-    /// Cells whose terrain collider is registered. The player only moves
-    /// inside ready cells, so it can never fall through unloaded world.
-    terrain_ready: HashSet<CellGrid>,
+    /// Cells whose collision batch is installed with its ground usable: the terrain trimesh is
+    /// registered, or the cell has no terrain at all and stands on its objects. The player only
+    /// moves inside ready cells, so it can never fall through unloaded world.
+    ground_ready: HashSet<CellGrid>,
     /// The terrain colliders; any other collider is attributed through the path registry.
     terrain_colliders: HashSet<ColliderHandle>,
     shape_cache: HashMap<ShapeKey, CacheEntry>,
@@ -212,7 +213,7 @@ pub(crate) struct PhysicsContext {
     plugin_index: HashMap<Arc<str>, u32>,
     /// Interior view active: the world holds one interior cell (object colliders
     /// only, no LAND terrain). The player then grounds against object colliders
-    /// and the per-grid terrain-ready gate is bypassed (see `spawn_ready` and
+    /// and the per-grid ground-ready gate is bypassed (see `spawn_ready` and
     /// `step_player`). Toggled via `SimCommand::SetInteriorMode`.
     interior_mode: bool,
     /// Colliders changed since the last step. With a static-only world the
@@ -283,7 +284,7 @@ impl PhysicsContext {
         Self {
             world,
             cell_colliders: HashMap::new(),
-            terrain_ready: HashSet::new(),
+            ground_ready: HashSet::new(),
             terrain_colliders: HashSet::new(),
             shape_cache: HashMap::new(),
             cell_cache_keys: HashMap::new(),
@@ -551,20 +552,20 @@ impl PhysicsContext {
 
     /// Whether the player may spawn/move at `grid` (the spawn ground-snap and
     /// the per-step ready gate both consult this). In a worldspace it is the
-    /// per-cell terrain-ready gate — the player only stands on streamed-in LAND.
-    /// In an interior there is no LAND, so readiness is "the interior's colliders
-    /// are registered". The grid is intentionally ignored in that branch: the
-    /// streamer freezes its ring and `teardown_resident` clears all residency on
-    /// entry, so the ONLY cell ever resident in interior mode is the interior
-    /// itself — hence a non-empty collider set means exactly "interior loaded",
-    /// true at every grid the player roams to inside it. (Grid-keying this would
-    /// wrongly freeze movement once the player crossed out of the interior's
-    /// anchor grid in a large interior.)
+    /// per-cell ground-ready gate — the player only stands in cells whose collision
+    /// is installed, whether that is streamed-in LAND or, for a landless cell, its objects.
+    /// In an interior readiness is "the interior's collision is installed". The grid is
+    /// intentionally ignored in that branch: the streamer freezes its ring and
+    /// `teardown_resident` clears all residency on entry, so the ONLY cell ever resident in
+    /// interior mode is the interior itself — hence a non-empty ready set means exactly
+    /// "interior loaded", true at every grid the player roams to inside it. (Grid-keying this
+    /// would wrongly freeze movement once the player crossed out of the interior's anchor
+    /// grid in a large interior.)
     pub fn spawn_ready(&self, grid: CellGrid) -> bool {
         if self.interior_mode {
-            !self.cell_colliders.is_empty()
+            !self.ground_ready.is_empty()
         } else {
-            self.terrain_ready.contains(&grid)
+            self.ground_ready.contains(&grid)
         }
     }
 
@@ -682,23 +683,29 @@ impl PhysicsContext {
         let mut handles = Vec::new();
         let mut keys = Vec::new();
 
-        if let Some(terrain) = &batch.terrain {
-            let shape = match baked.and_then(|b| b.terrain.clone()) {
-                Some(shape) => Ok(shape),
-                None => build_terrain_shape(terrain),
-            };
-            match shape {
-                Ok(shape) => {
-                    let collider = ColliderBuilder::new(shape).user_data(pack_grid(grid));
-                    let handle = self.world.insert_collider(collider, None);
-                    self.terrain_colliders.insert(handle);
-                    handles.push(handle);
-                    self.terrain_ready.insert(grid);
-                }
-                Err(e) => {
-                    tracing::warn!("collision: terrain trimesh failed for cell {grid:?}: {e}");
+        match &batch.terrain {
+            TerrainCollision::Present(terrain) => {
+                let shape = match baked.and_then(|b| b.terrain.clone()) {
+                    Some(shape) => Ok(shape),
+                    None => build_terrain_shape(terrain),
+                };
+                match shape {
+                    Ok(shape) => {
+                        let collider = ColliderBuilder::new(shape).user_data(pack_grid(grid));
+                        let handle = self.world.insert_collider(collider, None);
+                        self.terrain_colliders.insert(handle);
+                        handles.push(handle);
+                        self.ground_ready.insert(grid);
+                    }
+                    Err(e) => {
+                        tracing::warn!("collision: terrain trimesh failed for cell {grid:?}: {e}");
+                    }
                 }
             }
+            TerrainCollision::Absent => {
+                self.ground_ready.insert(grid);
+            }
+            TerrainCollision::Failed => {}
         }
 
         // (path, scale) -> pre-baked shapes, consulted on shape-cache misses.
@@ -1020,7 +1027,7 @@ impl PhysicsContext {
         if let Some(bounds) = removed_bounds {
             self.ragdolls.wake_near_bounds(&mut self.world, &bounds);
         }
-        self.terrain_ready.remove(&grid);
+        self.ground_ready.remove(&grid);
         if let Some(keys) = self.cell_cache_keys.remove(&grid) {
             for key in keys {
                 if let Some(entry) = self.shape_cache.get_mut(&key) {

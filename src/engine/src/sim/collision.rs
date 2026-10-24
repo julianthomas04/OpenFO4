@@ -144,9 +144,29 @@ pub struct TerrainColliderSpec {
     pub indices: Vec<[u32; 3]>,
 }
 
+/// How a cell's ground is represented in its collision batch. `Absent` is a cell with no LAND
+/// anywhere in its worldspace chain (or an interior): its ground, if any, is its objects.
+/// `Failed` is a cell whose LAND exists but could not be turned into a mesh.
+#[derive(Default)]
+pub enum TerrainCollision {
+    Present(TerrainColliderSpec),
+    #[default]
+    Absent,
+    Failed,
+}
+
+impl TerrainCollision {
+    pub fn spec(&self) -> Option<&TerrainColliderSpec> {
+        match self {
+            Self::Present(spec) => Some(spec),
+            Self::Absent | Self::Failed => None,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct CellColliderBatch {
-    pub terrain: Option<TerrainColliderSpec>,
+    pub terrain: TerrainCollision,
     pub objects: Vec<ObjectColliderGroup>,
 }
 

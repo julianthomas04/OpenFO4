@@ -47,7 +47,7 @@ pub enum SimCommand {
     SetPlayerInput(PlayerInput),
     /// Enter/leave interior mode. Interiors have no LAND terrain — only object-
     /// mesh floors — so while enabled the spawn readiness gate is "the
-    /// interior's colliders are resident" instead of the per-grid terrain-ready
+    /// interior's collision is installed" instead of the per-grid ground-ready
     /// gate (the whole interior loads as one resident cell), and entry places
     /// the player without a ground-snap (gravity settles them onto the floor).
     /// Set by the debug interior view around its teleport; cleared on any

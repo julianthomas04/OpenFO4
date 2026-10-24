@@ -30,8 +30,8 @@ pub struct ProgressCounts {
 /// What the simulation still waits for before the player stands in the world.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PlayerWait {
-    /// The spawn is pending its ground raycast, which waits for the terrain collider of
-    /// `spawn_cell` to be resident.
+    /// The spawn is pending its ground raycast, which waits for the collision of
+    /// `spawn_cell` to be installed.
     pub waiting_for_ground: bool,
     pub spawn_cell: (i32, i32),
 }

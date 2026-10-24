@@ -425,7 +425,7 @@ impl ShapeBakeCache {
         // hash of its geometry — content-addressing the disk blob. Unique per
         // cell in memory, but shared on disk across runs (and across any two
         // cells that happen to have identical terrain).
-        let terrain = batch.terrain.as_ref().and_then(|t| {
+        let terrain = batch.terrain.spec().and_then(|t| {
             let key = format!(
                 "terrain|{:016x}|{}|v{}",
                 content_hash(&t.vertices, &t.indices),
@@ -754,9 +754,12 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::sim::collision::{CellColliderBatch, ObjectColliderGroup, Placement};
+    use crate::sim::collision::{
+        CellColliderBatch, ObjectColliderGroup, Placement, TerrainCollision,
+    };
     use crate::sim::physics::test_support::{
         SIDECAR, box_shape, ground_batch, object_group, placement, set_mtime, sidecar_file,
+        terrain_mut,
     };
     use crate::sim::sidecar_hash::SidecarHash;
 
@@ -777,7 +780,7 @@ mod tests {
         let mut at_scale: Placement = placement("0A0001:Fallout4.esm", Vec3::ZERO);
         at_scale.scale = scale;
         CellColliderBatch {
-            terrain: None,
+            terrain: TerrainCollision::Absent,
             objects: vec![object_group(MESH, vec![at_scale], false, None)],
         }
     }
@@ -1183,7 +1186,7 @@ mod tests {
             "identical terrain shares one blob"
         );
         let mut shifted = ground_batch();
-        shifted.terrain.as_mut().unwrap().vertices[0].y = 1.0;
+        terrain_mut(&mut shifted).vertices[0].y = 1.0;
         cache.bake_cell(&shifted, load, |_| None, |_| None);
         assert_eq!(colbin_files(dir.path()).len(), 2);
     }
@@ -1193,7 +1196,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cache = ShapeBakeCache::new(dir.path().to_owned());
         let mut broken = ground_batch();
-        broken.terrain.as_mut().unwrap().indices = vec![];
+        terrain_mut(&mut broken).indices = vec![];
         let baked = cache.bake_cell(&broken, |_| Arc::new(Vec::new()), |_| None, |_| None);
         assert!(baked.terrain.is_none());
         assert_eq!(colbin_files(dir.path()), Vec::<std::path::PathBuf>::new());
@@ -1201,9 +1204,10 @@ mod tests {
 
     #[test]
     fn a_terrain_triangle_indexing_past_the_vertices_is_rejected_with_its_position() {
-        let mut broken = ground_batch().terrain.unwrap();
+        let mut batch = ground_batch();
+        let broken = terrain_mut(&mut batch);
         broken.indices[1] = [0, 2, 4];
-        let error = build_terrain_shape(&broken).unwrap_err();
+        let error = build_terrain_shape(broken).unwrap_err();
         assert!(matches!(
             error,
             TerrainShapeError::IndexOutOfRange {
@@ -1219,7 +1223,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cache = ShapeBakeCache::new(dir.path().to_owned());
         let mut broken = ground_batch();
-        broken.terrain.as_mut().unwrap().indices[0] = [0, 1, 99];
+        terrain_mut(&mut broken).indices[0] = [0, 1, 99];
         let baked = cache.bake_cell(&broken, |_| Arc::new(Vec::new()), |_| None, |_| None);
         assert!(baked.terrain.is_none());
         assert_eq!(colbin_files(dir.path()), Vec::<std::path::PathBuf>::new());
@@ -1499,7 +1503,7 @@ mod tests {
         );
         group.ragdoll_sidecar = Some(sidecar.to_str().unwrap().to_owned());
         CellColliderBatch {
-            terrain: None,
+            terrain: TerrainCollision::Absent,
             objects: vec![group],
         }
     }

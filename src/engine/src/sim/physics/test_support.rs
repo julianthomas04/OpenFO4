@@ -11,7 +11,7 @@ use super::{ActivationMode, PhysicsContext};
 use crate::sim::bake::{BakedCellColliders, ShapeBakeCache};
 use crate::sim::collision::{
     CellColliderBatch, ColShape, ObjectColliderGroup, PartLocal, PartShape, Placement,
-    TerrainColliderSpec,
+    TerrainColliderSpec, TerrainCollision,
 };
 use crate::sim::{CELL_SIZE_WORLD, CellGrid};
 
@@ -31,11 +31,19 @@ pub fn ground_batch() -> CellColliderBatch {
         Vec3::new(0.0, 0.0, -depth),
     ];
     CellColliderBatch {
-        terrain: Some(TerrainColliderSpec {
+        terrain: TerrainCollision::Present(TerrainColliderSpec {
             vertices,
             indices: vec![[0, 1, 2], [0, 2, 3]],
         }),
         objects: vec![],
+    }
+}
+
+/// The terrain mesh of a batch built by [`ground_batch`], for tests that corrupt it.
+pub fn terrain_mut(batch: &mut CellColliderBatch) -> &mut TerrainColliderSpec {
+    match &mut batch.terrain {
+        TerrainCollision::Present(spec) => spec,
+        TerrainCollision::Absent | TerrainCollision::Failed => panic!("batch has no terrain mesh"),
     }
 }
 

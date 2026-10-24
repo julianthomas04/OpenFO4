@@ -74,7 +74,7 @@ mod one_shot;
 use crate::shared_cache::SharedCache;
 use crate::sim::collision::{
     CellColliderBatch, CollisionMeta, ObjectColliderGroup, PartShape, Placement, SidecarData,
-    TerrainColliderSpec, load_manifest, load_sidecar_file, manifest_key,
+    TerrainColliderSpec, TerrainCollision, load_manifest, load_sidecar_file, manifest_key,
 };
 use crate::sim::{EntityId, SimCommand, refr_entity_id};
 use crate::water_world::{LoadedCell, VolumeShapes};
@@ -4620,7 +4620,7 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
             let (gx, gy, worldspace) = (*gx, *gy, worldspace.as_str());
             // Built alongside the render data for full cells, packed into
             // result.colliders before every send.
-            let mut terrain_collider: Option<TerrainColliderSpec> = None;
+            let mut terrain_collider = TerrainCollision::Absent;
 
             let cell = match db.get_cell(gx, gy, worldspace) {
                 Ok(c) => c,
@@ -4643,9 +4643,12 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
 
             {
                 let _span = info_span!("build_terrain").entered();
-                if let Some(landscape) =
-                    terrain_landscape(db.get_landscape_at(worldspace, gx, gy), gx, gy)
-                {
+                let landscape = terrain_landscape(db.get_landscape_at(worldspace, gx, gy), gx, gy)
+                    .unwrap_or_else(|LandscapeLookupFailed| {
+                        terrain_collider = TerrainCollision::Failed;
+                        None
+                    });
+                if let Some(landscape) = landscape {
                     let built = if is_lod {
                         terrain::build_cell_cpu_lod(&landscape, &shared.ltex_to_diffuse)
                     } else {
@@ -4658,7 +4661,7 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
                                 // the physics trimesh must match the render mesh
                                 // exactly. (Baked-tile UV remaps don't touch
                                 // positions, so copying here is safe.)
-                                terrain_collider = Some(TerrainColliderSpec {
+                                terrain_collider = TerrainCollision::Present(TerrainColliderSpec {
                                     vertices: cpu
                                         .vertices
                                         .iter()
@@ -4669,7 +4672,10 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
                             }
                             result.terrain = Some(cpu);
                         }
-                        Err(e) => warn!("Failed to build terrain for ({}, {}): {}", gx, gy, e),
+                        Err(e) => {
+                            warn!("Failed to build terrain for ({}, {}): {}", gx, gy, e);
+                            terrain_collider = TerrainCollision::Failed;
+                        }
                     }
                     if !is_lod {
                         result.grass =
@@ -4729,9 +4735,14 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
                         warn!("Failed to load placed objects for ({}, {}): {}", gx, gy, e);
                         if !is_lod {
                             // Ship the terrain collider anyway: a cell that lost
-                            // its objects should still be walkable ground.
+                            // its objects should still be walkable ground. Without
+                            // terrain the objects were the ground, so it has none.
+                            let terrain = match std::mem::take(&mut terrain_collider) {
+                                TerrainCollision::Absent => TerrainCollision::Failed,
+                                terrain => terrain,
+                            };
                             let batch = Arc::new(CellColliderBatch {
-                                terrain: terrain_collider.take(),
+                                terrain,
                                 objects: Vec::new(),
                             });
                             result.baked_colliders = Some(bake_cell_colliders(shared, &batch));
@@ -4791,7 +4802,7 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
                 &mut result,
                 placed_objects.iter(),
                 placed_objects.len(),
-                None,
+                TerrainCollision::Absent,
                 false,
                 shared,
             );
@@ -4801,16 +4812,19 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
     wrap(result)
 }
 
-/// The LAND a cell's terrain is built from. A cell without LAND anywhere in its worldspace chain has
-/// no terrain; a failed lookup is logged and builds none either.
+/// The LAND query for a cell failed; the failure is already logged.
+struct LandscapeLookupFailed;
+
+/// The LAND a cell's terrain is built from: `None` for a cell without LAND anywhere in its
+/// worldspace chain, which is legitimately landless, unlike a failed lookup.
 fn terrain_landscape(
     lookup: anyhow::Result<Option<Landscape>>,
     gx: i32,
     gy: i32,
-) -> Option<Landscape> {
-    lookup.unwrap_or_else(|error| {
+) -> Result<Option<Landscape>, LandscapeLookupFailed> {
+    lookup.map_err(|error| {
         warn!("Failed to look up the landscape of ({gx}, {gy}): {error:#}");
-        None
+        LandscapeLookupFailed
     })
 }
 
@@ -4924,13 +4938,13 @@ fn expand_weapon_refr(
 /// the caller has already set `result.grid` and `result.terrain`; this fills
 /// `meshes`, `colliders`, `baked_colliders`, and `textures`. `is_lod` selects
 /// LOD mesh variants and suppresses collision (distant shells never collide);
-/// `terrain_collider` is the caller's prebuilt terrain trimesh, packed into the
-/// collision batch (always `None` for interiors and LOD).
+/// `terrain_collider` is the caller's prebuilt terrain trimesh state, packed into the
+/// collision batch (always `Absent` for interiors and LOD).
 fn assemble_cell_payload<'a>(
     result: &mut CellLoadResult,
     placements: impl Iterator<Item = &'a PlacedObject>,
     placement_count: usize,
-    mut terrain_collider: Option<TerrainColliderSpec>,
+    terrain_collider: TerrainCollision,
     is_lod: bool,
     shared: &WorkerShared,
 ) {
@@ -5176,7 +5190,7 @@ fn assemble_cell_payload<'a>(
                 }
             }
             let batch = Arc::new(CellColliderBatch {
-                terrain: terrain_collider.take(),
+                terrain: terrain_collider,
                 objects,
             });
             {
@@ -6026,9 +6040,19 @@ mod tests {
 
     #[test]
     fn terrain_is_built_only_from_a_landscape_that_was_found() {
-        assert!(terrain_landscape(Ok(Some(landscape())), 1, 2).is_some());
-        assert!(terrain_landscape(Ok(None), 1, 2).is_none());
-        assert!(terrain_landscape(Err(anyhow::anyhow!("db down")), 1, 2).is_none());
+        assert!(matches!(
+            terrain_landscape(Ok(Some(landscape())), 1, 2),
+            Ok(Some(_))
+        ));
+    }
+
+    #[test]
+    fn a_missing_landscape_is_told_apart_from_a_failed_lookup() {
+        assert!(matches!(terrain_landscape(Ok(None), 1, 2), Ok(None)));
+        assert!(matches!(
+            terrain_landscape(Err(anyhow::anyhow!("db down")), 1, 2),
+            Err(LandscapeLookupFailed)
+        ));
     }
 
     #[test]
