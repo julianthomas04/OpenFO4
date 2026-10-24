@@ -162,7 +162,7 @@ use crate::rendering::{
     texture_streaming::{ResidencyPolicy, TextureFeedback, TextureResidency, demand::ScreenView},
     water::{CameraWater, WaterStage, water_panel},
     window_surface::WindowSurface,
-    world_streamer::{LoadMode, StreamTargets, UploadBudget, WorldStreamer},
+    world_streamer::{InteriorRequestError, LoadMode, StreamTargets, UploadBudget, WorldStreamer},
 };
 use crate::sim::pipboy::PipBoyAction;
 use crate::sim::{
@@ -847,11 +847,7 @@ impl State {
     /// activation and (via a precomputed bool) the crosshair and the debug
     /// `is_interactible` readout, so all agree exactly.
     fn aimed_activation(&self) -> Option<Activation> {
-        activation::resolve(
-            &self.aimed_ref()?,
-            &self.teleports,
-            &self.animated_objects,
-        )
+        activation::resolve(&self.aimed_ref()?, &self.teleports, &self.animated_objects)
     }
 
     /// The ref id of the object under the crosshair within activation reach.
@@ -2870,6 +2866,14 @@ impl State {
         f(&mut self.streamer, &mut targets)
     }
 
+    /// The interior cell request failed after the streamer tore the old content down: drops
+    /// the queued collider removals so physics matches the empty world, and leaves the player
+    /// where it was instead of teleporting into a cell that will never load.
+    fn abandon_failed_interior_entry(&mut self, error: &InteriorRequestError) {
+        tracing::error!("interior entry abandoned, the world stays empty: {error}");
+        stream_settle::apply_teardown(&mut self.sim, self.streamer.take_sim_commands());
+    }
+
     /// Finish a streamer teardown+load (worldspace switch or interior enter):
     /// apply the queued `RemoveCellColliders` and fold the broad phase BEFORE
     /// teleporting, then move the camera and request the player spawn at
@@ -3132,12 +3136,17 @@ impl State {
                 .find(|i| i.form_key == fk)
                 .map(|i| (i.grid, i.start_pos));
             if let Some((grid, start_pos)) = target {
-                let start = self.with_stream_targets(asset_server, |streamer, targets| {
+                let entered = self.with_stream_targets(asset_server, |streamer, targets| {
                     streamer.enter_interior(&fk, grid, start_pos, targets)
                 });
-                self.sim.apply(SimCommand::SetInteriorMode(true));
-                self.input_mode = InputMode::Walk;
-                self.apply_stream_teleport(start);
+                match entered {
+                    Ok(start) => {
+                        self.sim.apply(SimCommand::SetInteriorMode(true));
+                        self.input_mode = InputMode::Walk;
+                        self.apply_stream_teleport(start);
+                    }
+                    Err(error) => self.abandon_failed_interior_entry(&error),
+                }
             } else {
                 tracing::warn!("interior {fk} not in dropdown list; ignoring");
             }
@@ -3178,28 +3187,35 @@ impl State {
         // from the door's XTEL. `switch_worldspace`'s returned default start is
         // intentionally discarded — we always arrive at the door's destination.
         if let Some(t) = self.pending_teleport.take() {
-            self.with_stream_targets(asset_server, |streamer, targets| {
+            let entered = self.with_stream_targets(asset_server, |streamer, targets| {
                 if t.is_interior {
-                    streamer.enter_interior(&t.cell_form_key, t.grid, t.start_pos, targets);
+                    streamer
+                        .enter_interior(&t.cell_form_key, t.grid, t.start_pos, targets)
+                        .map(drop)
                 } else {
                     streamer.switch_worldspace(&t.worldspace, t.grid, targets);
+                    Ok(())
                 }
             });
-            self.sim.apply(SimCommand::SetInteriorMode(t.is_interior));
-            self.input_mode = InputMode::Walk;
-            if let Some(yaw) = t.yaw {
-                self.camera_controller.set_look(yaw, 0.0);
-            }
-            self.apply_stream_teleport(t.start_pos);
-            // Keep the debug picker in sync with where we now are. Crucially, the
-            // Worldspace dropdown auto-arms `pending_worldspace` while `in_interior`
-            // (its "flip to exit" affordance); leaving world_mode on Worldspace
-            // after entering an interior would bounce the player straight back out.
-            self.world_mode = if t.is_interior {
-                DebugWorldMode::Interior
+            if let Err(error) = entered {
+                self.abandon_failed_interior_entry(&error);
             } else {
-                DebugWorldMode::Worldspace
-            };
+                self.sim.apply(SimCommand::SetInteriorMode(t.is_interior));
+                self.input_mode = InputMode::Walk;
+                if let Some(yaw) = t.yaw {
+                    self.camera_controller.set_look(yaw, 0.0);
+                }
+                self.apply_stream_teleport(t.start_pos);
+                // Keep the debug picker in sync with where we now are. Crucially, the
+                // Worldspace dropdown auto-arms `pending_worldspace` while `in_interior`
+                // (its "flip to exit" affordance); leaving world_mode on Worldspace
+                // after entering an interior would bounce the player straight back out.
+                self.world_mode = if t.is_interior {
+                    DebugWorldMode::Interior
+                } else {
+                    DebugWorldMode::Worldspace
+                };
+            }
         }
 
         self.tick_animated_objects(world_dt);

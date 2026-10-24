@@ -228,6 +228,36 @@ enum CellRequest {
     },
 }
 
+/// The interior cell request could not reach the cell workers: their request channel is closed.
+#[derive(Debug, thiserror::Error)]
+#[error("interior cell {cell_form_key} request not sent: the cell worker channel is closed")]
+pub(crate) struct InteriorRequestError {
+    pub(crate) cell_form_key: String,
+}
+
+/// Marks `grid` pending and sends its interior request; a failed send leaves `grid` not
+/// pending so the streamer never waits for a cell that was never requested.
+fn request_interior(
+    tx: &crossbeam_channel::Sender<CellRequest>,
+    pending: &mut HashSet<(i32, i32)>,
+    cell_form_key: &str,
+    grid: (i32, i32),
+    epoch: u64,
+) -> Result<(), InteriorRequestError> {
+    pending.insert(grid);
+    tx.send(CellRequest::Interior {
+        cell_form_key: cell_form_key.to_string(),
+        grid,
+        epoch,
+    })
+    .map_err(|_| {
+        pending.remove(&grid);
+        InteriorRequestError {
+            cell_form_key: cell_form_key.to_string(),
+        }
+    })
+}
+
 impl CellRequest {
     /// Worldspace generation this request belongs to (see
     /// [`WorldStreamer::epoch`]). A worker drops a pulled request whose epoch
@@ -3521,13 +3551,16 @@ impl WorldStreamer {
     /// in the collision ring however the player moves. Returns the player start
     /// position (`start_world_pos`); the caller applies the queued collider
     /// removals + `flush_colliders`, enables sim interior mode, then teleports.
+    ///
+    /// Fails when the cell request cannot be sent. The old content is already torn down
+    /// by then and no cell is pending, so the caller must not teleport into the void.
     pub(crate) fn enter_interior(
         &mut self,
         cell_form_key: &str,
         grid: (i32, i32),
         start_world_pos: Vec3,
         targets: &mut StreamTargets,
-    ) -> Vec3 {
+    ) -> Result<Vec3, InteriorRequestError> {
         self.teardown_resident(targets);
         self.interior_cell = Some(cell_form_key.to_string());
         self.set_demand_camera(None);
@@ -3541,19 +3574,20 @@ impl WorldStreamer {
 
         // One frozen cell, requested directly by form_key: no ring, no LOD, and
         // no worldspace-persistent prefetch (interiors have none).
-        self.pending_cells.insert(grid);
-        let _ = self.db_worker_tx.send(CellRequest::Interior {
-            cell_form_key: cell_form_key.to_string(),
+        request_interior(
+            &self.db_worker_tx,
+            &mut self.pending_cells,
+            cell_form_key,
             grid,
-            epoch: self.epoch,
-        });
+            self.epoch,
+        )?;
 
         info!(
             "Interior -> {} (epoch {}), start cell ({}, {})",
             cell_form_key, self.epoch, grid.0, grid.1
         );
 
-        start_world_pos
+        Ok(start_world_pos)
     }
 
     /// Whether a single interior cell is loaded in place of a worldspace.
@@ -6035,6 +6069,38 @@ mod tests {
     use bytemuck::Zeroable;
 
     use super::*;
+
+    #[test]
+    fn interior_request_is_pending_and_delivered_when_the_workers_listen() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut pending = HashSet::new();
+
+        request_interior(&tx, &mut pending, "Cell:1", (3, 4), 7).unwrap();
+
+        assert!(pending.contains(&(3, 4)));
+        match rx.try_recv().unwrap() {
+            CellRequest::Interior {
+                cell_form_key,
+                grid,
+                epoch,
+            } => {
+                assert_eq!((cell_form_key.as_str(), grid, epoch), ("Cell:1", (3, 4), 7));
+            }
+            _ => panic!("expected an interior request"),
+        }
+    }
+
+    #[test]
+    fn failed_interior_request_reports_the_cell_and_leaves_nothing_pending() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        drop(rx);
+        let mut pending = HashSet::from([(9, 9)]);
+
+        let error = request_interior(&tx, &mut pending, "Cell:1", (3, 4), 7).unwrap_err();
+
+        assert_eq!(error.cell_form_key, "Cell:1");
+        assert_eq!(pending, HashSet::from([(9, 9)]));
+    }
 
     fn landscape() -> Landscape {
         Landscape {
