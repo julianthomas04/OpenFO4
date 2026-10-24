@@ -860,7 +860,7 @@ impl State {
             };
         if !doors.without_bounds.is_empty() {
             tracing::error!(
-                "{} walk-in doors have no trigger bounds (database predates door bounds extraction, re-run the installer); they cannot be walked into",
+                "{} walk-in doors have no trigger bounds (database predates door trigger bounds extraction, re-run the installer); they cannot be walked into",
                 doors.without_bounds.len()
             );
         }
