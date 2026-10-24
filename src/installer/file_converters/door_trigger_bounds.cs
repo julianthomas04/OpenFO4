@@ -8,19 +8,20 @@ namespace AssetConverter
 {
     /// <summary>
     /// Fills <c>doors.trigger_bounds</c> for the automatic (walk-in) doors: their OBND is empty, the volume that triggers them is the
-    /// editor-marker geometry of their model. Runs after the ESM load, which writes the doors.
+    /// editor-marker geometry of their model. Runs after the ESM load, which writes the doors. An automatic door left without them fails the
+    /// step, since walking into it would load nothing.
     /// </summary>
     internal static class DoorTriggerBounds
     {
         /// <summary>DOOR record flag "Automatic" (the door loads its destination when touched).</summary>
         public const int AutomaticFlag = 0x02;
 
-        public sealed record Report(int Filled, IReadOnlyList<string> Failures);
-
         private sealed record DoorRow(string FormKey, string? EditorId, string? ModelPath, string? Flags);
 
         /// <param name="readMesh">The bytes of a mesh by its path below the game's meshes root as the DOOR record names it, or null when the game has none.</param>
-        public static Report Run(string dbPath, Func<string, byte[]?> readMesh)
+        /// <returns>The number of automatic doors that received trigger bounds, which is all of them.</returns>
+        /// <exception cref="DoorTriggerBoundsException">An automatic door has no trigger bounds; nothing is written.</exception>
+        public static int Run(string dbPath, Func<string, byte[]?> readMesh)
         {
             using var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadWrite }.ToString());
             conn.Open();
@@ -39,23 +40,23 @@ namespace AssetConverter
                     : (null, "has no model");
                 if (json == null)
                 {
-                    failures.Add($"{subject}: no trigger bounds, {failure}");
+                    failures.Add($"{subject}: {failure}");
                     continue;
                 }
                 conn.Execute("UPDATE doors SET trigger_bounds = @Json WHERE form_key = @FormKey", new { Json = json, door.FormKey }, transaction);
                 filled++;
             }
+            if (failures.Count > 0) throw new DoorTriggerBoundsException(failures);
             transaction.Commit();
 
-            foreach (string failure in failures)
-                Console.Error.WriteLine($"  WARNING: automatic door {failure}");
             Console.WriteLine($"[DoorTriggerBounds] {filled} of {automatic.Count} automatic doors have trigger bounds");
-            return new Report(filled, failures);
+            return filled;
         }
 
         /// <summary>Runs against the meshes in the archives of <paramref name="gameDataDirectory"/>.</summary>
         /// <exception cref="FileNotFoundException">A mesh archive is missing.</exception>
-        public static Report RunOnGame(string dbPath, string gameDataDirectory)
+        /// <exception cref="DoorTriggerBoundsException">An automatic door has no trigger bounds; nothing is written.</exception>
+        public static int RunOnGame(string dbPath, string gameDataDirectory)
         {
             using var meshes = new GameMeshReader(gameDataDirectory);
             return Run(dbPath, meshes.Read);
@@ -76,9 +77,9 @@ namespace AssetConverter
                     ? (JsonSerializer.Serialize(box), null)
                     : (null, $"its model '{model}' has no EditorMarker geometry");
             }
-            catch (Exception ex) when (ex is InvalidDataException or InvalidCastException or NullReferenceException or ArgumentException)
+            catch (InvalidDataException ex)
             {
-                return (null, $"its model '{model}' could not be read: {ex.GetType().Name}: {ex.Message}");
+                return (null, $"its model '{model}' could not be read: {ex.Message}");
             }
         }
     }
@@ -130,5 +131,12 @@ namespace AssetConverter
         {
             foreach (var (archive, _) in _archives) archive.Close();
         }
+    }
+
+    /// <summary>Automatic doors whose trigger bounds could not be measured from their models, each named with the reason.</summary>
+    internal sealed class DoorTriggerBoundsException(IReadOnlyList<string> failures)
+        : ConversionStepException($"{failures.Count} automatic door(s) have no trigger bounds, so walking into them would load nothing: {string.Join("; ", failures)}")
+    {
+        public IReadOnlyList<string> Failures { get; } = failures;
     }
 }

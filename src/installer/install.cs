@@ -212,13 +212,17 @@ if (args.Length > 0)
                     Strings = StringTables.Extract(fo4Location, stagingRoot, GameLanguage.Resolve(fo4Location, settingsDirectory)),
                     Memory = devMemory.Value,
                 };
-                esmOnly.LoadESM(esmOnlySrc);
-                ModcSwapSynthesizer.Run(dbOnlyPath, meshesOut, stagingRoot, texturesOut);
-                LodWaterStage.Run(Path.Combine(fo4Location, "Data"), dbOnlyPath);
-                LodBackfill.Run(dbOnlyPath, meshesOut);
-                DoorTriggerBounds.RunOnGame(dbOnlyPath, Path.Combine(fo4Location, "Data"));
-                ModelPathNormalizer.Run(dbOnlyPath);
-                Console.WriteLine($"Database rebuilt at {dbOnlyPath}");
+                RunConversionCommand(() =>
+                {
+                    esmOnly.LoadESM(esmOnlySrc);
+                    ModcSwapSynthesizer.Run(dbOnlyPath, meshesOut, stagingRoot, texturesOut);
+                    LodWaterStage.Run(Path.Combine(fo4Location, "Data"), dbOnlyPath);
+                    LodBackfill.Run(dbOnlyPath, meshesOut);
+                    DoorTriggerBounds.RunOnGame(dbOnlyPath, Path.Combine(fo4Location, "Data"));
+                    ModelPathNormalizer.Run(dbOnlyPath);
+                    Console.WriteLine($"Database rebuilt at {dbOnlyPath}");
+                    return true;
+                });
                 return;
             }
         case "lod-water-only":
@@ -521,7 +525,7 @@ static void ReloadEsmTables(string tablesCsv, string dbPath, string esmSource, s
 static bool RunReloadPostStep(string name, string retryHint, Action step)
 {
     try { step(); return true; }
-    catch (Exception e) when (e is SqliteException or IOException)
+    catch (Exception e) when (e is SqliteException or IOException or DoorTriggerBoundsException)
     {
         FailReload($"Tables were reloaded, but post-step '{name}' failed: {e.Message}. To finish, {retryHint}.");
         return false;

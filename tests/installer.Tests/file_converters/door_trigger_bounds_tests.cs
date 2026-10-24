@@ -44,11 +44,10 @@ namespace InstallerTests
             AddDoor("A", "marker.nif", AutomaticFlags);
             var nif = MarkerNif();
 
-            var report = DoorTriggerBounds.Run(_db.DatabasePath, model => model == "marker.nif" ? nif : null);
+            int filled = DoorTriggerBounds.Run(_db.DatabasePath, model => model == "marker.nif" ? nif : null);
 
             Assert.Equal(Marker, TriggerBounds("A"));
-            Assert.Equal(1, report.Filled);
-            Assert.Empty(report.Failures);
+            Assert.Equal(1, filled);
         }
 
         [Theory]
@@ -60,11 +59,11 @@ namespace InstallerTests
             AddDoor("A", "marker.nif", flags);
             var read = new List<string>();
 
-            var report = DoorTriggerBounds.Run(_db.DatabasePath, model => { read.Add(model); return null; });
+            int filled = DoorTriggerBounds.Run(_db.DatabasePath, model => { read.Add(model); return null; });
 
             Assert.Null(TriggerBounds("A"));
             Assert.Empty(read);
-            Assert.Empty(report.Failures);
+            Assert.Equal(0, filled);
         }
 
         [Fact]
@@ -93,49 +92,65 @@ namespace InstallerTests
         }
 
         [Fact]
-        public void AMissingModelLeavesNullAndIsReportedWithTheDoor()
+        public void AMissingModelFailsTheStepNamingTheDoor()
         {
             AddDoor("A", "gone.nif", AutomaticFlags);
 
-            var report = DoorTriggerBounds.Run(_db.DatabasePath, _ => null);
+            var error = Assert.Throws<DoorTriggerBoundsException>(() => DoorTriggerBounds.Run(_db.DatabasePath, _ => null));
 
             Assert.Null(TriggerBounds("A"));
-            var failure = Assert.Single(report.Failures);
+            var failure = Assert.Single(error.Failures);
             Assert.Contains("A", failure);
             Assert.Contains("gone.nif", failure);
         }
 
         [Fact]
-        public void AModelWithoutMarkerGeometryLeavesNullAndIsReported()
+        public void AModelWithoutMarkerGeometryFailsTheStep()
         {
             AddDoor("A", "plain.nif", AutomaticFlags);
             var nif = NifWithShape("Door", [new(0, 0, 0), new(1, 0, 0), new(0, 1, 0)]);
 
-            var report = DoorTriggerBounds.Run(_db.DatabasePath, _ => nif);
+            var error = Assert.Throws<DoorTriggerBoundsException>(() => DoorTriggerBounds.Run(_db.DatabasePath, _ => nif));
 
             Assert.Null(TriggerBounds("A"));
-            Assert.Contains("no EditorMarker geometry", Assert.Single(report.Failures));
+            Assert.Contains("no EditorMarker geometry", Assert.Single(error.Failures));
         }
 
         [Fact]
-        public void AnUnreadableModelLeavesNullAndIsReported()
+        public void AnUnreadableModelFailsTheStep()
         {
             AddDoor("A", "broken.nif", AutomaticFlags);
 
-            var report = DoorTriggerBounds.Run(_db.DatabasePath, _ => [1, 2, 3, 4]);
+            var error = Assert.Throws<DoorTriggerBoundsException>(() => DoorTriggerBounds.Run(_db.DatabasePath, _ => [1, 2, 3, 4]));
 
             Assert.Null(TriggerBounds("A"));
-            Assert.Contains("could not be read", Assert.Single(report.Failures));
+            Assert.Contains("could not be read", Assert.Single(error.Failures));
         }
 
         [Fact]
-        public void AnAutomaticDoorWithoutAModelIsReported()
+        public void AnAutomaticDoorWithoutAModelFailsTheStep()
         {
             AddDoor("A", null, AutomaticFlags);
 
-            var report = DoorTriggerBounds.Run(_db.DatabasePath, _ => throw new InvalidOperationException("no read expected"));
+            var error = Assert.Throws<DoorTriggerBoundsException>(
+                () => DoorTriggerBounds.Run(_db.DatabasePath, _ => throw new InvalidOperationException("no read expected")));
 
-            Assert.Contains("has no model", Assert.Single(report.Failures));
+            Assert.Contains("has no model", Assert.Single(error.Failures));
+        }
+
+        [Fact]
+        public void OneFailedDoorLeavesEveryDoorWithoutBoundsAndIsNamedInTheMessage()
+        {
+            AddDoor("A", "marker.nif", AutomaticFlags);
+            AddDoor("B", "gone.nif", AutomaticFlags);
+            var nif = MarkerNif();
+
+            var error = Assert.Throws<DoorTriggerBoundsException>(
+                () => DoorTriggerBounds.Run(_db.DatabasePath, model => model == "marker.nif" ? nif : null));
+
+            Assert.Null(TriggerBounds("A"));
+            Assert.Null(TriggerBounds("B"));
+            Assert.Contains("gone.nif", error.Message);
         }
 
         [Fact]

@@ -15,7 +15,7 @@ namespace InstallerTests
         const string AutoloadDoorNoText = "07ECFC:Fallout4.esm";
 
         SchemaDatabase _db = null!;
-        DoorTriggerBounds.Report _report = null!;
+        int _filled;
 
         public async ValueTask InitializeAsync()
         {
@@ -25,7 +25,7 @@ namespace InstallerTests
 
             _db = await SchemaDatabase.CreateAsync();
             await new DoorProcessor().ProcessRecordsAsync(file.Doors.ToList(), "DOOR", _db.Connection, silent: true);
-            _report = DoorTriggerBounds.RunOnGame(_db.DatabasePath, Path.Combine(game!, "Data"));
+            _filled = DoorTriggerBounds.RunOnGame(_db.DatabasePath, Path.Combine(game!, "Data"));
         }
 
         public ValueTask DisposeAsync()
@@ -51,14 +51,13 @@ namespace InstallerTests
         }
 
         [Fact(Explicit = true)]
-        public void OnlyAutomaticDoorsHaveTriggerBoundsAndNoneFailed()
+        public void OnlyAutomaticDoorsHaveTriggerBounds()
         {
             var withBounds = _db.Query<string>("SELECT form_key FROM doors WHERE trigger_bounds IS NOT NULL ORDER BY form_key");
 
             Assert.All(withBounds, formKey => Assert.True(
                 DoorTriggerBounds.IsAutomatic(_db.QuerySingle<string?>("SELECT flags FROM doors WHERE form_key = @formKey", new { formKey }))));
-            Assert.Empty(_report.Failures);
-            Assert.Equal(withBounds.Count, _report.Filled);
+            Assert.Equal(withBounds.Count, _filled);
         }
     }
 }
