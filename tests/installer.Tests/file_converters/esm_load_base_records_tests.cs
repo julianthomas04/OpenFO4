@@ -123,6 +123,7 @@ namespace InstallerTests
         {
             var collidesWith = JsonSerializer.Deserialize<string[]>(CollisionLayer("LayerCharacter").CollidesWith!);
 
+            Assert.NotNull(collidesWith);
             Assert.Equal([db.KeyOf("LayerStatic"), db.KeyOf("LayerCharacter")], collidesWith);
         }
 

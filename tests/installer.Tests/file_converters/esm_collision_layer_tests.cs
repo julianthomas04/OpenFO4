@@ -64,12 +64,13 @@ namespace InstallerTests
         [Fact]
         public async Task DoorProcessor_WithoutObjectBounds_StoresNullBounds()
         {
+            var ct = TestContext.Current.CancellationToken;
             using var conn = new SqliteConnection("Data Source=:memory:");
-            await conn.OpenAsync(TestContext.Current.CancellationToken);
-            await conn.ExecuteAsync(await File.ReadAllTextAsync(InstallerPaths.Require("src/installer/file_converters/esm_schema.sql")));
-            var door = new Door(FormKey.Factory("000801:Fixture.esm"), Fallout4Release.Fallout4) { ObjectBounds = null };
+            await conn.OpenAsync(ct);
+            await conn.ExecuteAsync(await File.ReadAllTextAsync(InstallerPaths.Require("src/installer/file_converters/esm_schema.sql"), ct));
+            var door = new Door(FormKey.Factory("000801:Fixture.esm"), Fallout4Release.Fallout4) { ObjectBounds = null! };
 
-            await new DoorProcessor().ProcessRecordsAsync([door], "DOOR", conn, silent: true);
+            await new DoorProcessor().ProcessRecordsAsync([door], "DOOR", conn, silent: true, ct: ct);
 
             Assert.Null(conn.QuerySingle<string?>("SELECT bounds FROM doors"));
         }
