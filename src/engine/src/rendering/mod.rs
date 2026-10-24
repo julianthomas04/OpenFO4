@@ -73,6 +73,7 @@ pub mod version_overlay;
 pub mod vertex;
 mod walk_in;
 mod walk_in_hook;
+mod walk_in_trace;
 pub mod water;
 pub mod window_surface;
 pub mod world_streamer;
@@ -195,6 +196,7 @@ use ui_colour::UiColourSet;
 use ui_fonts::UiFonts;
 use walk_in::{PlayerLocation, WalkInTriggers};
 use walk_in_hook::{HookAction, HookFrame, WalkInDevHook};
+use walk_in_trace::{BLOCKER_RAY_GAP_UNITS, WalkInTrace, trace_line};
 
 // 00003C:Fallout4.esm // Commonwealth
 const WORLDSPACE: &str = crate::game_flow::spawn_locations::COMMONWEALTH;
@@ -618,6 +620,8 @@ pub struct State {
     walk_in_hook: WalkInDevHook,
     /// The walk-in door the detector fired for in the last sampled frame.
     walk_in_fired: Option<String>,
+    /// `OPENFO4_WALK_IN_TRACE=1`: diagnostic trace of the distance to the nearest trigger.
+    walk_in_trace: Option<WalkInTrace>,
     /// Resident animated placed objects (doors, containers, ...) and their playback.
     animated_objects: AnimatedObjects,
     /// Skinned replacements of ragdolls that moved (`OPENFO4_RAGDOLL_POKE` pokes one for checks).
@@ -899,7 +903,7 @@ impl State {
     /// Queues the teleport of the walk-in door the player just entered, if any. Only while
     /// walking with the world running: sampling during a pending teleport would spend the
     /// entering edge on a refused request.
-    fn sample_walk_in(&mut self, pipboy_open: bool) {
+    fn sample_walk_in(&mut self, pipboy_open: bool, dt: f32) {
         self.walk_in_fired = None;
         if self.input_mode != InputMode::Walk || pipboy_open || self.pending_teleport.is_some() {
             return;
@@ -909,11 +913,12 @@ impl State {
             Some(cell) => PlayerLocation::Interior(cell),
             None => PlayerLocation::Exterior(&self.streamer.worldspace),
         };
-        let Some(source_ref) = self
+        let fired = self
             .walk_in
             .sample(location, body.as_ref())
-            .map(str::to_owned)
-        else {
+            .map(str::to_owned);
+        self.trace_walk_in(dt, fired.as_deref());
+        let Some(source_ref) = fired else {
             return;
         };
         tracing::info!("WALK_IN ref={source_ref}");
@@ -921,6 +926,56 @@ impl State {
             tracing::debug!("walk-in of {source_ref} refused: {refusal}");
         }
         self.walk_in_fired = Some(source_ref);
+    }
+
+    /// The `OPENFO4_WALK_IN_TRACE` lines: where the player stands against the nearest trigger and,
+    /// close to it, what the rays toward its centre hit first.
+    fn trace_walk_in(&mut self, dt: f32, fired: Option<&str>) {
+        let Some(trace) = self.walk_in_trace.as_mut() else {
+            return;
+        };
+        let Some(body) = self.sim.player_body() else {
+            return;
+        };
+        let location = match self.streamer.current_interior() {
+            Some(cell) => PlayerLocation::Interior(cell),
+            None => PlayerLocation::Exterior(&self.streamer.worldspace),
+        };
+        let Some(probe) = self.walk_in.probe(location, &body) else {
+            return;
+        };
+        if !trace.should_log(dt, &probe, fired.is_some()) {
+            return;
+        }
+        tracing::info!("{}", trace_line(&probe, fired.is_some()));
+        if probe.gap_units >= BLOCKER_RAY_GAP_UNITS || probe.horizontal_to_center == Vec3::ZERO {
+            return;
+        }
+        for (height, origin) in ["centre", "head", "feet"]
+            .into_iter()
+            .zip(probe.ray_origins)
+        {
+            let hit = self.sim.debug_ray_hit(
+                origin,
+                probe.horizontal_to_center,
+                probe.horizontal_distance,
+            );
+            let outcome = hit.map_or_else(
+                || "clear".to_owned(),
+                |hit| {
+                    format!(
+                        "first_hit_ref={} model={} dist={:.1}",
+                        hit.ref_id.as_deref().unwrap_or("none"),
+                        hit.mesh_path,
+                        hit.dist * crate::bethesda_space::UNITS_FROM_ENGINE
+                    )
+                },
+            );
+            tracing::info!(
+                "WALK_IN_TRACE blocker ref={} height={height} {outcome}",
+                probe.source_ref
+            );
+        }
     }
 
     fn describe_location(&self) -> String {
@@ -1658,6 +1713,7 @@ impl State {
                 AUTO_ACTIVATE_COOLDOWN_FRAMES,
             ),
             walk_in_fired: None,
+            walk_in_trace: WalkInTrace::from_env(),
             animated_objects: AnimatedObjects::default(),
             ragdoll_objects: RagdollObjects::default(),
             auto_anim: AutoAnim::from_env(),
@@ -3383,7 +3439,7 @@ impl State {
                 self.sim
                     .apply(SimCommand::SetPlayerInput(self.player_input()));
                 self.sim.tick(dt);
-                self.sample_walk_in(pipboy_open);
+                self.sample_walk_in(pipboy_open, dt);
                 // Until the player has spawned onto the ground the camera
                 // holds its last position (initial load, teleports).
                 if let Some(eye) = self.sim.player_eye() {

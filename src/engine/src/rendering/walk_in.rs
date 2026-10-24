@@ -6,7 +6,8 @@ use glam::{Quat, Vec3};
 
 use crate::assets::db::teleports::{DoorLocation, WalkInDoor};
 use crate::bethesda_space::{
-    UNITS_TO_ENGINE, axes_to_engine, position_to_engine, rotation_to_engine,
+    UNITS_FROM_ENGINE, UNITS_TO_ENGINE, axes_to_engine, position_from_engine, position_to_engine,
+    rotation_to_engine,
 };
 use crate::sim::PlayerBody;
 
@@ -100,6 +101,11 @@ fn core_segment(body: &PlayerBody) -> [Vec3; 2] {
 struct Trigger {
     source_ref: String,
     volume: Obb,
+    /// Engine-space position of the door reference (the origin of its local frame).
+    origin: Vec3,
+    /// Door-local trigger corners in Bethesda units, scaled like the reference.
+    local_min: Vec3,
+    local_max: Vec3,
 }
 
 struct LocationTriggers {
@@ -122,6 +128,8 @@ pub(super) struct WalkInTriggers {
     locations: Vec<LocationTriggers>,
     /// The location index and body of the last valid sample; `None` until a baseline is taken.
     previous: Option<(usize, PlayerBody)>,
+    /// The body the last sample swept from; `None` when that sample was a baseline.
+    last_sweep_from: Option<PlayerBody>,
 }
 
 impl WalkInTriggers {
@@ -146,14 +154,25 @@ impl WalkInTriggers {
                     });
                     locations.len() - 1
                 });
+            let scale = door.scale as f32;
+            let corner = |point: [f64; 3]| Vec3::from(point.map(|v| v as f32)) * scale;
+            let (first, second) = (corner(door.bounds.min), corner(door.bounds.max));
             locations[index].triggers.push(Trigger {
                 source_ref: door.source_ref.clone(),
                 volume,
+                origin: position_to_engine(
+                    door.position[0] as f32,
+                    door.position[1] as f32,
+                    door.position[2] as f32,
+                ),
+                local_min: first.min(second),
+                local_max: first.max(second),
             });
         }
         let triggers = Self {
             locations,
             previous: None,
+            last_sweep_from: None,
         };
         (triggers, report)
     }
@@ -182,13 +201,16 @@ impl WalkInTriggers {
             .position(|entry| location.is(&entry.location))
         else {
             self.previous = None;
+            self.last_sweep_from = None;
             return None;
         };
         let previous = self
             .previous
             .replace((index, body))
             .filter(|(previous_index, _)| *previous_index == index)
-            .map(|(_, previous_body)| previous_body)?;
+            .map(|(_, previous_body)| previous_body);
+        self.last_sweep_from = previous;
+        let previous = previous?;
         self.locations[index]
             .triggers
             .iter()
@@ -197,6 +219,104 @@ impl WalkInTriggers {
                     && trigger.volume.touches_swept_capsule(&previous, &body)
             })
             .map(|trigger| trigger.source_ref.as_str())
+    }
+}
+
+/// How the player stands relative to the nearest trigger of the current location, for the
+/// diagnostic trace. Local coordinates are door-local Bethesda units, scaled like the reference.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct TriggerProbe {
+    pub source_ref: String,
+    pub feet_local: Vec3,
+    pub head_local: Vec3,
+    pub box_min: Vec3,
+    pub box_max: Vec3,
+    /// Distance from the capsule to the trigger box, 0 when touching, in Bethesda units.
+    pub gap_units: f32,
+    /// Whether the sweep of the last sample touched the trigger.
+    pub swept_prev: bool,
+    /// Whether the last sample had a previous position to sweep from.
+    pub armed: bool,
+    /// Unit direction in the ground plane from the capsule to the box centre; zero when above it.
+    pub horizontal_to_center: Vec3,
+    /// Ground-plane distance to the box centre, in engine units.
+    pub horizontal_distance: f32,
+    /// Engine-space ray origins at the capsule's centre, head and feet heights.
+    pub ray_origins: [Vec3; 3],
+}
+
+/// Height of the feet-level blocker ray above the soles, in engine units.
+const FEET_RAY_LIFT: f32 = 0.3;
+/// How far below the top the head-level blocker ray starts, in engine units.
+const HEAD_RAY_DROP: f32 = 0.3;
+
+impl Obb {
+    /// Distance from the capsule's core segment to the box, minus the radius, never negative
+    /// (engine units; round-edged, unlike the square-cornered detector).
+    fn capsule_gap(&self, body: &PlayerBody) -> f32 {
+        let inverse = self.rotation.inverse();
+        let [bottom, top] = core_segment(body).map(|point| inverse * (point - self.center));
+        let distance_at = |t: f32| {
+            (bottom.lerp(top, t).abs() - self.half_extents)
+                .max(Vec3::ZERO)
+                .length()
+        };
+        let (mut low, mut high) = (0.0_f32, 1.0_f32);
+        for _ in 0..40 {
+            let third = (high - low) / 3.0;
+            let (left, right) = (low + third, high - third);
+            if distance_at(left) < distance_at(right) {
+                high = right;
+            } else {
+                low = left;
+            }
+        }
+        (distance_at(f32::midpoint(low, high)) - body.radius).max(0.0)
+    }
+}
+
+impl WalkInTriggers {
+    /// The probe of the trigger nearest to the capsule in `location`; `None` when the location
+    /// has no triggers.
+    pub(super) fn probe(
+        &self,
+        location: PlayerLocation<'_>,
+        body: &PlayerBody,
+    ) -> Option<TriggerProbe> {
+        let entry = self
+            .locations
+            .iter()
+            .find(|entry| location.is(&entry.location))?;
+        let (trigger, gap) = entry
+            .triggers
+            .iter()
+            .map(|trigger| (trigger, trigger.volume.capsule_gap(body)))
+            .min_by(|(_, first), (_, second)| first.total_cmp(second))?;
+        let inverse = trigger.volume.rotation.inverse();
+        let to_local = |point: Vec3| position_from_engine(inverse * (point - trigger.origin));
+        let head = body.feet + Vec3::Y * body.height;
+        let centre_height = body.feet + Vec3::Y * (body.height * 0.5);
+        let across = trigger.volume.center - centre_height;
+        let horizontal = Vec3::new(across.x, 0.0, across.z);
+        Some(TriggerProbe {
+            source_ref: trigger.source_ref.clone(),
+            feet_local: to_local(body.feet),
+            head_local: to_local(head),
+            box_min: trigger.local_min,
+            box_max: trigger.local_max,
+            gap_units: gap * UNITS_FROM_ENGINE,
+            swept_prev: self
+                .last_sweep_from
+                .is_some_and(|from| trigger.volume.touches_swept_capsule(&from, body)),
+            armed: self.last_sweep_from.is_some(),
+            horizontal_to_center: horizontal.normalize_or_zero(),
+            horizontal_distance: horizontal.length(),
+            ray_origins: [
+                centre_height,
+                head - Vec3::Y * HEAD_RAY_DROP,
+                body.feet + Vec3::Y * FEET_RAY_LIFT,
+            ],
+        })
     }
 }
 
@@ -664,6 +784,92 @@ mod tests {
     #[test]
     fn an_unknown_door_has_no_walk_line() {
         assert_eq!(one_door().walk_line("NOPE", RADIUS), None);
+    }
+
+    #[test]
+    fn the_probe_reports_the_gap_in_bethesda_units_and_zero_when_touching() {
+        let triggers = one_door();
+        let location = PlayerLocation::Exterior("WS");
+        // Box x reaches 5; the capsule 2.5 further. Feet at x = 10 leave 2.5 engine units.
+        let probe = triggers
+            .probe(location, &body_at(Vec3::new(10.0, 0.0, 0.0)))
+            .unwrap();
+        assert!((probe.gap_units - 25.0).abs() < 0.01, "{}", probe.gap_units);
+        let touching = triggers
+            .probe(location, &body_at(Vec3::new(7.5, 0.0, 0.0)))
+            .unwrap();
+        assert!(touching.gap_units.abs() < 0.01, "{}", touching.gap_units);
+        let inside = triggers.probe(location, &body_at(INSIDE)).unwrap();
+        assert_eq!(inside.gap_units, 0.0);
+    }
+
+    #[test]
+    fn the_probe_gives_door_local_bethesda_coordinates_of_feet_and_head() {
+        let mut moved = door("DOOR", exterior());
+        moved.position = [300.0, 400.0, 0.0];
+        moved.rotation = [0.0, 0.0, 0.7];
+        let triggers = WalkInTriggers::build(&[moved]).0;
+        // The door origin in engine space is (30, 0, -40); standing there puts the feet at the
+        // local origin and the head 12.6 engine units (126 Bethesda units) straight up.
+        let probe = triggers
+            .probe(
+                PlayerLocation::Exterior("WS"),
+                &body_at(Vec3::new(30.0, 0.0, -40.0)),
+            )
+            .unwrap();
+        assert!(
+            probe.feet_local.abs().max_element() < 1e-3,
+            "{:?}",
+            probe.feet_local
+        );
+        assert!(
+            (probe.head_local - Vec3::new(0.0, 0.0, 126.0))
+                .abs()
+                .max_element()
+                < 1e-3
+        );
+        assert_eq!(probe.box_min, Vec3::new(-50.0, -10.0, 0.0));
+        assert_eq!(probe.box_max, Vec3::new(50.0, 10.0, 200.0));
+    }
+
+    #[test]
+    fn the_probe_picks_the_nearest_trigger_and_ignores_other_locations() {
+        let mut far = door("FAR", exterior());
+        far.position = [3000.0, 0.0, 0.0];
+        let triggers =
+            WalkInTriggers::build(&[far, door("NEAR", exterior()), door("IN", interior("A"))]).0;
+        let body = body_at(Vec3::new(20.0, 0.0, 0.0));
+        assert_eq!(
+            triggers
+                .probe(PlayerLocation::Exterior("WS"), &body)
+                .unwrap()
+                .source_ref,
+            "NEAR"
+        );
+        assert_eq!(
+            triggers
+                .probe(PlayerLocation::Interior("A"), &body)
+                .unwrap()
+                .source_ref,
+            "IN"
+        );
+        assert_eq!(triggers.probe(PlayerLocation::Interior("B"), &body), None);
+    }
+
+    #[test]
+    fn the_probe_reports_whether_the_last_sweep_touched_and_whether_it_was_armed() {
+        let mut triggers = one_door();
+        let location = PlayerLocation::Exterior("WS");
+        let before = body_at(Vec3::new(0.0, 0.0, 20.0));
+        let beyond = body_at(Vec3::new(0.0, 0.0, -20.0));
+        triggers.sample(location, Some(&before));
+        let baseline = triggers.probe(location, &before).unwrap();
+        assert!(!baseline.armed);
+        assert!(!baseline.swept_prev);
+        triggers.sample(location, Some(&beyond));
+        let swept = triggers.probe(location, &beyond).unwrap();
+        assert!(swept.armed);
+        assert!(swept.swept_prev);
     }
 
     #[test]
