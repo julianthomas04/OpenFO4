@@ -26,6 +26,8 @@ layers it collides with (`collides_with`, a JSON array of form keys in the recor
 
 `doors.bounds` and `statics.bounds` hold the record's object bounds as JSON with `Min` and `Max` points of `X`, `Y`,
 `Z`, in Bethesda units (int16, Z up).
+`doors.trigger_bounds` holds the same JSON for the volume that triggers an automatic door, measured from the editor-marker geometry of its model
+(whole or fractional units); it is NULL for every other door.
 
 ## Finalization
 
