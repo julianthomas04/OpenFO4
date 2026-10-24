@@ -12,6 +12,7 @@ use crate::anim::{AnimationRig, JointIndex};
 use crate::assets::AssetServer;
 use crate::assets::db::DbClient;
 use crate::assets::db::addon_nodes::AddonNodes;
+use crate::assets::db::collision_layers::PlayerCollisionLayers;
 use crate::assets::db::landscapes::Landscape;
 use crate::assets::db::lights::Light;
 use crate::assets::db::material_swaps::SwapEntry;
@@ -1255,6 +1256,10 @@ impl WorldStreamer {
         let light_lookup = build_light_lookup(&lights, db.schema().light_columns_present);
         let light_models = build_light_models(&lights);
         let addon_nodes = db.get_addon_nodes()?;
+        let player_layers = db.get_player_collision_layers().unwrap_or_else(|error| {
+            error!("collision layers unreadable ({error:#}); every collision shape stays solid");
+            PlayerCollisionLayers::all_solid()
+        });
 
         // Material swaps (FO4 MSWP): base-record swaps (MODS) + the
         // pre-resolved substitution entries. A ref-level swap (XMSP) comes per
@@ -1363,6 +1368,7 @@ impl WorldStreamer {
             collision_manifest: load_manifest(&format!(
                 "{asset_root}/{MESHES_DIR}/collision_manifest.json"
             )),
+            player_layers,
             resident_textures,
             texture_policy,
             demand_view: Mutex::new(DemandView::default()),
@@ -4054,6 +4060,9 @@ struct WorkerShared {
     /// collision". The bulky shapes are read lazily from the loose sidecar only
     /// when a cold `.colbin` miss forces a bake.
     collision_manifest: HashMap<String, CollisionMeta>,
+    /// Which collision layers never touch the player; static sidecar shapes on
+    /// those layers are left out of the bake.
+    player_layers: PlayerCollisionLayers,
     /// `TextureArray`'s path mirror (see `TextureArray::resident_paths`):
     /// workers skip pre-reading DDS files that are already GPU-resident.
     resident_textures: Arc<Mutex<HashSet<String>>>,
@@ -4350,9 +4359,13 @@ fn prepare_submesh(
 /// Loose-sidecar shape loader: `foo.glb` -> `{asset_root}/foo.col.json`. `None`
 /// means no collider (missing or unparseable sidecar). Read only on a cold
 /// `.colbin` miss.
-fn load_collider_sidecar(asset_root: &str, path: &str) -> Option<SidecarData> {
+fn load_collider_sidecar(
+    asset_root: &str,
+    path: &str,
+    layers: &PlayerCollisionLayers,
+) -> Option<SidecarData> {
     let stem = path.strip_suffix(".glb")?;
-    load_sidecar_file(&format!("{asset_root}/{stem}.col.json"))
+    load_sidecar_file(&format!("{asset_root}/{stem}.col.json"), layers)
 }
 
 /// `foo.glb` -> `{asset_root}/foo.col.json`, the sidecar carrying the ragdoll bodies.
@@ -4368,21 +4381,33 @@ fn ragdoll_sidecar_path(asset_root: &str, path: &str) -> Option<String> {
 /// so an empty result here means the sidecar is missing/unreadable/degenerate
 /// (manifest⇄disk drift) — warned once rather than silently dropping the
 /// collider, since the static collider path is otherwise silent.
+///
+/// Dynamic meshes keep every shape: their bodies also collide with the world
+/// and each other, so only static geometry is thinned by player layers.
 fn load_collision_shapes(shared: &WorkerShared, path: &str) -> Arc<Vec<PartShape>> {
     let key = [path.to_string()];
-    let shapes = shared
+    let layers = if is_dynamic_mesh(shared, path) {
+        &PlayerCollisionLayers::all_solid()
+    } else {
+        &shared.player_layers
+    };
+    let sidecar = shared
         .collider_cache
         .resolve(
             &key,
-            |p| load_collider_sidecar(&shared.asset_root, p),
+            |p| load_collider_sidecar(&shared.asset_root, p, layers),
             |_| 1,
         )
         .get(path)
         .cloned()
-        .flatten()
-        .map(|sd| sd.shapes)
-        .unwrap_or_default();
-    if shapes.is_empty() {
+        .flatten();
+    let dropped_for_player = sidecar.as_ref().map_or(0, |sd| sd.dropped_for_player);
+    let shapes = sidecar.map(|sd| sd.shapes).unwrap_or_default();
+    if shapes.is_empty() && dropped_for_player > 0 {
+        tracing::debug!(
+            "collision: every shape of {path} ({dropped_for_player}) sits on a layer that never touches the player; no collider"
+        );
+    } else if shapes.is_empty() {
         crate::utils::warn_once(path, || {
             format!(
                 "collision: manifest lists collision for {path} but its sidecar loaded no \
@@ -4391,6 +4416,13 @@ fn load_collision_shapes(shared: &WorkerShared, path: &str) -> Arc<Vec<PartShape
         });
     }
     bind_shapes_to_joints(shared, path, shapes)
+}
+
+fn is_dynamic_mesh(shared: &WorkerShared, path: &str) -> bool {
+    shared
+        .collision_manifest
+        .get(&manifest_key(path))
+        .is_some_and(|meta| meta.dynamic)
 }
 
 fn bake_cell_colliders(
@@ -4409,9 +4441,13 @@ fn bake_cell_colliders(
 /// (logged once) when the mesh has no usable collision: its water is drawn
 /// but covers no position for height queries.
 fn load_water_volume(shared: &WorkerShared, path: &str) -> Option<Arc<VolumeShapes>> {
-    let volume = load_collider_sidecar(&shared.asset_root, path)
-        .and_then(|sidecar| VolumeShapes::from_sidecar(&sidecar.shapes, path))
-        .map(Arc::new);
+    let volume = load_collider_sidecar(
+        &shared.asset_root,
+        path,
+        &PlayerCollisionLayers::all_solid(),
+    )
+    .and_then(|sidecar| VolumeShapes::from_sidecar(&sidecar.shapes, path))
+    .map(Arc::new);
     if volume.is_none() {
         crate::utils::warn_once(&format!("water-volume:{path}"), || {
             format!(

@@ -43,8 +43,9 @@ use crate::shared_cache::SharedCache;
 /// on read, so a stale hash can only cause a rebuild, never wrong geometry), so
 /// no bump is needed for that. Respelling the mesh path inside the key (it starts
 /// with the layout's `meshes\` root) re-keys every blob the same way, but is
-/// bumped so that the purge removes the orphans.
-const COLLIDER_CACHE_VERSION: u32 = 5;
+/// bumped so that the purge removes the orphans. Changing which shapes a sidecar
+/// bakes (e.g. dropping layers that never touch the player) bumps it too.
+const COLLIDER_CACHE_VERSION: u32 = 6;
 
 pub(crate) const TRIMESH_FLAGS: TriMeshFlags = TriMeshFlags::FIX_INTERNAL_EDGES
     .union(TriMeshFlags::MERGE_DUPLICATE_VERTICES)
@@ -1488,10 +1489,10 @@ mod tests {
     }
 
     #[test]
-    fn blobs_baked_without_materials_live_in_an_older_version_directory() {
+    fn blobs_baked_before_layer_filtering_live_in_an_older_version_directory() {
         let current = physics_cache_dir("install/assets");
-        assert_eq!(current.file_name().unwrap(), "v5");
-        assert_ne!(current.file_name().unwrap(), "v4");
+        assert_eq!(current.file_name().unwrap(), "v6");
+        assert_ne!(current.file_name().unwrap(), "v5");
     }
 
     fn ragdoll_batch(sidecar: &Path) -> CellColliderBatch {

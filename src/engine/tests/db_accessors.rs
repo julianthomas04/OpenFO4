@@ -2981,3 +2981,112 @@ fn a_database_with_only_some_navmesh_columns_is_rejected() {
     .unwrap();
     assert!(DbClient::from_connection(conn).is_err());
 }
+
+fn seed_collision_layer(
+    conn: &Connection,
+    form_key: &str,
+    editor_id: &str,
+    index: i64,
+    flags: i64,
+    collides_with: Value,
+) {
+    insert(
+        conn,
+        "collision_layers",
+        &[
+            ("form_key", text(form_key)),
+            ("editor_id", text(editor_id)),
+            ("layer_index", int(index)),
+            ("flags", int(flags)),
+            ("collides_with", collides_with),
+        ],
+    );
+}
+
+fn seed_character_layers(conn: &Connection) {
+    seed_collision_layer(
+        conn,
+        "0E7518:Fallout4.esm",
+        "L_CHARCONTROLLER",
+        30,
+        0,
+        text(r#"["0E751B:Fallout4.esm"]"#),
+    );
+    seed_collision_layer(
+        conn,
+        "0E751B:Fallout4.esm",
+        "L_CHARBUMPER",
+        56,
+        0,
+        text(r#"["0E7518:Fallout4.esm"]"#),
+    );
+}
+
+#[test]
+fn player_collision_layers_resolve_from_the_stored_rows() {
+    use openfo4::assets::db::collision_layers::LayerSolidity;
+    let conn = schema_connection();
+    seed_character_layers(&conn);
+    seed_collision_layer(
+        &conn,
+        "000001:Fallout4.esm",
+        "L_STATIC",
+        1,
+        0,
+        text(r#"["0E7518:Fallout4.esm"]"#),
+    );
+    seed_collision_layer(&conn, "000002:Fallout4.esm", "L_NAVCUT", 49, 5, Value::Null);
+    seed_collision_layer(
+        &conn,
+        "000003:Fallout4.esm",
+        "L_NONCOLLIDABLE",
+        15,
+        0,
+        text(r#"["000001:Fallout4.esm"]"#),
+    );
+    let layers = client(conn).get_player_collision_layers().unwrap();
+    assert_eq!(layers.solidity(Some(1)), LayerSolidity::Solid);
+    assert_eq!(layers.solidity(Some(49)), LayerSolidity::NeverTouchesPlayer);
+    assert_eq!(layers.solidity(Some(15)), LayerSolidity::NeverTouchesPlayer);
+    assert_eq!(layers.solidity(Some(99)), LayerSolidity::SolidUnknown);
+}
+
+#[test]
+fn player_collision_layers_keep_everything_solid_on_a_database_from_an_older_installer() {
+    use openfo4::assets::db::collision_layers::LayerSolidity;
+    let conn = legacy_connection(&[
+        ("collision_layers", "layer_index"),
+        ("collision_layers", "flags"),
+        ("collision_layers", "collides_with"),
+    ]);
+    let layers = client(conn).get_player_collision_layers().unwrap();
+    assert_eq!(layers.solidity(Some(49)), LayerSolidity::Solid);
+}
+
+#[test]
+fn player_collision_layers_keep_everything_solid_without_the_character_layers() {
+    use openfo4::assets::db::collision_layers::LayerSolidity;
+    let conn = schema_connection();
+    seed_collision_layer(&conn, "000002:Fallout4.esm", "L_NAVCUT", 49, 5, Value::Null);
+    let layers = client(conn).get_player_collision_layers().unwrap();
+    assert_eq!(layers.solidity(Some(49)), LayerSolidity::Solid);
+}
+
+#[test]
+fn a_malformed_collides_with_list_is_an_error() {
+    let conn = schema_connection();
+    seed_character_layers(&conn);
+    seed_collision_layer(
+        &conn,
+        "000004:Fallout4.esm",
+        "L_BAD",
+        7,
+        0,
+        text("not json"),
+    );
+    let error = client(conn).get_player_collision_layers().unwrap_err();
+    assert!(
+        format!("{error:#}").contains("000004:Fallout4.esm"),
+        "{error:#}"
+    );
+}

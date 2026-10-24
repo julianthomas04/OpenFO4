@@ -1,6 +1,7 @@
 pub mod activators;
 pub mod addon_nodes;
 pub mod cells;
+pub mod collision_layers;
 pub mod containers;
 pub mod doors;
 pub mod flora;
@@ -134,6 +135,33 @@ impl DbClient {
     #[instrument(skip(self))]
     pub fn get_footstep_catalog(&self) -> anyhow::Result<footsteps::FootstepCatalog> {
         footsteps::FootstepCatalog::from_connection(&self.conn)
+    }
+
+    #[instrument(skip(self))]
+    /// Which layers never touch the player. A database converted before the
+    /// installer extracted the layers, or one lacking a character layer,
+    /// yields a set that keeps every shape solid, after one `error!`.
+    #[instrument(skip(self))]
+    pub fn get_player_collision_layers(
+        &self,
+    ) -> anyhow::Result<collision_layers::PlayerCollisionLayers> {
+        if !self.schema.collision_layer_columns_present {
+            tracing::error!(
+                "collision_layers columns missing (database predates collision layer extraction); every collision shape stays solid, re-run the installer"
+            );
+            return Ok(collision_layers::PlayerCollisionLayers::all_solid());
+        }
+        let rows = collision_layers::CollisionLayerRow::list_all(&self.conn)?;
+        match collision_layers::PlayerCollisionLayers::from_rows(&rows) {
+            Ok(layers) => Ok(layers),
+            Err(error @ collision_layers::PlayerLayersError::CharacterLayerMissing { .. }) => {
+                tracing::error!(
+                    "collision layers unusable ({error}); every collision shape stays solid, re-run the installer"
+                );
+                Ok(collision_layers::PlayerCollisionLayers::all_solid())
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     #[instrument(skip(self))]
