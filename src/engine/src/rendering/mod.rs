@@ -72,6 +72,7 @@ pub mod ui_fonts;
 pub mod version_overlay;
 pub mod vertex;
 mod walk_in;
+mod walk_in_hook;
 pub mod water;
 pub mod window_surface;
 pub mod world_streamer;
@@ -193,6 +194,7 @@ use startup_reads::StartupDbReads;
 use ui_colour::UiColourSet;
 use ui_fonts::UiFonts;
 use walk_in::{PlayerLocation, WalkInTriggers};
+use walk_in_hook::{HookAction, HookFrame, WalkInDevHook};
 
 // 00003C:Fallout4.esm // Commonwealth
 const WORLDSPACE: &str = crate::game_flow::spawn_locations::COMMONWEALTH;
@@ -611,6 +613,11 @@ pub struct State {
     auto_activate: Vec<String>,
     auto_idx: usize,
     auto_cooldown: u32,
+    /// Dev override (`OPENFO4_AUTO_WALK_IN="ref1,ref2,..."`): walk the player into the listed
+    /// walk-in doors so the real detector fires.
+    walk_in_hook: WalkInDevHook,
+    /// The walk-in door the detector fired for in the last sampled frame.
+    walk_in_fired: Option<String>,
     /// Resident animated placed objects (doors, containers, ...) and their playback.
     animated_objects: AnimatedObjects,
     /// Skinned replacements of ragdolls that moved (`OPENFO4_RAGDOLL_POKE` pokes one for checks).
@@ -882,10 +889,18 @@ impl State {
         triggers
     }
 
+    /// Moves the player to `pos` outside any load. The walk-in detector starts over: arriving
+    /// somewhere is not walking into a door.
+    fn teleport_player(&mut self, pos: Vec3) {
+        self.walk_in.rearm();
+        self.sim.apply(SimCommand::TeleportPlayer { pos });
+    }
+
     /// Queues the teleport of the walk-in door the player just entered, if any. Only while
     /// walking with the world running: sampling during a pending teleport would spend the
     /// entering edge on a refused request.
     fn sample_walk_in(&mut self, pipboy_open: bool) {
+        self.walk_in_fired = None;
         if self.input_mode != InputMode::Walk || pipboy_open || self.pending_teleport.is_some() {
             return;
         }
@@ -901,10 +916,77 @@ impl State {
         else {
             return;
         };
-        match self.queue_teleport(&source_ref) {
-            Ok(()) => tracing::info!("walked into load door {source_ref}"),
-            Err(refusal) => tracing::debug!("walk-in of {source_ref} refused: {refusal}"),
+        tracing::info!("WALK_IN ref={source_ref}");
+        if let Err(refusal) = self.queue_teleport(&source_ref) {
+            tracing::debug!("walk-in of {source_ref} refused: {refusal}");
         }
+        self.walk_in_fired = Some(source_ref);
+    }
+
+    fn describe_location(&self) -> String {
+        match self.streamer.current_interior() {
+            Some(cell) => format!("interior {cell}"),
+            None => format!("exterior {}", self.streamer.worldspace),
+        }
+    }
+
+    /// Carries out the `OPENFO4_AUTO_WALK_IN` dev hook: the moves go through the sim like the
+    /// player's own, so the real detector decides; everything the hook observes is logged.
+    fn tick_walk_in_hook(&mut self) {
+        if !self.walk_in_hook.is_active() {
+            return;
+        }
+        let fired = self.walk_in_fired.take();
+        let frame = HookFrame {
+            player_spawned: self.sim.player_eye().is_some(),
+            teleport_pending: self.pending_teleport.is_some(),
+            fired: fired.as_deref(),
+        };
+        match self.walk_in_hook.tick(frame) {
+            HookAction::None | HookAction::Fired { .. } => {}
+            HookAction::PlaceAtApproach { source_ref } => {
+                let Some(line) = self.walk_line_for_hook(&source_ref) else {
+                    return;
+                };
+                self.teleport_player(line.approach);
+            }
+            HookAction::CrossThrough { source_ref } => {
+                let Some(line) = self.walk_line_for_hook(&source_ref) else {
+                    return;
+                };
+                self.sim
+                    .apply(SimCommand::TeleportPlayer { pos: line.through });
+            }
+            HookAction::DidNotFire { source_ref } => tracing::warn!(
+                "WALK_IN did not fire ref={source_ref} after crossing its trigger (player in {})",
+                self.describe_location()
+            ),
+            HookAction::Arrived { source_ref } => tracing::info!(
+                "WALK_IN arrived ref={source_ref} location={}",
+                self.describe_location()
+            ),
+            HookAction::DidNotArrive { source_ref } => {
+                tracing::warn!("WALK_IN did not arrive after firing ref={source_ref}");
+            }
+            HookAction::FiredAfterArrival {
+                arrived_ref,
+                fired_ref,
+            } => tracing::error!(
+                "WALK_IN fired ref={fired_ref} right after arriving from ref={arrived_ref}"
+            ),
+            HookAction::Finished => tracing::info!("WALK_IN hook finished"),
+        }
+    }
+
+    /// The hook's walk line for a door, or a warning and a skip when it has none.
+    fn walk_line_for_hook(&mut self, source_ref: &str) -> Option<walk_in::WalkLine> {
+        let radius = self.sim.player_body().map(|body| body.radius);
+        let line = radius.and_then(|radius| self.walk_in.walk_line(source_ref, radius));
+        if line.is_none() {
+            tracing::warn!("WALK_IN ref={source_ref} has no trigger volume; skipped");
+            self.walk_in_hook.skip_current();
+        }
+        line
     }
 
     /// What the player is currently aiming at within activation reach, if it can
@@ -1571,6 +1653,11 @@ impl State {
                 .unwrap_or_default(),
             auto_idx: 0,
             auto_cooldown: 0,
+            walk_in_hook: WalkInDevHook::from_list(
+                &std::env::var("OPENFO4_AUTO_WALK_IN").unwrap_or_default(),
+                AUTO_ACTIVATE_COOLDOWN_FRAMES,
+            ),
+            walk_in_fired: None,
             animated_objects: AnimatedObjects::default(),
             ragdoll_objects: RagdollObjects::default(),
             auto_anim: AutoAnim::from_env(),
@@ -2762,6 +2849,7 @@ impl State {
                                     if fly {
                                         self.input_mode = InputMode::Fly;
                                     } else {
+                                        self.walk_in.rearm();
                                         self.sim.apply(SimCommand::TeleportPlayer {
                                             pos: self.camera.eye,
                                         });
@@ -3236,6 +3324,8 @@ impl State {
                 }
             }
         }
+
+        self.tick_walk_in_hook();
 
         // Apply a load-door activation (E): the same teardown + teleport path as
         // the debug pickers, but the arrival position, grid and facing all come
@@ -3974,9 +4064,7 @@ impl State {
         self.input_mode = match self.input_mode {
             InputMode::Walk => InputMode::Fly,
             InputMode::Fly => {
-                self.sim.apply(SimCommand::TeleportPlayer {
-                    pos: self.camera.eye,
-                });
+                self.teleport_player(self.camera.eye);
                 InputMode::Walk
             }
         };

@@ -200,6 +200,41 @@ impl WalkInTriggers {
     }
 }
 
+/// Where a dev hook may put the player to walk through a door's trigger.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct WalkLine {
+    pub location: DoorLocation,
+    /// Just outside the trigger on one side of its thin axis.
+    pub approach: Vec3,
+    /// Just outside on the other side; a straight move from `approach` crosses the trigger.
+    pub through: Vec3,
+}
+
+/// How far beyond the capsule's reach the line's ends sit, in engine units.
+const WALK_LINE_CLEARANCE: f32 = 3.0;
+
+impl WalkInTriggers {
+    /// The walk line of a door's trigger, for a capsule of `radius`. The thin axis is the
+    /// trigger's local Z (Bethesda local Y, the way through a doorway).
+    pub(super) fn walk_line(&self, source_ref: &str, radius: f32) -> Option<WalkLine> {
+        let (entry, trigger) = self.locations.iter().find_map(|entry| {
+            entry
+                .triggers
+                .iter()
+                .find(|trigger| trigger.source_ref == source_ref)
+                .map(|trigger| (entry, trigger))
+        })?;
+        let volume = trigger.volume;
+        let along =
+            volume.rotation * Vec3::Z * (volume.half_extents.z + radius + WALK_LINE_CLEARANCE);
+        Some(WalkLine {
+            location: entry.location.clone(),
+            approach: volume.center + along,
+            through: volume.center - along,
+        })
+    }
+}
+
 /// The engine-space trigger box of a door, and whether its trigger bound had to be widened. `None` for
 /// non-finite input.
 fn volume_of(door: &WalkInDoor) -> Option<(Obb, bool)> {
@@ -612,6 +647,23 @@ mod tests {
         assert_eq!(report.non_finite, ["BROKEN"]);
         sample(&mut triggers, FAR);
         assert_eq!(sample(&mut triggers, INSIDE), None);
+    }
+
+    #[test]
+    fn the_walk_line_of_a_rotated_door_crosses_it_and_starts_outside() {
+        let mut rotated = door("DOOR", exterior());
+        rotated.rotation = [0.0, 0.0, 0.7];
+        rotated.position = [300.0, 400.0, 0.0];
+        let mut triggers = WalkInTriggers::build(&[rotated]).0;
+        let line = triggers.walk_line("DOOR", RADIUS).unwrap();
+        assert_eq!(line.location, exterior());
+        assert_eq!(sample(&mut triggers, line.approach), None);
+        assert_eq!(sample(&mut triggers, line.through), Some("DOOR"));
+    }
+
+    #[test]
+    fn an_unknown_door_has_no_walk_line() {
+        assert_eq!(one_door().walk_line("NOPE", RADIUS), None);
     }
 
     #[test]
