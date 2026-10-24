@@ -261,6 +261,71 @@ class WaterSummaryTests(unittest.TestCase):
         self.assertIsNone(worker._nif_water({3: [anchor_body()]}, {}))
 
 
+class ShapeLayerTests(unittest.TestCase):
+    BODIES = {3: [simulated_body(4), anchor_body()]}
+
+    def test_the_layer_is_the_one_of_the_body_that_owns_the_shape(self):
+        self.assertEqual([worker._shape_layer(self.BODIES, 3, 0), worker._shape_layer(self.BODIES, 3, 1)], [4, 1])
+
+    def test_a_system_without_decoded_filters_has_no_layer(self):
+        self.assertIsNone(worker._shape_layer(self.BODIES, 9, 0))
+
+    def test_a_shape_without_a_valid_body_index_has_no_layer(self):
+        for index in (None, -1, 2):
+            with self.subTest(index=index):
+                self.assertIsNone(worker._shape_layer(self.BODIES, 3, index))
+
+
+class SidecarLayerTests(unittest.TestCase):
+    """process_nif with the Havok decoding stubbed: what matters is how each shape's body layer reaches the sidecar."""
+
+    def process(self, shapes, bodies_or_error):
+        blocks = [{"id": 0, "type": "NiNode", "name": "Root", "transform": None},
+                  {"id": 1, "type": "bhkPhysicsSystem", "blob": bhk.HAVOK_MAGIC + b"\x00"}]
+        parse_body_physics = (mock.Mock(side_effect=bodies_or_error) if isinstance(bodies_or_error, Exception)
+                              else mock.Mock(return_value=bodies_or_error))
+        patches = [mock.patch.object(bhk, "_parse_nif_blocks", return_value=(blocks, None)),
+                   mock.patch.object(bhk, "_resolve_collision_physics_pairs", return_value=[(0, 1)]),
+                   mock.patch.object(bhk, "resolve_collision_body_owners", return_value={}),
+                   mock.patch.object(bhk, "parse_bytes", return_value=shapes),
+                   mock.patch.object(bhk, "has_supported_constraints", return_value=False),
+                   mock.patch.object(bhk, "parse_body_physics", parse_body_physics)]
+        worker._take_problem_count()
+        with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack, \
+                contextlib.redirect_stderr(io.StringIO()) as stderr:
+            for patch in patches:
+                stack.enter_context(patch)
+            nif = Path(tmp) / "a.nif"
+            nif.write_bytes(b"bhkPhysicsSystem")
+            out = Path(tmp) / "a.col.json"
+            worker.process_nif(nif, out)
+            payload = json.loads(out.read_text())
+        return payload, worker._take_problem_count(), stderr.getvalue()
+
+    @staticmethod
+    def shape_of_body(index):
+        shape = sphere(STONE)
+        shape.body_index = index
+        return shape
+
+    def test_every_shape_carries_the_layer_of_its_own_body(self):
+        bodies = [simulated_body(4, mass=0.0), simulated_body(49, mass=0.0)]
+        payload, problems, _ = self.process([self.shape_of_body(0), self.shape_of_body(1)], bodies)
+        self.assertEqual(([s["layer"] for s in payload["shapes"]], problems), ([4, 49], 0))
+
+    def test_a_dynamic_nif_s_shapes_carry_their_layer_too(self):
+        shape = self.shape_of_body(0)
+        shape.physics = SimpleNamespace(is_dynamic=True, mass=2.0)
+        payload, _, _ = self.process([shape], [simulated_body(10, mass=2.0)])
+        self.assertEqual((payload["shapes"][0]["layer"], payload["dynamic"]), (10, True))
+
+    def test_undecodable_filters_omit_the_layer_and_are_reported(self):
+        payload, problems, stderr = self.process([self.shape_of_body(0)], ValueError("bad filter"))
+        self.assertNotIn("layer", payload["shapes"][0])
+        self.assertEqual(problems, 2)
+        self.assertIn("no decodable collision layer", stderr)
+
+
 class ManifestTests(unittest.TestCase):
     WATER = {"layer": 4, "part": 0, "materials": [[STONE, 2]]}
 

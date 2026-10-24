@@ -85,5 +85,38 @@ class RealMeshMaterialTests(unittest.TestCase):
                 self.assertEqual(self.trimesh_materials(name), expected)
 
 
+NAVCUT_LAYER = 49  # bhkRigidBody layer L_NAVCUT, https://ck.uesp.net/wiki/NAVCUT (not in third_party/pynifly)
+JUNK_WALL_DOOR = "meshes/setdressing/junkwalls/junkwalldoor01.nif"
+NAVCUT_NODES = ("c_navcut01", "c_navcut02", "c_navcut03")
+
+
+@unittest.skipUnless(os.environ.get("OPENFO4_FO4_PATH"), "OPENFO4_FO4_PATH names no Fallout 4 install.")
+class RealShapeLayerTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        data_dir = Path(os.environ["OPENFO4_FO4_PATH"]) / "Data"
+        nifs: Dict[str, bytes] = {}
+        for archive in MESH_ARCHIVES:
+            nifs.update(read_general_ba2_entries(data_dir / archive, {JUNK_WALL_DOOR} - set(nifs)))
+        with tempfile.TemporaryDirectory() as folder:
+            nif = Path(folder) / "mesh.nif"
+            sidecar = Path(folder) / "mesh.col.json"
+            nif.write_bytes(nifs[JUNK_WALL_DOOR])
+            worker.process_nif(nif, sidecar)
+            cls.shapes = json.loads(sidecar.read_text())["shapes"]
+
+    def test_the_navcut_shapes_carry_the_navcut_layer(self):
+        navcut = {shape["node"].lower(): shape for shape in self.shapes if shape["node"].lower() in NAVCUT_NODES}
+        self.assertEqual(sorted(navcut), sorted(NAVCUT_NODES))
+        self.assertEqual({shape["layer"] for shape in navcut.values()}, {NAVCUT_LAYER})
+
+    def test_the_wall_trimesh_does_not_carry_the_navcut_layer(self):
+        walls = [shape for shape in self.shapes if shape["type"] == "trimesh" and shape["node"].lower() not in NAVCUT_NODES]
+        self.assertTrue(walls)
+        for wall in walls:
+            self.assertIn("layer", wall)
+            self.assertNotEqual(wall["layer"], NAVCUT_LAYER)
+
+
 if __name__ == "__main__":
     unittest.main()

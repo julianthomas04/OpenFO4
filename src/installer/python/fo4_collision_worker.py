@@ -16,7 +16,10 @@ Sidecar schema:
       { "type": "convex",  "vertices": [[x,y,z], ...] },
       { "type": "trimesh", "vertices": [[x,y,z], ...], "indices": [[a,b,c], ...] },
       // every shape also carries "node": the name of the NiNode that owns the
-      // collision object, matching the node name in the converted GLB
+      // collision object, matching the node name in the converted GLB, and
+      // "layer": the integer Havok collision layer (filter bits 0-6) of the body
+      // that owns it, static and dynamic alike; omitted (and reported on stderr)
+      // when the body's filter could not be decoded
     ],
     "dynamic": true,   // optional; present only for Havok-dynamic bodies
     "mass": 12.5        // optional; body mass, present only when dynamic
@@ -735,6 +738,15 @@ def _body_water(physics, entries) -> dict:
     return _water_entry(physics.layer, physics.part, entries)
 
 
+def _shape_layer(physics_by_pid: dict, pid: int, body_index: Optional[int]) -> Optional[int]:
+    """The Havok collision layer (filter bits 0-6) of the body that owns a top-level shape, or None
+    when the system's body filters were not decoded or the shape has no valid body index."""
+    bodies = physics_by_pid.get(pid)
+    if bodies is None or body_index is None or not 0 <= body_index < len(bodies):
+        return None
+    return bodies[body_index].layer
+
+
 def _nif_water(physics_by_pid: dict, body_shapes: dict):
     """Water inputs of a Havok-dynamic NIF, or None without a simulated body. The engine turns the
     whole NIF into one rigid body, so the materials of every simulated body are pooled; layer and part
@@ -917,18 +929,23 @@ def process_nif(nif_path: Path, out_path: Path) -> Optional[SidecarResult]:
             owner_id = body_owners.get(body_key, node_id)
             rot, scale, trans = _node_world_nif(blocks, parent_of, owner_id)
             owner_name = _owning_node_name(blocks, owner_id)
+            layer = _shape_layer(physics_by_pid, pid, s.body_index)
+            if layer is None:
+                _report_message(f"{nif_path}: physics system {pid} body {s.body_index} has no decodable "
+                                f"collision layer; its shapes carry no layer")
             for placed in _place_entries(local_entries, _rotation_to_godot(rot), scale,
                                          _nif_translation_to_godot(trans)):
                 placed["node"] = owner_name
+                if layer is not None:
+                    placed["layer"] = layer
                 entries.append(placed)
 
     if not entries:
         return None
 
-    # Static sidecars stay byte-identical to the pre-dynamic schema (no extra
-    # keys); only Havok-dynamic NIFs carry `dynamic`/`mass`, which the engine
-    # consumes to spawn rigid bodies (the Rust reader defaults the absent keys
-    # to static).
+    # Static sidecars carry no `dynamic`/`mass` keys; only Havok-dynamic NIFs do,
+    # which the engine consumes to spawn rigid bodies (the Rust reader defaults
+    # the absent keys to static).
     payload = {"shapes": entries}
     if nif_dynamic:
         payload["dynamic"] = True
