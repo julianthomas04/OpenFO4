@@ -718,6 +718,287 @@ fn batched_landscapes_skip_cells_without_a_form_key_or_grid_and_empty_input_is_e
     assert!(db.get_landscapes(&interior).unwrap().is_empty());
 }
 
+// ------------------------------------------------ worldspace LAND lineage
+
+const LAND_DATA: i64 = 0x01;
+const LOD_DATA: i64 = 0x02;
+
+fn worldspace_row(
+    form_key: &str,
+    parent: Option<&str>,
+    parent_flags: i64,
+) -> Vec<(&'static str, Value)> {
+    let mut row = vec![
+        ("form_key", text(form_key)),
+        ("editor_id", text(&format!("{form_key}Edid"))),
+        ("parent_flags", int(parent_flags)),
+    ];
+    if let Some(parent) = parent {
+        row.push(("parent_worldspace", text(parent)));
+    }
+    row
+}
+
+fn seed_worldspaces(conn: &Connection, rows: &[(&str, Option<&str>, i64)]) {
+    for (form_key, parent, flags) in rows {
+        insert(
+            conn,
+            "worldspaces",
+            &worldspace_row(form_key, *parent, *flags),
+        );
+    }
+}
+
+/// A grid cell of `worldspace` at (1, 2) with a one-byte LAND whose height byte is `marker`.
+fn seed_land(conn: &Connection, worldspace: &str, marker: u8) {
+    let cell = format!("{worldspace}-cell");
+    insert(
+        conn,
+        "cells",
+        &cell_row(&cell, Some(worldspace), Some((1, 2))),
+    );
+    insert(
+        conn,
+        "landscapes",
+        &landscape_row(&format!("{worldspace}-land"), &cell, &[marker], None, None),
+    );
+}
+
+fn seed_cell_without_land(conn: &Connection, worldspace: &str) {
+    insert(
+        conn,
+        "cells",
+        &cell_row(
+            &format!("{worldspace}-cell"),
+            Some(worldspace),
+            Some((1, 2)),
+        ),
+    );
+}
+
+fn marker_at(db: &DbClient, worldspace: &str) -> Option<u8> {
+    db.get_landscape_at(worldspace, 1, 2)
+        .unwrap()
+        .map(|land| land.vertex_height_map[0])
+}
+
+#[test]
+fn a_worldspace_with_its_own_land_reads_it_with_the_requested_grid() {
+    let conn = schema_connection();
+    seed_worldspaces(&conn, &[("WS", None, 0)]);
+    seed_land(&conn, "WS", 7);
+    let land = client(conn).get_landscape_at("WS", 1, 2).unwrap().unwrap();
+    assert_eq!(land.vertex_height_map, [7]);
+    assert_eq!((land.grid_x, land.grid_y), (1, 2));
+    assert_eq!(land.cell, "WS-cell");
+}
+
+#[test]
+fn a_cell_without_land_inherits_it_from_the_parent_when_the_land_bit_is_set() {
+    let conn = schema_connection();
+    seed_worldspaces(
+        &conn,
+        &[("CHILD", Some("PARENT"), LAND_DATA), ("PARENT", None, 0)],
+    );
+    seed_cell_without_land(&conn, "CHILD");
+    seed_land(&conn, "PARENT", 9);
+    let db = client(conn);
+    let land = db.get_landscape_at("CHILD", 1, 2).unwrap().unwrap();
+    assert_eq!(land.vertex_height_map, [9]);
+    assert_eq!((land.grid_x, land.grid_y), (1, 2));
+}
+
+#[test]
+fn a_child_without_any_cell_at_the_grid_inherits_the_parents_land() {
+    let conn = schema_connection();
+    seed_worldspaces(
+        &conn,
+        &[("CHILD", Some("PARENT"), LAND_DATA), ("PARENT", None, 0)],
+    );
+    seed_land(&conn, "PARENT", 9);
+    assert_eq!(marker_at(&client(conn), "CHILD"), Some(9));
+}
+
+#[test]
+fn the_childs_own_land_wins_over_the_parents() {
+    let conn = schema_connection();
+    seed_worldspaces(
+        &conn,
+        &[("CHILD", Some("PARENT"), LAND_DATA), ("PARENT", None, 0)],
+    );
+    seed_land(&conn, "CHILD", 1);
+    seed_land(&conn, "PARENT", 9);
+    assert_eq!(marker_at(&client(conn), "CHILD"), Some(1));
+}
+
+#[test]
+fn a_cleared_land_bit_blocks_inheritance() {
+    let conn = schema_connection();
+    seed_worldspaces(
+        &conn,
+        &[
+            ("CHILD", Some("PARENT"), 0xFF & !LAND_DATA),
+            ("PARENT", None, 0),
+        ],
+    );
+    seed_cell_without_land(&conn, "CHILD");
+    seed_land(&conn, "PARENT", 9);
+    assert_eq!(marker_at(&client(conn), "CHILD"), None);
+}
+
+#[test]
+fn land_is_inherited_through_a_grandparent_while_every_link_defers() {
+    let conn = schema_connection();
+    seed_worldspaces(
+        &conn,
+        &[
+            ("CHILD", Some("PARENT"), LAND_DATA),
+            ("PARENT", Some("GRAND"), LAND_DATA),
+            ("GRAND", None, 0),
+        ],
+    );
+    seed_land(&conn, "GRAND", 5);
+    assert_eq!(marker_at(&client(conn), "CHILD"), Some(5));
+}
+
+#[test]
+fn the_nearest_ancestor_with_land_wins() {
+    let conn = schema_connection();
+    seed_worldspaces(
+        &conn,
+        &[
+            ("CHILD", Some("PARENT"), LAND_DATA),
+            ("PARENT", Some("GRAND"), LAND_DATA),
+            ("GRAND", None, 0),
+        ],
+    );
+    seed_land(&conn, "PARENT", 6);
+    seed_land(&conn, "GRAND", 5);
+    assert_eq!(marker_at(&client(conn), "CHILD"), Some(6));
+}
+
+#[test]
+fn a_link_that_keeps_its_land_cuts_the_chain_to_the_grandparent() {
+    let conn = schema_connection();
+    seed_worldspaces(
+        &conn,
+        &[
+            ("CHILD", Some("PARENT"), LAND_DATA),
+            ("PARENT", Some("GRAND"), 0),
+            ("GRAND", None, 0),
+        ],
+    );
+    seed_land(&conn, "GRAND", 5);
+    assert_eq!(marker_at(&client(conn), "CHILD"), None);
+}
+
+#[test]
+fn the_worldspace_persistent_cell_never_provides_land() {
+    let conn = schema_connection();
+    seed_worldspaces(&conn, &[("WS", None, 0)]);
+    let mut persistent = cell_row("WS-top", Some("WS"), Some((1, 2)));
+    persistent.push(("is_worldspace_persistent_cell", int(1)));
+    insert(&conn, "cells", &persistent);
+    insert(
+        &conn,
+        "landscapes",
+        &landscape_row("TOP-land", "WS-top", &[3], None, None),
+    );
+    assert_eq!(marker_at(&client(conn), "WS"), None);
+}
+
+#[test]
+fn a_database_without_the_pnam_column_inherits_nothing() {
+    let conn = legacy_connection(&[
+        ("worldspaces", "water_type"),
+        ("worldspaces", "lod_water_type"),
+        ("worldspaces", "lod_water_height"),
+        ("worldspaces", "default_land_height"),
+        ("worldspaces", "default_water_height"),
+        ("worldspaces", "water_environment_map"),
+        ("worldspaces", "parent_flags"),
+    ]);
+    insert(
+        &conn,
+        "worldspaces",
+        &[
+            ("form_key", text("CHILD")),
+            ("parent_worldspace", text("PARENT")),
+        ],
+    );
+    insert(&conn, "worldspaces", &[("form_key", text("PARENT"))]);
+    seed_land(&conn, "PARENT", 9);
+    let db = client(conn);
+    assert_eq!(marker_at(&db, "CHILD"), None);
+    assert_eq!(db.lod_data_owner("CHILD").unwrap(), "CHILD");
+}
+
+#[test]
+fn a_parent_loop_is_an_error_not_a_missing_land() {
+    let conn = schema_connection();
+    seed_worldspaces(
+        &conn,
+        &[("A", Some("B"), LAND_DATA), ("B", Some("A"), LAND_DATA)],
+    );
+    let error = client(conn).get_landscape_at("A", 1, 2).err().unwrap();
+    assert!(error.to_string().contains("loops at"), "{error}");
+}
+
+#[test]
+fn an_unknown_worldspace_is_an_error_not_a_missing_land() {
+    let error = client(schema_connection())
+        .get_landscape_at("NOPE", 1, 2)
+        .err()
+        .unwrap();
+    assert!(is_no_rows(&error));
+}
+
+#[test]
+fn a_missing_parent_row_ends_the_chain_without_land() {
+    let conn = schema_connection();
+    seed_worldspaces(&conn, &[("CHILD", Some("GONE"), LAND_DATA)]);
+    assert_eq!(marker_at(&client(conn), "CHILD"), None);
+}
+
+#[test]
+fn a_worldspace_that_keeps_its_lod_data_owns_it() {
+    let conn = schema_connection();
+    seed_worldspaces(
+        &conn,
+        &[
+            ("CHILD", Some("PARENT"), 0xFF & !LOD_DATA),
+            ("PARENT", None, 0),
+        ],
+    );
+    assert_eq!(client(conn).lod_data_owner("CHILD").unwrap(), "CHILD");
+}
+
+#[test]
+fn lod_data_is_owned_by_the_nearest_ancestor_that_keeps_its_own() {
+    let conn = schema_connection();
+    seed_worldspaces(
+        &conn,
+        &[
+            ("CHILD", Some("PARENT"), LOD_DATA),
+            ("PARENT", Some("GRAND"), LOD_DATA),
+            ("GRAND", None, 0),
+        ],
+    );
+    let db = client(conn);
+    assert_eq!(db.lod_data_owner("CHILD").unwrap(), "GRAND");
+    assert_eq!(db.lod_data_owner("PARENT").unwrap(), "GRAND");
+}
+
+#[test]
+fn lod_data_ignores_the_land_bit() {
+    let conn = schema_connection();
+    seed_worldspaces(
+        &conn,
+        &[("CHILD", Some("PARENT"), LAND_DATA), ("PARENT", None, 0)],
+    );
+    assert_eq!(client(conn).lod_data_owner("CHILD").unwrap(), "CHILD");
+}
+
 // --------------------------------------------------------- placed objects
 
 #[test]

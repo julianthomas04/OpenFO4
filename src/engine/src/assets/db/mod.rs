@@ -60,6 +60,7 @@ use crate::assets::db::{
     water_placement::{CellWater, LodWaterQuad, PlacedWaterRef, WorldspaceWater},
     waters::Water,
     weapons::{ModModelRow, WeaponRow},
+    worldspace_lineage::{ParentLink, owner_index, parent_use, walk_parents},
     worldspaces::Worldspace,
 };
 use crate::navmesh::NavMeshRecord;
@@ -235,6 +236,54 @@ impl DbClient {
     #[instrument(skip(self))]
     pub fn get_landscape(&self, cell: &str, grid_x: i32, grid_y: i32) -> anyhow::Result<Landscape> {
         Landscape::get(cell, grid_x, grid_y, &self.conn)
+    }
+
+    /// The LAND of an exterior grid cell of a worldspace: its own, else the one
+    /// it inherits from a parent worldspace whose `PNAM` defers land data to it.
+    /// `None` when no worldspace of the chain has LAND for the cell.
+    #[instrument(skip(self))]
+    pub fn get_landscape_at(
+        &self,
+        worldspace: &str,
+        grid_x: i32,
+        grid_y: i32,
+    ) -> anyhow::Result<Option<Landscape>> {
+        if let Some(own) = Landscape::get_in_worldspace(worldspace, grid_x, grid_y, &self.conn)? {
+            return Ok(Some(own));
+        }
+        let lineage = self.worldspace_lineage(worldspace)?;
+        let owner = owner_index(&lineage, parent_use::LAND_DATA);
+        for parent in &lineage[1..=owner] {
+            let inherited =
+                Landscape::get_in_worldspace(&parent.form_key, grid_x, grid_y, &self.conn)?;
+            if inherited.is_some() {
+                return Ok(inherited);
+            }
+        }
+        Ok(None)
+    }
+
+    /// The form key of the worldspace whose LOD data (terrain tiles, LOD water
+    /// form) the worldspace uses: itself, or the nearest parent it does not
+    /// defer its LOD data past.
+    #[instrument(skip(self))]
+    pub fn lod_data_owner(&self, worldspace: &str) -> anyhow::Result<String> {
+        let lineage = self.worldspace_lineage(worldspace)?;
+        let owner = owner_index(&lineage, parent_use::LOD_DATA);
+        Ok(lineage[owner].form_key.clone())
+    }
+
+    /// The worldspace and its parents, nearest first. A database converted
+    /// before the installer extracted `PNAM` defers nothing to any parent.
+    fn worldspace_lineage(&self, worldspace: &str) -> anyhow::Result<Vec<ParentLink>> {
+        walk_parents(worldspace, |form_key| {
+            let water = self.get_worldspace_water(form_key)?;
+            Ok(ParentLink {
+                form_key: form_key.to_owned(),
+                parent: water.parent_worldspace,
+                parent_flags: water.parent_flags.unwrap_or(0),
+            })
+        })
     }
 
     #[instrument(skip(self, cells))]
