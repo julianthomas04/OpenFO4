@@ -31,6 +31,7 @@ pub mod water_placement;
 pub mod waters;
 pub mod weapons;
 pub mod weather;
+pub mod worldspace_lineage;
 pub mod worldspaces;
 
 use rusqlite::{Connection, OpenFlags};

@@ -6,6 +6,7 @@
 //! [`super::WaterWorld`].
 
 use crate::assets::db::water_placement::{CellWater, CellWaterHeight, WorldspaceWater};
+use crate::assets::db::worldspace_lineage::{WorldspaceLink, owner_index, parent_use};
 
 /// The hard-coded fallback water form (form ID 0x18, EDID `DefaultWater`) the
 /// game uses when a cell, worldspace or LOD water type is null.
@@ -14,16 +15,6 @@ pub const DEFAULT_WATER_FORM_KEY: &str = "000018:Fallout4.esm";
 /// The cell loader rounds `XCLW` to an integer; a value at or above this
 /// (float max) means "use the worldspace default".
 const USE_WORLDSPACE_DEFAULT_HEIGHT: f32 = 2_147_483_648.0;
-
-/// `PNAM` bits the game tests, by what they inherit (not xEdit's names for the bits).
-pub mod parent_use {
-    /// Take `DNAM` from the parent.
-    pub const DEFAULT_WATER_HEIGHT: u16 = 0x01;
-    /// Take `NAM3` from the parent.
-    pub const LOD_WATER_FORM: u16 = 0x02;
-    /// Take `NAM2` from the parent.
-    pub const WATER_FORM: u16 = 0x08;
-}
 
 /// `DATA` worldspace flag: no LOD water.
 pub const WORLDSPACE_NO_LOD_WATER: u32 = 0x08;
@@ -60,6 +51,16 @@ impl WorldspaceWaterRecord {
     }
 }
 
+impl WorldspaceLink for WorldspaceWaterRecord {
+    fn parent(&self) -> Option<&str> {
+        self.parent.as_deref()
+    }
+
+    fn parent_flags(&self) -> u16 {
+        self.parent_flags
+    }
+}
+
 /// A worldspace and the parents its `PNAM` flags can defer to, nearest first.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorldspaceChain {
@@ -76,9 +77,7 @@ impl WorldspaceChain {
 
     /// The first record in the chain that keeps its own value for `flag`.
     fn owner(&self, flag: u16) -> &WorldspaceWaterRecord {
-        let inherits = |record: &&WorldspaceWaterRecord| record.parent_flags & flag != 0;
-        let inherited = self.records.iter().take_while(inherits).count();
-        &self.records[inherited.min(self.records.len() - 1)]
+        &self.records[owner_index(&self.records, flag)]
     }
 
     pub fn worldspace(&self) -> &str {
@@ -87,7 +86,7 @@ impl WorldspaceChain {
 
     /// The worldspace's water form, with parent inheritance.
     pub fn water_form(&self) -> &str {
-        self.owner(parent_use::WATER_FORM)
+        self.owner(parent_use::WATER_DATA)
             .water_form
             .as_deref()
             .unwrap_or(DEFAULT_WATER_FORM_KEY)
@@ -95,7 +94,7 @@ impl WorldspaceChain {
 
     /// The worldspace's LOD water form, with parent inheritance.
     pub fn lod_water_form(&self) -> &str {
-        self.owner(parent_use::LOD_WATER_FORM)
+        self.owner(parent_use::LOD_DATA)
             .lod_water_form
             .as_deref()
             .unwrap_or(DEFAULT_WATER_FORM_KEY)
@@ -103,8 +102,7 @@ impl WorldspaceChain {
 
     /// The worldspace's default water height, with parent inheritance.
     pub fn default_water_height(&self) -> f32 {
-        self.owner(parent_use::DEFAULT_WATER_HEIGHT)
-            .default_water_height
+        self.owner(parent_use::LAND_DATA).default_water_height
     }
 
     /// `NAM4` of the worldspace itself: no parent chain is followed for it.
@@ -329,7 +327,7 @@ mod tests {
         let chain = WorldspaceChain::new(vec![
             WorldspaceWaterRecord {
                 default_water_height: -10_000.0,
-                ..record("child", Some("parent"), parent_use::WATER_FORM)
+                ..record("child", Some("parent"), parent_use::WATER_DATA)
             },
             record("parent", None, 0),
         ]);
@@ -341,8 +339,8 @@ mod tests {
     #[test]
     fn inheritance_follows_the_chain_while_flags_stay_set() {
         let chain = WorldspaceChain::new(vec![
-            record("a", Some("b"), parent_use::DEFAULT_WATER_HEIGHT),
-            record("b", Some("c"), parent_use::DEFAULT_WATER_HEIGHT),
+            record("a", Some("b"), parent_use::LAND_DATA),
+            record("b", Some("c"), parent_use::LAND_DATA),
             WorldspaceWaterRecord {
                 default_water_height: 7.0,
                 ..record("c", None, 0)
