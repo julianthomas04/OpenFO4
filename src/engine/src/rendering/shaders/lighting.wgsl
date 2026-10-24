@@ -181,14 +181,18 @@ const MIN_CONE_COSINE_SPAN = 1e-6;
 const MIN_CONE_SIN_SQ = 1e-12;
 const MIN_CONE_TAN_DIVISOR = 1e-30;
 
-// Distance falloff of a placed light, `distance` in engine units: the light's
-// constant plus scalar times the normalised distance raised to its exponent
-// is the share of light lost, raised to a power. Zero from the radius outwards.
+// Distance falloff of a placed light, `distance` in engine units: the share of
+// light lost, raised to a power. It is the larger of the light's own loss (its
+// constant plus scalar times the normalised distance raised to its exponent) and
+// the squared normalised distance, so the falloff never exceeds
+// (1 - normalised^2)^power and reaches 0 with zero slope at the radius whatever
+// the record says. Zero from the radius outwards.
 fn local_light_attenuation(light: VisibleLight, distance: f32) -> f32 {
     let normalised = distance / light.radius;
+    let window_loss = normalised * normalised;
     let distance_power = min(pow_or_zero(normalised, light.attenuation.z), MAX_DISTANCE_POWER);
-    let lost = saturate(light.attenuation.x + light.attenuation.y * distance_power);
-    return select(pow_or_zero(1.0 - lost, LIGHT_FALLOFF_POWER), 0.0, normalised >= 1.0);
+    let record_loss = saturate(light.attenuation.x + light.attenuation.y * distance_power);
+    return pow_or_zero(1.0 - saturate(max(record_loss, window_loss)), LIGHT_FALLOFF_POWER);
 }
 
 // Falloff of a spot light without a lamp shadow: the cosine of the angle off
