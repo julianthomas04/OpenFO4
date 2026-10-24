@@ -16,6 +16,11 @@ use crate::sim::PlayerBody;
 /// staying below the capsule radius, so the capsule inflation still dominates the reach.
 pub(super) const MIN_HALF_EXTENT: f32 = 0.5;
 
+/// How far a door's trigger reaches past its editor-marker box on every side, in Bethesda units at
+/// reference scale 1. The marker box alone fires far too late and is unreachable where a door sits in
+/// rock (the Red Rocket cave exit); in vanilla the Diamond City exit fires 300 units in front of it.
+const TRIGGER_REACH_UNITS: f32 = 300.0;
+
 /// Bethesda units below which a trigger bound extent counts as collapsed.
 const DEGENERATE_EXTENT_UNITS: f64 = 0.01;
 
@@ -103,7 +108,7 @@ struct Trigger {
     volume: Obb,
     /// Engine-space position of the door reference (the origin of its local frame).
     origin: Vec3,
-    /// Door-local trigger corners in Bethesda units, scaled like the reference.
+    /// Door-local trigger corners in Bethesda units, reach included, scaled like the reference.
     local_min: Vec3,
     local_max: Vec3,
 }
@@ -157,6 +162,7 @@ impl WalkInTriggers {
             let scale = door.scale as f32;
             let corner = |point: [f64; 3]| Vec3::from(point.map(|v| v as f32)) * scale;
             let (first, second) = (corner(door.bounds.min), corner(door.bounds.max));
+            let reach = Vec3::splat(TRIGGER_REACH_UNITS * scale.abs());
             locations[index].triggers.push(Trigger {
                 source_ref: door.source_ref.clone(),
                 volume,
@@ -165,8 +171,8 @@ impl WalkInTriggers {
                     door.position[1] as f32,
                     door.position[2] as f32,
                 ),
-                local_min: first.min(second),
-                local_max: first.max(second),
+                local_min: first.min(second) - reach,
+                local_max: first.max(second) + reach,
             });
         }
         let triggers = Self {
@@ -377,12 +383,13 @@ fn volume_of(door: &WalkInDoor) -> Option<(Obb, bool)> {
         f32::midpoint(min[2], max[2]),
     ) * (UNITS_TO_ENGINE * scale);
     let degenerate = (0..3).any(|axis| f64::from(max[axis] - min[axis]) < DEGENERATE_EXTENT_UNITS);
-    let half_extents = axes_to_engine(
+    let half_extents = (axes_to_engine(
         (max[0] - min[0]) * 0.5,
         (max[1] - min[1]) * 0.5,
         (max[2] - min[2]) * 0.5,
     )
     .abs()
+        + Vec3::splat(TRIGGER_REACH_UNITS))
         * (UNITS_TO_ENGINE * scale.abs());
     let rotation = rotation_to_engine(
         door.rotation[0] as f32,
@@ -412,8 +419,8 @@ mod tests {
     const RADIUS: f32 = 2.5;
     const HEIGHT: f32 = 12.6;
 
-    /// A 100 x 20 x 200 unit door-local box (10 x 2 x 20 engine units) at the origin, which
-    /// stands 10 engine units wide along engine X, 2 deep along engine Z, 20 tall.
+    /// A 100 x 20 x 200 unit door-local marker at the origin. With the reach its trigger spans engine
+    /// x in [-35, 35], y in [-30, 50] and z in [-31, 31].
     fn door(source_ref: &str, location: DoorLocation) -> WalkInDoor {
         WalkInDoor {
             source_ref: source_ref.to_string(),
@@ -448,6 +455,13 @@ mod tests {
         }
     }
 
+    const HALF_X: f32 = 35.0;
+    const HALF_Z: f32 = 31.0;
+    const BOTTOM: f32 = -30.0;
+    const TOP: f32 = 50.0;
+    /// Feet just in front of and just behind the trigger along engine Z.
+    const BEFORE: Vec3 = Vec3::new(0.0, 0.0, 40.0);
+    const BEYOND: Vec3 = Vec3::new(0.0, 0.0, -40.0);
     const FAR: Vec3 = Vec3::new(100.0, 0.0, 0.0);
     const INSIDE: Vec3 = Vec3::new(0.0, 0.0, 0.0);
 
@@ -592,10 +606,9 @@ mod tests {
     #[test]
     fn capsule_touching_the_box_from_the_side_counts() {
         let mut triggers = one_door();
-        // Box spans x in [-5, 5]; the capsule reaches 2.5 further.
         sample(&mut triggers, FAR);
         assert_eq!(
-            sample(&mut triggers, Vec3::new(7.5, 0.0, 0.0)),
+            sample(&mut triggers, Vec3::new(HALF_X + RADIUS, 0.0, 0.0)),
             Some("DOOR")
         );
     }
@@ -604,90 +617,88 @@ mod tests {
     fn capsule_just_short_of_the_box_does_not_count() {
         let mut triggers = one_door();
         sample(&mut triggers, FAR);
-        assert_eq!(sample(&mut triggers, Vec3::new(7.51, 0.0, 0.0)), None);
+        assert_eq!(
+            sample(&mut triggers, Vec3::new(HALF_X + RADIUS + 0.01, 0.0, 0.0)),
+            None
+        );
     }
 
     #[test]
     fn capsule_above_or_below_the_box_does_not_count() {
         let mut triggers = one_door();
-        // Box is 20 tall from y = 0; the capsule core starts RADIUS above the feet.
         let level = |y| (Vec3::new(100.0, y, 0.0), Vec3::new(0.0, y, 0.0));
-        let (from, to) = level(25.0);
+        let (from, to) = level(TOP + 5.0);
         assert_eq!(approach(&mut triggers, from, to), None);
-        let (from, to) = level(-HEIGHT - 1.0);
+        let (from, to) = level(BOTTOM - HEIGHT - 1.0);
         assert_eq!(approach(&mut triggers, from, to), None);
-        let (from, to) = level(20.0);
+        let (from, to) = level(TOP);
         assert_eq!(approach(&mut triggers, from, to), Some("DOOR"));
     }
 
     #[test]
     fn a_body_reaching_the_box_with_its_head_only_counts() {
         let mut triggers = one_door();
-        // Feet 10 units under the box floor: the body spans y in [-10, 2.6], reaching the box.
-        let from = Vec3::new(100.0, -10.0, 0.0);
+        let feet = BOTTOM - 10.0;
+        let from = Vec3::new(100.0, feet, 0.0);
         assert_eq!(
-            approach(&mut triggers, from, Vec3::new(0.0, -10.0, 0.0)),
+            approach(&mut triggers, from, Vec3::new(0.0, feet, 0.0)),
             Some("DOOR")
         );
     }
 
     #[test]
-    fn a_step_across_a_thin_trigger_fires_although_both_ends_are_outside() {
+    fn a_step_across_the_trigger_fires_although_both_ends_are_outside() {
         let mut triggers = one_door();
-        let before = Vec3::new(0.0, 0.0, 20.0);
-        let beyond = Vec3::new(0.0, 0.0, -20.0);
-        assert_eq!(approach(&mut triggers, before, beyond), Some("DOOR"));
+        assert_eq!(approach(&mut triggers, BEFORE, BEYOND), Some("DOOR"));
     }
 
     #[test]
     fn a_step_across_in_the_other_direction_fires_too() {
         let mut triggers = one_door();
-        let before = Vec3::new(0.0, 0.0, -20.0);
-        let beyond = Vec3::new(0.0, 0.0, 20.0);
-        assert_eq!(approach(&mut triggers, before, beyond), Some("DOOR"));
+        assert_eq!(approach(&mut triggers, BEYOND, BEFORE), Some("DOOR"));
     }
 
     #[test]
     fn a_long_step_passing_beside_the_trigger_does_not_fire() {
         let mut triggers = one_door();
-        let before = Vec3::new(20.0, 0.0, 20.0);
-        let beyond = Vec3::new(20.0, 0.0, -20.0);
-        assert_eq!(approach(&mut triggers, before, beyond), None);
+        let beside = Vec3::new(HALF_X + RADIUS + 1.0, 0.0, 0.0);
+        assert_eq!(
+            approach(&mut triggers, BEFORE + beside, BEYOND + beside),
+            None
+        );
     }
 
     #[test]
     fn a_long_step_passing_over_the_trigger_does_not_fire() {
         let mut triggers = one_door();
-        let before = Vec3::new(0.0, 40.0, 20.0);
-        let beyond = Vec3::new(0.0, 40.0, -20.0);
-        assert_eq!(approach(&mut triggers, before, beyond), None);
+        let over = Vec3::new(0.0, TOP + 1.0, 0.0);
+        assert_eq!(approach(&mut triggers, BEFORE + over, BEYOND + over), None);
     }
 
     #[test]
     fn a_diagonal_step_clipping_the_inflated_corner_region_fires() {
         let mut triggers = one_door();
-        let before = Vec3::new(10.0, 0.0, 10.0);
-        let beyond = Vec3::new(-10.0, 0.0, -10.0);
+        // x + z = 70 misses the box corner (35, 31) by more than the radius but crosses the
+        // square-cornered inflation reaching (37.5, 33.5).
+        let before = Vec3::new(75.0, 0.0, -5.0);
+        let beyond = Vec3::new(-5.0, 0.0, 75.0);
         assert_eq!(approach(&mut triggers, before, beyond), Some("DOOR"));
     }
 
     #[test]
     fn rearm_keeps_a_teleport_from_counting_as_a_sweep() {
         let mut triggers = one_door();
-        sample(&mut triggers, Vec3::new(0.0, 0.0, 20.0));
+        sample(&mut triggers, BEFORE);
         triggers.rearm();
-        assert_eq!(sample(&mut triggers, Vec3::new(0.0, 0.0, -20.0)), None);
+        assert_eq!(sample(&mut triggers, BEYOND), None);
     }
 
     #[test]
     fn a_step_into_another_location_is_not_swept_from_the_old_one() {
         let mut triggers =
             WalkInTriggers::build(&[door("OUT", exterior()), door("IN", interior("A"))]).0;
-        triggers.sample(
-            PlayerLocation::Exterior("WS"),
-            Some(&body_at(Vec3::new(0.0, 0.0, 20.0))),
-        );
-        let across = body_at(Vec3::new(0.0, 0.0, -20.0));
+        triggers.sample(PlayerLocation::Exterior("WS"), Some(&body_at(BEFORE)));
+        let across = body_at(BEYOND);
         assert_eq!(
             triggers.sample(PlayerLocation::Interior("A"), Some(&across)),
             None
@@ -697,10 +708,10 @@ mod tests {
     #[test]
     fn a_step_with_a_changing_body_height_is_swept_between_both_core_segments() {
         let mut triggers = one_door();
-        let standing = body_at(Vec3::new(0.0, 25.0, 20.0));
+        let standing = body_at(Vec3::new(0.0, TOP + 5.0, BEFORE.z));
         let crouched = PlayerBody {
             height: 6.3,
-            ..body_at(Vec3::new(0.0, -3.0, -20.0))
+            ..body_at(Vec3::new(0.0, -3.0, BEYOND.z))
         };
         triggers.sample(PlayerLocation::Exterior("WS"), Some(&standing));
         assert_eq!(
@@ -711,15 +722,18 @@ mod tests {
 
     #[test]
     fn a_rotated_box_is_tested_along_its_rotated_axes() {
-        // A quarter turn about Bethesda Z swaps the box's engine X and Z extents: the 5-unit
-        // half-width now runs along Z and the 1-unit half-depth along X.
+        // A quarter turn about Bethesda Z swaps the box's engine X and Z extents: the half-width
+        // now runs along Z and the half-depth along X.
         let mut rotated = door("DOOR", exterior());
         rotated.rotation = [0.0, 0.0, std::f32::consts::FRAC_PI_2.into()];
         let mut triggers = WalkInTriggers::build(&[rotated]).0;
         sample(&mut triggers, FAR);
-        assert_eq!(sample(&mut triggers, Vec3::new(4.0, 0.0, 0.0)), None);
         assert_eq!(
-            sample(&mut triggers, Vec3::new(0.0, 0.0, 7.0)),
+            sample(&mut triggers, Vec3::new(HALF_Z + RADIUS + 1.0, 0.0, 0.0)),
+            None
+        );
+        assert_eq!(
+            sample(&mut triggers, Vec3::new(0.0, 0.0, HALF_Z + RADIUS + 1.0)),
             Some("DOOR")
         );
     }
@@ -730,21 +744,37 @@ mod tests {
         scaled.position = [300.0, -200.0, 100.0];
         scaled.scale = 2.0;
         let mut triggers = WalkInTriggers::build(&[scaled]).0;
-        // Bethesda (300, -200, 100) is engine (30, 10, 20). The box is 20 wide in X after
-        // scaling: x in [20, 40], reach 2.5 further.
-        let left = Vec3::new(0.0, 10.0, 20.0);
+        // Bethesda (300, -200, 100) is engine (30, 10, 20). Marker and reach both double: the box
+        // spans x in [-40, 100], the capsule reaches 2.5 further.
+        let left = Vec3::new(-100.0, 10.0, 20.0);
         assert_eq!(
-            approach(&mut triggers, left, Vec3::new(17.5, 10.0, 20.0)),
+            approach(&mut triggers, left, Vec3::new(-42.5, 10.0, 20.0)),
             Some("DOOR")
         );
         assert_eq!(
-            approach(&mut triggers, left, Vec3::new(17.4, 10.0, 20.0)),
+            approach(&mut triggers, left, Vec3::new(-42.6, 10.0, 20.0)),
             None
         );
     }
 
     #[test]
-    fn a_collapsed_bound_is_widened_and_reported() {
+    fn a_small_door_reaches_proportionally_less() {
+        let mut small = door("DOOR", exterior());
+        small.scale = 0.25;
+        let mut triggers = WalkInTriggers::build(&[small]).0;
+        // (50 + 300) units at a quarter scale is 8.75 engine units, the capsule 2.5 further.
+        assert_eq!(
+            approach(&mut triggers, FAR, Vec3::new(11.25, 0.0, 0.0)),
+            Some("DOOR")
+        );
+        assert_eq!(
+            approach(&mut triggers, FAR, Vec3::new(11.26, 0.0, 0.0)),
+            None
+        );
+    }
+
+    #[test]
+    fn a_collapsed_bound_is_reported_and_still_reaches_past_the_marker() {
         let mut flat = door("FLAT", exterior());
         flat.bounds = DoorTriggerBounds {
             min: [-50.0, 0.0, 0.0],
@@ -756,7 +786,10 @@ mod tests {
         sample(&mut triggers, FAR);
         assert_eq!(sample(&mut triggers, INSIDE), Some("FLAT"));
         let widened = triggers.locations[0].triggers[0].volume.half_extents;
-        assert!((widened.z - MIN_HALF_EXTENT).abs() < 1e-6, "{widened:?}");
+        assert!(
+            (widened.z - TRIGGER_REACH_UNITS * UNITS_TO_ENGINE).abs() < 1e-5,
+            "{widened:?}"
+        );
     }
 
     #[test]
@@ -790,13 +823,16 @@ mod tests {
     fn the_probe_reports_the_gap_in_bethesda_units_and_zero_when_touching() {
         let triggers = one_door();
         let location = PlayerLocation::Exterior("WS");
-        // Box x reaches 5; the capsule 2.5 further. Feet at x = 10 leave 2.5 engine units.
+        // Feet 2.5 engine units past where the capsule touches.
         let probe = triggers
-            .probe(location, &body_at(Vec3::new(10.0, 0.0, 0.0)))
+            .probe(
+                location,
+                &body_at(Vec3::new(HALF_X + RADIUS + 2.5, 0.0, 0.0)),
+            )
             .unwrap();
         assert!((probe.gap_units - 25.0).abs() < 0.01, "{}", probe.gap_units);
         let touching = triggers
-            .probe(location, &body_at(Vec3::new(7.5, 0.0, 0.0)))
+            .probe(location, &body_at(Vec3::new(HALF_X + RADIUS, 0.0, 0.0)))
             .unwrap();
         assert!(touching.gap_units.abs() < 0.01, "{}", touching.gap_units);
         let inside = triggers.probe(location, &body_at(INSIDE)).unwrap();
@@ -828,8 +864,8 @@ mod tests {
                 .max_element()
                 < 1e-3
         );
-        assert_eq!(probe.box_min, Vec3::new(-50.0, -10.0, 0.0));
-        assert_eq!(probe.box_max, Vec3::new(50.0, 10.0, 200.0));
+        assert_eq!(probe.box_min, Vec3::new(-350.0, -310.0, -300.0));
+        assert_eq!(probe.box_max, Vec3::new(350.0, 310.0, 500.0));
     }
 
     #[test]
