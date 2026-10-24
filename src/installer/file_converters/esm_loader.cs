@@ -471,6 +471,7 @@ namespace AssetConverter
             "CREATE INDEX IF NOT EXISTS idx_navmesh_ws_grid ON navigation_meshes(worldspace, grid_x, grid_y)",
             "CREATE INDEX IF NOT EXISTS idx_navmesh_cell ON navigation_meshes(cell)",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_navmesh_form_id ON navigation_meshes(form_id)",
+            "CREATE INDEX IF NOT EXISTS idx_collision_layers_index ON collision_layers(layer_index)",
         };
 
         // grasses.flags was TEXT (enum rendered as a string); the column is now the raw INTEGER bitfield. SQLite cannot
@@ -2424,7 +2425,7 @@ namespace AssetConverter
             var tally = ReadFailureTally.Shared;
             long? layerIndex = tally.Read("COLL Index", record.EditorID, () => (long?)record.Index, (long?)null);
             long? flags = tally.Read("COLL Flags", record.EditorID, () => (long?)(uint)record.Flags, (long?)null);
-            string? collidesWith = tally.Read("COLL CollidesWith", record.EditorID, () => SerializeCollidesWith(record), (string?)null);
+            string? collidesWith = tally.Read("COLL CollidesWith", record.EditorID, () => SafeSerialize(CollidesWithKeys(record), "CollidesWith"), (string?)null);
 
             await conn.ExecuteAsync(sql, new
             {
@@ -2436,13 +2437,10 @@ namespace AssetConverter
             }, transaction);
         }
 
-        private string? SerializeCollidesWith(ICollisionLayerGetter record)
-        {
-            var keys = record.CollidesWith?.Select(link => link.IsNull
+        internal static List<string>? CollidesWithKeys(ICollisionLayerGetter record) =>
+            record.CollidesWith?.Select(link => link.IsNull
                 ? throw new InvalidDataException("CNAM contains a null collision layer link")
                 : link.FormKey.ToString()).ToList();
-            return SafeSerialize(keys, "CollidesWith");
-        }
     }
 
     public class StaticProcessor : BaseRecordProcessor<IStaticGetter>

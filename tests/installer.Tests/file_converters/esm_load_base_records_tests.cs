@@ -76,6 +76,14 @@ namespace InstallerTests
         }
 
         [Fact]
+        public void CollisionLayerIndex_IsIndexedForLookupByLayerNumber()
+        {
+            var indexed = db.QuerySingle<long>("SELECT COUNT(*) FROM pragma_index_info('idx_collision_layers_index') WHERE name = 'layer_index'");
+
+            Assert.Equal(1, indexed);
+        }
+
+        [Fact]
         public void Static_ObjectBounds_KeepTheExactJsonFormat()
         {
             Assert.Equal("""{"Min":{"X":-10,"Y":-20,"Z":-30},"Max":{"X":10,"Y":20,"Z":30}}""", Static("WallStatic").Bounds);
