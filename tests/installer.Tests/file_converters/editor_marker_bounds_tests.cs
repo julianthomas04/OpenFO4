@@ -65,12 +65,37 @@ namespace InstallerTests
         }
 
         [Fact]
-        public void ARotationTurnsThePointsTheWayTheConverterReadsIt()
+        public void ATransformPlacesThePointsWhereTheConverterPutsThem()
         {
+            var rotation = Rotation(Matrix4x4.CreateFromYawPitchRoll(0.3f, 0.5f, 0.7f));
+            var translation = new Vector3(10, -20, 30);
+            const float Scale = 1.5f;
+            Vector3[] points = [new(1, 0, 0), new(2, 3, -1), new(-4, 1, 5)];
             var scene = new NifSceneBuilder();
-            scene.AddShape(scene.Root, "EditorMarker", [new Vector3(1, 0, 0), new Vector3(2, 0, 0), new Vector3(1, 0, 1)], OneTriangle, rotation: NifSceneBuilder.AboutZ(90));
+            scene.AddShape(scene.Root, "EditorMarker", points, OneTriangle, translation: translation, rotation: rotation, scale: Scale);
 
-            Assert.Equal(Box(new Vector3(0, 1, 0), new Vector3(0, 2, 1)), EditorMarkerBounds.Compute(scene.Nif));
+            var converted = GameCoordinates.ToGltfTransform(rotation, translation, Scale);
+            var expected = points.Select(point => FromGltfPosition(Vector3.Transform(GameCoordinates.ToGltfPosition(point), converted))).ToArray();
+            var bounds = EditorMarkerBounds.Compute(scene.Nif)!.Value;
+
+            AssertNear(expected.Aggregate(Vector3.Min), bounds.Min);
+            AssertNear(expected.Aggregate(Vector3.Max), bounds.Max);
+        }
+
+        static Matrix33 Rotation(Matrix4x4 m) => new()
+        {
+            M11 = m.M11, M12 = m.M12, M13 = m.M13,
+            M21 = m.M21, M22 = m.M22, M23 = m.M23,
+            M31 = m.M31, M32 = m.M32, M33 = m.M33,
+        };
+
+        static Vector3 FromGltfPosition(Vector3 gltf) => new Vector3(gltf.X, -gltf.Z, gltf.Y) / GameCoordinates.Scaling;
+
+        static void AssertNear(Vector3 expected, ObjectBoundsJson.FloatPoint actual)
+        {
+            Assert.Equal(expected.X, actual.X, 0.002f);
+            Assert.Equal(expected.Y, actual.Y, 0.002f);
+            Assert.Equal(expected.Z, actual.Z, 0.002f);
         }
 
         [Fact]
