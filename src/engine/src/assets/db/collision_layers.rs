@@ -144,7 +144,8 @@ impl PlayerCollisionLayers {
         })
     }
 
-    /// Stable across runs; equal exactly when both tables keep and drop the same layers.
+    /// Equal exactly when both tables keep and drop the same layers; stable for one build of the
+    /// engine, as `DefaultHasher` output may change between Rust releases.
     pub fn fingerprint(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
         match &self.layers {
@@ -235,8 +236,8 @@ pub(crate) mod fixtures {
 mod tests {
     use super::*;
 
-    const CONTROLLER: &str = "0E7518:Fallout4.esm";
-    const BUMPER: &str = "0E751B:Fallout4.esm";
+    const CONTROLLER: &str = "08877F:Fallout4.esm";
+    const BUMPER: &str = "0D8121:Fallout4.esm";
 
     fn layer(
         form_key: &str,
@@ -389,7 +390,7 @@ mod tests {
             "L_Z",
             21,
             0,
-            Some(&["0e7518:fallout4.esm"]),
+            Some(&["08877f:fallout4.esm"]),
         )]);
         assert_eq!(layers.solidity(Some(21)), LayerSolidity::Solid);
     }

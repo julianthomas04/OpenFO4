@@ -19,7 +19,6 @@ use openfo4::assets::db::collision_layers::{
 use openfo4::sim::collision::parse_sidecar_bytes;
 use rusqlite::{Connection, OpenFlags};
 
-const AUTOLOAD_DOOR: &str = "01ED77:Fallout4.esm";
 const DEFAULT_SIDECAR_SAMPLE: usize = 4000;
 
 const SOLID_LAYERS: [&str; 7] = [
@@ -76,6 +75,7 @@ fn every_active_walk_in_door_has_usable_trigger_bounds_and_a_teleport() {
         Vec::<String>::new(),
         "doors without trigger bounds; re-run the installer"
     );
+    assert!(doors.rejected.is_empty(), "{:?}", doors.rejected);
     assert!(!doors.doors.is_empty(), "no active walk-in doors found");
 
     let teleport_sources: HashSet<String> = db
@@ -105,19 +105,13 @@ fn every_active_walk_in_door_has_usable_trigger_bounds_and_a_teleport() {
 
 #[test]
 #[ignore = "needs a converted installation"]
-fn the_autoload_door_trigger_is_the_doorway_slab() {
-    let json: String = connection()
-        .query_row(
-            "SELECT trigger_bounds FROM doors WHERE form_key = ?",
-            [AUTOLOAD_DOOR],
-            |row| row.get(0),
-        )
-        .unwrap();
-    let bounds: serde_json::Value = serde_json::from_str(&json).unwrap();
-    let corner =
-        |which: &str| ["X", "Y", "Z"].map(|axis| bounds[which][axis].as_f64().unwrap_or(f64::NAN));
-    assert_eq!(corner("Min"), [-64.0, -8.0, 0.0]);
-    assert_eq!(corner("Max"), [64.0, 8.0, 192.0]);
+fn every_walk_in_door_trigger_is_the_doorway_slab() {
+    let doors = database().get_walk_in_doors().unwrap();
+    assert!(!doors.doors.is_empty(), "no active walk-in doors found");
+    for door in &doors.doors {
+        assert_eq!(door.bounds.min, [-64.0, -8.0, 0.0], "{}", door.source_ref);
+        assert_eq!(door.bounds.max, [64.0, 8.0, 192.0], "{}", door.source_ref);
+    }
 }
 
 #[test]
@@ -187,7 +181,7 @@ struct ShapeLayer {
 
 #[test]
 #[ignore = "needs a converted installation"]
-fn sidecar_layer_histogram_with_keep_or_drop_decisions() {
+fn sidecar_layers_are_known_and_navcut_and_static_are_split() {
     let layers = player_layers();
     let names: BTreeMap<u8, String> = layer_indices()
         .into_iter()
@@ -231,8 +225,33 @@ fn sidecar_layer_histogram_with_keep_or_drop_decisions() {
             layers.solidity(*layer)
         );
     }
-    assert!(
-        histogram.keys().any(Option::is_some),
-        "no shape carries a layer; re-run the installer"
+    let unknown: Vec<u8> = histogram
+        .keys()
+        .flatten()
+        .filter(|index| !names.contains_key(index))
+        .copied()
+        .collect();
+    assert_eq!(
+        unknown,
+        Vec::<u8>::new(),
+        "sidecar layers missing from the layer table"
     );
+    let index_of = |editor_id: &str| {
+        *names
+            .iter()
+            .find(|(_, name)| name.as_str() == editor_id)
+            .unwrap_or_else(|| panic!("no collision layer {editor_id}"))
+            .0
+    };
+    for (editor_id, solidity) in [
+        ("L_NAVCUT", LayerSolidity::NeverTouchesPlayer),
+        ("L_STATIC", LayerSolidity::Solid),
+    ] {
+        let index = index_of(editor_id);
+        assert!(
+            histogram.get(&Some(index)).is_some_and(|count| *count > 0),
+            "no sampled shape on {editor_id}; re-run the installer"
+        );
+        assert_eq!(layers.solidity(Some(index)), solidity, "{editor_id}");
+    }
 }

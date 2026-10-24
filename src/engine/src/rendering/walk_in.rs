@@ -11,9 +11,8 @@ use crate::bethesda_space::{
 };
 use crate::sim::PlayerBody;
 
-/// Smallest trigger half-extent per axis, in engine units. A door whose trigger bound collapses on an
-/// axis (zero or inverted extent) would never be entered; this keeps the box well-formed while
-/// staying below the capsule radius, so the capsule inflation still dominates the reach.
+/// Smallest trigger half-extent per axis, in engine units: keeps the box well-formed for a reference
+/// scaled so small that even the reach collapses.
 pub(super) const MIN_HALF_EXTENT: f32 = 0.5;
 
 /// How far a door's trigger reaches past its editor-marker box on every side, in Bethesda units at
@@ -121,7 +120,7 @@ struct LocationTriggers {
 /// Why a door got no usable trigger or a corrected one; reported once at boot.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct BuildReport {
-    /// Refs with a collapsed trigger bound axis, widened to [`MIN_HALF_EXTENT`].
+    /// Refs with a collapsed trigger bound axis, which only the reach spans.
     pub degenerate_bounds: Vec<String>,
     /// Refs with a non-finite position, rotation, scale or bounds, left without a trigger.
     pub non_finite: Vec<String>,
@@ -683,6 +682,16 @@ mod tests {
         let before = Vec3::new(75.0, 0.0, -5.0);
         let beyond = Vec3::new(-5.0, 0.0, 75.0);
         assert_eq!(approach(&mut triggers, before, beyond), Some("DOOR"));
+    }
+
+    #[test]
+    fn a_diagonal_step_beyond_the_inflated_corner_does_not_fire() {
+        let mut triggers = one_door();
+        // x + z = 75 clears the inflated corner (37.5 + 33.5 = 71); only the diagonal axis
+        // separates it, the step's extent overlaps the box on every face axis.
+        let before = Vec3::new(80.0, 0.0, -5.0);
+        let beyond = Vec3::new(-5.0, 0.0, 80.0);
+        assert_eq!(approach(&mut triggers, before, beyond), None);
     }
 
     #[test]
