@@ -231,8 +231,8 @@ enum CellRequest {
 /// The interior cell request could not reach the cell workers: their request channel is closed.
 #[derive(Debug, thiserror::Error)]
 #[error("interior cell {cell_form_key} request not sent: the cell worker channel is closed")]
-pub(crate) struct InteriorRequestError {
-    pub(crate) cell_form_key: String,
+pub struct InteriorRequestError {
+    pub cell_form_key: String,
 }
 
 /// Marks `grid` pending and sends its interior request; a failed send leaves `grid` not
