@@ -66,17 +66,22 @@ namespace InstallerTests
             Assert.NotNull(Layer(CharBumper));
         }
 
+        static string[] KeysOf(LayerRow layer) => layer.CollidesWith is null ? [] : JsonSerializer.Deserialize<string[]>(layer.CollidesWith)!;
+
         [Fact(Explicit = true)]
-        public void ReportEveryLayerAndWhetherItCollidesWithTheCharacterLayers()
+        public void ReportEveryLayerAndItsRelationToTheCharacterLayers()
         {
             string KeyOf(string editorId) => _conn.QuerySingle<string>("SELECT form_key FROM collision_layers WHERE editor_id = @editorId", new { editorId });
+            var characters = new[] { Layer(CharController), Layer(CharBumper) };
             var characterKeys = new[] { KeyOf(CharController), KeyOf(CharBumper) };
 
             foreach (var layer in _layers)
             {
-                string[]? collidesWith = layer.CollidesWith is null ? null : JsonSerializer.Deserialize<string[]>(layer.CollidesWith);
-                string hitsCharacter = collidesWith is null ? "UNKNOWN (collides_with NULL)" : collidesWith.Intersect(characterKeys).Any().ToString();
-                _output.WriteLine($"{layer.EditorId}\tindex={layer.LayerIndex}\tflags={layer.Flags}\tcollides_with_character={hitsCharacter}");
+                string hitsCharacter = layer.CollidesWith is null ? "UNKNOWN (collides_with NULL)" : KeysOf(layer).Intersect(characterKeys).Any().ToString();
+                string key = KeyOf(layer.EditorId!);
+                bool listedByCharacter = characters.Any(character => KeysOf(character).Contains(key));
+                var flagNames = (CollisionLayer.Flag)(uint)(layer.Flags ?? 0);
+                _output.WriteLine($"{layer.EditorId}	index={layer.LayerIndex}	flags={layer.Flags} ({flagNames})	collides_with_character={hitsCharacter}	listed_by_character={listedByCharacter}");
             }
 
             Assert.NotEmpty(_layers);

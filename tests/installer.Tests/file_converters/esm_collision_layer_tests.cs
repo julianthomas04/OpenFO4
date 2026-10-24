@@ -19,6 +19,14 @@ namespace InstallerTests
         }
 
         [Fact]
+        public void CollisionLayerFlags_MatchTheRawCollFlagBits()
+        {
+            Assert.Equal(
+                (1, 2, 4),
+                ((int)CollisionLayer.Flag.TriggerVolume, (int)CollisionLayer.Flag.Sensor, (int)CollisionLayer.Flag.NavmeshObstacle));
+        }
+
+        [Fact]
         public void CollidesWithKeys_AreFormKeysInRecordOrder()
         {
             var second = FormKey.Factory("0E7519:Fallout4.esm");
