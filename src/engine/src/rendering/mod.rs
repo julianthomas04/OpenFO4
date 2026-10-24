@@ -71,6 +71,7 @@ pub mod ui_colour;
 pub mod ui_fonts;
 pub mod version_overlay;
 pub mod vertex;
+mod walk_in;
 pub mod water;
 pub mod window_surface;
 pub mod world_streamer;
@@ -191,6 +192,7 @@ use shaders::startup::EffectValidation;
 use startup_reads::StartupDbReads;
 use ui_colour::UiColourSet;
 use ui_fonts::UiFonts;
+use walk_in::{PlayerLocation, WalkInTriggers};
 
 // 00003C:Fallout4.esm // Commonwealth
 const WORLDSPACE: &str = crate::game_flow::spawn_locations::COMMONWEALTH;
@@ -595,6 +597,9 @@ pub struct State {
     /// boot. Looked up O(1) by the activation raycast (E) and the debug
     /// `is_interactible` readout — no DB query at runtime.
     teleports: std::collections::HashMap<String, ResolvedTarget>,
+    /// Trigger volumes of the walk-in (automatic) load doors; their sources are keys of
+    /// `teleports`.
+    walk_in: WalkInTriggers,
     /// A load door activated this frame (E), applied next `update` like
     /// `pending_interior`.
     pending_teleport: Option<ResolvedTarget>,
@@ -840,6 +845,66 @@ impl State {
             tracing::info!("teleport map: {} doors resolved", map.len());
         }
         map
+    }
+
+    /// Trigger volumes of the enabled automatic load doors. Failures degrade to no walk-in
+    /// doors and are reported; the engine still runs, doors stay usable with E.
+    fn build_walk_in(db_path: &str) -> WalkInTriggers {
+        let doors =
+            match crate::assets::db::DbClient::new(db_path).and_then(|db| db.get_walk_in_doors()) {
+                Ok(doors) => doors,
+                Err(e) => {
+                    tracing::error!("walk-in doors unavailable: {e}");
+                    return WalkInTriggers::default();
+                }
+            };
+        if !doors.without_bounds.is_empty() {
+            tracing::error!(
+                "{} walk-in doors have no trigger bounds (database predates door bounds extraction, re-run the installer); they cannot be walked into",
+                doors.without_bounds.len()
+            );
+        }
+        let (triggers, report) = WalkInTriggers::build(&doors.doors);
+        for source_ref in &report.degenerate_bounds {
+            tracing::warn!(
+                "walk-in door {source_ref} has a collapsed trigger bound; widened to the minimum"
+            );
+        }
+        for source_ref in &report.non_finite {
+            tracing::error!(
+                "walk-in door {source_ref} has a non-finite placement or bound; it has no trigger"
+            );
+        }
+        tracing::info!(
+            "walk-in doors: {} trigger volumes",
+            doors.doors.len() - report.non_finite.len()
+        );
+        triggers
+    }
+
+    /// Queues the teleport of the walk-in door the player just entered, if any. Only while
+    /// walking with the world running: sampling during a pending teleport would spend the
+    /// entering edge on a refused request.
+    fn sample_walk_in(&mut self, pipboy_open: bool) {
+        if self.input_mode != InputMode::Walk || pipboy_open || self.pending_teleport.is_some() {
+            return;
+        }
+        let body = self.sim.player_body();
+        let location = match self.streamer.current_interior() {
+            Some(cell) => PlayerLocation::Interior(cell),
+            None => PlayerLocation::Exterior(&self.streamer.worldspace),
+        };
+        let Some(source_ref) = self
+            .walk_in
+            .sample(location, body.as_ref())
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        match self.queue_teleport(&source_ref) {
+            Ok(()) => tracing::info!("walked into load door {source_ref}"),
+            Err(refusal) => tracing::debug!("walk-in of {source_ref} refused: {refusal}"),
+        }
     }
 
     /// What the player is currently aiming at within activation reach, if it can
@@ -1330,6 +1395,7 @@ impl State {
             interior_lighting,
             interiors,
             teleports,
+            walk_in,
             player_movement,
             buoyancy_table,
         } = match db_reads.join() {
@@ -1492,6 +1558,7 @@ impl State {
             world_mode: DebugWorldMode::Worldspace,
             interior_filter: String::new(),
             teleports,
+            walk_in,
             pending_teleport: spawn_target,
             auto_activate: std::env::var("OPENFO4_AUTO_ACTIVATE")
                 .ok()
@@ -2874,6 +2941,7 @@ impl State {
     /// terrain at a grid that numerically aliases the new start.
     fn apply_stream_teleport(&mut self, start: Vec3) {
         stream_settle::apply_teardown(&mut self.sim, self.streamer.take_sim_commands());
+        self.walk_in.rearm();
         self.camera.eye = start;
         self.sim.apply(SimCommand::SpawnPlayer { pos: start });
     }
@@ -3225,6 +3293,7 @@ impl State {
                 self.sim
                     .apply(SimCommand::SetPlayerInput(self.player_input()));
                 self.sim.tick(dt);
+                self.sample_walk_in(pipboy_open);
                 // Until the player has spawned onto the ground the camera
                 // holds its last position (initial load, teleports).
                 if let Some(eye) = self.sim.player_eye() {

@@ -83,7 +83,7 @@ const AIR_ACCEL: f32 = 60.0;
 // Human height is ~12.8 units; eye sits near the capsule top.
 const STAND_HEIGHT: f32 = 12.6;
 const CROUCH_HEIGHT: f32 = 6.3;
-const RADIUS: f32 = 2.5;
+pub(super) const RADIUS: f32 = 2.5;
 const EYE_BELOW_TOP: f32 = 0.8;
 // Raw FO4 collision has noisy normals: a tighter climb angle glues the
 // capsule on small ledges (player.gd:18).

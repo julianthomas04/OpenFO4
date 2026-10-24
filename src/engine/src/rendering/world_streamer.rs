@@ -5951,10 +5951,15 @@ fn build_base_object_lookup(
         );
     }
     for s in rows_or_warn("get_doors", db.get_doors()) {
+        // Automatic doors are walk-in triggers (see `rendering::walk_in`), not geometry.
+        let automatic = s.is_automatic().unwrap_or_else(|error| {
+            tracing::warn!("{error}; the door is placed as an ordinary door");
+            false
+        });
         insert(
             &s.form_key,
             &s.model_path,
-            s.is_marker,
+            s.is_marker || automatic,
             None,
             false,
             false,

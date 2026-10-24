@@ -118,6 +118,8 @@ pub struct PlayerBody {
     pub feet: Vec3,
     /// Engine units from the soles to the top of the capsule.
     pub height: f32,
+    /// Engine units, horizontal radius of the capsule.
+    pub radius: f32,
 }
 
 /// Read-only player snapshot for the debug overlay.
@@ -468,7 +470,11 @@ impl SimWorld {
         let eye = self.player_eye()?;
         let height = self.player.height();
         let feet = eye - Vec3::Y * (self.player.eye_above_center() + height * 0.5);
-        Some(PlayerBody { feet, height })
+        Some(PlayerBody {
+            feet,
+            height,
+            radius: player::RADIUS,
+        })
     }
 
     /// Moves the bodies' water entries since the last call into `out`
