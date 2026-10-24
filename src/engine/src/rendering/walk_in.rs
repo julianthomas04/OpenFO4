@@ -15,7 +15,7 @@ use crate::sim::PlayerBody;
 /// staying below the capsule radius, so the capsule inflation still dominates the reach.
 pub(super) const MIN_HALF_EXTENT: f32 = 0.5;
 
-/// Bethesda units below which an trigger bound extent counts as collapsed.
+/// Bethesda units below which a trigger bound extent counts as collapsed.
 const DEGENERATE_EXTENT_UNITS: f64 = 0.01;
 
 /// Where the player currently is, as the streamer reports it.
@@ -252,7 +252,7 @@ fn volume_of(door: &WalkInDoor) -> Option<(Obb, bool)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::db::teleports::DoorBounds;
+    use crate::assets::db::teleports::DoorTriggerBounds;
 
     const RADIUS: f32 = 2.5;
     const HEIGHT: f32 = 12.6;
@@ -266,7 +266,7 @@ mod tests {
             position: [0.0, 0.0, 0.0],
             rotation: [0.0, 0.0, 0.0],
             scale: 1.0,
-            bounds: DoorBounds {
+            bounds: DoorTriggerBounds {
                 min: [-50.0, -10.0, 0.0],
                 max: [50.0, 10.0, 200.0],
             },
@@ -591,7 +591,7 @@ mod tests {
     #[test]
     fn a_collapsed_bound_is_widened_and_reported() {
         let mut flat = door("FLAT", exterior());
-        flat.bounds = DoorBounds {
+        flat.bounds = DoorTriggerBounds {
             min: [-50.0, 0.0, 0.0],
             max: [50.0, 0.0, 200.0],
         };

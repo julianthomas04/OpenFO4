@@ -97,7 +97,7 @@ pub enum DoorLocation {
 
 /// A door's trigger volume (`doors.trigger_bounds`), door-local, Bethesda units, Z-up.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct DoorBounds {
+pub struct DoorTriggerBounds {
     pub min: [f64; 3],
     pub max: [f64; 3],
 }
@@ -120,7 +120,7 @@ struct JsonBounds {
     max: JsonPoint,
 }
 
-impl DoorBounds {
+impl DoorTriggerBounds {
     fn parse(json: &str) -> Result<Self, serde_json::Error> {
         let JsonBounds { min, max } = serde_json::from_str(json)?;
         Ok(Self {
@@ -139,7 +139,7 @@ pub struct WalkInDoor {
     pub position: [f64; 3],
     pub rotation: [f64; 3],
     pub scale: f64,
-    pub bounds: DoorBounds,
+    pub bounds: DoorTriggerBounds,
 }
 
 /// Walk-in doors with a usable trigger volume, plus the refs that could not
@@ -216,11 +216,12 @@ pub fn get_walk_in_doors(conn: &Connection, schema: DbSchema) -> anyhow::Result<
             result.without_bounds.push(row.source_ref);
             continue;
         };
-        let bounds =
-            DoorBounds::parse(bounds_json).map_err(|e| WalkInDoorError::MalformedBounds {
+        let bounds = DoorTriggerBounds::parse(bounds_json).map_err(|e| {
+            WalkInDoorError::MalformedBounds {
                 source_ref: row.source_ref.clone(),
                 reason: e.to_string(),
-            })?;
+            }
+        })?;
         let location = door_location(&row)?;
         result.doors.push(WalkInDoor {
             source_ref: row.source_ref,
