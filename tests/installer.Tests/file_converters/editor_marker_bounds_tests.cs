@@ -84,9 +84,15 @@ namespace InstallerTests
 
         static Matrix33 Rotation(Matrix4x4 m) => new()
         {
-            M11 = m.M11, M12 = m.M12, M13 = m.M13,
-            M21 = m.M21, M22 = m.M22, M23 = m.M23,
-            M31 = m.M31, M32 = m.M32, M33 = m.M33,
+            M11 = m.M11,
+            M12 = m.M12,
+            M13 = m.M13,
+            M21 = m.M21,
+            M22 = m.M22,
+            M23 = m.M23,
+            M31 = m.M31,
+            M32 = m.M32,
+            M33 = m.M33,
         };
 
         static Vector3 FromGltfPosition(Vector3 gltf) => new Vector3(gltf.X, -gltf.Z, gltf.Y) / GameCoordinates.Scaling;
