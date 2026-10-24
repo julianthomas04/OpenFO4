@@ -217,8 +217,34 @@ pub(super) struct RawShape {
     pub(super) node: Option<String>,
     /// BGS material hash; absent or 0 = none.
     pub(super) material: Option<u32>,
-    /// Havok filter layer (0-127); absent = undecodable, kept solid.
-    pub(super) layer: Option<u8>,
+    /// Havok filter layer (0-127); absent or unreadable = undecodable, kept solid.
+    #[serde(default, deserialize_with = "lenient_layer")]
+    pub(super) layer: ShapeLayer,
+}
+
+/// A shape's `layer` key as found in the sidecar.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ShapeLayer {
+    #[default]
+    Absent,
+    Valid(u8),
+    /// Present but not an integer in 0..=255.
+    Unreadable,
+}
+
+/// Reads `layer` without ever failing the sidecar: an odd value only makes that
+/// shape's layer unreadable.
+fn lenient_layer<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<ShapeLayer, D::Error> {
+    let value = <serde_json::Value as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(match value {
+        serde_json::Value::Null => ShapeLayer::Absent,
+        other => other
+            .as_u64()
+            .and_then(|layer| u8::try_from(layer).ok())
+            .map_or(ShapeLayer::Unreadable, ShapeLayer::Valid),
+    })
 }
 
 /// Read and parse a loose `.col.json` sidecar file. `None` = missing, unreadable,
@@ -326,7 +352,7 @@ pub fn parse_sidecar_bytes(
             return None;
         }
     };
-    let (solid, dropped_for_player) = keep_player_solid(raw.shapes, layers);
+    let (solid, dropped_for_player) = keep_player_solid(raw.shapes, layers, label);
     let total = solid.len();
     let shapes: Vec<PartShape> = solid
         .into_iter()
@@ -358,22 +384,35 @@ pub fn parse_sidecar_bytes(
 fn keep_player_solid(
     shapes: Vec<RawShape>,
     layers: &PlayerCollisionLayers,
+    label: &str,
 ) -> (Vec<RawShape>, usize) {
     let total = shapes.len();
     let kept: Vec<RawShape> = shapes
         .into_iter()
-        .filter(|shape| match layers.solidity(shape.layer) {
-            LayerSolidity::Solid => true,
-            LayerSolidity::NeverTouchesPlayer => false,
-            LayerSolidity::SolidUnknown => {
-                if let Some(layer) = shape.layer {
-                    crate::utils::warn_once(&format!("collision-layer-unknown:{layer}"), || {
-                        format!(
-                            "collision: layer {layer} has no collision_layers row or no collides-with list; its shapes stay solid"
-                        )
+        .filter(|shape| {
+            let layer = match shape.layer {
+                ShapeLayer::Absent => None,
+                ShapeLayer::Valid(layer) => Some(layer),
+                ShapeLayer::Unreadable => {
+                    crate::utils::warn_once(&format!("collision-layer-unreadable:{label}"), || {
+                        format!("collision: {label} has a shape whose layer is not an integer in 0..=255; it stays solid")
                     });
+                    return true;
                 }
-                true
+            };
+            match layers.solidity(layer) {
+                LayerSolidity::Solid => true,
+                LayerSolidity::NeverTouchesPlayer => false,
+                LayerSolidity::SolidUnknown => {
+                    if let Some(layer) = layer {
+                        crate::utils::warn_once(&format!("collision-layer-unknown:{layer}"), || {
+                            format!(
+                                "collision: layer {layer} has no collision_layers row or no collides-with list; its shapes stay solid"
+                            )
+                        });
+                    }
+                    true
+                }
             }
         })
         .collect();
@@ -618,6 +657,33 @@ mod tests {
         let nodes: Vec<_> = parsed.shapes.iter().map(|s| s.node.as_deref()).collect();
         assert_eq!(nodes, [Some("wall"), Some("unknown row"), Some("no layer")]);
         assert_eq!(parsed.dropped_for_player, 2);
+    }
+
+    #[test]
+    fn an_unreadable_layer_keeps_that_shape_solid_without_failing_the_sidecar() {
+        let sidecar = json!({
+            "shapes": [
+                { "type": "sphere", "radius": 1.0, "layer": 300, "node": "too big" },
+                { "type": "sphere", "radius": 1.0, "layer": -1, "node": "negative" },
+                { "type": "sphere", "radius": 1.0, "layer": "x", "node": "text" },
+                { "type": "sphere", "radius": 1.0, "layer": 1.5, "node": "fraction" },
+                { "type": "sphere", "radius": 1.0, "layer": null, "node": "null" },
+                { "type": "sphere", "radius": 1.0, "layer": 15, "node": "dropped" },
+            ],
+        });
+        let parsed = parse_sidecar_bytes(
+            &serde_json::to_vec(&sidecar).unwrap(),
+            "test",
+            &sample_layers(),
+        )
+        .unwrap();
+        let nodes: Vec<_> = parsed
+            .shapes
+            .iter()
+            .map(|s| s.node.as_deref().unwrap())
+            .collect();
+        assert_eq!(nodes, ["too big", "negative", "text", "fraction", "null"]);
+        assert_eq!(parsed.dropped_for_player, 1);
     }
 
     #[test]

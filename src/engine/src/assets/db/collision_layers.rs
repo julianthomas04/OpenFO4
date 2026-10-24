@@ -206,6 +206,31 @@ fn classify(row: &CollisionLayerRow, character_keys: &[&str; 2]) -> LayerSolidit
     }
 }
 
+/// Layer tables for tests elsewhere in the crate.
+#[cfg(test)]
+pub(crate) mod fixtures {
+    use super::*;
+
+    /// Character layers plus one trigger layer `layer`, which never touches the player.
+    pub(crate) fn dropping_layer(layer: i64) -> PlayerCollisionLayers {
+        let row = |form_key: &str, editor_id: &str, index: i64, flags: i64, list: &[&str]| {
+            CollisionLayerRow {
+                form_key: form_key.to_owned(),
+                editor_id: Some(editor_id.to_owned()),
+                layer_index: Some(index),
+                flags: Some(flags),
+                collides_with: Some(list.iter().map(|key| (*key).to_owned()).collect()),
+            }
+        };
+        PlayerCollisionLayers::from_rows(&[
+            row("A", CHARACTER_CONTROLLER_EDITOR_ID, 30, 0, &["B"]),
+            row("B", CHARACTER_BUMPER_EDITOR_ID, 56, 0, &["A"]),
+            row("C", "L_TRIGGER", layer, layer_flags::TRIGGER_VOLUME, &[]),
+        ])
+        .unwrap()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,6 +277,20 @@ mod tests {
         let mut rows = character_rows();
         rows.extend(extra);
         PlayerCollisionLayers::from_rows(&rows).unwrap()
+    }
+
+    #[test]
+    fn classify_handles_the_real_data_cases() {
+        let keys = [CONTROLLER, BUMPER];
+        let navcut = layer("N", "L_NAVCUT", 49, 5, None);
+        assert_eq!(classify(&navcut, &keys), LayerSolidity::NeverTouchesPlayer);
+        let noncollidable = layer("M", "L_NONCOLLIDABLE", 15, 0, Some(&[]));
+        assert_eq!(
+            classify(&noncollidable, &keys),
+            LayerSolidity::NeverTouchesPlayer
+        );
+        let unknown = layer("U", "L_U", 20, 0, None);
+        assert_eq!(classify(&unknown, &keys), LayerSolidity::SolidUnknown);
     }
 
     #[test]

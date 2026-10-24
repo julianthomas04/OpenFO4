@@ -137,7 +137,6 @@ impl DbClient {
         footsteps::FootstepCatalog::from_connection(&self.conn)
     }
 
-    #[instrument(skip(self))]
     /// Which layers never touch the player. A database converted before the
     /// installer extracted the layers, or one lacking a character layer,
     /// yields a set that keeps every shape solid, after one `error!`.

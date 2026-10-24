@@ -1376,10 +1376,7 @@ impl WorldStreamer {
             collider_cache: SharedCache::new(COLLIDER_CACHE_CAP),
             layout_cache: SharedCache::new(LAYOUT_CACHE_CAP),
             dds_cache: SharedCache::new(DDS_CACHE_MAX_BYTES),
-            bake_cache: crate::sim::bake::ShapeBakeCache::new(crate::sim::bake::physics_cache_dir(
-                asset_root,
-            ))
-            .with_player_layers(&player_layers),
+            bake_cache: new_bake_cache(asset_root, &player_layers),
             ws_editor_ids: Mutex::new(HashMap::new()),
             tile_exists: Mutex::new(HashMap::new()),
             persistent_by_grid: Mutex::new(HashMap::new()),
@@ -4419,6 +4416,15 @@ fn load_collision_shapes(shared: &WorkerShared, path: &str) -> Arc<Vec<PartShape
     bind_shapes_to_joints(shared, path, shapes)
 }
 
+/// The shape bake cache of an install, keyed by the layer table its sidecars are filtered with.
+fn new_bake_cache(
+    asset_root: &str,
+    layers: &PlayerCollisionLayers,
+) -> crate::sim::bake::ShapeBakeCache {
+    crate::sim::bake::ShapeBakeCache::new(crate::sim::bake::physics_cache_dir(asset_root))
+        .with_player_layers(layers)
+}
+
 fn is_dynamic_mesh(shared: &WorkerShared, path: &str) -> bool {
     shared
         .collision_manifest
@@ -6111,6 +6117,21 @@ mod tests {
     use bytemuck::Zeroable;
 
     use super::*;
+
+    #[test]
+    fn the_bake_cache_is_keyed_by_the_players_layer_table() {
+        use crate::assets::db::collision_layers::fixtures::dropping_layer;
+        let install = tempfile::tempdir().unwrap();
+        let assets = install.path().join("assets");
+        let assets = assets.to_str().unwrap();
+        let unfiltered = new_bake_cache(assets, &PlayerCollisionLayers::all_solid());
+        let filtered = new_bake_cache(assets, &dropping_layer(12));
+        assert_ne!(unfiltered.layer_table(), filtered.layer_table());
+        assert_eq!(
+            filtered.layer_table(),
+            new_bake_cache(assets, &dropping_layer(12)).layer_table()
+        );
+    }
 
     #[test]
     fn interior_request_is_pending_and_delivered_when_the_workers_listen() {
