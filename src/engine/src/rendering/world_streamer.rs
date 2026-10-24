@@ -12,6 +12,7 @@ use crate::anim::{AnimationRig, JointIndex};
 use crate::assets::AssetServer;
 use crate::assets::db::DbClient;
 use crate::assets::db::addon_nodes::AddonNodes;
+use crate::assets::db::landscapes::Landscape;
 use crate::assets::db::lights::Light;
 use crate::assets::db::material_swaps::SwapEntry;
 use crate::assets::db::placed_objects::PlacedObject;
@@ -4642,7 +4643,9 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
 
             {
                 let _span = info_span!("build_terrain").entered();
-                if let Ok(landscape) = db.get_landscape(&cell_form_key, gx, gy) {
+                if let Some(landscape) =
+                    terrain_landscape(db.get_landscape_at(worldspace, gx, gy), gx, gy)
+                {
                     let built = if is_lod {
                         terrain::build_cell_cpu_lod(&landscape, &shared.ltex_to_diffuse)
                     } else {
@@ -4691,9 +4694,7 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
                         .lock()
                         .unwrap()
                         .entry(worldspace.to_string())
-                        .or_insert_with(|| {
-                            db.get_worldspace(worldspace).ok().and_then(|w| w.editor_id)
-                        })
+                        .or_insert_with(|| baked_tile_editor_id(db, worldspace))
                         .clone();
                     if let Some(eid) = editor_id {
                         let tx = terrain::baked_tile_coord(gx);
@@ -4795,6 +4796,32 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
     }
 
     wrap(result)
+}
+
+/// The LAND a cell's terrain is built from. A cell without LAND anywhere in its worldspace chain has
+/// no terrain; a failed lookup is logged and builds none either.
+fn terrain_landscape(
+    lookup: anyhow::Result<Option<Landscape>>,
+    gx: i32,
+    gy: i32,
+) -> Option<Landscape> {
+    lookup.unwrap_or_else(|error| {
+        warn!("Failed to look up the landscape of ({gx}, {gy}): {error:#}");
+        None
+    })
+}
+
+/// The editor id naming the baked terrain tile folder of a worldspace: that of the worldspace whose
+/// LOD data it uses, since a child worldspace has no tiles of its own. `None` is logged.
+fn baked_tile_editor_id(db: &DbClient, worldspace: &str) -> Option<String> {
+    let editor_id = db
+        .lod_data_owner(worldspace)
+        .and_then(|owner| db.get_worldspace(&owner))
+        .map(|owner| owner.editor_id);
+    editor_id.unwrap_or_else(|error| {
+        warn!("No baked terrain tiles for worldspace {worldspace}: {error:#}");
+        None
+    })
 }
 
 /// Decodes and builds the navigation meshes of one cell on the worker. A cell whose query fails
@@ -5929,6 +5956,27 @@ mod tests {
     use bytemuck::Zeroable;
 
     use super::*;
+
+    fn landscape() -> Landscape {
+        Landscape {
+            form_key: None,
+            editor_id: None,
+            cell: "cell".to_owned(),
+            grid_x: 1,
+            grid_y: 2,
+            vertex_height_map: Vec::new(),
+            vertex_colors: None,
+            layers: None,
+            flags: None,
+        }
+    }
+
+    #[test]
+    fn terrain_is_built_only_from_a_landscape_that_was_found() {
+        assert!(terrain_landscape(Ok(Some(landscape())), 1, 2).is_some());
+        assert!(terrain_landscape(Ok(None), 1, 2).is_none());
+        assert!(terrain_landscape(Err(anyhow::anyhow!("db down")), 1, 2).is_none());
+    }
 
     #[test]
     fn the_music_place_agrees_with_the_grid_cell_and_converts_the_point_to_bethesda_units() {
