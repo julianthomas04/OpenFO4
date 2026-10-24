@@ -4384,7 +4384,7 @@ fn ragdoll_sidecar_path(asset_root: &str, path: &str) -> Option<String> {
 /// and each other, so only static geometry is thinned by player layers.
 fn load_collision_shapes(shared: &WorkerShared, path: &str) -> Arc<Vec<PartShape>> {
     let key = [path.to_string()];
-    let layers = if is_dynamic_mesh(shared, path) {
+    let layers = if is_havok_dynamic(shared, path) {
         &PlayerCollisionLayers::all_solid()
     } else {
         &shared.player_layers
@@ -4423,13 +4423,6 @@ fn new_bake_cache(
 ) -> crate::sim::bake::ShapeBakeCache {
     crate::sim::bake::ShapeBakeCache::new(crate::sim::bake::physics_cache_dir(asset_root))
         .with_player_layers(layers)
-}
-
-fn is_dynamic_mesh(shared: &WorkerShared, path: &str) -> bool {
-    shared
-        .collision_manifest
-        .get(&manifest_key(path))
-        .is_some_and(|meta| meta.dynamic)
 }
 
 fn bake_cell_colliders(
