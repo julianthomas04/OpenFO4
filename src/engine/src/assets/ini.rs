@@ -404,9 +404,8 @@ fn read_text(entries: &mut HashMap<String, Entry>, file: &str, text: &str) {
     reason = "expected values are exact literals parsed or copied, not computed"
 )]
 mod tests {
-    use std::sync::{Arc, Mutex};
-
     use super::*;
+    use crate::audio::test_support::SharedBuffer;
     use proptest::prelude::*;
 
     const KEY: IniKey = IniKey::new("Display", "iKey");
@@ -419,38 +418,13 @@ mod tests {
         GameIni::from_texts([text])
     }
 
-    #[derive(Clone, Default)]
-    struct LogBuffer(Arc<Mutex<Vec<u8>>>);
-
-    impl std::io::Write for LogBuffer {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBuffer {
-        type Writer = Self;
-
-        fn make_writer(&'a self) -> Self::Writer {
-            self.clone()
-        }
-    }
-
     /// Everything `action` logs at warning level or above on this thread.
     fn capture_warnings<R>(action: impl FnOnce() -> R) -> String {
-        let buffer = LogBuffer::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(buffer.clone())
-            .with_max_level(tracing::Level::WARN)
-            .with_ansi(false)
-            .finish();
-        tracing::subscriber::with_default(subscriber, action);
-        String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap()
+        let log = SharedBuffer::default();
+        let guard = log.capture("warn");
+        action();
+        drop(guard);
+        log.drain()
     }
 
     fn write(dir: &Path, file: &str, text: &str) {
