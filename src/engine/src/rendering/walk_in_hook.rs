@@ -128,6 +128,13 @@ impl WalkInDevHook {
     }
 
     fn after_placement(&mut self, waited: u32, frame: HookFrame<'_>) -> HookAction {
+        let source_ref = self.current_ref();
+        // The placement itself (landing, depenetration) may already walk into the trigger; the
+        // detector fired for the door, and the player is on its way through.
+        if frame.fired == Some(source_ref.as_str()) {
+            self.phase = Phase::Fired { waited: 0 };
+            return HookAction::Fired { source_ref };
+        }
         let waited = waited + 1;
         if waited < SETTLE_FRAMES || !frame.player_spawned {
             self.phase = Phase::Placed { waited };
@@ -303,6 +310,22 @@ mod tests {
         placed_and_crossing(&mut hook);
         assert_eq!(next_action(&mut hook, idle()), action("no_fire", "A"));
         assert_eq!(next_action(&mut hook, idle()), action("place", "B"));
+    }
+
+    #[test]
+    fn a_fire_already_during_the_placement_counts_and_is_not_crossed_again() {
+        let mut hook = hook("A");
+        assert_eq!(hook.tick(idle()), action("place", "A"));
+        assert_eq!(hook.tick(firing("A")), action("fired", "A"));
+        assert_eq!(next_action(&mut hook, idle()), action("arrived", "A"));
+        assert_eq!(next_action(&mut hook, idle()), HookAction::Finished);
+    }
+
+    #[test]
+    fn a_different_door_firing_during_the_placement_does_not_count() {
+        let mut hook = hook("A");
+        hook.tick(idle());
+        assert_eq!(hook.tick(firing("OTHER")), HookAction::None);
     }
 
     #[test]
