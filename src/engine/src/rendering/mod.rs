@@ -858,8 +858,8 @@ impl State {
         map
     }
 
-    /// Trigger volumes of the enabled automatic load doors. Failures degrade to no walk-in
-    /// doors and are reported; the engine still runs, doors stay usable with E.
+    /// Trigger volumes of the enabled automatic load doors. A door with an unusable row is
+    /// reported and left out; when the doors cannot be read at all there are none, reported.
     fn build_walk_in(db_path: &str) -> WalkInTriggers {
         let doors =
             match crate::assets::db::DbClient::new(db_path).and_then(|db| db.get_walk_in_doors()) {
@@ -869,6 +869,9 @@ impl State {
                     return WalkInTriggers::default();
                 }
             };
+        for rejected in &doors.rejected {
+            tracing::error!("walk-in door left out: {rejected}");
+        }
         if !doors.without_bounds.is_empty() {
             tracing::error!(
                 "{} walk-in doors have no trigger bounds (database predates door trigger bounds extraction, re-run the installer); they cannot be walked into",
@@ -878,7 +881,7 @@ impl State {
         let (triggers, report) = WalkInTriggers::build(&doors.doors);
         for source_ref in &report.degenerate_bounds {
             tracing::warn!(
-                "walk-in door {source_ref} has a collapsed trigger bound; widened to the minimum"
+                "walk-in door {source_ref} has a collapsed trigger bound; only the reach spans that axis"
             );
         }
         for source_ref in &report.non_finite {
@@ -922,8 +925,12 @@ impl State {
             return;
         };
         tracing::info!("WALK_IN ref={source_ref}");
-        if let Err(refusal) = self.queue_teleport(&source_ref) {
-            tracing::debug!("walk-in of {source_ref} refused: {refusal}");
+        match self.queue_teleport(&source_ref) {
+            Ok(()) => {}
+            Err(refusal @ TeleportRefusal::UnknownSource(_)) => {
+                tracing::warn!("walk-in of {source_ref} has no usable destination: {refusal}");
+            }
+            Err(refusal) => tracing::debug!("walk-in of {source_ref} refused: {refusal}"),
         }
         self.walk_in_fired = Some(source_ref);
     }
@@ -1033,10 +1040,14 @@ impl State {
         }
     }
 
-    /// The hook's walk line for a door, or a warning and a skip when it has none.
+    /// The hook's walk line for a door, or a warning and a skip when there is none.
     fn walk_line_for_hook(&mut self, source_ref: &str) -> Option<walk_in::WalkLine> {
-        let radius = self.sim.player_body().map(|body| body.radius);
-        let line = radius.and_then(|radius| self.walk_in.walk_line(source_ref, radius));
+        let Some(body) = self.sim.player_body() else {
+            tracing::warn!("WALK_IN ref={source_ref} skipped: the player has no body");
+            self.walk_in_hook.skip_current();
+            return None;
+        };
+        let line = self.walk_in.walk_line(source_ref, body.radius);
         if line.is_none() {
             tracing::warn!("WALK_IN ref={source_ref} has no trigger volume; skipped");
             self.walk_in_hook.skip_current();

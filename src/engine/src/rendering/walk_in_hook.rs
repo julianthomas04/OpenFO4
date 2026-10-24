@@ -74,15 +74,21 @@ impl WalkInDevHook {
     /// `list` is the environment variable: comma-separated refs, blanks ignored. `quiet_frames`
     /// is both the wait before each hop and the no-refire window after each arrival.
     pub(super) fn from_list(list: &str, quiet_frames: u32) -> Self {
+        let pending: VecDeque<String> = list
+            .split(',')
+            .map(str::trim)
+            .filter(|source_ref| !source_ref.is_empty())
+            .map(str::to_owned)
+            .collect();
+        let phase = if pending.is_empty() {
+            Phase::Done
+        } else {
+            Phase::Ready { cooldown: 0 }
+        };
         Self {
-            pending: list
-                .split(',')
-                .map(str::trim)
-                .filter(|source_ref| !source_ref.is_empty())
-                .map(str::to_owned)
-                .collect(),
+            pending,
             current: None,
-            phase: Phase::Ready { cooldown: 0 },
+            phase,
             quiet_frames,
         }
     }
@@ -272,9 +278,8 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_list_finishes_at_once() {
-        let mut hook = hook("");
-        assert_eq!(hook.tick(idle()), HookAction::Finished);
+    fn an_empty_list_is_inactive_and_never_reports() {
+        let mut hook = hook(" , ");
         assert!(!hook.is_active());
         assert_eq!(hook.tick(idle()), HookAction::None);
     }

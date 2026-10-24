@@ -9,7 +9,7 @@
 
 use openfo4::assets::db::DbClient;
 use openfo4::assets::db::schema::DbSchema;
-use openfo4::assets::db::teleports::DoorLocation;
+use openfo4::assets::db::teleports::{DoorLocation, WalkInDoors};
 use openfo4::assets::db::water_placement::CellWaterHeight;
 use rusqlite::Connection;
 use rusqlite::types::Value;
@@ -1405,6 +1405,7 @@ fn walk_in_doors_are_the_automatic_doors_with_location_pose_and_bounds() {
     let doors = client(conn).get_walk_in_doors().unwrap();
 
     assert_eq!(doors.without_bounds, Vec::<String>::new());
+    assert!(doors.rejected.is_empty(), "{:?}", doors.rejected);
     assert_eq!(doors.doors.len(), 2);
     let indoor = &doors.doors[0];
     assert_eq!(indoor.source_ref, "indoor");
@@ -1490,14 +1491,28 @@ fn walk_in_doors_from_a_database_without_the_trigger_bounds_column_report_every_
     assert_eq!(doors.without_bounds, ["legacy"]);
 }
 
+fn rejected_refs(doors: &WalkInDoors) -> Vec<String> {
+    doors.rejected.iter().map(ToString::to_string).collect()
+}
+
+fn walk_in_refs(doors: &WalkInDoors) -> Vec<&str> {
+    doors.doors.iter().map(|d| d.source_ref.as_str()).collect()
+}
+
 #[test]
-fn walk_in_doors_with_malformed_flags_or_bounds_fail_naming_the_ref() {
+fn walk_in_doors_with_malformed_flags_or_bounds_are_rejected_alone_naming_the_ref() {
     let conn = walk_in_world();
     conn.execute("UPDATE doors SET flags = 'x' WHERE form_key = 'PLAIN'", [])
         .unwrap();
     placed_door(&conn, "badflags", "EXT", "PLAIN", &[]);
-    let error = client(conn).get_walk_in_doors().err().unwrap();
-    assert!(error.to_string().contains("badflags"), "{error}");
+    placed_door(&conn, "fine", "EXT", "AUTO", &[]);
+    let doors = client(conn).get_walk_in_doors().unwrap();
+    let rejected = rejected_refs(&doors);
+    assert!(
+        rejected.len() == 1 && rejected[0].contains("badflags"),
+        "{rejected:?}"
+    );
+    assert_eq!(walk_in_refs(&doors), ["fine"]);
 
     let conn = walk_in_world();
     conn.execute(
@@ -1506,17 +1521,29 @@ fn walk_in_doors_with_malformed_flags_or_bounds_fail_naming_the_ref() {
     )
     .unwrap();
     placed_door(&conn, "badbounds", "EXT", "AUTO", &[]);
-    let error = client(conn).get_walk_in_doors().err().unwrap();
-    assert!(error.to_string().contains("badbounds"), "{error}");
+    placed_door(&conn, "fine", "EXT", "AUTO_NO_TEXT", &[]);
+    let doors = client(conn).get_walk_in_doors().unwrap();
+    let rejected = rejected_refs(&doors);
+    assert!(
+        rejected.len() == 1 && rejected[0].contains("badbounds"),
+        "{rejected:?}"
+    );
+    assert_eq!(walk_in_refs(&doors), ["fine"]);
 }
 
 #[test]
-fn walk_in_doors_standing_in_an_exterior_cell_without_a_worldspace_fail_naming_the_ref() {
+fn walk_in_doors_standing_in_an_exterior_cell_without_a_worldspace_are_rejected_naming_the_ref() {
     let conn = walk_in_world();
     insert(&conn, "cells", &cell_row("ORPHAN", None, Some((0, 0))));
     placed_door(&conn, "lost", "ORPHAN", "AUTO", &[]);
-    let error = client(conn).get_walk_in_doors().err().unwrap();
-    assert!(error.to_string().contains("lost"), "{error}");
+    placed_door(&conn, "fine", "EXT", "AUTO", &[]);
+    let doors = client(conn).get_walk_in_doors().unwrap();
+    let rejected = rejected_refs(&doors);
+    assert!(
+        rejected.len() == 1 && rejected[0].contains("lost"),
+        "{rejected:?}"
+    );
+    assert_eq!(walk_in_refs(&doors), ["fine"]);
 }
 
 // ---------------------------------------------------------- material swaps
@@ -3211,19 +3238,19 @@ fn seed_collision_layer(
 fn seed_character_layers(conn: &Connection) {
     seed_collision_layer(
         conn,
-        "0E7518:Fallout4.esm",
+        "08877F:Fallout4.esm",
         "L_CHARCONTROLLER",
         30,
         0,
-        text(r#"["0E751B:Fallout4.esm"]"#),
+        text(r#"["0D8121:Fallout4.esm"]"#),
     );
     seed_collision_layer(
         conn,
-        "0E751B:Fallout4.esm",
+        "0D8121:Fallout4.esm",
         "L_CHARBUMPER",
         56,
         0,
-        text(r#"["0E7518:Fallout4.esm"]"#),
+        text(r#"["08877F:Fallout4.esm"]"#),
     );
 }
 
@@ -3238,7 +3265,7 @@ fn player_collision_layers_resolve_from_the_stored_rows() {
         "L_STATIC",
         1,
         0,
-        text(r#"["0E7518:Fallout4.esm"]"#),
+        text(r#"["08877F:Fallout4.esm"]"#),
     );
     seed_collision_layer(&conn, "000002:Fallout4.esm", "L_NAVCUT", 49, 5, Value::Null);
     seed_collision_layer(

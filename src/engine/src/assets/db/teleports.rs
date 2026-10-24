@@ -149,6 +149,8 @@ pub struct WalkInDoor {
 pub struct WalkInDoors {
     pub doors: Vec<WalkInDoor>,
     pub without_bounds: Vec<String>,
+    /// Load doors whose row is unusable; each is left out on its own.
+    pub rejected: Vec<WalkInDoorError>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -206,33 +208,48 @@ pub fn get_walk_in_doors(conn: &Connection, schema: DbSchema) -> anyhow::Result<
 
     let mut result = WalkInDoors::default();
     for row in rows {
-        if !flags_are_automatic(
-            &format!("door ref {}", row.source_ref),
-            row.flags.as_deref(),
-        )? {
-            continue;
-        }
-        let Some(bounds_json) = row.bounds.as_deref() else {
-            result.without_bounds.push(row.source_ref);
-            continue;
-        };
-        let bounds = DoorTriggerBounds::parse(bounds_json).map_err(|e| {
-            WalkInDoorError::MalformedBounds {
-                source_ref: row.source_ref.clone(),
-                reason: e.to_string(),
+        match walk_in_door(row) {
+            Ok(WalkInRowOutcome::Door(door)) => result.doors.push(door),
+            Ok(WalkInRowOutcome::WithoutBounds(source_ref)) => {
+                result.without_bounds.push(source_ref);
             }
-        })?;
-        let location = door_location(&row)?;
-        result.doors.push(WalkInDoor {
-            source_ref: row.source_ref,
-            location,
-            position: row.position,
-            rotation: row.rotation,
-            scale: row.scale,
-            bounds,
-        });
+            Ok(WalkInRowOutcome::NotAutomatic) => {}
+            Err(error) => result.rejected.push(error),
+        }
     }
     Ok(result)
+}
+
+enum WalkInRowOutcome {
+    Door(WalkInDoor),
+    WithoutBounds(String),
+    NotAutomatic,
+}
+
+fn walk_in_door(row: WalkInRow) -> Result<WalkInRowOutcome, WalkInDoorError> {
+    if !flags_are_automatic(
+        &format!("door ref {}", row.source_ref),
+        row.flags.as_deref(),
+    )? {
+        return Ok(WalkInRowOutcome::NotAutomatic);
+    }
+    let Some(bounds_json) = row.bounds.as_deref() else {
+        return Ok(WalkInRowOutcome::WithoutBounds(row.source_ref));
+    };
+    let bounds =
+        DoorTriggerBounds::parse(bounds_json).map_err(|e| WalkInDoorError::MalformedBounds {
+            source_ref: row.source_ref.clone(),
+            reason: e.to_string(),
+        })?;
+    let location = door_location(&row)?;
+    Ok(WalkInRowOutcome::Door(WalkInDoor {
+        source_ref: row.source_ref,
+        location,
+        position: row.position,
+        rotation: row.rotation,
+        scale: row.scale,
+        bounds,
+    }))
 }
 
 fn door_location(row: &WalkInRow) -> Result<DoorLocation, WalkInDoorError> {
