@@ -43,7 +43,7 @@ impl WorldspaceLink for ParentLink {
 
 /// The worldspace and its parents, nearest first, each fetched with `fetch`.
 /// The worldspace itself must exist; a parent that cannot be fetched only ends
-/// the chain. A chain that loops or runs deeper than the depth cap is an error.
+/// the chain, logged once per worldspace and parent. A chain that loops or runs deeper than the depth cap is an error.
 pub fn walk_parents<L: WorldspaceLink>(
     worldspace: &str,
     mut fetch: impl FnMut(&str) -> anyhow::Result<L>,
@@ -62,7 +62,9 @@ pub fn walk_parents<L: WorldspaceLink>(
                 links.push(link);
             }
             Err(error) if !links.is_empty() => {
-                tracing::warn!("parent worldspace {key} of {worldspace}: {error:#}");
+                crate::utils::warn_once(&format!("worldspace-parent:{worldspace}:{key}"), || {
+                    format!("worldspace lineage: parent {key} of {worldspace}: {error:#}")
+                });
             }
             Err(error) => return Err(error),
         }
