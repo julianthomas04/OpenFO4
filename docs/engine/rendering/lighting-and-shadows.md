@@ -12,6 +12,19 @@ Placed lights (`local_lights/`) are handled by splitting the view into a 3D
 grid. A compute pass builds a short list of lights for each grid cell, and
 shaders read only their own cell's list, so many lights stay cheap.
 
+### Falloff
+
+A light's distance falloff is `(1 - saturate(max(C + S * x^E, x^2)))^2.2`, where
+`x` is the distance divided by the light's radius and `C`, `S`, `E` are the
+Constant, Scalar and Exponent of its LIGH record. The `x^2` term is a window
+that brings every light to 0 at its radius with zero slope. The record term can
+only remove more light than the window does. With the default `(0, 1, 2)` the two terms
+coincide. `local_light_attenuation` in `lighting.wgsl` is the reference, and
+`EffectLight::attenuation_at` mirrors the window on the CPU for effect lighting.
+
+Flicker and pulse animation, flicker movement, the XLIG End Distance Cap, gobo
+projection and god rays do not feed into the falloff.
+
 ## Shadows
 
 Sun shadows (`shadows/`) split the view into zones from near to far, each with

@@ -565,9 +565,16 @@ fn falloff_after_losing(lost: f32) -> f32 {
     (1.0 - lost.clamp(0.0, 1.0)).powf(2.2)
 }
 
+/// Falloff of a light whose record loses `record_loss`, at `distance` from a light of `radius`:
+/// the radius window `normalised^2` is a floor under the loss.
+fn windowed_falloff(record_loss: f32, distance: f32, radius: f32) -> f32 {
+    let normalised = distance / radius;
+    falloff_after_losing(record_loss.max(normalised * normalised))
+}
+
 #[test]
 #[ignore = "needs a GPU adapter"]
-fn attenuation_without_a_scalar_is_the_constant_term_alone() {
+fn attenuation_without_a_scalar_is_the_constant_term_or_the_radius_window() {
     let mut cases = Vec::new();
     let mut expected = Vec::new();
     for light in attenuation_lights()
@@ -575,11 +582,13 @@ fn attenuation_without_a_scalar_is_the_constant_term_alone() {
         .filter(|light| light.attenuation.y == 0.0)
     {
         for &fraction in &DISTANCE_FRACTIONS {
-            cases.push(Case::attenuation(
-                &light,
-                (fraction * light.radius).max(1e-4),
+            let distance = (fraction * light.radius).max(1e-4);
+            cases.push(Case::attenuation(&light, distance));
+            expected.push(windowed_falloff(
+                light.attenuation.x,
+                distance,
+                light.radius,
             ));
-            expected.push(falloff_after_losing(light.attenuation.x));
         }
     }
     for (index, (output, expected)) in run(&cases).iter().zip(expected).enumerate() {
@@ -589,14 +598,15 @@ fn attenuation_without_a_scalar_is_the_constant_term_alone() {
 
 #[test]
 #[ignore = "needs a GPU adapter"]
-fn attenuation_with_a_zero_exponent_does_not_depend_on_the_distance() {
+fn attenuation_with_a_zero_exponent_depends_on_the_distance_only_through_the_radius_window() {
     let mut cases = Vec::new();
     let mut expected = Vec::new();
     for (constant, scalar) in [(0.0, 1.0), (0.2, 0.3), (0.5, 0.25), (-0.5, 1.0), (0.0, 0.5)] {
         let light = Light::attenuated(constant, scalar, 0.0);
         for fraction in [0.1, 0.5, 0.9] {
-            cases.push(Case::attenuation(&light, fraction * light.radius));
-            expected.push(falloff_after_losing(constant + scalar));
+            let distance = fraction * light.radius;
+            cases.push(Case::attenuation(&light, distance));
+            expected.push(windowed_falloff(constant + scalar, distance, light.radius));
         }
     }
     for (index, (output, expected)) in run(&cases).iter().zip(expected).enumerate() {
@@ -616,6 +626,132 @@ fn attenuation_without_a_floor_term_falls_monotonically_with_distance() {
         values.windows(2).all(|pair| pair[1] <= pair[0]),
         "{values:?}"
     );
+}
+
+/// Attenuation triples (constant, scalar, exponent) of vanilla-like records.
+const VANILLA_ATTENUATIONS: [[f32; 3]; 10] = [
+    [0.0, 1.0, 2.0],
+    [0.0, 0.0, 0.0],
+    [0.0, 0.0, 2.0],
+    [0.0, 1.0, 0.25],
+    [0.0, 1.0, 1.0],
+    [0.0, 1.0, 22.0],
+    [0.0, 1.0, 100.0],
+    [0.1, 1.0, 0.8],
+    [0.25, 1.0, 2.0],
+    [0.3, 0.5, 1.0],
+];
+/// Slack of the comparison against a bound the shader may only reach, in falloff units.
+const EDGE_BOUND_TOLERANCE: f32 = 1e-5;
+/// Slack of a monotonicity check against rounding of the GPU's `pow`, in falloff units.
+const MONOTONICITY_TOLERANCE: f32 = 1e-6;
+
+/// Distances over the radius that close in on the radius: 1 - 2^-k for k in 1..=20.
+fn radius_approach() -> Vec<f32> {
+    (1..=20).map(|k| 1.0 - 0.5_f32.powi(k)).collect()
+}
+
+fn edge_bound_lights() -> Vec<Light> {
+    let vanilla = VANILLA_ATTENUATIONS
+        .iter()
+        .map(|&[constant, scalar, exponent]| Light::attenuated(constant, scalar, exponent));
+    attenuation_lights().into_iter().chain(vanilla).collect()
+}
+
+#[test]
+#[ignore = "needs a GPU adapter"]
+fn attenuation_never_exceeds_the_radius_window_when_approaching_the_radius() {
+    let mut cases = Vec::new();
+    let mut bounds = Vec::new();
+    for light in edge_bound_lights() {
+        for fraction in radius_approach() {
+            let distance = fraction * light.radius;
+            cases.push(Case::attenuation(&light, distance));
+            bounds.push(falloff_after_losing((distance / light.radius).powi(2)));
+        }
+    }
+    for (index, (output, bound)) in run(&cases).iter().zip(bounds).enumerate() {
+        let value = output.scalar();
+        assert!(
+            value <= bound + EDGE_BOUND_TOLERANCE,
+            "case {index}: {value} over the window {bound}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "needs a GPU adapter"]
+fn attenuation_of_the_default_triple_is_the_radius_window() {
+    let light = Light::default();
+    let fractions = (1..100)
+        .map(|step| step as f32 / 100.0)
+        .chain(radius_approach());
+    let mut cases = Vec::new();
+    let mut expected = Vec::new();
+    for fraction in fractions {
+        cases.push(Case::attenuation(&light, fraction * light.radius));
+        expected.push(falloff_after_losing(fraction * fraction));
+    }
+    for (index, (output, expected)) in run(&cases).iter().zip(expected).enumerate() {
+        assert_close(output.scalar(), expected, &format!("case {index}"));
+    }
+}
+
+#[test]
+#[ignore = "needs a GPU adapter"]
+fn attenuation_of_a_light_without_a_scalar_fades_out_towards_the_radius() {
+    const FRACTIONS: [f32; 6] = [0.75, 0.8, 0.9, 0.95, 0.99, 0.999];
+    let mut cases = Vec::new();
+    let mut lights = Vec::new();
+    for constant in [0.0, 0.25, 0.5] {
+        for exponent in [0.0, 2.0] {
+            let light = Light::attenuated(constant, 0.0, exponent);
+            for fraction in FRACTIONS {
+                cases.push(Case::attenuation(&light, fraction * light.radius));
+            }
+            lights.push((constant, exponent));
+        }
+    }
+    let outputs = run(&cases);
+    for ((constant, exponent), values) in lights.iter().zip(outputs.chunks(FRACTIONS.len())) {
+        let values: Vec<f32> = values.iter().map(Output::scalar).collect();
+        let row = format!("c={constant} e={exponent}: {values:?}");
+        assert!(values.windows(2).all(|pair| pair[1] < pair[0]), "{row}");
+        assert!(values[FRACTIONS.len() - 1] < 1e-3, "{row}");
+    }
+}
+
+#[test]
+#[ignore = "needs a GPU adapter"]
+fn attenuation_with_a_non_negative_scalar_and_exponent_never_rises_with_distance() {
+    let mut fractions = vec![1e-3, 0.01, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9];
+    fractions.extend(radius_approach());
+    fractions.sort_by(f32::total_cmp);
+    fractions.dedup();
+    let lights: Vec<Light> = attenuation_lights()
+        .into_iter()
+        .filter(|light| light.attenuation.y >= 0.0 && light.attenuation.z >= 0.0)
+        .collect();
+    let cases: Vec<Case> = lights
+        .iter()
+        .flat_map(|light| {
+            fractions
+                .iter()
+                .map(|&fraction| Case::attenuation(light, fraction * light.radius))
+        })
+        .collect();
+    let outputs = run(&cases);
+    for (light, values) in lights.iter().zip(outputs.chunks(fractions.len())) {
+        let values: Vec<f32> = values.iter().map(Output::scalar).collect();
+        assert!(
+            values
+                .windows(2)
+                .all(|pair| pair[1] <= pair[0] + MONOTONICITY_TOLERANCE),
+            "{:?} radius {}: {values:?}",
+            light.attenuation,
+            light.radius
+        );
+    }
 }
 
 const COSINE_OUTER_VALUES: [f32; 10] = [

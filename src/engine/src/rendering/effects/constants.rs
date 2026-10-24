@@ -36,7 +36,8 @@ pub const LIGHT_COUNT: usize = 4;
 
 /// Gamma the effect shaders expect authored colours and alpha to be raised to.
 const COLOUR_GAMMA: f32 = 2.2;
-/// Exponent of the light attenuation `(1 - saturate(d / r)^2)^2.2`.
+/// The 2.2 power of the radius-window falloff `(1 - (d/r)^2)^2.2`, which the object shader's
+/// local-light falloff never exceeds.
 const ATTENUATION_EXPONENT: f32 = 2.2;
 
 /// `vs_cb1[1].x` lower bound: the soft fade divides by it.
@@ -286,8 +287,9 @@ impl EffectLight {
         }
     }
 
-    /// `(1 - saturate(d / r)^2)^2.2`, times `saturate((cos - cos_half) / (1 - cos_half))^exponent`
-    /// inside a spot cone.
+    /// `(1 - saturate(d / r)^2)^2.2` (the record's attenuation triple is not applied; the object
+    /// shader's falloff never exceeds this), times
+    /// `saturate((cos - cos_half) / (1 - cos_half))^exponent` inside a spot cone.
     pub fn attenuation_at(&self, point: Vec3) -> f32 {
         if self.radius <= 0.0 {
             return 0.0;
