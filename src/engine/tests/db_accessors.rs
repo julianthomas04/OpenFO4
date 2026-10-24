@@ -9,6 +9,7 @@
 
 use openfo4::assets::db::DbClient;
 use openfo4::assets::db::schema::DbSchema;
+use openfo4::assets::db::teleports::DoorLocation;
 use openfo4::assets::db::water_placement::CellWaterHeight;
 use rusqlite::Connection;
 use rusqlite::types::Value;
@@ -1312,6 +1313,185 @@ fn teleport_into_a_cell_picks_the_lowest_source_ref() {
         "door_a"
     );
     assert!(db.get_teleport_into_cell("EXT").unwrap().is_none());
+}
+
+// ---------------------------------------------------------- walk-in doors
+
+const BOUNDS_JSON: &str = r#"{"Min":{"X":-64,"Y":-8,"Z":0},"Max":{"X":64,"Y":8,"Z":192}}"#;
+
+fn walk_in_world() -> Connection {
+    let conn = teleport_world();
+    insert(
+        &conn,
+        "doors",
+        &[
+            ("form_key", text("AUTO")),
+            ("flags", text("2")),
+            ("bounds", text(BOUNDS_JSON)),
+        ],
+    );
+    insert(
+        &conn,
+        "doors",
+        &[
+            ("form_key", text("AUTO_NO_TEXT")),
+            ("flags", text("66")),
+            ("bounds", text(BOUNDS_JSON)),
+        ],
+    );
+    insert(
+        &conn,
+        "doors",
+        &[
+            ("form_key", text("PLAIN")),
+            ("flags", text("0")),
+            ("bounds", text(BOUNDS_JSON)),
+        ],
+    );
+    conn
+}
+
+fn placed_door(
+    conn: &Connection,
+    form_key: &str,
+    cell: &str,
+    base: &str,
+    extra: &[(&'static str, Value)],
+) {
+    let mut row = placed(form_key, cell, (10.0, 20.0, 30.0));
+    let overridden =
+        |column: &str| column == "base_object" || extra.iter().any(|(name, _)| *name == column);
+    row.retain(|(column, _)| !overridden(column));
+    row.push(("base_object", text(base)));
+    row.extend(extra.iter().cloned());
+    insert(conn, "placed_objects", &row);
+    teleport(conn, form_key, "dest_int");
+}
+
+#[test]
+fn walk_in_doors_are_the_automatic_doors_with_location_pose_and_bounds() {
+    let conn = walk_in_world();
+    placed_door(
+        &conn,
+        "outdoor",
+        "EXT",
+        "AUTO",
+        &[("scale", real(1.5)), ("rotation_z", real(0.5))],
+    );
+    placed_door(&conn, "indoor", "INT", "AUTO_NO_TEXT", &[]);
+    placed_door(&conn, "ordinary", "EXT", "PLAIN", &[]);
+    let doors = client(conn).get_walk_in_doors().unwrap();
+
+    assert_eq!(doors.without_bounds, Vec::<String>::new());
+    assert_eq!(doors.doors.len(), 2);
+    let indoor = &doors.doors[0];
+    assert_eq!(indoor.source_ref, "indoor");
+    assert_eq!(
+        indoor.location,
+        DoorLocation::Interior { cell: "INT".into() }
+    );
+    let outdoor = &doors.doors[1];
+    assert_eq!(outdoor.source_ref, "outdoor");
+    assert_eq!(
+        outdoor.location,
+        DoorLocation::Exterior {
+            worldspace: "WS".into()
+        }
+    );
+    assert_eq!(outdoor.position, [10.0, 20.0, 30.0]);
+    assert_eq!(outdoor.rotation, [0.0, 0.0, 0.5]);
+    assert_eq!(outdoor.scale, 1.5);
+    assert_eq!(outdoor.bounds.min, [-64.0, -8.0, 0.0]);
+    assert_eq!(outdoor.bounds.max, [64.0, 8.0, 192.0]);
+}
+
+#[test]
+fn walk_in_doors_exclude_refs_that_start_disabled_or_hidden() {
+    let conn = walk_in_world();
+    placed_door(&conn, "on", "EXT", "AUTO", &[]);
+    placed_door(
+        &conn,
+        "disabled",
+        "EXT",
+        "AUTO",
+        &[("is_initially_disabled", int(1))],
+    );
+    placed_door(
+        &conn,
+        "hidden",
+        "EXT",
+        "AUTO",
+        &[("initially_hidden", int(1))],
+    );
+    let doors = client(conn).get_walk_in_doors().unwrap();
+    let refs: Vec<_> = doors.doors.iter().map(|d| d.source_ref.as_str()).collect();
+    assert_eq!(refs, ["on"]);
+}
+
+#[test]
+fn walk_in_doors_without_bounds_are_reported_not_defaulted() {
+    let conn = walk_in_world();
+    conn.execute("UPDATE doors SET bounds = NULL WHERE form_key = 'AUTO'", [])
+        .unwrap();
+    placed_door(&conn, "nobounds", "EXT", "AUTO", &[]);
+    placed_door(&conn, "fine", "EXT", "AUTO_NO_TEXT", &[]);
+    let doors = client(conn).get_walk_in_doors().unwrap();
+    assert_eq!(doors.without_bounds, ["nobounds"]);
+    assert_eq!(doors.doors.len(), 1);
+    assert_eq!(doors.doors[0].source_ref, "fine");
+}
+
+#[test]
+fn walk_in_doors_from_a_database_without_the_bounds_column_report_every_ref() {
+    let conn = legacy_connection(&[("doors", "bounds")]);
+    insert(
+        &conn,
+        "cells",
+        &[("form_key", text("INT")), ("is_interior", int(1))],
+    );
+    insert(
+        &conn,
+        "placed_objects",
+        &placed("dest_int", "INT", (0.0, 0.0, 0.0)),
+    );
+    insert(
+        &conn,
+        "doors",
+        &[("form_key", text("AUTO")), ("flags", text("2"))],
+    );
+    placed_door(&conn, "legacy", "INT", "AUTO", &[]);
+    let doors = client(conn).get_walk_in_doors().unwrap();
+    assert_eq!(doors.doors.len(), 0);
+    assert_eq!(doors.without_bounds, ["legacy"]);
+}
+
+#[test]
+fn walk_in_doors_with_malformed_flags_or_bounds_fail_naming_the_ref() {
+    let conn = walk_in_world();
+    conn.execute("UPDATE doors SET flags = 'x' WHERE form_key = 'PLAIN'", [])
+        .unwrap();
+    placed_door(&conn, "badflags", "EXT", "PLAIN", &[]);
+    let error = client(conn).get_walk_in_doors().err().unwrap();
+    assert!(error.to_string().contains("badflags"), "{error}");
+
+    let conn = walk_in_world();
+    conn.execute(
+        "UPDATE doors SET bounds = '{\"Min\":1}' WHERE form_key = 'AUTO'",
+        [],
+    )
+    .unwrap();
+    placed_door(&conn, "badbounds", "EXT", "AUTO", &[]);
+    let error = client(conn).get_walk_in_doors().err().unwrap();
+    assert!(error.to_string().contains("badbounds"), "{error}");
+}
+
+#[test]
+fn walk_in_doors_standing_in_an_exterior_cell_without_a_worldspace_fail_naming_the_ref() {
+    let conn = walk_in_world();
+    insert(&conn, "cells", &cell_row("ORPHAN", None, Some((0, 0))));
+    placed_door(&conn, "lost", "ORPHAN", "AUTO", &[]);
+    let error = client(conn).get_walk_in_doors().err().unwrap();
+    assert!(error.to_string().contains("lost"), "{error}");
 }
 
 // ---------------------------------------------------------- material swaps

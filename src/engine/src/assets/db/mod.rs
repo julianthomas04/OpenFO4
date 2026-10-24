@@ -378,6 +378,12 @@ impl DbClient {
         teleports::get_all(&self.conn)
     }
 
+    /// Enabled automatic load doors with their trigger volumes.
+    #[instrument(skip(self))]
+    pub fn get_walk_in_doors(&self) -> anyhow::Result<teleports::WalkInDoors> {
+        teleports::get_walk_in_doors(&self.conn, self.schema)
+    }
+
     #[instrument(skip(self))]
     pub fn get_teleport_into_cell(
         &self,
