@@ -550,17 +550,9 @@ impl PhysicsContext {
         self.interior_mode
     }
 
-    /// Whether the player may spawn/move at `grid` (the spawn ground-snap and
-    /// the per-step ready gate both consult this). In a worldspace it is the
-    /// per-cell ground-ready gate — the player only stands in cells whose collision
-    /// is installed, whether that is streamed-in LAND or, for a landless cell, its objects.
-    /// In an interior readiness is "the interior's collision is installed". The grid is
-    /// intentionally ignored in that branch: the streamer freezes its ring and
-    /// `teardown_resident` clears all residency on entry, so the ONLY cell ever resident in
-    /// interior mode is the interior itself — hence a non-empty ready set means exactly
-    /// "interior loaded", true at every grid the player roams to inside it. (Grid-keying this
-    /// would wrongly freeze movement once the player crossed out of the interior's anchor
-    /// grid in a large interior.)
+    /// Whether the player may spawn/move at `grid`: its cell's collision is installed.
+    /// Interiors ignore the grid: the interior is the only resident cell, and a large one
+    /// spans grids other than its anchor, where a per-grid check would freeze the player.
     pub fn spawn_ready(&self, grid: CellGrid) -> bool {
         if self.interior_mode {
             !self.ground_ready.is_empty()

@@ -4620,7 +4620,7 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
             let (gx, gy, worldspace) = (*gx, *gy, worldspace.as_str());
             // Built alongside the render data for full cells, packed into
             // result.colliders before every send.
-            let mut terrain_collider = TerrainCollision::Absent;
+            let mut terrain_collider;
 
             let cell = match db.get_cell(gx, gy, worldspace) {
                 Ok(c) => c,
@@ -4643,46 +4643,41 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
 
             {
                 let _span = info_span!("build_terrain").entered();
-                let landscape = terrain_landscape(db.get_landscape_at(worldspace, gx, gy), gx, gy)
-                    .unwrap_or_else(|LandscapeLookupFailed| {
-                        terrain_collider = TerrainCollision::Failed;
-                        None
-                    });
-                if let Some(landscape) = landscape {
-                    let built = if is_lod {
-                        terrain::build_cell_cpu_lod(&landscape, &shared.ltex_to_diffuse)
-                    } else {
-                        terrain::build_cell_cpu(&landscape, &shared.ltex_to_diffuse)
-                    };
-                    match built {
-                        Ok(cpu) => {
-                            if !is_lod {
-                                // Copy positions before the cpu mesh moves on:
-                                // the physics trimesh must match the render mesh
-                                // exactly. (Baked-tile UV remaps don't touch
-                                // positions, so copying here is safe.)
-                                terrain_collider = TerrainCollision::Present(TerrainColliderSpec {
-                                    vertices: cpu
-                                        .vertices
-                                        .iter()
-                                        .map(|v| Vec3::from(v.position))
-                                        .collect(),
-                                    indices: cpu.indices.as_chunks::<3>().0.to_vec(),
-                                });
-                            }
-                            result.terrain = Some(cpu);
-                        }
-                        Err(e) => {
-                            warn!("Failed to build terrain for ({}, {}): {}", gx, gy, e);
-                            terrain_collider = TerrainCollision::Failed;
-                        }
-                    }
-                    if !is_lod {
-                        result.grass =
-                            shared
-                                .grass
-                                .place(db, worldspace, &cell_form_key, &landscape);
-                    }
+                let cell_terrain = resolve_cell_terrain(
+                    db.get_landscape_at(worldspace, gx, gy),
+                    gx,
+                    gy,
+                    |landscape| {
+                        let cpu = if is_lod {
+                            terrain::build_cell_cpu_lod(landscape, &shared.ltex_to_diffuse)?
+                        } else {
+                            terrain::build_cell_cpu(landscape, &shared.ltex_to_diffuse)?
+                        };
+                        // Copy positions before the cpu mesh moves on:
+                        // the physics trimesh must match the render mesh
+                        // exactly. (Baked-tile UV remaps don't touch
+                        // positions, so copying here is safe.)
+                        let collision = if is_lod {
+                            TerrainCollision::Absent
+                        } else {
+                            TerrainCollision::Present(TerrainColliderSpec {
+                                vertices: cpu
+                                    .vertices
+                                    .iter()
+                                    .map(|v| Vec3::from(v.position))
+                                    .collect(),
+                                indices: cpu.indices.as_chunks::<3>().0.to_vec(),
+                            })
+                        };
+                        Ok((cpu, collision))
+                    },
+                );
+                terrain_collider = cell_terrain.collision;
+                result.terrain = cell_terrain.cpu;
+                if let (false, Some(landscape)) = (is_lod, &cell_terrain.landscape) {
+                    result.grass = shared
+                        .grass
+                        .place(db, worldspace, &cell_form_key, landscape);
                 }
             }
             result.grass_models = shared.grass_models.prepare(&result.grass);
@@ -4737,12 +4732,8 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
                             // Ship the terrain collider anyway: a cell that lost
                             // its objects should still be walkable ground. Without
                             // terrain the objects were the ground, so it has none.
-                            let terrain = match std::mem::take(&mut terrain_collider) {
-                                TerrainCollision::Absent => TerrainCollision::Failed,
-                                terrain => terrain,
-                            };
                             let batch = Arc::new(CellColliderBatch {
-                                terrain,
+                                terrain: std::mem::take(&mut terrain_collider).without_objects(),
                                 objects: Vec::new(),
                             });
                             result.baked_colliders = Some(bake_cell_colliders(shared, &batch));
@@ -4813,7 +4804,56 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
 }
 
 /// The LAND query for a cell failed; the failure is already logged.
+#[derive(Debug)]
 struct LandscapeLookupFailed;
+
+struct CellTerrain<C> {
+    landscape: Option<Landscape>,
+    cpu: Option<C>,
+    collision: TerrainCollision,
+}
+
+/// Looks up and builds a cell's terrain. `Absent` means legitimately landless; a failed lookup or
+/// build is `Failed`, so the cell never counts as ground-ready.
+fn resolve_cell_terrain<C>(
+    lookup: anyhow::Result<Option<Landscape>>,
+    gx: i32,
+    gy: i32,
+    build: impl FnOnce(&Landscape) -> anyhow::Result<(C, TerrainCollision)>,
+) -> CellTerrain<C> {
+    let landscape = match terrain_landscape(lookup, gx, gy) {
+        Ok(Some(landscape)) => landscape,
+        Ok(None) => {
+            return CellTerrain {
+                landscape: None,
+                cpu: None,
+                collision: TerrainCollision::Absent,
+            };
+        }
+        Err(LandscapeLookupFailed) => {
+            return CellTerrain {
+                landscape: None,
+                cpu: None,
+                collision: TerrainCollision::Failed,
+            };
+        }
+    };
+    match build(&landscape) {
+        Ok((cpu, collision)) => CellTerrain {
+            landscape: Some(landscape),
+            cpu: Some(cpu),
+            collision,
+        },
+        Err(e) => {
+            warn!("Failed to build terrain for ({gx}, {gy}): {e}");
+            CellTerrain {
+                landscape: Some(landscape),
+                cpu: None,
+                collision: TerrainCollision::Failed,
+            }
+        }
+    }
+}
 
 /// The LAND a cell's terrain is built from: `None` for a cell without LAND anywhere in its
 /// worldspace chain, which is legitimately landless, unlike a failed lookup.
@@ -6044,6 +6084,49 @@ mod tests {
             terrain_landscape(Ok(Some(landscape())), 1, 2),
             Ok(Some(_))
         ));
+    }
+
+    fn present() -> ((), TerrainCollision) {
+        (
+            (),
+            TerrainCollision::Present(TerrainColliderSpec {
+                vertices: Vec::new(),
+                indices: Vec::new(),
+            }),
+        )
+    }
+
+    #[test]
+    fn a_built_terrain_keeps_its_landscape_and_collider() {
+        let terrain = resolve_cell_terrain(Ok(Some(landscape())), 1, 2, |_| Ok(present()));
+        assert!(terrain.landscape.is_some() && terrain.cpu.is_some());
+        assert!(matches!(terrain.collision, TerrainCollision::Present(_)));
+    }
+
+    #[test]
+    fn a_landless_cell_has_absent_terrain_and_never_builds() {
+        let terrain = resolve_cell_terrain(Ok(None), 1, 2, |_| -> anyhow::Result<((), _)> {
+            panic!("built without LAND")
+        });
+        assert!(terrain.landscape.is_none() && terrain.cpu.is_none());
+        assert!(matches!(terrain.collision, TerrainCollision::Absent));
+    }
+
+    #[test]
+    fn a_failed_landscape_lookup_fails_the_terrain() {
+        let terrain =
+            resolve_cell_terrain(Err(anyhow::anyhow!("db down")), 1, 2, |_| Ok(present()));
+        assert!(terrain.landscape.is_none() && terrain.cpu.is_none());
+        assert!(matches!(terrain.collision, TerrainCollision::Failed));
+    }
+
+    #[test]
+    fn a_failed_terrain_build_fails_the_collision_but_keeps_the_landscape() {
+        let terrain = resolve_cell_terrain(Ok(Some(landscape())), 1, 2, |_| {
+            Err::<((), _), _>(anyhow::anyhow!("bad heightmap"))
+        });
+        assert!(terrain.landscape.is_some() && terrain.cpu.is_none());
+        assert!(matches!(terrain.collision, TerrainCollision::Failed));
     }
 
     #[test]

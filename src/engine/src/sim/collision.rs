@@ -156,6 +156,16 @@ pub enum TerrainCollision {
 }
 
 impl TerrainCollision {
+    /// The terrain of a cell whose objects failed to load: terrain stays walkable ground, but a
+    /// landless cell stood on its objects and so has no ground left.
+    #[must_use]
+    pub fn without_objects(self) -> Self {
+        match self {
+            Self::Absent => Self::Failed,
+            terrain => terrain,
+        }
+    }
+
     pub fn spec(&self) -> Option<&TerrainColliderSpec> {
         match self {
             Self::Present(spec) => Some(spec),
@@ -393,6 +403,28 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+
+    #[test]
+    fn a_cell_that_lost_its_objects_keeps_terrain_but_a_landless_one_has_no_ground() {
+        let terrain = || {
+            TerrainCollision::Present(TerrainColliderSpec {
+                vertices: Vec::new(),
+                indices: Vec::new(),
+            })
+        };
+        assert!(matches!(
+            terrain().without_objects(),
+            TerrainCollision::Present(_)
+        ));
+        assert!(matches!(
+            TerrainCollision::Absent.without_objects(),
+            TerrainCollision::Failed
+        ));
+        assert!(matches!(
+            TerrainCollision::Failed.without_objects(),
+            TerrainCollision::Failed
+        ));
+    }
 
     fn convert(shape: Value) -> Option<ColShape> {
         convert_shape(serde_json::from_value(shape).unwrap())
