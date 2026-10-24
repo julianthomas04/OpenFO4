@@ -127,7 +127,7 @@ pub struct PlayerDebug {
     pub vertical_vel: f32,
     pub crouching: bool,
     pub spawned: bool,
-    /// A spawn/teleport is pending a ground raycast (terrain not ready yet).
+    /// A spawn/teleport is pending a ground raycast (ground not ready yet).
     pub waiting_for_ground: bool,
     pub cell: CellGrid,
     pub cell_ready: bool,
@@ -213,7 +213,7 @@ impl SimWorld {
     /// inserted at once, so a bulk load pays no broad-phase fold per cell and
     /// no insert burst in one frame. Releasing lets the next `tick` fold every
     /// insert in one pass before any player query; the player spawn resumes
-    /// from there, still gated on its cell's terrain being resident.
+    /// from there, still gated on its cell's collision being installed.
     pub fn set_fold_hold(&mut self, hold: bool) {
         self.fold_hold = hold;
     }
@@ -447,7 +447,7 @@ impl SimWorld {
 
     /// First-person eye position, interpolated between the last two fixed
     /// steps. `None` until the player has spawned onto the ground, and again
-    /// while a teleport waits for its destination terrain: returning the
+    /// while a teleport waits for its destination collision: returning the
     /// stale pre-teleport position would snap the camera (and with it the
     /// streamer) back to the old cell, unloading the very colliders the
     /// pending ground-snap is waiting on.
@@ -1134,7 +1134,7 @@ mod tests {
         }
 
         #[test]
-        fn the_player_spawns_only_after_the_hold_is_released_and_the_terrain_is_resident() {
+        fn the_player_spawns_only_after_the_hold_is_released_and_the_collision_is_installed() {
             let mut sim = held_sim();
             sim.apply(SimCommand::SpawnPlayer { pos: SPAWN_AT });
             add_ground(&mut sim, SPAWN_GRID);
@@ -1144,7 +1144,7 @@ mod tests {
             }
             assert!(
                 !sim.player_debug().spawned,
-                "held: terrain resident but no step"
+                "held: collision installed but no step"
             );
             assert!(sim.player_eye().is_none());
             sim.set_fold_hold(false);
@@ -1156,7 +1156,7 @@ mod tests {
         }
 
         #[test]
-        fn a_release_with_terrain_still_queued_keeps_the_player_waiting_instead_of_falling() {
+        fn a_release_with_collision_still_queued_keeps_the_player_waiting_instead_of_falling() {
             let mut sim = held_sim();
             sim.apply(SimCommand::SpawnPlayer { pos: SPAWN_AT });
             add_ground(&mut sim, SPAWN_GRID);

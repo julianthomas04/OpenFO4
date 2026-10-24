@@ -12,6 +12,7 @@ use crate::anim::{AnimationRig, JointIndex};
 use crate::assets::AssetServer;
 use crate::assets::db::DbClient;
 use crate::assets::db::addon_nodes::AddonNodes;
+use crate::assets::db::landscapes::Landscape;
 use crate::assets::db::lights::Light;
 use crate::assets::db::material_swaps::SwapEntry;
 use crate::assets::db::placed_objects::PlacedObject;
@@ -73,7 +74,7 @@ mod one_shot;
 use crate::shared_cache::SharedCache;
 use crate::sim::collision::{
     CellColliderBatch, CollisionMeta, ObjectColliderGroup, PartShape, Placement, SidecarData,
-    TerrainColliderSpec, load_manifest, load_sidecar_file, manifest_key,
+    TerrainColliderSpec, TerrainCollision, load_manifest, load_sidecar_file, manifest_key,
 };
 use crate::sim::{EntityId, SimCommand, refr_entity_id};
 use crate::water_world::{LoadedCell, VolumeShapes};
@@ -4049,7 +4050,7 @@ struct WorkerShared {
     bake_cache: crate::sim::bake::ShapeBakeCache,
     /// Baked terrain-LOD tile lookups, memoized for the pool's lifetime: one
     /// DB round-trip per worldspace and one fs metadata call per tile.
-    ws_editor_ids: Mutex<HashMap<String, Option<String>>>,
+    ws_editor_ids: Mutex<HashMap<String, Vec<String>>>,
     tile_exists: Mutex<HashMap<String, bool>>,
     /// Worldspace persistent REFRs (WRLD.TopCell) are unreachable through
     /// the grid query — loaded once per worldspace, bucketed by the grid
@@ -4619,7 +4620,7 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
             let (gx, gy, worldspace) = (*gx, *gy, worldspace.as_str());
             // Built alongside the render data for full cells, packed into
             // result.colliders before every send.
-            let mut terrain_collider: Option<TerrainColliderSpec> = None;
+            let mut terrain_collider;
 
             let cell = match db.get_cell(gx, gy, worldspace) {
                 Ok(c) => c,
@@ -4642,38 +4643,41 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
 
             {
                 let _span = info_span!("build_terrain").entered();
-                if let Ok(landscape) = db.get_landscape(&cell_form_key, gx, gy) {
-                    let built = if is_lod {
-                        terrain::build_cell_cpu_lod(&landscape, &shared.ltex_to_diffuse)
-                    } else {
-                        terrain::build_cell_cpu(&landscape, &shared.ltex_to_diffuse)
-                    };
-                    match built {
-                        Ok(cpu) => {
-                            if !is_lod {
-                                // Copy positions before the cpu mesh moves on:
-                                // the physics trimesh must match the render mesh
-                                // exactly. (Baked-tile UV remaps don't touch
-                                // positions, so copying here is safe.)
-                                terrain_collider = Some(TerrainColliderSpec {
-                                    vertices: cpu
-                                        .vertices
-                                        .iter()
-                                        .map(|v| Vec3::from(v.position))
-                                        .collect(),
-                                    indices: cpu.indices.as_chunks::<3>().0.to_vec(),
-                                });
-                            }
-                            result.terrain = Some(cpu);
-                        }
-                        Err(e) => warn!("Failed to build terrain for ({}, {}): {}", gx, gy, e),
-                    }
-                    if !is_lod {
-                        result.grass =
-                            shared
-                                .grass
-                                .place(db, worldspace, &cell_form_key, &landscape);
-                    }
+                let cell_terrain = resolve_cell_terrain(
+                    db.get_landscape_at(worldspace, gx, gy),
+                    gx,
+                    gy,
+                    |landscape| {
+                        let cpu = if is_lod {
+                            terrain::build_cell_cpu_lod(landscape, &shared.ltex_to_diffuse)?
+                        } else {
+                            terrain::build_cell_cpu(landscape, &shared.ltex_to_diffuse)?
+                        };
+                        // Copy positions before the cpu mesh moves on:
+                        // the physics trimesh must match the render mesh
+                        // exactly. (Baked-tile UV remaps don't touch
+                        // positions, so copying here is safe.)
+                        let collision = if is_lod {
+                            TerrainCollision::Absent
+                        } else {
+                            TerrainCollision::Present(TerrainColliderSpec {
+                                vertices: cpu
+                                    .vertices
+                                    .iter()
+                                    .map(|v| Vec3::from(v.position))
+                                    .collect(),
+                                indices: cpu.indices.as_chunks::<3>().0.to_vec(),
+                            })
+                        };
+                        Ok((cpu, collision))
+                    },
+                );
+                terrain_collider = cell_terrain.collision;
+                result.terrain = cell_terrain.cpu;
+                if let (false, Some(landscape)) = (is_lod, &cell_terrain.landscape) {
+                    result.grass = shared
+                        .grass
+                        .place(db, worldspace, &cell_form_key, landscape);
                 }
             }
             result.grass_models = shared.grass_models.prepare(&result.grass);
@@ -4686,33 +4690,34 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
             if let Some(cpu) = result.terrain.as_mut() {
                 let unpainted = cpu.texture_paths.iter().all(std::option::Option::is_none);
                 if is_lod || unpainted {
-                    let editor_id = shared
+                    let editor_ids = shared
                         .ws_editor_ids
                         .lock()
                         .unwrap()
                         .entry(worldspace.to_string())
-                        .or_insert_with(|| {
-                            db.get_worldspace(worldspace).ok().and_then(|w| w.editor_id)
-                        })
+                        .or_insert_with(|| baked_tile_editor_ids(db, worldspace))
                         .clone();
-                    if let Some(eid) = editor_id {
-                        let tx = terrain::baked_tile_coord(gx);
-                        let ty = terrain::baked_tile_coord(gy);
-                        // Single construction site: this string is also the
-                        // texture cache/refcount key on the main thread.
-                        let rel = format!("{TEXTURES_DIR}/Terrain/{eid}/{eid}.4.{tx}.{ty}.DDS");
-                        let exists = *shared
-                            .tile_exists
-                            .lock()
-                            .unwrap()
-                            .entry(rel.clone())
-                            .or_insert_with(|| {
-                                std::path::Path::new(&format!("{}/{rel}", shared.asset_root))
-                                    .is_file()
-                            });
-                        if exists {
-                            terrain::apply_baked_tile_uvs(cpu, rel);
-                        }
+                    let tx = terrain::baked_tile_coord(gx);
+                    let ty = terrain::baked_tile_coord(gy);
+                    // Single construction site: this string is also the
+                    // texture cache/refcount key on the main thread.
+                    let tile = first_existing_baked_tile(
+                        &editor_ids,
+                        |eid| format!("{TEXTURES_DIR}/Terrain/{eid}/{eid}.4.{tx}.{ty}.DDS"),
+                        |rel| {
+                            *shared
+                                .tile_exists
+                                .lock()
+                                .unwrap()
+                                .entry(rel.to_owned())
+                                .or_insert_with(|| {
+                                    std::path::Path::new(&format!("{}/{rel}", shared.asset_root))
+                                        .is_file()
+                                })
+                        },
+                    );
+                    if let Some(rel) = tile {
+                        terrain::apply_baked_tile_uvs(cpu, rel);
                     }
                 }
             }
@@ -4725,9 +4730,10 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
                         warn!("Failed to load placed objects for ({}, {}): {}", gx, gy, e);
                         if !is_lod {
                             // Ship the terrain collider anyway: a cell that lost
-                            // its objects should still be walkable ground.
+                            // its objects should still be walkable ground. Without
+                            // terrain the objects were the ground, so it has none.
                             let batch = Arc::new(CellColliderBatch {
-                                terrain: terrain_collider.take(),
+                                terrain: std::mem::take(&mut terrain_collider).without_objects(),
                                 objects: Vec::new(),
                             });
                             result.baked_colliders = Some(bake_cell_colliders(shared, &batch));
@@ -4787,7 +4793,7 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
                 &mut result,
                 placed_objects.iter(),
                 placed_objects.len(),
-                None,
+                TerrainCollision::Absent,
                 false,
                 shared,
             );
@@ -4795,6 +4801,106 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
     }
 
     wrap(result)
+}
+
+/// The LAND query for a cell failed; the failure is already logged.
+#[derive(Debug)]
+struct LandscapeLookupFailed;
+
+struct CellTerrain<C> {
+    landscape: Option<Landscape>,
+    cpu: Option<C>,
+    collision: TerrainCollision,
+}
+
+/// Looks up and builds a cell's terrain. `Absent` means legitimately landless; a failed lookup or
+/// build is `Failed`, so the cell never counts as ground-ready.
+fn resolve_cell_terrain<C>(
+    lookup: anyhow::Result<Option<Landscape>>,
+    gx: i32,
+    gy: i32,
+    build: impl FnOnce(&Landscape) -> anyhow::Result<(C, TerrainCollision)>,
+) -> CellTerrain<C> {
+    let landscape = match terrain_landscape(lookup, gx, gy) {
+        Ok(Some(landscape)) => landscape,
+        Ok(None) => {
+            return CellTerrain {
+                landscape: None,
+                cpu: None,
+                collision: TerrainCollision::Absent,
+            };
+        }
+        Err(LandscapeLookupFailed) => {
+            return CellTerrain {
+                landscape: None,
+                cpu: None,
+                collision: TerrainCollision::Failed,
+            };
+        }
+    };
+    match build(&landscape) {
+        Ok((cpu, collision)) => CellTerrain {
+            landscape: Some(landscape),
+            cpu: Some(cpu),
+            collision,
+        },
+        Err(e) => {
+            warn!("Failed to build terrain for ({gx}, {gy}): {e}");
+            CellTerrain {
+                landscape: Some(landscape),
+                cpu: None,
+                collision: TerrainCollision::Failed,
+            }
+        }
+    }
+}
+
+/// The LAND a cell's terrain is built from: `None` for a cell without LAND anywhere in its
+/// worldspace chain, which is legitimately landless, unlike a failed lookup.
+fn terrain_landscape(
+    lookup: anyhow::Result<Option<Landscape>>,
+    gx: i32,
+    gy: i32,
+) -> Result<Option<Landscape>, LandscapeLookupFailed> {
+    lookup.map_err(|error| {
+        warn!("Failed to look up the landscape of ({gx}, {gy}): {error:#}");
+        LandscapeLookupFailed
+    })
+}
+
+/// The editor ids whose baked terrain tile folders can texture a worldspace, preferred first: its
+/// own, then that of the worldspace whose LOD data it uses (a child worldspace may ship no tiles).
+fn baked_tile_editor_ids(db: &DbClient, worldspace: &str) -> Vec<String> {
+    let lod_owner = db.lod_data_owner(worldspace).unwrap_or_else(|error| {
+        warn!("No LOD data owner for worldspace {worldspace}: {error:#}");
+        worldspace.to_owned()
+    });
+    let mut form_keys = vec![worldspace];
+    if lod_owner != worldspace {
+        form_keys.push(&lod_owner);
+    }
+    form_keys
+        .into_iter()
+        .filter_map(|form_key| match db.get_worldspace(form_key) {
+            Ok(worldspace) => worldspace.editor_id,
+            Err(error) => {
+                warn!("No editor id for worldspace {form_key}: {error:#}");
+                None
+            }
+        })
+        .collect()
+}
+
+/// The first baked tile, in editor id preference order, that exists.
+fn first_existing_baked_tile(
+    editor_ids: &[String],
+    tile_key: impl Fn(&str) -> String,
+    mut exists: impl FnMut(&str) -> bool,
+) -> Option<String> {
+    editor_ids
+        .iter()
+        .map(|editor_id| tile_key(editor_id))
+        .find(|key| exists(key))
 }
 
 /// Decodes and builds the navigation meshes of one cell on the worker. A cell whose query fails
@@ -4872,13 +4978,13 @@ fn expand_weapon_refr(
 /// the caller has already set `result.grid` and `result.terrain`; this fills
 /// `meshes`, `colliders`, `baked_colliders`, and `textures`. `is_lod` selects
 /// LOD mesh variants and suppresses collision (distant shells never collide);
-/// `terrain_collider` is the caller's prebuilt terrain trimesh, packed into the
-/// collision batch (always `None` for interiors and LOD).
+/// `terrain_collider` is the caller's prebuilt terrain trimesh state, packed into the
+/// collision batch (always `Absent` for interiors and LOD).
 fn assemble_cell_payload<'a>(
     result: &mut CellLoadResult,
     placements: impl Iterator<Item = &'a PlacedObject>,
     placement_count: usize,
-    mut terrain_collider: Option<TerrainColliderSpec>,
+    terrain_collider: TerrainCollision,
     is_lod: bool,
     shared: &WorkerShared,
 ) {
@@ -5124,7 +5230,7 @@ fn assemble_cell_payload<'a>(
                 }
             }
             let batch = Arc::new(CellColliderBatch {
-                terrain: terrain_collider.take(),
+                terrain: terrain_collider,
                 objects,
             });
             {
@@ -5929,6 +6035,108 @@ mod tests {
     use bytemuck::Zeroable;
 
     use super::*;
+
+    fn landscape() -> Landscape {
+        Landscape {
+            form_key: None,
+            editor_id: None,
+            cell: "cell".to_owned(),
+            grid_x: 1,
+            grid_y: 2,
+            vertex_height_map: Vec::new(),
+            vertex_colors: None,
+            layers: None,
+            flags: None,
+        }
+    }
+
+    #[test]
+    fn a_worldspace_with_its_own_baked_tile_keeps_it_over_its_lod_owners() {
+        let ids = ["Own".to_owned(), "Owner".to_owned()];
+        let tile = first_existing_baked_tile(&ids, |id| format!("{id}.dds"), |_| true);
+        assert_eq!(tile.as_deref(), Some("Own.dds"));
+    }
+
+    #[test]
+    fn a_worldspace_without_its_own_baked_tile_falls_back_to_its_lod_owners() {
+        let ids = ["Own".to_owned(), "Owner".to_owned()];
+        let tile =
+            first_existing_baked_tile(&ids, |id| format!("{id}.dds"), |key| key == "Owner.dds");
+        assert_eq!(tile.as_deref(), Some("Owner.dds"));
+    }
+
+    #[test]
+    fn a_worldspace_without_any_baked_tile_gets_none() {
+        let ids = ["Own".to_owned(), "Owner".to_owned()];
+        assert_eq!(
+            first_existing_baked_tile(&ids, |id| format!("{id}.dds"), |_| false),
+            None
+        );
+        assert_eq!(
+            first_existing_baked_tile(&[], std::borrow::ToOwned::to_owned, |_| true),
+            None
+        );
+    }
+
+    #[test]
+    fn terrain_is_built_only_from_a_landscape_that_was_found() {
+        assert!(matches!(
+            terrain_landscape(Ok(Some(landscape())), 1, 2),
+            Ok(Some(_))
+        ));
+    }
+
+    fn present() -> ((), TerrainCollision) {
+        (
+            (),
+            TerrainCollision::Present(TerrainColliderSpec {
+                vertices: Vec::new(),
+                indices: Vec::new(),
+            }),
+        )
+    }
+
+    #[test]
+    fn a_built_terrain_keeps_its_landscape_and_collider() {
+        let terrain = resolve_cell_terrain(Ok(Some(landscape())), 1, 2, |_| Ok(present()));
+        assert!(terrain.landscape.is_some() && terrain.cpu.is_some());
+        assert!(matches!(terrain.collision, TerrainCollision::Present(_)));
+    }
+
+    #[test]
+    fn a_landless_cell_has_absent_terrain_and_never_builds() {
+        let terrain = resolve_cell_terrain(Ok(None), 1, 2, |_| -> anyhow::Result<((), _)> {
+            panic!("built without LAND")
+        });
+        assert!(terrain.landscape.is_none() && terrain.cpu.is_none());
+        assert!(matches!(terrain.collision, TerrainCollision::Absent));
+    }
+
+    #[test]
+    fn a_failed_landscape_lookup_fails_the_terrain() {
+        let terrain =
+            resolve_cell_terrain(Err(anyhow::anyhow!("db down")), 1, 2, |_| Ok(present()));
+        assert!(terrain.landscape.is_none() && terrain.cpu.is_none());
+        assert!(matches!(terrain.collision, TerrainCollision::Failed));
+    }
+
+    #[test]
+    fn a_failed_terrain_build_fails_the_collision_but_keeps_the_landscape() {
+        let terrain = resolve_cell_terrain(Ok(Some(landscape())), 1, 2, |_| {
+            Err::<((), _), _>(anyhow::anyhow!("bad heightmap"))
+        });
+        assert!(terrain.landscape.is_some() && terrain.cpu.is_none());
+        assert!(matches!(terrain.collision, TerrainCollision::Failed));
+    }
+
+    #[test]
+    fn a_missing_landscape_is_told_apart_from_a_failed_lookup() {
+        assert!(matches!(terrain_landscape(Ok(None), 1, 2), Ok(None)));
+        assert!(matches!(
+            terrain_landscape(Err(anyhow::anyhow!("db down")), 1, 2),
+            Err(LandscapeLookupFailed)
+        ));
+    }
 
     #[test]
     fn the_music_place_agrees_with_the_grid_cell_and_converts_the_point_to_bethesda_units() {

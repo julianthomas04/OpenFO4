@@ -578,7 +578,7 @@ mod tests {
     use super::*;
     use crate::sim::FIXED_DT;
     use crate::sim::SimWorld;
-    use crate::sim::collision::{CellColliderBatch, ColShape, PartShape};
+    use crate::sim::collision::{CellColliderBatch, ColShape, PartShape, TerrainCollision};
     use crate::sim::commands::SimCommand;
     use crate::sim::physics::test_support::{
         bake, box_shape, ground_batch, object_group, placement,
@@ -631,7 +631,20 @@ mod tests {
 
     /// A flat world with `props` registered in cell (0, 0).
     fn world_with(props: &[Prop]) -> SimWorld {
-        let mut batch: CellColliderBatch = ground_batch();
+        world_in(ground_batch(), props)
+    }
+
+    /// A world whose cell (0, 0) has no terrain: its floor is an object.
+    fn landless_world() -> SimWorld {
+        let floor = prop_box(
+            "meshes\\floor.glb",
+            Vec3::new(200.0, -0.5, -100.0),
+            Vec3::new(150.0, 0.5, 150.0),
+        );
+        world_in(CellColliderBatch::default(), &[floor])
+    }
+
+    fn world_in(mut batch: CellColliderBatch, props: &[Prop]) -> SimWorld {
         for (index, prop) in props.iter().enumerate() {
             let ref_key = format!("{:06X}:Fallout4.esm", 0x0A_0000 + index);
             batch.objects.push(object_group(
@@ -756,7 +769,7 @@ mod tests {
     }
 
     #[test]
-    fn a_spawn_waits_until_the_destination_terrain_is_resident() {
+    fn a_spawn_waits_until_the_destination_collision_is_installed() {
         let mut sim = SimWorld::new(PlayerMovement::default());
         sim.apply(SimCommand::SpawnPlayer { pos: SPAWN_AT });
         tick(&mut sim, 5);
@@ -770,6 +783,61 @@ mod tests {
         });
         tick(&mut sim, 2);
         assert!(sim.player_debug().spawned);
+    }
+
+    #[test]
+    fn a_spawn_in_a_cell_without_terrain_stands_on_its_object_floor() {
+        let sim = spawned_at(landless_world(), SPAWN_AT);
+        let debug = sim.player_debug();
+        assert!(debug.spawned && debug.grounded);
+        assert!(
+            (debug.pos.y - STANDING_CENTER_HEIGHT).abs() < 0.01,
+            "{}",
+            debug.pos.y
+        );
+    }
+
+    #[test]
+    fn walking_in_a_cell_without_terrain_is_not_frozen_by_the_ready_gate() {
+        let mut sim = spawned_at(landless_world(), SPAWN_AT);
+        let start = position(&sim);
+        hold(&mut sim, walking(0.0));
+        tick(&mut sim, 60);
+        let moved = position(&sim) - start;
+        assert!(
+            moved.x > PlayerMovement::default().run_speed * 0.5,
+            "moved {moved}"
+        );
+    }
+
+    #[test]
+    fn a_teleport_in_a_cell_without_terrain_snaps_onto_the_object_floor() {
+        let mut sim = spawned_at(landless_world(), SPAWN_AT);
+        sim.apply(SimCommand::TeleportPlayer {
+            pos: Vec3::new(50.0, 80.0, -50.0),
+        });
+        tick(&mut sim, 2);
+        let debug = sim.player_debug();
+        assert!(debug.spawned && !debug.waiting_for_ground);
+        assert_eq!((debug.pos.x, debug.pos.z), (50.0, -50.0));
+        assert!((debug.pos.y - STANDING_CENTER_HEIGHT).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_spawn_waits_forever_for_a_cell_whose_terrain_failed_to_build() {
+        let mut sim = SimWorld::new(PlayerMovement::default());
+        sim.apply(SimCommand::SpawnPlayer { pos: SPAWN_AT });
+        sim.apply(SimCommand::AddCellColliders {
+            grid: (0, 0),
+            batch: Arc::new(CellColliderBatch {
+                terrain: TerrainCollision::Failed,
+                objects: Vec::new(),
+            }),
+            baked: None,
+        });
+        tick(&mut sim, 30);
+        let debug = sim.player_debug();
+        assert!(!debug.spawned && debug.waiting_for_ground);
     }
 
     #[test]

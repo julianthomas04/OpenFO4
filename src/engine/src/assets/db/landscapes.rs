@@ -1,3 +1,5 @@
+use rusqlite::OptionalExtension;
+
 use crate::assets::db::cells::Cell;
 
 pub struct Landscape {
@@ -13,29 +15,60 @@ pub struct Landscape {
 }
 
 impl Landscape {
+    /// Column list shared by every query feeding [`from_row`], whose positional
+    /// `row.get(0..6)` must stay aligned with this order.
+    const COLUMNS: &'static str =
+        "form_key, editor_id, cell, vertex_height_map, vertex_colors, layers, flags";
+
+    fn from_row(row: &rusqlite::Row, grid_x: i32, grid_y: i32) -> rusqlite::Result<Self> {
+        Ok(Self {
+            form_key: row.get(0)?,
+            editor_id: row.get(1)?,
+            cell: row.get(2)?,
+            grid_x,
+            grid_y,
+            vertex_height_map: row.get(3)?,
+            vertex_colors: row.get(4)?,
+            layers: row.get(5)?,
+            flags: row.get(6)?,
+        })
+    }
+
     pub fn get(
         cell: &str,
         grid_x: i32,
         grid_y: i32,
         conn: &rusqlite::Connection,
     ) -> anyhow::Result<Self> {
-        let mut stmt = conn.prepare_cached(
-            "SELECT form_key, editor_id, cell, vertex_height_map, vertex_colors, layers, flags
-             FROM landscapes WHERE cell = ?",
-        )?;
+        let mut stmt = conn.prepare_cached(&format!(
+            "SELECT {} FROM landscapes WHERE cell = ?",
+            Self::COLUMNS
+        ))?;
         Ok(stmt.query_row(rusqlite::params![cell], |row| {
-            Ok(Self {
-                form_key: row.get(0)?,
-                editor_id: row.get(1)?,
-                cell: row.get(2)?,
-                grid_x,
-                grid_y,
-                vertex_height_map: row.get(3)?,
-                vertex_colors: row.get(4)?,
-                layers: row.get(5)?,
-                flags: row.get(6)?,
-            })
+            Self::from_row(row, grid_x, grid_y)
         })?)
+    }
+
+    /// The LAND of the exterior grid cell of a worldspace itself, `None` when the
+    /// cell has none. The worldspace persistent cell is no grid cell.
+    pub fn get_in_worldspace(
+        worldspace: &str,
+        grid_x: i32,
+        grid_y: i32,
+        conn: &rusqlite::Connection,
+    ) -> anyhow::Result<Option<Self>> {
+        let mut stmt = conn.prepare_cached(
+            "SELECT l.form_key, l.editor_id, l.cell, l.vertex_height_map, l.vertex_colors,
+                    l.layers, l.flags
+             FROM landscapes l JOIN cells c ON c.form_key = l.cell
+             WHERE c.worldspace = ? AND c.grid_x = ? AND c.grid_y = ?
+               AND COALESCE(c.is_worldspace_persistent_cell, 0) = 0",
+        )?;
+        Ok(stmt
+            .query_row(rusqlite::params![worldspace, grid_x, grid_y], |row| {
+                Self::from_row(row, grid_x, grid_y)
+            })
+            .optional()?)
     }
 
     pub fn get_for_cells(cells: &[Cell], conn: &rusqlite::Connection) -> anyhow::Result<Vec<Self>> {
@@ -56,8 +89,8 @@ impl Landscape {
 
         let placeholders: String = keys.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!(
-            "SELECT form_key, editor_id, cell, vertex_height_map, vertex_colors, layers, flags
-             FROM landscapes WHERE cell IN ({placeholders})"
+            "SELECT {} FROM landscapes WHERE cell IN ({placeholders})",
+            Self::COLUMNS
         );
 
         let mut stmt = conn.prepare(&sql)?;
@@ -73,17 +106,7 @@ impl Landscape {
             .query_map(params.as_slice(), |row| {
                 let cell_fk: String = row.get(2)?;
                 let (gx, gy) = grid_lookup.get(cell_fk.as_str()).copied().unwrap_or((0, 0));
-                Ok(Self {
-                    form_key: row.get(0)?,
-                    editor_id: row.get(1)?,
-                    cell: cell_fk,
-                    grid_x: gx,
-                    grid_y: gy,
-                    vertex_height_map: row.get(3)?,
-                    vertex_colors: row.get(4)?,
-                    layers: row.get(5)?,
-                    flags: row.get(6)?,
-                })
+                Self::from_row(row, gx, gy)
             })?
             .collect::<Result<Vec<_>, _>>()?)
     }

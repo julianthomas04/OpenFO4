@@ -21,6 +21,7 @@ use super::lod::LodWater;
 use super::volume::PlacedWaterVolume;
 use crate::assets::db::DbClient;
 use crate::assets::db::water_placement::CellWater;
+use crate::assets::db::worldspace_lineage::walk_parents;
 use crate::bethesda_space::{
     UNITS_FROM_ENGINE, UNITS_TO_ENGINE, axes_to_engine, position_from_engine,
 };
@@ -35,9 +36,6 @@ pub fn exterior_cell_of(game: Vec3) -> (i32, i32) {
         (game.y / CELL_SIZE).floor() as i32,
     )
 }
-
-/// A worldspace parent chain this long is a cycle in the data.
-const MAX_WORLDSPACE_DEPTH: usize = 8;
 
 /// The water world's place: what the streamer has loaded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -395,28 +393,12 @@ pub fn worldspace_default_water_height(db: &DbClient, worldspace: &str) -> anyho
 }
 
 fn load_chain(db: &DbClient, worldspace: &str) -> anyhow::Result<WorldspaceChain> {
-    let mut records = Vec::new();
-    let mut seen = HashSet::new();
-    let mut next = Some(worldspace.to_owned());
-    while let Some(key) = next.take() {
-        anyhow::ensure!(
-            seen.insert(key.clone()) && seen.len() <= MAX_WORLDSPACE_DEPTH,
-            "worldspace parent chain of {worldspace} loops at {key}"
-        );
-        match db.get_worldspace_water(&key) {
-            Ok(water) => {
-                let record = WorldspaceWaterRecord::from_db(&key, water);
-                next.clone_from(&record.parent);
-                records.push(record);
-            }
-            // The worldspace itself must exist; a missing parent only ends
-            // the chain.
-            Err(error) if !records.is_empty() => {
-                tracing::warn!("water world: parent worldspace {key} of {worldspace}: {error:#}");
-            }
-            Err(error) => return Err(error),
-        }
-    }
+    let records = walk_parents(worldspace, |key| {
+        Ok(WorldspaceWaterRecord::from_db(
+            key,
+            db.get_worldspace_water(key)?,
+        ))
+    })?;
     Ok(WorldspaceChain::new(records))
 }
 

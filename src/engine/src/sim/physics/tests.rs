@@ -10,11 +10,11 @@ use serde_json::json;
 
 use super::test_support::{
     GROUND_CELL, NEIGHBOUR_CELL, bake, box_shape, box_shape_posed, ground_batch, object_group,
-    part_placement, part_placement_posed, placement, run_ticks, wake_context,
+    part_placement, part_placement_posed, placement, run_ticks, terrain_mut, wake_context,
 };
 use super::*;
 use crate::footsteps::events::SurfaceMaterial;
-use crate::sim::collision::{CellColliderBatch, PartLocal, PartShape};
+use crate::sim::collision::{CellColliderBatch, PartLocal, PartShape, TerrainCollision};
 
 const CRATE_PATH: &str = "meshes\\crate.glb";
 const CRATE_REF: &str = "0A0001:Fallout4.esm";
@@ -569,14 +569,14 @@ fn a_static_world_needs_no_steps_once_its_colliders_are_folded() {
 #[test]
 fn a_cell_whose_terrain_indexes_past_its_vertices_gets_no_ground_and_does_not_panic() {
     let mut batch = ground_batch();
-    batch.terrain.as_mut().unwrap().indices[1] = [0, 2, 17];
+    terrain_mut(&mut batch).indices[1] = [0, 2, 17];
     let mut context = wake_context();
     context.add_cell(GROUND_CELL, &batch, None);
     assert!(!context.spawn_ready(GROUND_CELL));
 }
 
 #[test]
-fn spawn_readiness_follows_the_terrain_of_the_cell() {
+fn spawn_readiness_follows_the_installed_ground_of_the_cell() {
     let mut context = wake_context();
     assert!(!context.spawn_ready(GROUND_CELL));
     context.add_cell(GROUND_CELL, &ground_batch(), None);
@@ -585,8 +585,48 @@ fn spawn_readiness_follows_the_terrain_of_the_cell() {
     context.set_interior_mode(true);
     assert!(
         context.spawn_ready((99, 99)),
-        "interior mode only asks for resident colliders"
+        "interior mode only asks for an installed cell"
     );
+}
+
+#[test]
+fn a_cell_without_terrain_is_ready_once_installed() {
+    let mut context = wake_context();
+    let landless = CellColliderBatch {
+        terrain: TerrainCollision::Absent,
+        objects: Vec::new(),
+    };
+    context.add_cell(GROUND_CELL, &landless, None);
+    assert!(context.spawn_ready(GROUND_CELL));
+    assert!(!context.spawn_ready(NEIGHBOUR_CELL));
+}
+
+#[test]
+fn a_cell_whose_terrain_failed_to_build_is_never_ready() {
+    let mut context = wake_context();
+    let failed = CellColliderBatch {
+        terrain: TerrainCollision::Failed,
+        objects: Vec::new(),
+    };
+    context.add_cell(GROUND_CELL, &failed, None);
+    assert!(!context.spawn_ready(GROUND_CELL));
+}
+
+#[test]
+fn removing_a_cell_withdraws_its_readiness() {
+    let mut context = wake_context();
+    context.add_cell(GROUND_CELL, &CellColliderBatch::default(), None);
+    context.remove_cell(GROUND_CELL);
+    assert!(!context.spawn_ready(GROUND_CELL));
+}
+
+#[test]
+fn interior_readiness_needs_an_installed_cell_but_ignores_the_grid() {
+    let mut context = wake_context();
+    context.set_interior_mode(true);
+    assert!(!context.spawn_ready((99, 99)));
+    context.add_cell(GROUND_CELL, &CellColliderBatch::default(), None);
+    assert!(context.spawn_ready((99, 99)));
 }
 
 #[test]

@@ -144,9 +144,39 @@ pub struct TerrainColliderSpec {
     pub indices: Vec<[u32; 3]>,
 }
 
+/// How a cell's ground is represented in its collision batch. `Absent` is a cell with no LAND
+/// anywhere in its worldspace chain (or an interior): its ground, if any, is its objects.
+/// `Failed` is a cell whose LAND exists but could not be turned into a mesh.
+#[derive(Default)]
+pub enum TerrainCollision {
+    Present(TerrainColliderSpec),
+    #[default]
+    Absent,
+    Failed,
+}
+
+impl TerrainCollision {
+    /// The terrain of a cell whose objects failed to load: terrain stays walkable ground, but a
+    /// landless cell stood on its objects and so has no ground left.
+    #[must_use]
+    pub fn without_objects(self) -> Self {
+        match self {
+            Self::Absent => Self::Failed,
+            terrain => terrain,
+        }
+    }
+
+    pub fn spec(&self) -> Option<&TerrainColliderSpec> {
+        match self {
+            Self::Present(spec) => Some(spec),
+            Self::Absent | Self::Failed => None,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct CellColliderBatch {
-    pub terrain: Option<TerrainColliderSpec>,
+    pub terrain: TerrainCollision,
     pub objects: Vec<ObjectColliderGroup>,
 }
 
@@ -373,6 +403,28 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+
+    #[test]
+    fn a_cell_that_lost_its_objects_keeps_terrain_but_a_landless_one_has_no_ground() {
+        let terrain = || {
+            TerrainCollision::Present(TerrainColliderSpec {
+                vertices: Vec::new(),
+                indices: Vec::new(),
+            })
+        };
+        assert!(matches!(
+            terrain().without_objects(),
+            TerrainCollision::Present(_)
+        ));
+        assert!(matches!(
+            TerrainCollision::Absent.without_objects(),
+            TerrainCollision::Failed
+        ));
+        assert!(matches!(
+            TerrainCollision::Failed.without_objects(),
+            TerrainCollision::Failed
+        ));
+    }
 
     fn convert(shape: Value) -> Option<ColShape> {
         convert_shape(serde_json::from_value(shape).unwrap())
