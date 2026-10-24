@@ -641,6 +641,7 @@ namespace AssetConverter
             ("collision_layers", "layer_index", "INTEGER"),
             ("collision_layers", "flags", "INTEGER"),
             ("collision_layers", "collides_with", "TEXT"),
+            ("doors", "bounds", "TEXT"),
         };
 
         private async Task AddColumnIfMissingAsync(string table, string column, string type)
@@ -888,6 +889,9 @@ namespace AssetConverter
                 return null;
             }
         }
+
+        protected string? SerializeObjectBounds(IObjectBoundsGetter? bounds) =>
+            SafeSerialize(bounds == null ? null : ObjectBoundsJson.From(bounds), "ObjectBounds");
 
         protected int TotalProcessed { get; set; }
 
@@ -2399,6 +2403,16 @@ namespace AssetConverter
         }
     }
 
+    internal static class ObjectBoundsJson
+    {
+        internal readonly record struct Point(short X, short Y, short Z);
+        internal readonly record struct Box(Point Min, Point Max);
+
+        internal static Box From(IObjectBoundsGetter bounds) => new(
+            new Point(bounds.First.X, bounds.First.Y, bounds.First.Z),
+            new Point(bounds.Second.X, bounds.Second.Y, bounds.Second.Z));
+    }
+
     public class CollisionLayerProcessor : BaseRecordProcessor<ICollisionLayerGetter>
     {
         protected override async Task ProcessSpecificRecordAsync(ICollisionLayerGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
@@ -2439,11 +2453,7 @@ namespace AssetConverter
                 INSERT OR REPLACE INTO statics (form_key, editor_id, model_path, material_object, has_distant_lod, bounds, alternate_textures, is_marker)
                 VALUES (@FormKey, @EditorId, @ModelPath, @MaterialObject, @HasDistantLOD, @Bounds, @AlternateTextures, @IsMarker)";
 
-            string? bounds = SafeSerialize(record.ObjectBounds == null ? null : new
-            {
-                Min = new { record.ObjectBounds.First.X, record.ObjectBounds.First.Y, record.ObjectBounds.First.Z },
-                Max = new { record.ObjectBounds.Second.X, record.ObjectBounds.Second.Y, record.ObjectBounds.Second.Z }
-            });
+            string? bounds = SerializeObjectBounds(record.ObjectBounds);
 
             string? material = record.Material.IsNull ? null : record.Material.FormKey.ToString();
             int hasDistantLod = (record.DistantLods?.Count > 0) ? 1 : 0;
@@ -2776,8 +2786,8 @@ namespace AssetConverter
     {
         protected override async Task ProcessSpecificRecordAsync(IDoorGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
         {
-            const string sql = @"INSERT OR REPLACE INTO doors (form_key, editor_id, name, model_path, open_sound, close_sound, flags, is_marker)
-                VALUES (@FormKey, @EditorId, @Name, @ModelPath, @OpenSound, @CloseSound, @Flags, @IsMarker)";
+            const string sql = @"INSERT OR REPLACE INTO doors (form_key, editor_id, name, model_path, open_sound, close_sound, flags, is_marker, bounds)
+                VALUES (@FormKey, @EditorId, @Name, @ModelPath, @OpenSound, @CloseSound, @Flags, @IsMarker, @Bounds)";
             await conn.ExecuteAsync(sql, new
             {
                 FormKey = formKey,
@@ -2787,7 +2797,8 @@ namespace AssetConverter
                 OpenSound = record.OpenSound.IsNull ? (string?)null : record.OpenSound.FormKey.ToString(),
                 CloseSound = record.CloseSound.IsNull ? (string?)null : record.CloseSound.FormKey.ToString(),
                 Flags = SafeSerialize(record.Flags),
-                IsMarker = (record.MajorRecordFlagsRaw & 0x800000) != 0 ? 1 : 0
+                IsMarker = (record.MajorRecordFlagsRaw & 0x800000) != 0 ? 1 : 0,
+                Bounds = SerializeObjectBounds(record.ObjectBounds)
             }, transaction);
         }
     }

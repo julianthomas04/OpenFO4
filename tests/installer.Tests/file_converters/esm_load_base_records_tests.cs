@@ -67,6 +67,20 @@ namespace InstallerTests
             Assert.Equal(@"Doors\Door01.nif", model);
         }
 
+        [Fact]
+        public void Door_ObjectBounds_AreMinMaxJson()
+        {
+            var json = db.QuerySingle<string>("SELECT bounds FROM doors WHERE form_key = @key", new { key = db.KeyOf("DoorBase") });
+
+            Assert.Equal("""{"Min":{"X":-40,"Y":-6,"Z":0},"Max":{"X":40,"Y":6,"Z":200}}""", json);
+        }
+
+        [Fact]
+        public void Static_ObjectBounds_KeepTheExactJsonFormat()
+        {
+            Assert.Equal("""{"Min":{"X":-10,"Y":-20,"Z":-30},"Max":{"X":10,"Y":20,"Z":30}}""", Static("WallStatic").Bounds);
+        }
+
         sealed class CollisionLayerRow
         {
             public string? EditorId { get; init; }
