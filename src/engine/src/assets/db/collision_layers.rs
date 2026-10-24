@@ -7,6 +7,7 @@
 //! performance, never let the player walk through geometry.
 
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use anyhow::Context;
 use rusqlite::Connection;
@@ -141,6 +142,24 @@ impl PlayerCollisionLayers {
         Ok(Self {
             layers: Some(layers),
         })
+    }
+
+    /// Stable across runs; equal exactly when both tables keep and drop the same layers.
+    pub fn fingerprint(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        match &self.layers {
+            None => hasher.write_u8(0),
+            Some(layers) => {
+                hasher.write_u8(1);
+                let mut decisions: Vec<(u8, bool)> = layers
+                    .iter()
+                    .map(|(layer, solidity)| (*layer, solidity.is_solid()))
+                    .collect();
+                decisions.sort_unstable();
+                decisions.hash(&mut hasher);
+            }
+        }
+        hasher.finish()
     }
 
     /// A shape without a layer is undecodable and stays solid.

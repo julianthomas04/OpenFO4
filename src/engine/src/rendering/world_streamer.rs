@@ -1368,7 +1368,7 @@ impl WorldStreamer {
             collision_manifest: load_manifest(&format!(
                 "{asset_root}/{MESHES_DIR}/collision_manifest.json"
             )),
-            player_layers,
+            player_layers: player_layers.clone(),
             resident_textures,
             texture_policy,
             demand_view: Mutex::new(DemandView::default()),
@@ -1378,7 +1378,8 @@ impl WorldStreamer {
             dds_cache: SharedCache::new(DDS_CACHE_MAX_BYTES),
             bake_cache: crate::sim::bake::ShapeBakeCache::new(crate::sim::bake::physics_cache_dir(
                 asset_root,
-            )),
+            ))
+            .with_player_layers(&player_layers),
             ws_editor_ids: Mutex::new(HashMap::new()),
             tile_exists: Mutex::new(HashMap::new()),
             persistent_by_grid: Mutex::new(HashMap::new()),

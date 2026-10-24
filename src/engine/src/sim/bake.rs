@@ -30,6 +30,7 @@ use super::cache_purge::{spawn_purge, versioned_dir_name};
 use super::collision::{CellColliderBatch, ColShape, PartShape, TerrainColliderSpec};
 use super::ragdoll_spec::{RagdollSpec, load_ragdoll_spec};
 use super::sidecar_hash::{SidecarHasher, SidecarLookup};
+use crate::assets::db::collision_layers::PlayerCollisionLayers;
 use crate::assets::layout::{CACHE_DIR, PHYSICS_CACHE_DIR};
 use crate::shared_cache::SharedCache;
 
@@ -168,6 +169,9 @@ pub struct ShapeBakeCache {
     disk_dir: Option<PathBuf>,
     /// Content hashes of the `.col.json` sidecars that key the object blobs.
     sidecar_hashes: SidecarHasher,
+    /// Fingerprint of the player layer table the sidecars are filtered by; part of every
+    /// object blob key, so a changed table cannot be served stale blobs.
+    layer_table: u64,
 }
 
 const BAKE_CACHE_CAP: u64 = 512;
@@ -283,6 +287,7 @@ impl ShapeBakeCache {
         Self {
             cache: SharedCache::new(BAKE_CACHE_CAP),
             ragdoll_cache: SharedCache::new(RAGDOLL_BAKE_CACHE_CAP),
+            layer_table: PlayerCollisionLayers::all_solid().fingerprint(),
             sidecar_hashes: SidecarHasher::new(
                 disk_dir.as_deref(),
                 disk_dir
@@ -402,6 +407,13 @@ impl ShapeBakeCache {
         built
     }
 
+    /// Keys the object blobs by the layer table the sidecars are filtered with.
+    #[must_use]
+    pub fn with_player_layers(mut self, layers: &PlayerCollisionLayers) -> Self {
+        self.layer_table = layers.fingerprint();
+        self
+    }
+
     /// Bake every shape `add_cell` will need for this batch, building
     /// uncached (path, scale) pairs in parallel. `load_shapes` fetches a mesh's
     /// raw collision shapes by path; `joint_fingerprint` names the animated
@@ -471,7 +483,13 @@ impl ShapeBakeCache {
                 });
                 let build = || build_shapes(&load_shapes(&key.0), scale, &key.0);
                 Arc::new(
-                    match object_disk_key(&key.0, key.1, joint_fingerprint(&key.0), sidecar) {
+                    match object_disk_key(
+                        &key.0,
+                        key.1,
+                        joint_fingerprint(&key.0),
+                        sidecar,
+                        self.layer_table,
+                    ) {
                         Some(disk_key) => self.cached_or_build(&disk_key, build),
                         None => build(),
                     },
@@ -555,6 +573,7 @@ fn object_disk_key(
     scale_bits: u32,
     joint_fingerprint: Option<u64>,
     sidecar: SidecarLookup,
+    layer_table: u64,
 ) -> Option<String> {
     let sidecar = match sidecar {
         SidecarLookup::Absent => String::new(),
@@ -565,7 +584,7 @@ fn object_disk_key(
         .map(|fingerprint| format!("|j{fingerprint:016x}"))
         .unwrap_or_default();
     Some(format!(
-        "obj|{mesh_path}|{scale_bits}|{}{joints}{sidecar}|v{COLLIDER_CACHE_VERSION}",
+        "obj|{mesh_path}|{scale_bits}|{}{joints}{sidecar}|l{layer_table:016x}|v{COLLIDER_CACHE_VERSION}",
         TRIMESH_FLAGS.bits(),
     ))
 }
@@ -944,7 +963,7 @@ mod tests {
     fn the_object_key_follows_sidecar_content_and_ignores_nothing_else() {
         let hashed = |bytes: &[u8]| SidecarLookup::Hashed(SidecarHash::of_bytes(bytes));
         let key = |sidecar: SidecarLookup, joints: Option<u64>, scale: u32| {
-            object_disk_key("a.glb", scale, joints, sidecar).unwrap()
+            object_disk_key("a.glb", scale, joints, sidecar, 0).unwrap()
         };
         let base = key(hashed(b"a"), None, 1);
         assert_eq!(base, key(hashed(b"a"), None, 1));
@@ -956,9 +975,37 @@ mod tests {
     }
 
     #[test]
+    fn the_object_key_follows_the_player_layer_table() {
+        use crate::assets::db::collision_layers::CollisionLayerRow;
+        let key = |table: &PlayerCollisionLayers| {
+            object_disk_key("a.glb", 1, None, SidecarLookup::Absent, table.fingerprint()).unwrap()
+        };
+        let dropping = |layer: i64| {
+            let row = |form_key: &str, editor_id: &str, index: i64, flags: i64, list: &[&str]| {
+                CollisionLayerRow {
+                    form_key: form_key.to_owned(),
+                    editor_id: Some(editor_id.to_owned()),
+                    layer_index: Some(index),
+                    flags: Some(flags),
+                    collides_with: Some(list.iter().map(|k| (*k).to_owned()).collect()),
+                }
+            };
+            PlayerCollisionLayers::from_rows(&[
+                row("A", "L_CHARCONTROLLER", 30, 0, &["B"]),
+                row("B", "L_CHARBUMPER", 56, 0, &["A"]),
+                row("C", "L_X", layer, 1, &[]),
+            ])
+            .unwrap()
+        };
+        assert_eq!(key(&dropping(12)), key(&dropping(12)));
+        assert_ne!(key(&dropping(12)), key(&dropping(13)));
+        assert_ne!(key(&dropping(12)), key(&PlayerCollisionLayers::all_solid()));
+    }
+
+    #[test]
     fn an_unreadable_sidecar_gets_no_disk_key() {
         assert_eq!(
-            object_disk_key("a.glb", 1, None, SidecarLookup::Unreadable),
+            object_disk_key("a.glb", 1, None, SidecarLookup::Unreadable, 0),
             None
         );
     }
