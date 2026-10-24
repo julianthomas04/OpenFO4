@@ -456,7 +456,10 @@ mod tests {
     fn empty_atlas_is_allowed() {
         let mut value = fixture();
         value["data"]["subtexture_rects"] = json!([]);
-        assert!(parse(&value).unwrap().data.subtexture_rects.is_empty());
+        assert_eq!(
+            parse(&value).unwrap().data.subtexture_rects,
+            [] as [[f32; 4]; 0]
+        );
     }
 
     #[test]

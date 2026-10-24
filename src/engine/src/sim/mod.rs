@@ -874,7 +874,7 @@ mod tests {
         sim.player.set_health(hp_max - 25.0);
         pipboy(&mut sim, pipboy::PipBoyAction::UseFirstStimpak);
         assert_eq!(sim.pipboy_snapshot().vitals.hp, hp_max);
-        assert!(sim.pipboy.inventory.items.is_empty());
+        assert_eq!(sim.pipboy.inventory.items, []);
     }
 
     #[test]

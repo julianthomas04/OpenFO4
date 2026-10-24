@@ -134,11 +134,11 @@ mod tests {
     fn a_new_model_is_empty_and_closed() {
         let model = empty_model();
         assert!(!model.open);
-        assert!(model.inventory.items.is_empty());
-        assert!(model.quests.is_empty());
-        assert!(model.settlements.is_empty());
-        assert!(model.stats.is_empty());
-        assert!(model.radio.stations.is_empty());
+        assert_eq!(model.inventory.items, []);
+        assert_eq!(model.quests, []);
+        assert_eq!(model.settlements, []);
+        assert_eq!(model.stats, []);
+        assert_eq!(model.radio.stations, []);
         assert!(model.perks.0.is_empty());
         assert!(model.custom_marker.is_none());
         assert!(model.last_rejection.is_none());

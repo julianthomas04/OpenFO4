@@ -394,7 +394,7 @@ mod tests {
             touch(dir.path(), &session_log_file_name(stamp(second)));
         }
         let warnings = prune_session_logs(dir.path(), 3);
-        assert!(warnings.is_empty());
+        assert_eq!(warnings, [] as [String; 0]);
         let mut left: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .map(|e| e.unwrap().file_name().into_string().unwrap())

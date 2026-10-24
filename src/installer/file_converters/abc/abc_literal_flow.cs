@@ -202,7 +202,8 @@ namespace AssetConverter.Abc
                 var handlerEntries = new List<int>();
                 var pending = new Stack<int>([0]);
                 var handlers = body.Exceptions.ToList();
-                while (true)
+                List<AbcExceptionHandler> guarding;
+                do
                 {
                     while (pending.Count > 0)
                     {
@@ -210,9 +211,7 @@ namespace AssetConverter.Abc
                         if (reachable.Add(index))
                             Successors(index).ForEach(pending.Push);
                     }
-                    var guarding = handlers.Where(h => reachable.Any(i => code[i].Offset >= h.From && code[i].Offset < h.To)).ToList();
-                    if (guarding.Count == 0)
-                        return (reachable, handlerEntries);
+                    guarding = handlers.Where(h => reachable.Any(i => code[i].Offset >= h.From && code[i].Offset < h.To)).ToList();
                     foreach (AbcExceptionHandler handler in guarding)
                     {
                         handlers.Remove(handler);
@@ -221,6 +220,8 @@ namespace AssetConverter.Abc
                         pending.Push(entry);
                     }
                 }
+                while (guarding.Count > 0);
+                return (reachable, handlerEntries);
             }
 
             private List<Block> BuildBlocks()

@@ -149,7 +149,7 @@ mod tests {
     fn the_level_word_is_the_translated_label_without_its_trailing_space() {
         let layout = pipboy_layout();
         let xp = load(&layout, &Words::new(&layout).unwrap()).unwrap();
-        assert!(!xp.level_word.is_empty());
+        assert_ne!(xp.level_word, "");
         assert!(!xp.level_word.ends_with(' '));
     }
 

@@ -616,6 +616,6 @@ mod tests {
 
     #[test]
     fn no_placements_have_no_order() {
-        assert!(order_of(&[]).is_empty());
+        assert_eq!(order_of(&[]), [] as [usize; 0]);
     }
 }

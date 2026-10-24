@@ -377,7 +377,7 @@ mod tests {
             wave.advance_to(f64::from(step) * params.tick_seconds, 6.0);
         }
         let highest = params.amplitude_floor + params.amplitude_span;
-        assert!(wave.amplitude.fract() == 0.0);
+        assert_eq!(wave.amplitude.fract(), 0.0);
         assert!(wave.amplitude >= params.initial_amplitude.min(params.amplitude_floor));
         assert!(wave.amplitude < highest);
         let reach = params.max_amplitude + highest;

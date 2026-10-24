@@ -1239,7 +1239,7 @@ mod tests {
         fn nothing_plays_when_no_timings_are_installed() {
             let mut sim = spawned_at(flat_world(), SPAWN_AT);
             hold(&mut sim, walking(0.0));
-            assert!(record(&mut sim, 60).is_empty());
+            assert_eq!(record(&mut sim, 60), []);
         }
 
         #[test]
@@ -1253,7 +1253,7 @@ mod tests {
                 },
             );
             let sprint = record(&mut sim, 30);
-            assert!(!sprint.is_empty());
+            assert_ne!(sprint, []);
             assert!(sprint.iter().all(|(_, event)| event.gait == Gait::Sprint));
 
             let mut sim = footstep_world();
@@ -1266,14 +1266,14 @@ mod tests {
                 },
             );
             let sneak = record(&mut sim, 60);
-            assert!(!sneak.is_empty());
+            assert_ne!(sneak, []);
             assert!(sneak.iter().all(|(_, event)| event.gait == Gait::Sneak));
         }
 
         #[test]
         fn standing_still_and_released_input_are_silent() {
             let mut sim = footstep_world();
-            assert!(record(&mut sim, 60).is_empty());
+            assert_eq!(record(&mut sim, 60), []);
             hold(&mut sim, walking(0.0));
             record(&mut sim, 30);
             hold(&mut sim, PlayerInput::default());
@@ -1296,7 +1296,7 @@ mod tests {
             hold(&mut sim, walking(0.0));
             record(&mut sim, 40);
             assert!(position(&sim).x > 205.0, "the player should be at the wall");
-            assert!(record(&mut sim, 120).is_empty());
+            assert_eq!(record(&mut sim, 120), []);
         }
 
         #[test]

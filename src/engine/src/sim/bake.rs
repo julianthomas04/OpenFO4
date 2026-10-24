@@ -973,7 +973,7 @@ mod tests {
             &counter,
         );
         assert!((baked_half_extent(&baked) - 0.5).abs() < 1e-5);
-        assert!(colbin_files(dir.path()).is_empty());
+        assert_eq!(colbin_files(dir.path()), [] as [PathBuf; 0]);
     }
 
     #[test]

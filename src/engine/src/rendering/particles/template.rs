@@ -102,7 +102,7 @@ impl MeshSurface {
             .clone()
             .filter(|mesh| mesh.topology == Topology::Triangles)
         {
-            for corner_indices in mesh.indices.chunks_exact(3) {
+            for corner_indices in mesh.indices.as_chunks::<3>().0 {
                 let corners: [Vec3; 3] = std::array::from_fn(|corner| {
                     let index = corner_indices[corner];
                     to_system.transform_point3(Vec3::from(mesh.vertices[index as usize].position))

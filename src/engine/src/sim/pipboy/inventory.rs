@@ -289,7 +289,10 @@ mod tests {
             names(&inventory.listed(InventoryCategory::Aid)),
             ["Stimpak"]
         );
-        assert!(inventory.listed(InventoryCategory::Ammo).is_empty());
+        assert_eq!(
+            inventory.listed(InventoryCategory::Ammo),
+            [] as [&InventoryItem; 0]
+        );
     }
 
     #[test]

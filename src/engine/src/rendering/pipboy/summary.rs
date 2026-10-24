@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn nothing_equipped_lists_nothing() {
-        assert!(equipped_damage(&inventory(Vec::new())).is_empty());
+        assert_eq!(equipped_damage(&inventory(Vec::new())), []);
     }
 
     #[test]

@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn a_single_rank_perk_shows_no_stars_in_the_panel() {
-        assert!(panel_stars(1, 1, false).is_empty());
+        assert_eq!(panel_stars(1, 1, false), []);
         assert_eq!(
             panel_stars(3, 1, true),
             [RankStar::Full, RankStar::Available, RankStar::Empty]

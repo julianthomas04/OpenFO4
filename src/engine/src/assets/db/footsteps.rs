@@ -1106,7 +1106,7 @@ mod tests {
         );
         let compound = &catalog.sound_descriptors[COMPOUND];
         assert_eq!(compound.children, [LAYER_FIRST_PERSON, LAYER_THIRD_PERSON]);
-        assert!(compound.sound_files.is_empty());
+        assert_eq!(compound.sound_files, [] as [String; 0]);
         assert_eq!(compound.static_attenuation_centidb, 0);
         let layer = &catalog.sound_descriptors[LAYER_FIRST_PERSON];
         assert_eq!(layer.freq_shift_pct, -5);
@@ -1119,11 +1119,7 @@ mod tests {
         );
         assert_eq!(layer.conditions.len(), 1);
         assert_eq!(layer.conditions[0].function, 391);
-        assert!(
-            catalog.sound_descriptors[LAYER_THIRD_PERSON]
-                .conditions
-                .is_empty()
-        );
+        assert_eq!(catalog.sound_descriptors[LAYER_THIRD_PERSON].conditions, []);
     }
 
     #[test]

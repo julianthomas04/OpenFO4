@@ -691,7 +691,7 @@ mod tests {
         let ground = open_ground(&page);
         harness.send(&mut page, &model, NavInput::Released(ground));
 
-        assert!(harness.take_actions().is_empty());
+        assert_eq!(harness.take_actions(), []);
     }
 
     #[test]
@@ -717,7 +717,7 @@ mod tests {
         let speed = page.view.params().drag_speed;
         assert!((moved.x - -4.0 * speed).abs() < 1e-2);
         assert!((moved.y - -3.0 * speed).abs() < 1e-2);
-        assert!(harness.take_actions().is_empty());
+        assert_eq!(harness.take_actions(), []);
     }
 
     #[test]
@@ -756,7 +756,7 @@ mod tests {
         page.on_open();
         harness.send(&mut page, &model, NavInput::Released(at));
 
-        assert!(harness.take_actions().is_empty());
+        assert_eq!(harness.take_actions(), []);
     }
 
     #[test]
@@ -870,7 +870,7 @@ mod tests {
         };
         assert_eq!(page.hints(&snapshot).len(), 1);
         click(&mut harness, &mut page, &model, at);
-        assert!(harness.take_actions().is_empty());
+        assert_eq!(harness.take_actions(), []);
     }
 
     #[test]
@@ -955,7 +955,7 @@ mod tests {
             &mut harness,
         );
         feed(&button(ElementState::Released), &mut page, &mut harness);
-        assert!(harness.take_actions().is_empty());
+        assert_eq!(harness.take_actions(), []);
     }
 
     #[test]

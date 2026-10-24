@@ -266,7 +266,9 @@ fn read_red(
     let data = slice
         .get_mapped_range()
         .expect("the readback buffer is mapped");
-    data.chunks_exact(8)
+    data.as_chunks::<8>()
+        .0
+        .iter()
         .map(|texel| f16_value(u16::from_le_bytes([texel[0], texel[1]])))
         .collect()
 }

@@ -668,7 +668,7 @@ mod startup_and_logging {
             "{startup}"
         );
         for _ in 0..3 {
-            assert!(footsteps.step(run_right(), Some(STONE)).unwrap().is_empty());
+            assert_eq!(footsteps.step(run_right(), Some(STONE)).unwrap(), []);
         }
         let steps = log.drain();
         assert_eq!(steps.lines().count(), 1, "{steps}");
@@ -679,7 +679,7 @@ mod startup_and_logging {
         let root = install();
         std::fs::remove_file(root.path().join("audio").join(STONE_FILE)).unwrap();
         let mut footsteps = footsteps(root.path()).unwrap();
-        assert!(!footsteps.step(run_right(), Some(DIRT)).unwrap().is_empty());
+        assert_ne!(footsteps.step(run_right(), Some(DIRT)).unwrap(), []);
     }
 
     #[test]
@@ -699,12 +699,7 @@ mod startup_and_logging {
         let log = SharedBuffer::default();
         let _guard = log.capture("openfo4::audio::footsteps=warn");
         for _ in 0..3 {
-            assert!(
-                footsteps
-                    .step(run_right(), Some(ORPHAN))
-                    .unwrap()
-                    .is_empty()
-            );
+            assert_eq!(footsteps.step(run_right(), Some(ORPHAN)).unwrap(), []);
         }
         let first = log.drain();
         assert_eq!(first.lines().count(), 1, "{first}");

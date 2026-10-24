@@ -220,14 +220,14 @@ mod tests {
             .collect();
         layers.push(layer("late", 0, false, uniform_alpha(1.0)));
         assert_eq!(QuadrantLayers::of(&layers, 0).overlays.len(), 12);
-        assert!(gather(&layers, &catalog, &grass_settings()).is_empty());
+        assert_eq!(gather(&layers, &catalog, &grass_settings()), []);
     }
 
     #[test]
     fn overlay_at_the_prefilter_byte_is_skipped_one_above_grows() {
         let catalog = catalog_of(&[("O", &[("a", 100)])]);
         let flat = |bytes: f32| [layer("O", 0, false, uniform_alpha(bytes / 255.0))];
-        assert!(gather(&flat(25.0), &catalog, &grass_settings()).is_empty());
+        assert_eq!(gather(&flat(25.0), &catalog, &grass_settings()), []);
         let slots = gather(&flat(26.0), &catalog, &grass_settings());
         assert_eq!(slots.len(), 1);
         assert_eq!(slots[0].density, [1.0; 9]);
@@ -333,7 +333,7 @@ mod tests {
     fn layers_of_other_quadrants_are_ignored() {
         let catalog = catalog_of(&[("L", &[("a", 50)])]);
         let layers = [layer("L", 2, true, None)];
-        assert!(gather(&layers, &catalog, &grass_settings()).is_empty());
+        assert_eq!(gather(&layers, &catalog, &grass_settings()), []);
         assert_eq!(
             gather_slots(
                 &QuadrantLayers::of(&layers, 2),

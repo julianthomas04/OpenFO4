@@ -42,7 +42,7 @@ fn pixels_from_rows(mapped: &[u8], width: u32, height: u32, bgra: bool) -> Vec<u
         pixels.extend_from_slice(&row[..row_bytes]);
     }
     if bgra {
-        for texel in pixels.chunks_exact_mut(BYTES_PER_PIXEL as usize) {
+        for texel in pixels.as_chunks_mut::<{ BYTES_PER_PIXEL as usize }>().0 {
             texel.swap(0, 2);
         }
     }

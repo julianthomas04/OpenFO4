@@ -533,7 +533,7 @@ mod tests {
     #[test]
     fn a_single_rank_perk_shows_its_star_only_when_held() {
         assert_eq!(grid_stars(1, 1, false), [RankStar::Full]);
-        assert!(grid_stars(1, 0, true).is_empty());
+        assert_eq!(grid_stars(1, 0, true), []);
     }
 
     #[test]

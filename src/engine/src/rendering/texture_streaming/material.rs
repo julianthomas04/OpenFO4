@@ -146,7 +146,6 @@ fn forced_environment(cube: &str, source: &MaterialSource) -> Option<EnvParams> 
 }
 
 #[cfg(test)]
-#[expect(clippy::float_cmp, reason = "tests compare copied values")]
 mod tests {
     use super::*;
 

@@ -488,12 +488,12 @@ mod tests {
         let third = translator.translate(&wheel(10.0), fit());
         let fourth = translator.translate(&wheel(20.0), fit());
 
-        assert!(first.inputs.is_empty());
+        assert_eq!(first.inputs, []);
         assert_eq!(
             second.inputs,
             vec![ShellInput::Nav(NavInput::Scrolled(1.0))]
         );
-        assert!(third.inputs.is_empty());
+        assert_eq!(third.inputs, []);
         assert_eq!(
             fourth.inputs,
             vec![ShellInput::Nav(NavInput::Scrolled(1.0))]

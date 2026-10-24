@@ -314,7 +314,7 @@ mod tests {
     fn each_frame_lists_the_children_alive_then_placed_by_their_track() {
         let layout = fixture();
         let frames = flatten_clip(&layout.movie("Fixture").unwrap(), "Fixture", "Clip", 3).unwrap();
-        assert!(frames[0].is_empty());
+        assert_eq!(frames[0], []);
         let second = frames[1][0];
         assert_close(second.x, 10.0);
         assert_close(second.w, 4.0);
@@ -348,7 +348,7 @@ mod tests {
         layout_parts["instances"]["Clip/@1"]["local"]["color"]["mult"] = json!([1, 1, 1, 0]);
         let layout = layout_with_movie("Fixture", &movie_json("Fixture", &layout_parts));
         let frames = flatten_clip(&layout.movie("Fixture").unwrap(), "Fixture", "Clip", 1).unwrap();
-        assert!(frames[0].is_empty());
+        assert_eq!(frames[0], []);
     }
 
     #[test]

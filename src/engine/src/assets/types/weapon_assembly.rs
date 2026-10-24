@@ -604,7 +604,7 @@ mod tests {
     fn null_mods_are_skipped_silently() {
         let fixture = Fixture::default().part("muzzle", Some("ap_gun_Muzzle"), None, None);
         let result = fixture.assemble(info(vec![], None), &["muzzle"]);
-        assert!(result.mods.is_empty());
+        assert_eq!(result.mods, []);
         assert!(result.unmatched.is_empty() && result.unresolved.is_empty());
     }
 
@@ -613,7 +613,7 @@ mod tests {
         let fixture =
             Fixture::default().part("broken", Some("ap_gun_Grip"), Some("broken.nif"), None);
         let result = fixture.assemble(info(vec![], None), &["missing", "broken"]);
-        assert!(result.mods.is_empty());
+        assert_eq!(result.mods, []);
         assert_eq!(result.unresolved, ["missing", "broken"]);
     }
 
@@ -761,7 +761,7 @@ mod tests {
         let bytes = doc.to_string().into_bytes();
         let document = gltf::Gltf::from_slice(&bytes).unwrap().document;
         let connect = ConnectInfo::from_document(&document);
-        assert!(connect.parents.is_empty());
+        assert_eq!(connect.parents, []);
         assert_eq!(connect.rejected.len(), 1);
         assert_eq!(connect.rejected[0].node_name, "Receiver");
         assert_eq!(connect.rejected[0].kind, "connect_parents");

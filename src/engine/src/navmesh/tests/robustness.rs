@@ -49,7 +49,7 @@ fn out_of_range_arguments_give_none_instead_of_panicking() {
     assert_eq!(mesh.neighbour(0, 3), None);
     assert_eq!(mesh.neighbour(9, 0), None);
     assert_eq!(mesh.height_at(9, 0.0, 0.0), None);
-    assert!(mesh.door_refs(9).is_empty());
+    assert_eq!(mesh.door_refs(9), [] as [u32; 0]);
     assert!(!mesh.is_walkable(9));
     assert!(mesh.is_walkable(0));
 }

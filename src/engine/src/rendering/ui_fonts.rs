@@ -189,7 +189,7 @@ mod tests {
             .faces()
             .map(|face| face.families[0].0.clone())
             .collect();
-        assert!(!families.is_empty());
+        assert_ne!(families, [] as [String; 0]);
         assert!(
             families.iter().all(|name| *name == family()),
             "{families:?}"

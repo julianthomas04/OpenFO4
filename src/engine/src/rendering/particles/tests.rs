@@ -649,7 +649,7 @@ fn face_emission_over_a_point_set_falls_back_to_its_vertices_and_says_so() {
         template.unsupported_fields
     );
     let faces = try_template(&mesh_value(), &triangle_mesh()).unwrap();
-    assert!(faces.unsupported_fields.is_empty());
+    assert_eq!(faces.unsupported_fields, [] as [&str; 0]);
 }
 
 #[test]
@@ -853,7 +853,7 @@ fn ignored_authored_fields_are_listed_per_template() {
 
 #[test]
 fn a_plain_system_ignores_nothing() {
-    assert!(template(&base_json()).unsupported_fields.is_empty());
+    assert_eq!(template(&base_json()).unsupported_fields, [] as [&str; 0]);
 }
 
 #[test]

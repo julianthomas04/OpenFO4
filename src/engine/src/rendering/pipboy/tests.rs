@@ -265,7 +265,7 @@ fn closing_from_a_page_asks_the_sim_to_close_and_from_the_perk_chart_returns_to_
 
     screen.show(Screen::PerkChart, None);
     screen.dispatch(ShellInput::Close, &snapshot);
-    assert!(screen.take_actions().is_empty());
+    assert_eq!(screen.take_actions(), []);
     assert!(matches!(screen.nav().screen(), Screen::Shell(_)));
 
     screen.dispatch(ShellInput::Close, &snapshot);
@@ -534,7 +534,7 @@ fn page_and_chrome_input_is_swallowed_while_the_tab_is_modal() {
 
     screen.dispatch(ShellInput::Close, &snapshot);
     assert!(!screen.active_tab_is_modal());
-    assert!(screen.take_actions().is_empty());
+    assert_eq!(screen.take_actions(), []);
 }
 
 #[test]
@@ -629,7 +629,7 @@ fn stimpak_and_radaway_keys_do_nothing_without_the_item() {
     screen.dispatch(ShellInput::Nav(NavInput::Hint(HintKey::E)), &snapshot);
     screen.dispatch(ShellInput::Nav(NavInput::Hint(HintKey::R)), &snapshot);
 
-    assert!(screen.take_actions().is_empty());
+    assert_eq!(screen.take_actions(), []);
 }
 
 fn read_pixels(

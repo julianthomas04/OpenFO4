@@ -333,6 +333,6 @@ mod tests {
             model: &model,
             vitals: crate::rendering::pipboy::pages::test_harness::vitals(),
         };
-        assert!(page.hints(&snapshot).is_empty());
+        assert_eq!(page.hints(&snapshot), []);
     }
 }

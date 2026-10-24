@@ -771,7 +771,7 @@ mod tests {
             entries(&[quest("open", QuestStatus::Active)]),
             vec![Entry::Quest(0)]
         );
-        assert!(entries(&[]).is_empty());
+        assert_eq!(entries(&[]), []);
     }
 
     #[test]
@@ -982,7 +982,7 @@ mod tests {
 
         harness.send(&mut page, &model, NavInput::Down);
         harness.send(&mut page, &model, NavInput::Hint(HintKey::R));
-        assert!(harness.take_requests().is_empty());
+        assert_eq!(harness.take_requests(), []);
     }
 
     #[test]
