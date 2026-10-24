@@ -173,7 +173,7 @@ use crate::startup::{StartupError, StartupTimer};
 use crate::utils;
 use crate::video::{MenuVideo, VideoCommand, VideoError};
 use crate::water_world::{Scope as WaterScope, SharedWaterWorld, WaterWorld, physics_query};
-use activation::Activation;
+use activation::{Activation, TeleportRefusal, teleport_gate};
 use addon_nodes::AddonFx;
 use animated_objects::AnimatedObjects;
 use auto_anim::AutoAnim;
@@ -846,13 +846,60 @@ impl State {
     /// be activated: a load door or an animated object. Shared by the E-press
     /// activation and (via a precomputed bool) the crosshair and the debug
     /// `is_interactible` readout, so all agree exactly.
-    fn aimed_activation(&self) -> Option<Activation<'_>> {
-        let hit = self.sim.debug_ray_hit(
-            self.camera.eye,
-            self.camera_controller.forward(),
-            ACTIVATE_REACH,
+    fn aimed_activation(&self) -> Option<Activation> {
+        activation::resolve(
+            &self.aimed_ref()?,
+            &self.teleports,
+            &self.animated_objects,
+        )
+    }
+
+    /// The ref id of the object under the crosshair within activation reach.
+    fn aimed_ref(&self) -> Option<String> {
+        self.sim
+            .debug_ray_hit(
+                self.camera.eye,
+                self.camera_controller.forward(),
+                ACTIVATE_REACH,
+            )?
+            .ref_id
+    }
+
+    /// The one entry for every request to teleport through a load door, by the door's ref id.
+    /// Only a spawned player with no teleport already pending may queue one; the teleport
+    /// itself runs in `update`. The menu spawn path (`begin_play`) bypasses this gate: the
+    /// player is not spawned there by design.
+    fn queue_teleport(&mut self, source_ref: &str) -> Result<(), TeleportRefusal> {
+        teleport_gate(
+            self.sim.player_eye().is_some(),
+            self.pending_teleport.is_some(),
         )?;
-        activation::resolve(&hit.ref_id?, &self.teleports, &self.animated_objects)
+        let target = self
+            .teleports
+            .get(source_ref)
+            .ok_or_else(|| TeleportRefusal::UnknownSource(source_ref.to_string()))?;
+        self.pending_teleport = Some(target.clone());
+        Ok(())
+    }
+
+    /// E-press: queues the aimed load door's teleport or toggles the aimed animated object.
+    fn activate_aimed(&mut self) {
+        let Some(ref_id) = self.aimed_ref() else {
+            return;
+        };
+        match activation::resolve(&ref_id, &self.teleports, &self.animated_objects) {
+            Some(Activation::Teleport) => {
+                if let Err(refusal) = self.queue_teleport(&ref_id) {
+                    tracing::debug!("activation of {ref_id} refused: {refusal}");
+                }
+            }
+            Some(Activation::Animate(entity)) => {
+                if let Err(error) = self.animated_objects.toggle(entity) {
+                    tracing::warn!("activation: {error}");
+                }
+            }
+            None => {}
+        }
     }
 
     /// Assembles the renderer state on the startup worker from the main thread's boot parts.
@@ -3105,14 +3152,24 @@ impl State {
                 self.auto_cooldown -= 1;
             } else if self.sim.player_eye().is_some() {
                 let r = self.auto_activate[self.auto_idx].clone();
-                if let Some(t) = self.teleports.get(&r) {
-                    self.pending_teleport = Some(t.clone());
-                    tracing::info!("OPENFO4_AUTO_ACTIVATE[{}]: {r}", self.auto_idx);
-                } else {
-                    tracing::warn!("OPENFO4_AUTO_ACTIVATE: {r} not in teleport map");
+                let hop_consumed = match self.queue_teleport(&r) {
+                    Ok(()) => {
+                        tracing::info!("OPENFO4_AUTO_ACTIVATE[{}]: {r}", self.auto_idx);
+                        true
+                    }
+                    Err(refusal @ TeleportRefusal::UnknownSource(_)) => {
+                        tracing::warn!("OPENFO4_AUTO_ACTIVATE: {refusal}");
+                        true
+                    }
+                    Err(refusal) => {
+                        tracing::debug!("OPENFO4_AUTO_ACTIVATE: {r} deferred: {refusal}");
+                        false
+                    }
+                };
+                if hop_consumed {
+                    self.auto_idx += 1;
+                    self.auto_cooldown = AUTO_ACTIVATE_COOLDOWN_FRAMES;
                 }
-                self.auto_idx += 1;
-                self.auto_cooldown = AUTO_ACTIVATE_COOLDOWN_FRAMES;
             }
         }
 
@@ -3777,15 +3834,7 @@ impl State {
             // Activate the load door under the crosshair. Record intent only; the
             // teleport (streamer teardown + player move) needs `asset_server` and
             // runs in `update`, like the debug pickers.
-            match self.aimed_activation() {
-                Some(Activation::Teleport(target)) => self.pending_teleport = Some(target.clone()),
-                Some(Activation::Animate(entity)) => {
-                    if let Err(error) = self.animated_objects.toggle(entity) {
-                        tracing::warn!("activation: {error}");
-                    }
-                }
-                None => {}
-            }
+            self.activate_aimed();
         } else {
             // Both key maps stay fresh regardless of mode (same physical
             // keys, different meanings), so neither holds stale pressed
