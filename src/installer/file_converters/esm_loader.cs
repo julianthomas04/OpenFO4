@@ -643,6 +643,7 @@ namespace AssetConverter
             ("collision_layers", "flags", "INTEGER"),
             ("collision_layers", "collides_with", "TEXT"),
             ("doors", "bounds", "TEXT"),
+            ("doors", "trigger_bounds", "TEXT"),
         };
 
         private async Task AddColumnIfMissingAsync(string table, string column, string type)
@@ -2408,6 +2409,9 @@ namespace AssetConverter
     {
         internal readonly record struct Point(short X, short Y, short Z);
         internal readonly record struct Box(Point Min, Point Max);
+
+        internal readonly record struct FloatPoint(float X, float Y, float Z);
+        internal readonly record struct FloatBox(FloatPoint Min, FloatPoint Max);
 
         internal static Box From(IObjectBoundsGetter bounds) => new(
             new Point(bounds.First.X, bounds.First.Y, bounds.First.Z),

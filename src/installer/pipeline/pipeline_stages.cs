@@ -367,6 +367,7 @@ namespace AssetConverter.Pipeline
             RunFinalizeStep(phase, "late palette bakes", () => lateBakes.Drain(databaseLoaded, _paths.StagingRoot, _paths.TexturesOut));
             RunFinalizeStep(phase, "LOD water", () => LodWaterStage.WriteTable(_paths.DatabasePath, lodWater));
             RunFinalizeStep(phase, "LOD backfill", () => LodBackfill.Run(_paths.DatabasePath, _paths.MeshesOut));
+            RunFinalizeStep(phase, "door trigger bounds", () => DoorTriggerBounds.RunOnGame(_paths.DatabasePath, _paths.GameDataDirectory));
             RunFinalizeStep(phase, "model path normalization", () => ModelPathNormalizer.Run(_paths.DatabasePath));
             InstallProgress.EndPhase(phase);
         }

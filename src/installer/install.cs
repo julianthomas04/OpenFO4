@@ -216,6 +216,7 @@ if (args.Length > 0)
                 ModcSwapSynthesizer.Run(dbOnlyPath, meshesOut, stagingRoot, texturesOut);
                 LodWaterStage.Run(Path.Combine(fo4Location, "Data"), dbOnlyPath);
                 LodBackfill.Run(dbOnlyPath, meshesOut);
+                DoorTriggerBounds.RunOnGame(dbOnlyPath, Path.Combine(fo4Location, "Data"));
                 ModelPathNormalizer.Run(dbOnlyPath);
                 Console.WriteLine($"Database rebuilt at {dbOnlyPath}");
                 return;
@@ -506,6 +507,9 @@ static void ReloadEsmTables(string tablesCsv, string dbPath, string esmSource, s
     if (plan.ReloadsMaterialSwaps &&
         !RunReloadPostStep("MODC synthesis", "rerun `esm-only --tables material_swaps` to retry",
             () => ModcSwapSynthesizer.Run(dbPath, meshesOut, stagingRoot, texturesOut))) return;
+    if (plan.Tables.Contains("doors") &&
+        !RunReloadPostStep("door trigger bounds", "rerun `esm-only --tables doors` to retry",
+            () => DoorTriggerBounds.RunOnGame(dbPath, Path.Combine(fo4Location, "Data")))) return;
     if (plan.Tables.Contains("statics") &&
         !RunReloadPostStep("LOD backfill", "rerun `esm-only --tables statics` to retry",
             () => LodBackfill.Run(dbPath, meshesOut))) return;

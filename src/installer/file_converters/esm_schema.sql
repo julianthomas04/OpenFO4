@@ -689,7 +689,8 @@ CREATE TABLE IF NOT EXISTS doors (
     close_sound TEXT,
     flags TEXT,                         -- JSON
     is_marker INTEGER DEFAULT 0,        -- ESM major record flag 0x800000
-    bounds TEXT                         -- JSON: min/max coordinates (OBND)
+    bounds TEXT,                        -- JSON: min/max coordinates (OBND)
+    trigger_bounds TEXT                 -- JSON: min/max coordinates of the model's editor-marker geometry, automatic doors only
 );
 
 CREATE TABLE IF NOT EXISTS lights (

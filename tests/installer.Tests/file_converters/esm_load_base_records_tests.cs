@@ -76,6 +76,14 @@ namespace InstallerTests
         }
 
         [Fact]
+        public void Door_TriggerBounds_AreNullUntilTheMarkerStepFillsThem()
+        {
+            var json = db.QuerySingle<string?>("SELECT trigger_bounds FROM doors WHERE form_key = @key", new { key = db.KeyOf("DoorBase") });
+
+            Assert.Null(json);
+        }
+
+        [Fact]
         public void CollisionLayerIndex_IsIndexedForLookupByLayerNumber()
         {
             var indexed = db.QuerySingle<long>("SELECT COUNT(*) FROM pragma_index_info('idx_collision_layers_index') WHERE name = 'layer_index'");
