@@ -1319,15 +1319,37 @@ fn teleport_into_a_cell_picks_the_lowest_source_ref() {
 
 const BOUNDS_JSON: &str = r#"{"Min":{"X":-64,"Y":-8,"Z":0},"Max":{"X":64,"Y":8,"Z":192}}"#;
 
+/// The schema file gains `doors.trigger_bounds` with the installer; this keeps the tests valid
+/// either side of that change.
+fn with_trigger_bounds_column(conn: Connection, present: bool) -> Connection {
+    let has_column: bool = conn
+        .query_row(
+            "SELECT count(*) > 0 FROM pragma_table_info('doors') WHERE name = 'trigger_bounds'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    match (has_column, present) {
+        (false, true) => conn
+            .execute_batch("ALTER TABLE doors ADD COLUMN trigger_bounds TEXT;")
+            .unwrap(),
+        (true, false) => conn
+            .execute_batch("ALTER TABLE doors DROP COLUMN trigger_bounds;")
+            .unwrap(),
+        _ => {}
+    }
+    conn
+}
+
 fn walk_in_world() -> Connection {
-    let conn = teleport_world();
+    let conn = with_trigger_bounds_column(teleport_world(), true);
     insert(
         &conn,
         "doors",
         &[
             ("form_key", text("AUTO")),
             ("flags", text("2")),
-            ("bounds", text(BOUNDS_JSON)),
+            ("trigger_bounds", text(BOUNDS_JSON)),
         ],
     );
     insert(
@@ -1336,7 +1358,7 @@ fn walk_in_world() -> Connection {
         &[
             ("form_key", text("AUTO_NO_TEXT")),
             ("flags", text("66")),
-            ("bounds", text(BOUNDS_JSON)),
+            ("trigger_bounds", text(BOUNDS_JSON)),
         ],
     );
     insert(
@@ -1345,7 +1367,7 @@ fn walk_in_world() -> Connection {
         &[
             ("form_key", text("PLAIN")),
             ("flags", text("0")),
-            ("bounds", text(BOUNDS_JSON)),
+            ("trigger_bounds", text(BOUNDS_JSON)),
         ],
     );
     conn
@@ -1429,10 +1451,13 @@ fn walk_in_doors_exclude_refs_that_start_disabled_or_hidden() {
 }
 
 #[test]
-fn walk_in_doors_without_bounds_are_reported_not_defaulted() {
+fn walk_in_doors_without_trigger_bounds_are_reported_not_defaulted() {
     let conn = walk_in_world();
-    conn.execute("UPDATE doors SET bounds = NULL WHERE form_key = 'AUTO'", [])
-        .unwrap();
+    conn.execute(
+        "UPDATE doors SET trigger_bounds = NULL WHERE form_key = 'AUTO'",
+        [],
+    )
+    .unwrap();
     placed_door(&conn, "nobounds", "EXT", "AUTO", &[]);
     placed_door(&conn, "fine", "EXT", "AUTO_NO_TEXT", &[]);
     let doors = client(conn).get_walk_in_doors().unwrap();
@@ -1442,8 +1467,8 @@ fn walk_in_doors_without_bounds_are_reported_not_defaulted() {
 }
 
 #[test]
-fn walk_in_doors_from_a_database_without_the_bounds_column_report_every_ref() {
-    let conn = legacy_connection(&[("doors", "bounds")]);
+fn walk_in_doors_from_a_database_without_the_trigger_bounds_column_report_every_ref() {
+    let conn = with_trigger_bounds_column(schema_connection(), false);
     insert(
         &conn,
         "cells",
@@ -1476,7 +1501,7 @@ fn walk_in_doors_with_malformed_flags_or_bounds_fail_naming_the_ref() {
 
     let conn = walk_in_world();
     conn.execute(
-        "UPDATE doors SET bounds = '{\"Min\":1}' WHERE form_key = 'AUTO'",
+        "UPDATE doors SET trigger_bounds = '{\"Min\":1}' WHERE form_key = 'AUTO'",
         [],
     )
     .unwrap();

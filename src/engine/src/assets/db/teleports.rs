@@ -7,7 +7,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::Deserialize;
 
 use super::doors::{DoorFlagsError, flags_are_automatic};
-use super::schema::{DbSchema, door_bounds_select_list};
+use super::schema::{DbSchema, door_trigger_bounds_select_list};
 
 /// A source load door and the cell/position/rotation it teleports to. Positions
 /// are Bethesda world units and `dest_rot_z` is radians, exactly as stored —
@@ -95,7 +95,7 @@ pub enum DoorLocation {
     Exterior { worldspace: String },
 }
 
-/// A door's object bounds (OBND), door-local, Bethesda units, Z-up.
+/// A door's trigger volume (`doors.trigger_bounds`), door-local, Bethesda units, Z-up.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DoorBounds {
     pub min: [f64; 3],
@@ -144,7 +144,7 @@ pub struct WalkInDoor {
 
 /// Walk-in doors with a usable trigger volume, plus the refs that could not
 /// get one because the database carries no bounds for them (converted before
-/// the installer extracted door bounds); the caller reports those once.
+/// the installer extracted door trigger bounds); the caller reports those once.
 #[derive(Debug, Default)]
 pub struct WalkInDoors {
     pub doors: Vec<WalkInDoor>,
@@ -186,7 +186,7 @@ pub fn get_walk_in_doors(conn: &Connection, schema: DbSchema) -> anyhow::Result<
          JOIN cells c ON c.form_key = po.cell_form_key
          WHERE po.is_initially_disabled = 0 AND po.initially_hidden = 0
          ORDER BY t.source_ref",
-        bounds = door_bounds_select_list(schema, "d."),
+        bounds = door_trigger_bounds_select_list(schema, "d."),
     ))?;
     let rows = stmt
         .query_map([], |row| {
