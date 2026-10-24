@@ -325,6 +325,19 @@ class SidecarLayerTests(unittest.TestCase):
         self.assertEqual(problems, 2)
         self.assertIn("no decodable collision layer", stderr)
 
+    def test_a_body_without_a_layer_is_reported_once_however_many_shapes_it_owns(self):
+        shapes = [self.shape_of_body(0), self.shape_of_body(0), self.shape_of_body(1)]
+        _, problems, stderr = self.process(shapes, ValueError("bad filter"))
+        self.assertEqual(problems, 3)
+        self.assertEqual(stderr.count("no decodable collision layer"), 2)
+
+    def test_a_shape_without_a_body_index_gets_its_own_message_once_per_system(self):
+        shapes = [self.shape_of_body(None), self.shape_of_body(None)]
+        _, problems, stderr = self.process(shapes, [simulated_body(4)])
+        self.assertEqual(problems, 1)
+        self.assertEqual(stderr.count("has no body index"), 1)
+        self.assertNotIn("no decodable collision layer", stderr)
+
 
 class ManifestTests(unittest.TestCase):
     WATER = {"layer": 4, "part": 0, "materials": [[STONE, 2]]}

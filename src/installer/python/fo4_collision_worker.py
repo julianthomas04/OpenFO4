@@ -878,6 +878,7 @@ def process_nif(nif_path: Path, out_path: Path) -> Optional[SidecarResult]:
     # a body is simulated (is_dynamic) and has a positive mass.
     nif_dynamic = False
     nif_mass = 0.0
+    layerless_reported = set()   # (physics system id, body index) already reported as having no layer
     for node_id, pids in node_to_phys.items():
         seen_pid = set()
         node_shapes = []  # (physics system id, shape)
@@ -930,9 +931,14 @@ def process_nif(nif_path: Path, out_path: Path) -> Optional[SidecarResult]:
             rot, scale, trans = _node_world_nif(blocks, parent_of, owner_id)
             owner_name = _owning_node_name(blocks, owner_id)
             layer = _shape_layer(physics_by_pid, pid, s.body_index)
-            if layer is None:
-                _report_message(f"{nif_path}: physics system {pid} body {s.body_index} has no decodable "
-                                f"collision layer; its shapes carry no layer")
+            if layer is None and body_key not in layerless_reported:
+                layerless_reported.add(body_key)
+                if s.body_index is None:
+                    _report_message(f"{nif_path}: a shape of physics system {pid} has no body index; "
+                                    f"its shapes carry no layer")
+                else:
+                    _report_message(f"{nif_path}: physics system {pid} body {s.body_index} has no decodable "
+                                    f"collision layer; its shapes carry no layer")
             for placed in _place_entries(local_entries, _rotation_to_godot(rot), scale,
                                          _nif_translation_to_godot(trans)):
                 placed["node"] = owner_name
