@@ -104,6 +104,13 @@ namespace InstallerTests
             plugin.AddStatic("WallStatic", ModelOfWall);
             plugin.AddStatic("MarkerStatic", @"Markers\Marker.nif", TinyPlugin.MarkerFlag);
             plugin.AddDoor("DoorBase", @"Doors\Door01.nif");
+            plugin.AddCollisionLayer("LayerStatic", layer => { layer.Index = 1; layer.Flags = CollisionLayer.Flag.TriggerVolume; });
+            plugin.AddCollisionLayer("LayerCharacter", layer =>
+            {
+                layer.Index = 30;
+                layer.CollidesWith = [new FormLink<ICollisionLayerGetter>(plugin.FormKeyOf("LayerStatic")), new FormLink<ICollisionLayerGetter>(layer.FormKey)];
+            });
+            plugin.AddCollisionLayer("LayerIsolated", layer => layer.Index = 7);
             plugin.AddLight("LampLight", light =>
             {
                 light.Radius = 512;

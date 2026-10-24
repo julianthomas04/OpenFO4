@@ -204,7 +204,7 @@ namespace AssetConverter
         Simple<IBodyPartDataGetter>("BPTD", "body_part_datas", f => f.EnumerateMajorRecords<IBodyPartDataGetter>()),
         Simple<ICameraPathGetter>("CPTH", "camera_paths", f => f.CameraPaths),
         Simple<ICameraShotGetter>("CAMS", "camera_shots", f => f.CameraShots),
-        Simple<ICollisionLayerGetter>("COLL", "collision_layers", f => f.CollisionLayers),
+        Job<ICollisionLayerGetter>("COLL", ["collision_layers"], f => f.CollisionLayers, _ => new CollisionLayerProcessor()),
         Simple<IColorRecordGetter>("CLFM", "color_records", f => f.EnumerateMajorRecords<IColorRecordGetter>()),
         Simple<IDebrisGetter>("DEBR", "debrises", f => f.EnumerateMajorRecords<IDebrisGetter>()),
         Job<IDefaultObjectManagerGetter>("DOMD", ["default_object_managers", "default_object_slots"], f => f.DefaultObjectManagers, _ => new DefaultObjectManagerProcessor()),

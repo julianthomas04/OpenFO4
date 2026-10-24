@@ -67,6 +67,41 @@ namespace InstallerTests
             Assert.Equal(@"Doors\Door01.nif", model);
         }
 
+        sealed class CollisionLayerRow
+        {
+            public string? EditorId { get; init; }
+            public long? LayerIndex { get; init; }
+            public long? Flags { get; init; }
+            public string? CollidesWith { get; init; }
+        }
+
+        CollisionLayerRow CollisionLayer(string editorId) =>
+            db.QuerySingle<CollisionLayerRow>("SELECT * FROM collision_layers WHERE form_key = @key", new { key = db.KeyOf(editorId) });
+
+        [Fact]
+        public void CollisionLayer_StoresIndexAndRawFlags()
+        {
+            var row = CollisionLayer("LayerStatic");
+
+            Assert.Equal("LayerStatic", row.EditorId);
+            Assert.Equal(1, row.LayerIndex);
+            Assert.Equal((long)(uint)Mutagen.Bethesda.Fallout4.CollisionLayer.Flag.TriggerVolume, row.Flags);
+        }
+
+        [Fact]
+        public void CollisionLayer_CollidesWith_IsJsonArrayOfFormKeysInAuthoredOrder()
+        {
+            var collidesWith = JsonSerializer.Deserialize<string[]>(CollisionLayer("LayerCharacter").CollidesWith!);
+
+            Assert.Equal([db.KeyOf("LayerStatic"), db.KeyOf("LayerCharacter")], collidesWith);
+        }
+
+        [Fact]
+        public void CollisionLayer_WithoutCollidesWithList_StoresNull()
+        {
+            Assert.Null(CollisionLayer("LayerIsolated").CollidesWith);
+        }
+
         sealed class LightRow
         {
             public double Radius { get; init; }

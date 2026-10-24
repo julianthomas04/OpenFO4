@@ -638,6 +638,9 @@ namespace AssetConverter
             ("footsteps", "impact_data_set", "TEXT"),
             ("impacts", "player_sound", "TEXT"),
             ("impacts", "npc_sound", "TEXT"),
+            ("collision_layers", "layer_index", "INTEGER"),
+            ("collision_layers", "flags", "INTEGER"),
+            ("collision_layers", "collides_with", "TEXT"),
         };
 
         private async Task AddColumnIfMissingAsync(string table, string column, string type)
@@ -2393,6 +2396,38 @@ namespace AssetConverter
             Console.WriteLine($"  Placed Objects Processed: {_placedObjectsProcessed}");
             Console.WriteLine($"  Teleport Doors Processed: {_teleportsProcessed}");
             Console.WriteLine($"  Landscapes Processed: {_landscapesProcessed}");
+        }
+    }
+
+    public class CollisionLayerProcessor : BaseRecordProcessor<ICollisionLayerGetter>
+    {
+        protected override async Task ProcessSpecificRecordAsync(ICollisionLayerGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
+        {
+            const string sql = @"
+                INSERT OR REPLACE INTO collision_layers (form_key, editor_id, layer_index, flags, collides_with)
+                VALUES (@FormKey, @EditorId, @LayerIndex, @Flags, @CollidesWith)";
+
+            var tally = ReadFailureTally.Shared;
+            long? layerIndex = tally.Read("COLL Index", record.EditorID, () => (long?)record.Index, (long?)null);
+            long? flags = tally.Read("COLL Flags", record.EditorID, () => (long?)(uint)record.Flags, (long?)null);
+            string? collidesWith = tally.Read("COLL CollidesWith", record.EditorID, () => SerializeCollidesWith(record), (string?)null);
+
+            await conn.ExecuteAsync(sql, new
+            {
+                FormKey = formKey,
+                EditorId = record.EditorID,
+                LayerIndex = layerIndex,
+                Flags = flags,
+                CollidesWith = collidesWith
+            }, transaction);
+        }
+
+        private string? SerializeCollidesWith(ICollisionLayerGetter record)
+        {
+            var keys = record.CollidesWith?.Select(link => link.IsNull
+                ? throw new InvalidDataException("CNAM contains a null collision layer link")
+                : link.FormKey.ToString()).ToList();
+            return SafeSerialize(keys, "CollidesWith");
         }
     }
 

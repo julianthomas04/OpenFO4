@@ -63,6 +63,14 @@ namespace InstallerTests
             return record;
         }
 
+        public CollisionLayer AddCollisionLayer(string editorId, Action<CollisionLayer>? configure = null)
+        {
+            var record = _mod.CollisionLayers.AddNew(editorId);
+            configure?.Invoke(record);
+            Register(editorId, record.FormKey);
+            return record;
+        }
+
         public Light AddLight(string editorId, Action<Light> configure)
         {
             var record = _mod.Lights.AddNew(editorId);
