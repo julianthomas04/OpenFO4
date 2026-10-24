@@ -4050,7 +4050,7 @@ struct WorkerShared {
     bake_cache: crate::sim::bake::ShapeBakeCache,
     /// Baked terrain-LOD tile lookups, memoized for the pool's lifetime: one
     /// DB round-trip per worldspace and one fs metadata call per tile.
-    ws_editor_ids: Mutex<HashMap<String, Option<String>>>,
+    ws_editor_ids: Mutex<HashMap<String, Vec<String>>>,
     tile_exists: Mutex<HashMap<String, bool>>,
     /// Worldspace persistent REFRs (WRLD.TopCell) are unreachable through
     /// the grid query — loaded once per worldspace, bucketed by the grid
@@ -4689,31 +4689,34 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
             if let Some(cpu) = result.terrain.as_mut() {
                 let unpainted = cpu.texture_paths.iter().all(std::option::Option::is_none);
                 if is_lod || unpainted {
-                    let editor_id = shared
+                    let editor_ids = shared
                         .ws_editor_ids
                         .lock()
                         .unwrap()
                         .entry(worldspace.to_string())
-                        .or_insert_with(|| baked_tile_editor_id(db, worldspace))
+                        .or_insert_with(|| baked_tile_editor_ids(db, worldspace))
                         .clone();
-                    if let Some(eid) = editor_id {
-                        let tx = terrain::baked_tile_coord(gx);
-                        let ty = terrain::baked_tile_coord(gy);
-                        // Single construction site: this string is also the
-                        // texture cache/refcount key on the main thread.
-                        let rel = format!("{TEXTURES_DIR}/Terrain/{eid}/{eid}.4.{tx}.{ty}.DDS");
-                        let exists = *shared
-                            .tile_exists
-                            .lock()
-                            .unwrap()
-                            .entry(rel.clone())
-                            .or_insert_with(|| {
-                                std::path::Path::new(&format!("{}/{rel}", shared.asset_root))
-                                    .is_file()
-                            });
-                        if exists {
-                            terrain::apply_baked_tile_uvs(cpu, rel);
-                        }
+                    let tx = terrain::baked_tile_coord(gx);
+                    let ty = terrain::baked_tile_coord(gy);
+                    // Single construction site: this string is also the
+                    // texture cache/refcount key on the main thread.
+                    let tile = first_existing_baked_tile(
+                        &editor_ids,
+                        |eid| format!("{TEXTURES_DIR}/Terrain/{eid}/{eid}.4.{tx}.{ty}.DDS"),
+                        |rel| {
+                            *shared
+                                .tile_exists
+                                .lock()
+                                .unwrap()
+                                .entry(rel.to_owned())
+                                .or_insert_with(|| {
+                                    std::path::Path::new(&format!("{}/{rel}", shared.asset_root))
+                                        .is_file()
+                                })
+                        },
+                    );
+                    if let Some(rel) = tile {
+                        terrain::apply_baked_tile_uvs(cpu, rel);
                     }
                 }
             }
@@ -4811,17 +4814,39 @@ fn terrain_landscape(
     })
 }
 
-/// The editor id naming the baked terrain tile folder of a worldspace: that of the worldspace whose
-/// LOD data it uses, since a child worldspace has no tiles of its own. `None` is logged.
-fn baked_tile_editor_id(db: &DbClient, worldspace: &str) -> Option<String> {
-    let editor_id = db
-        .lod_data_owner(worldspace)
-        .and_then(|owner| db.get_worldspace(&owner))
-        .map(|owner| owner.editor_id);
-    editor_id.unwrap_or_else(|error| {
-        warn!("No baked terrain tiles for worldspace {worldspace}: {error:#}");
-        None
-    })
+/// The editor ids whose baked terrain tile folders can texture a worldspace, preferred first: its
+/// own, then that of the worldspace whose LOD data it uses (a child worldspace may ship no tiles).
+fn baked_tile_editor_ids(db: &DbClient, worldspace: &str) -> Vec<String> {
+    let lod_owner = db.lod_data_owner(worldspace).unwrap_or_else(|error| {
+        warn!("No LOD data owner for worldspace {worldspace}: {error:#}");
+        worldspace.to_owned()
+    });
+    let mut form_keys = vec![worldspace];
+    if lod_owner != worldspace {
+        form_keys.push(&lod_owner);
+    }
+    form_keys
+        .into_iter()
+        .filter_map(|form_key| match db.get_worldspace(form_key) {
+            Ok(worldspace) => worldspace.editor_id,
+            Err(error) => {
+                warn!("No editor id for worldspace {form_key}: {error:#}");
+                None
+            }
+        })
+        .collect()
+}
+
+/// The first baked tile, in editor id preference order, that exists.
+fn first_existing_baked_tile(
+    editor_ids: &[String],
+    tile_key: impl Fn(&str) -> String,
+    mut exists: impl FnMut(&str) -> bool,
+) -> Option<String> {
+    editor_ids
+        .iter()
+        .map(|editor_id| tile_key(editor_id))
+        .find(|key| exists(key))
 }
 
 /// Decodes and builds the navigation meshes of one cell on the worker. A cell whose query fails
@@ -5969,6 +5994,34 @@ mod tests {
             layers: None,
             flags: None,
         }
+    }
+
+    #[test]
+    fn a_worldspace_with_its_own_baked_tile_keeps_it_over_its_lod_owners() {
+        let ids = ["Own".to_owned(), "Owner".to_owned()];
+        let tile = first_existing_baked_tile(&ids, |id| format!("{id}.dds"), |_| true);
+        assert_eq!(tile.as_deref(), Some("Own.dds"));
+    }
+
+    #[test]
+    fn a_worldspace_without_its_own_baked_tile_falls_back_to_its_lod_owners() {
+        let ids = ["Own".to_owned(), "Owner".to_owned()];
+        let tile =
+            first_existing_baked_tile(&ids, |id| format!("{id}.dds"), |key| key == "Owner.dds");
+        assert_eq!(tile.as_deref(), Some("Owner.dds"));
+    }
+
+    #[test]
+    fn a_worldspace_without_any_baked_tile_gets_none() {
+        let ids = ["Own".to_owned(), "Owner".to_owned()];
+        assert_eq!(
+            first_existing_baked_tile(&ids, |id| format!("{id}.dds"), |_| false),
+            None
+        );
+        assert_eq!(
+            first_existing_baked_tile(&[], std::borrow::ToOwned::to_owned, |_| true),
+            None
+        );
     }
 
     #[test]
