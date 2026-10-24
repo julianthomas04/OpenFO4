@@ -94,14 +94,23 @@ namespace AssetConverter
         /// <exception cref="FileNotFoundException">A mesh archive is missing from the game's Data folder.</exception>
         public GameMeshReader(string gameDataDirectory)
         {
-            foreach (string name in ArchiveNames)
+            var paths = ArchiveNames.Select(name => Path.Combine(gameDataDirectory, name)).ToList();
+            foreach (string missing in paths.Where(path => !File.Exists(path)))
+                throw new FileNotFoundException($"{missing} not found; the doors' trigger bounds cannot be read from their models.", missing);
+            try
             {
-                string path = Path.Combine(gameDataDirectory, name);
-                if (!File.Exists(path)) throw new FileNotFoundException($"{path} not found; the doors' trigger bounds cannot be read from their models.", path);
-                var archive = new BA2(path);
-                var entries = new Dictionary<string, ArchiveEntry>(StringComparer.OrdinalIgnoreCase);
-                foreach (var file in archive.Files) entries[file.FullPath.Replace('/', '\\')] = file;
-                _archives.Add((archive, entries));
+                foreach (string path in paths)
+                {
+                    var entries = new Dictionary<string, ArchiveEntry>(StringComparer.OrdinalIgnoreCase);
+                    var archive = new BA2(path);
+                    _archives.Add((archive, entries));
+                    foreach (var file in archive.Files) entries[file.FullPath.Replace('/', '\\')] = file;
+                }
+            }
+            catch
+            {
+                Dispose();
+                throw;
             }
         }
 

@@ -137,5 +137,16 @@ namespace InstallerTests
 
             Assert.Contains("has no model", Assert.Single(report.Failures));
         }
+
+        [Fact]
+        public void AMissingMeshArchiveIsReportedBeforeAnyArchiveIsOpened()
+        {
+            using var data = new TempDirectory();
+            File.WriteAllBytes(Path.Combine(data.Path, "Fallout4 - MeshesExtra.ba2"), [1, 2, 3, 4]);
+
+            var error = Assert.Throws<FileNotFoundException>(() => new GameMeshReader(data.Path));
+
+            Assert.Equal(Path.Combine(data.Path, "Fallout4 - Meshes.ba2"), error.FileName);
+        }
     }
 }
