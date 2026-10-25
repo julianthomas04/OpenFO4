@@ -7,11 +7,14 @@ pub mod fog;
 pub mod frame_binding;
 pub mod frame_uniform;
 pub mod interior_catalog;
+pub mod lerp;
+pub mod sky_clock;
 pub mod state;
 pub mod time_of_day;
 pub mod time_panel;
 pub mod tonemap_settings;
 pub mod weather_panel;
+pub mod weather_slots;
 
 pub use frame_binding::FrameBinding;
 pub use frame_uniform::FrameUniform;

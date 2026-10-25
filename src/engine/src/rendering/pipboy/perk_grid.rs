@@ -11,8 +11,8 @@ use bytemuck::{Pod, Zeroable};
 use egui::{Pos2, Rect, TextureId, Vec2};
 use egui_wgpu::{Callback, CallbackResources, CallbackTrait, ScreenDescriptor};
 
-use super::world_map_texture::resolve_below;
 use crate::assets::pipboy_art::PerkGridTexture;
+use crate::assets::resolve::resolve_below;
 use crate::assets::types::texture::TextureError;
 use crate::rendering::egui_pass::EguiPass;
 use crate::rendering::texture::load_dds_view;

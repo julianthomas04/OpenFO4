@@ -34,7 +34,7 @@ fn sky_gradient(sine_elevation: f32) -> vec3<f32> {
 @fragment
 fn fs_main(in: SkyVertexOutput) -> @location(0) vec4<f32> {
     let dir = view_ray(in.ndc);
-    let cos_sun = dot(dir, frame.to_sun.xyz);
+    let cos_sun = dot(dir, frame.sun_disc.xyz);
     let edge_width = max(fwidth(cos_sun), MIN_SUN_EDGE_WIDTH);
     let disc = smoothstep(frame.to_sun.w - edge_width, frame.to_sun.w + edge_width, cos_sun);
     let glow = pow(max(cos_sun, 0.0), SUN_GLOW_EXPONENT);

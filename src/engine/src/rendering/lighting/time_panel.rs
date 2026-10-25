@@ -1,5 +1,7 @@
 use std::ops::RangeInclusive;
 
+use super::time_of_day::{SkyMoment, SlotBlend};
+use crate::rendering::post::night_sky::{AssetState, SkyAssetStatus};
 use crate::sim::commands::ClockEdit;
 use crate::sim::world_clock::{GameClock, WorldClock};
 
@@ -30,7 +32,14 @@ impl TimeControls {
     }
 }
 
-pub fn time_panel(ui: &mut egui::Ui, clock: &WorldClock, edits: &mut Vec<ClockEdit>) {
+/// `sky` is where the clock last put the sky, `None` before the first exterior frame.
+pub fn time_panel(
+    ui: &mut egui::Ui,
+    clock: &WorldClock,
+    sky: Option<&SkyMoment>,
+    sky_assets: &SkyAssetStatus,
+    edits: &mut Vec<ClockEdit>,
+) {
     let before = TimeControls::of(clock);
     let mut after = before;
 
@@ -55,6 +64,9 @@ pub fn time_panel(ui: &mut egui::Ui, clock: &WorldClock, edits: &mut Vec<ClockEd
     ui.label(format!("date: {}", format_date(&clock.date())));
     ui.label(format!("days passed: {}", clock.days_passed()));
     ui.label(format_time_scale(clock.time_scale()));
+    ui.label(weather_slot_label(sky.map(|moment| &moment.blend)));
+    ui.label(moon_label(sky));
+    ui.label(sky_assets_label(sky_assets));
 
     edits.extend(clock_edits(&before, &after));
 }
@@ -118,6 +130,70 @@ pub fn format_date(date: &GameClock) -> String {
     format!("{:04}-{:02}-{:02}", date.year, date.month, date.day)
 }
 
+/// `Weather slot: LateSunrise -> Day (42%)`, or just the slot while the blend holds one.
+pub fn weather_slot_label(blend: Option<&SlotBlend>) -> String {
+    match blend {
+        None => "Weather slot: -".to_owned(),
+        Some(blend) if blend.from == blend.to => {
+            format!("Weather slot: {}", blend.from.json_key())
+        }
+        Some(blend) => format!(
+            "Weather slot: {} -> {} ({}%)",
+            blend.from.json_key(),
+            blend.to.json_key(),
+            (blend.t * 100.0).round() as u32
+        ),
+    }
+}
+
+/// `Moon: HalfWax`; `none` where the climate shows no moon.
+pub fn moon_label(sky: Option<&SkyMoment>) -> String {
+    match sky {
+        None => "Moon: -".to_owned(),
+        Some(moment) => match &moment.moon {
+            Some(moon) => format!("Moon: {:?}", moon.phase),
+            None => "Moon: none".to_owned(),
+        },
+    }
+}
+
+fn state_word(state: &AssetState) -> &'static str {
+    match state {
+        AssetState::NotRequested => "not requested",
+        AssetState::Loaded => "loaded",
+        AssetState::Placeholder => "placeholder",
+        AssetState::Failed(_) => "failed",
+    }
+}
+
+/// `Sky assets: star texture loaded, star mesh loaded, moon 7 loaded, 1 failed`.
+pub fn sky_assets_label(status: &SkyAssetStatus) -> String {
+    let count = |wanted: fn(&AssetState) -> bool| status.moon.iter().filter(|s| wanted(s)).count();
+    let counts = [
+        (count(|s| matches!(s, AssetState::Loaded)), "loaded"),
+        (
+            count(|s| matches!(s, AssetState::Placeholder)),
+            "placeholder",
+        ),
+        (count(|s| matches!(s, AssetState::Failed(_))), "failed"),
+    ];
+    let moon: Vec<String> = counts
+        .into_iter()
+        .filter(|(number, _)| *number > 0)
+        .map(|(number, word)| format!("{number} {word}"))
+        .collect();
+    let moon = if moon.is_empty() {
+        state_word(&AssetState::NotRequested).to_owned()
+    } else {
+        moon.join(", ")
+    };
+    format!(
+        "Sky assets: star texture {}, star mesh {}, moon {moon}",
+        state_word(&status.star_texture),
+        state_word(&status.star_mesh),
+    )
+}
+
 /// `20x (one game day = 1 h 12 min)`.
 pub fn format_time_scale(time_scale: f32) -> String {
     let seconds = SECONDS_PER_GAME_DAY_AT_SCALE_1 / f64::from(time_scale);
@@ -138,7 +214,11 @@ pub fn format_time_scale(time_scale: f32) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::time_of_day::{
+        LightSource, MoonKind, MoonPhase, MoonSky, SkyPosition, StarRotation, TimeSlot,
+    };
     use super::*;
+    use crate::rendering::post::night_sky::{AssetFailure, AssetFailureKind};
 
     fn controls() -> TimeControls {
         TimeControls {
@@ -306,6 +386,115 @@ mod tests {
     fn dates_read_as_year_month_day() {
         let date = WorldClock::default().date();
         assert_eq!(format_date(&date), "2287-10-23");
+    }
+
+    fn blend(from: TimeSlot, to: TimeSlot, t: f32) -> SlotBlend {
+        SlotBlend { from, to, t }
+    }
+
+    #[test]
+    fn the_slot_label_names_both_slots_and_the_percentage_between_them() {
+        assert_eq!(
+            weather_slot_label(Some(&blend(TimeSlot::LateSunrise, TimeSlot::Day, 0.4231))),
+            "Weather slot: LateSunrise -> Day (42%)"
+        );
+        assert_eq!(
+            weather_slot_label(Some(&blend(TimeSlot::Night, TimeSlot::EarlySunrise, 0.0))),
+            "Weather slot: Night -> EarlySunrise (0%)"
+        );
+        assert_eq!(
+            weather_slot_label(Some(&blend(TimeSlot::Sunset, TimeSlot::LateSunset, 1.0))),
+            "Weather slot: Sunset -> LateSunset (100%)"
+        );
+    }
+
+    #[test]
+    fn the_slot_label_of_a_held_slot_names_it_alone() {
+        assert_eq!(
+            weather_slot_label(Some(&blend(TimeSlot::Day, TimeSlot::Day, 0.7))),
+            "Weather slot: Day"
+        );
+    }
+
+    #[test]
+    fn the_slot_label_before_the_first_exterior_frame_is_a_dash() {
+        assert_eq!(weather_slot_label(None), "Weather slot: -");
+    }
+
+    fn moment(moon: Option<MoonSky>) -> SkyMoment {
+        let sun = SkyPosition {
+            azimuth_deg: 90.0,
+            elevation_deg: 10.0,
+        };
+        SkyMoment {
+            blend: blend(TimeSlot::Day, TimeSlot::Day, 0.0),
+            sun,
+            moon,
+            light: LightSource {
+                direction: sun.direction(),
+                from_moon_weight: 0.0,
+                strength: 1.0,
+            },
+            star_rotation: StarRotation {
+                axis: glam::Vec3::Y,
+                angle_rad: 0.0,
+            },
+        }
+    }
+
+    fn failed() -> AssetState {
+        AssetState::Failed(AssetFailure {
+            kind: AssetFailureKind::NotFound,
+            message: "missing".to_owned(),
+        })
+    }
+
+    #[test]
+    fn the_sky_assets_label_before_anything_is_requested() {
+        assert_eq!(
+            sky_assets_label(&SkyAssetStatus::default()),
+            "Sky assets: star texture not requested, star mesh not requested, moon not requested"
+        );
+    }
+
+    #[test]
+    fn the_sky_assets_label_counts_the_moon_phases_by_state() {
+        let mut status = SkyAssetStatus {
+            star_texture: AssetState::Loaded,
+            star_mesh: failed(),
+            ..SkyAssetStatus::default()
+        };
+        for (index, state) in status.moon.iter_mut().enumerate() {
+            *state = match index {
+                0 => failed(),
+                1 => AssetState::Placeholder,
+                _ => AssetState::Loaded,
+            };
+        }
+        assert_eq!(
+            sky_assets_label(&status),
+            "Sky assets: star texture loaded, star mesh failed, moon 6 loaded, 1 placeholder, 1 failed"
+        );
+    }
+
+    #[test]
+    fn the_moon_label_names_the_phase() {
+        let moon = MoonSky {
+            kind: MoonKind::Masser,
+            phase: MoonPhase::HalfWax,
+            position: SkyPosition {
+                azimuth_deg: 270.0,
+                elevation_deg: 30.0,
+            },
+            visibility: 1.0,
+        };
+        assert_eq!(moon_label(Some(&moment(Some(moon)))), "Moon: HalfWax");
+    }
+
+    #[test]
+    fn the_moon_label_tells_a_climate_without_a_moon_from_no_data_yet() {
+        assert_eq!(moon_label(Some(&moment(None))), "Moon: none");
+        assert_eq!(moon_label(None), "Moon: -");
     }
 
     #[test]

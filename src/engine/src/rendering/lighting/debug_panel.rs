@@ -9,26 +9,32 @@ pub fn lighting_panel(ui: &mut egui::Ui, lighting: &mut LightingState) {
     weather_section(ui, lighting);
 
     ui.separator();
-    ui.label("Sun");
-    ui.add(
-        egui::Slider::new(&mut lighting.sun.azimuth_deg, 0.0..=360.0)
-            .text("azimuth (0 = north, clockwise)"),
-    );
-    ui.add(egui::Slider::new(&mut lighting.sun.elevation_deg, -10.0..=90.0).text("elevation"));
-    color_row(ui, "color", &mut lighting.sun.color);
-    color_row(ui, "disc color", &mut lighting.sun.disc_color);
-    ui.add(egui::Slider::new(&mut lighting.sun.intensity, 0.0..=10.0).text("intensity"));
+    ui.checkbox(&mut lighting.sun_override, "Override (manual sun/sky)");
+    let manual = lighting.sun_override;
+    ui.add_enabled_ui(manual, |ui| {
+        ui.label("Sun");
+        ui.add(
+            egui::Slider::new(&mut lighting.sun.azimuth_deg, 0.0..=360.0)
+                .text("azimuth (0 = north, clockwise)"),
+        );
+        ui.add(egui::Slider::new(&mut lighting.sun.elevation_deg, -10.0..=90.0).text("elevation"));
+        color_row(ui, "color", &mut lighting.sun.color);
+        color_row(ui, "disc color", &mut lighting.sun.disc_color);
+        ui.add(egui::Slider::new(&mut lighting.sun.intensity, 0.0..=10.0).text("intensity"));
 
-    ui.separator();
-    ui.label("Sky");
-    color_row(ui, "zenith", &mut lighting.sky.zenith);
-    color_row(ui, "horizon", &mut lighting.sky.horizon);
-    color_row(ui, "ground", &mut lighting.sky.ground);
+        ui.separator();
+        ui.label("Sky");
+        color_row(ui, "zenith", &mut lighting.sky.zenith);
+        color_row(ui, "horizon", &mut lighting.sky.horizon);
+        color_row(ui, "ground", &mut lighting.sky.ground);
+        ui.add(egui::Slider::new(&mut lighting.sky.radiance_scale, 0.0..=10.0).text("sky scale"));
+
+        ui.separator();
+        fog_section(ui, &mut lighting.fog);
+    });
     ui.add(egui::Slider::new(&mut lighting.sky.ambient_intensity, 0.0..=2.0).text("ambient"));
-    ui.add(egui::Slider::new(&mut lighting.sky.radiance_scale, 0.0..=10.0).text("sky scale"));
 
     ui.separator();
-    fog_section(ui, &mut lighting.fog);
     shadow_section(ui, lighting);
 
     ui.separator();

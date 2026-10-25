@@ -90,6 +90,7 @@ use crate::anim::marker_timeline::{FIRST_PERSON_ASSETS_DIR, load_gait_timings};
 use crate::assets::AssetServer;
 use crate::assets::layout;
 use crate::assets::pipboy_art::ArtLibrary;
+use crate::assets::sky_game_settings::load_sky_game_config_or_report;
 use crate::audio::conditions::GameTime;
 use crate::audio::world_music_loader::{load_world_music, seed_from_clock};
 use crate::audio::{
@@ -118,8 +119,8 @@ use crate::rendering::{
     hiz::HizPipeline,
     lighting::{
         FrameBinding, LightingState, debug_panel::lighting_panel,
-        exterior_weather::ExteriorWeather, interior_catalog::InteriorLightingCatalog,
-        state::FrameInputs, time_panel::time_panel,
+        exterior_weather::ExteriorWeatherSlots, interior_catalog::InteriorLightingCatalog,
+        state::FrameInputs, time_of_day::DayTime, time_panel::time_panel,
     },
     line_buffer::LineBuffer,
     local_lights::{
@@ -137,6 +138,7 @@ use crate::rendering::{
         PostChain,
         depth_of_field::{BokehGate, DofCamera, select_frame},
         hdr_target::{HDR_FORMAT, clear_color},
+        night_sky::{MoonSizes, NightSky, NightSkyInput},
         tonemap,
     },
     ragdoll_debug_panel::ragdoll_settings_section,
@@ -501,6 +503,7 @@ pub struct State {
 
     // Post
     post: PostChain,
+    night_sky: NightSky,
     scene_copy: SceneCopy,
     water_stage: WaterStage,
     effect_stage: EffectStage,
@@ -1182,9 +1185,13 @@ impl State {
             LampShadowState::new(settings.lamp_shadows),
             LocalLightSettings::new(settings.light_fade),
         );
-        if let Some(weather) = ExteriorWeather::load_or_report(&asset_server.db_path(), WORLDSPACE)
+        if let Some(slots) =
+            ExteriorWeatherSlots::load_or_report(&asset_server.db_path(), WORLDSPACE)
         {
-            lighting.set_exterior_weather(weather);
+            match load_sky_game_config_or_report(&asset_server.db_path()) {
+                Some(game) => lighting.set_exterior_sky(slots, game),
+                None => lighting.set_exterior_weather(slots.initial()),
+            }
         }
         let shadow_maps = ShadowMaps::new(&device, &lighting.shadows.config);
         let lamp_atlas_resolution = lighting.lamp_shadows.config.atlas_resolution;
@@ -1215,6 +1222,24 @@ impl State {
             &frame_binding.layout,
             &world_pass_layout.pipeline_layout,
         );
+        let night_sky = {
+            let (initial_moon, initial_sky_model) = lighting.initial_night_sky();
+            let moon_sizes = lighting
+                .sky_game_config()
+                .map_or(MoonSizes::VANILLA, |game| MoonSizes {
+                    masser: game.masser_size(),
+                    secunda: game.secunda_size(),
+                });
+            NightSky::new(
+                &device,
+                &queue,
+                asset_server.asset_location(),
+                &frame_binding.layout,
+                moon_sizes,
+                initial_moon,
+                initial_sky_model,
+            )
+        };
         timer.mark("frame_resources")?;
 
         // GPU-driven: textures & materials
@@ -1649,6 +1674,7 @@ impl State {
             lighting,
             interior_lighting,
             frame_binding,
+            night_sky,
             shadow_renderer,
             lamp_shadow_cache,
             lamp_candidates: Vec::new(),
@@ -2183,6 +2209,10 @@ impl State {
                 // instead.
                 if self.lighting.draws_sky() {
                     self.post.draw_sky(&mut render_pass);
+                    if self.lighting.sky_objects().is_some() {
+                        self.night_sky
+                            .draw(&mut render_pass, self.texture_feedback.bind_group());
+                    }
                 }
             }
         }
@@ -2940,7 +2970,13 @@ impl State {
                             .default_open(false)
                             .show(ui, |ui| {
                                 let mut clock_edits = Vec::new();
-                                time_panel(ui, self.sim.world_clock(), &mut clock_edits);
+                                time_panel(
+                                    ui,
+                                    self.sim.world_clock(),
+                                    self.lighting.sky_moment(),
+                                    self.night_sky.asset_status(),
+                                    &mut clock_edits,
+                                );
                                 for edit in clock_edits {
                                     self.sim.apply(SimCommand::SetWorldClock(edit));
                                 }
@@ -3527,6 +3563,19 @@ impl State {
             self.streamer.current_interior(),
             self.interior_lighting.as_ref(),
         );
+        let clock = self.sim.world_clock();
+        self.lighting
+            .set_time_of_day(DayTime::clamped(clock.days_passed(), clock.hour()));
+        if self.lighting.draws_sky()
+            && let Some(objects) = self.lighting.sky_objects()
+        {
+            self.night_sky.update(
+                &self.device,
+                &self.queue,
+                &NightSkyInput::from(objects),
+                self.lighting.sky.radiance_scale,
+            );
+        }
         let mut water_entries = Vec::new();
         if self.water_stage.wants_water_entries() {
             self.sim.drain_water_entries(&mut water_entries);

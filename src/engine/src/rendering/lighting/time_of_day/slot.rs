@@ -24,6 +24,11 @@ impl TimeSlot {
         Self::LateSunset,
     ];
 
+    /// The position in [`Self::ALL`].
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+
     /// The key of this slot in the database's per-slot JSON objects.
     pub const fn json_key(self) -> &'static str {
         match self {
@@ -61,6 +66,13 @@ mod tests {
                 "LateSunset"
             ]
         );
+    }
+
+    #[test]
+    fn the_index_is_the_position_in_record_order() {
+        for (position, slot) in TimeSlot::ALL.into_iter().enumerate() {
+            assert_eq!(slot.index(), position);
+        }
     }
 
     #[test]

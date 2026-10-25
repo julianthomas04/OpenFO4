@@ -19,6 +19,9 @@ pub struct FrameUniform {
     pub sun_illuminance: Vec4,
     /// rgb: linear sun disc colour times intensity, painted by the sky.
     pub sun_disc_illuminance: Vec4,
+    /// xyz: unit direction towards the sun disc, which is the sun's own place (`to_sun` follows
+    /// the moon at night), w: the sun's alpha around sunrise and sunset, 0 to 1.
+    pub sun_disc: Vec4,
     /// rgb: linear ambient colour of each cube face, order +X, -X, +Y, -Y, +Z, -Z (engine axes).
     pub ambient_cube: [Vec4; AMBIENT_CUBE_FACES],
     pub sky_zenith: Vec4,
@@ -70,7 +73,7 @@ pub fn wrapped_time(elapsed_seconds: f32) -> f32 {
     elapsed_seconds.rem_euclid(TIME_WRAP_SECONDS)
 }
 
-const _: () = assert!(std::mem::size_of::<FrameUniform>() == 880);
+const _: () = assert!(std::mem::size_of::<FrameUniform>() == 896);
 
 #[cfg(test)]
 #[allow(clippy::float_cmp, reason = "the wrap is exact in f32 by construction")]
@@ -79,8 +82,17 @@ mod tests {
 
     #[test]
     fn water_fields_close_the_uniform_at_the_wgsl_offset() {
-        assert_eq!(std::mem::offset_of!(FrameUniform, time_water), 864);
+        assert_eq!(std::mem::offset_of!(FrameUniform, time_water), 880);
         assert_eq!(std::mem::size_of::<FrameUniform>() % 16, 0);
+    }
+
+    #[test]
+    fn the_sun_disc_field_follows_the_disc_illuminance() {
+        assert_eq!(
+            std::mem::offset_of!(FrameUniform, sun_disc_illuminance),
+            176
+        );
+        assert_eq!(std::mem::offset_of!(FrameUniform, sun_disc), 192);
     }
 
     #[test]

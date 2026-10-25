@@ -6,6 +6,25 @@ GPU data. Exteriors are lit from the worldspace's weather. Interiors are lit per
 cell, including values inherited from lighting templates, with a neutral
 fallback for cells that have no usable data.
 
+## Time of day
+
+The exterior follows the world clock. The weather's eight time slots (Sunrise,
+Day, Sunset, Night and the four Early/Late slots) are loaded once. Each frame the
+clock picks the two slots around the current time and blends their colours, light
+scales, exposure, ambient and depth of field in linear space. Fog distances exist
+only for Day and Night and are blended by how much daylight the moment has; fog that
+is on in one of the two and off in the other switches at the midpoint instead of
+blending.
+
+The one directional light is whichever of the sun and the moon is up, with the
+weather's Sunlight colour of the current slot, so the night slot lights the world
+by the moon. Its direction turns from the sun to the moon as the sun fades, its strength
+fades with the elevation of the sun or the moon, and the
+sun shadows follow it and turn off only when neither body gives light. The sun
+disc in the sky always sits at the sun's own position, and its alpha and the
+water's daylight factor ramp around sunrise and sunset over the game's
+`fSunAlphaTransTime`.
+
 ## Placed lights
 
 Placed lights (`local_lights/`) are handled by splitting the view into a 3D

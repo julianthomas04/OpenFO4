@@ -22,6 +22,17 @@ impl DayTime {
         Ok(Self { days_passed, hour })
     }
 
+    /// For a clock whose hour is in range by construction: a stray value is pulled into
+    /// `[0, 24)` (not-a-number reads as midnight) instead of failing.
+    pub fn clamped(days_passed: u32, hour: f32) -> Self {
+        let hour = if hour.is_nan() {
+            0.0
+        } else {
+            hour.clamp(0.0, 24.0_f32.next_down())
+        };
+        Self { days_passed, hour }
+    }
+
     /// From the hours elapsed since day 0, 00:00.
     pub fn from_total_hours(total_hours: f64) -> Result<Self, DayTimeError> {
         let not_representable = DayTimeError::TotalHoursNotRepresentable(total_hours);
@@ -61,6 +72,20 @@ impl DayTime {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_clamped_time_keeps_an_hour_in_range_and_pulls_strays_into_it() {
+        assert_eq!(DayTime::clamped(3, 13.5), DayTime::new(3, 13.5).unwrap());
+        for (stray, expected) in [
+            (-1.0, 0.0),
+            (f32::NAN, 0.0),
+            (24.0, 24.0_f32.next_down()),
+            (f32::INFINITY, 24.0_f32.next_down()),
+        ] {
+            let time = DayTime::clamped(1, stray);
+            assert_eq!((time.days_passed(), time.hour()), (1, expected), "{stray}");
+        }
+    }
 
     #[test]
     fn a_time_inside_the_day_is_kept() {
