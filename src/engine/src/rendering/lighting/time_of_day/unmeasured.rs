@@ -179,6 +179,7 @@ pub fn sun_light_weight(elevation_deg: f32) -> f32 {
 
 /// Geometry of the exterior one directional light. The direction turns from the sun's to
 /// the moon's as `from_moon_weight` goes from 0 to 1, so it never snaps while the light is strong.
+/// While neither body lights the ground the light keeps the sun's direction.
 pub fn light_source(
     sun: SkyPosition,
     moon: Option<SkyPosition>,
@@ -188,7 +189,7 @@ pub fn light_source(
     let moon_weight = moon.map_or(0.0, |moon| moon_visibility(moon.elevation_deg, settings));
     let moon_share = moon_weight * (1.0 - sun_weight);
     let total = sun_weight + moon_share;
-    let from_moon_weight = if total > 0.0 { moon_share / total } else { 0.5 };
+    let from_moon_weight = if total > 0.0 { moon_share / total } else { 0.0 };
     let direction = match moon {
         Some(moon) => turn_towards(sun.direction(), moon.direction(), from_moon_weight),
         None => sun.direction(),
@@ -934,6 +935,17 @@ mod tests {
                 "{hour}"
             );
         }
+    }
+
+    #[test]
+    fn while_both_bodies_are_down_the_light_keeps_the_sun_direction() {
+        let source = light(-20.0, -20.0);
+        assert_eq!((source.from_moon_weight, source.strength), (0.0, 0.0));
+        assert!(
+            source
+                .direction
+                .abs_diff_eq(at_sky(-20.0, 90.0).direction(), 1e-6)
+        );
     }
 
     #[test]
