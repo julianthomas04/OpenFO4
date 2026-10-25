@@ -24,7 +24,8 @@ use crate::rendering::post::night_sky::SunInput;
 use crate::rendering::shadows::{CascadeSet, ShadowState, lamps::LampShadowState};
 use crate::rendering::water::CameraWater;
 
-const SUN_ANGULAR_RADIUS_DEG: f32 = 0.5;
+/// Angular radius of the real sun's disc; sun shadow edges soften with it.
+const SUN_ANGULAR_RADIUS_DEG: f32 = 0.266;
 /// The Creation Kit states the eye adaptation speed per frame at 30 fps.
 const ADAPTATION_REFERENCE_FPS: f32 = 30.0;
 /// Compensates for the unproven AutoExposureMin/Max semantics; calibrated against the vanilla reference screenshot.

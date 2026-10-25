@@ -40,7 +40,7 @@ pub struct FrameUniform {
     pub shadow_params: Vec4,
     /// World size of one shadow-map texel, one component per cascade.
     pub cascade_texel_world: Vec4,
-    /// x: PCF taps per axis.
+    /// x: compare taps of the sun shadow filter.
     pub shadow_filter: UVec4,
     /// x: shadows enabled, y: cascade count, z: debug view, w: material sampler anisotropy clamp.
     pub flags: UVec4,

@@ -94,7 +94,7 @@ impl ShadowState {
                 self.config.split_blend,
             ),
             cascade_texel_world: Vec4::ZERO,
-            shadow_filter: UVec4::new(self.config.filter.taps_per_axis(), 0, 0, 0),
+            shadow_filter: UVec4::new(self.config.filter.sun_disc_taps(), 0, 0, 0),
             cascade_count: 0,
         };
         let Some(cascades) = cascades else {
