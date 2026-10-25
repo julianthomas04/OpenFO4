@@ -49,6 +49,8 @@ pub enum StartupError {
     Hud(anyhow::Error),
     #[error("cannot create the Pip-Boy: {0:#}")]
     Pipboy(anyhow::Error),
+    #[error("cannot start the world clock: {0:#}")]
+    WorldClock(anyhow::Error),
     #[error("Pip-Boy world map: {0}")]
     PipboyWorldMap(#[from] WorldMapTextureError),
     #[error("Pip-Boy map marker art: {0}")]

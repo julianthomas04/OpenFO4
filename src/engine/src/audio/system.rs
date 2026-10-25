@@ -6,6 +6,7 @@ use kira::{AudioManager, AudioManagerSettings, DefaultBackend};
 
 use super::backend::AudioBackend;
 use super::backend_errors::BackendErrorReporter;
+use super::conditions::GameTime;
 use super::error::AudioError;
 use super::footsteps::Footsteps;
 use super::music::{MusicCommand, MusicDirector};
@@ -24,8 +25,8 @@ use crate::game_flow::Phase;
 pub struct AudioFrame {
     pub phase: Phase,
     pub dt: Duration,
-    /// The game clock's hour of day, for the music track conditions.
-    pub hour: f32,
+    /// The game clock, for the music track conditions.
+    pub time: GameTime,
     /// The player's place when it was polled this frame.
     pub place: Option<PlaceSnapshot>,
 }
@@ -37,7 +38,7 @@ impl From<Phase> for AudioFrame {
         Self {
             phase,
             dt: Duration::ZERO,
-            hour: 0.0,
+            time: GameTime::at_hour(0.0),
             place: None,
         }
     }
@@ -163,7 +164,7 @@ impl<B: AudioBackend> AudioSystem<B> {
             world.sync(
                 &mut self.output,
                 self.clock,
-                frame.hour,
+                frame.time,
                 frame.place.as_ref(),
             )?;
         }

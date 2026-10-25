@@ -61,6 +61,18 @@ pub enum SimCommand {
     SetRagdollSettings(RagdollSettings),
     /// An action from the Pip-Boy screen; a rejection is recorded on the model, never dropped.
     PipBoy(PipBoyAction),
+    /// A change to the world clock; the sim rejects an invalid value with a warning and leaves
+    /// the clock as it was.
+    SetWorldClock(ClockEdit),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ClockEdit {
+    /// The hour of the day, `0..=24`; the date and the days passed stay.
+    SetHour(f32),
+    SetPaused(bool),
+    /// Game minutes per real minute.
+    SetTimeScale(f32),
 }
 
 /// World pose for the kinematic body of one animated joint of a placed

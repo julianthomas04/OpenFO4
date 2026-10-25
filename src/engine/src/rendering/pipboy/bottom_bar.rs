@@ -12,7 +12,8 @@ use super::summary::{
 };
 use super::tab::{BottomBar, TabContext};
 use crate::assets::pipboy_art::Icon;
-use crate::sim::pipboy::{GameClock, InventoryCategory};
+use crate::sim::pipboy::InventoryCategory;
+use crate::sim::world_clock::{GAME_YEAR_BASE, GameClock};
 use crate::ui_layout::set_text::SetTextRules;
 use crate::ui_layout::values::Matrix;
 use crate::ui_layout::{
@@ -614,7 +615,7 @@ impl BarTexts {
     /// `DateMonth + "." + DateDay + ".2" + DateYear`. The game's year value counts from 2000;
     /// the clock's year is the full year.
     pub fn date(&self, clock: &GameClock) -> String {
-        let year_value = i32::from(clock.year) - GAME_YEAR_BASE;
+        let year_value = i32::from(clock.year) - i32::from(GAME_YEAR_BASE);
         format!(
             "{}{}{}{}{year_value}",
             clock.month, self.date_dot, clock.day, self.year_prefix
@@ -639,9 +640,6 @@ impl BarTexts {
         ghost.min(hp_max)
     }
 }
-
-/// Stand-in: the native date value the bar appends after its ".2" is the year minus 2000.
-const GAME_YEAR_BASE: i32 = 2000;
 
 impl ClockTexts {
     /// `h:mm AM` on a twelve-hour clock.
@@ -984,8 +982,8 @@ impl BottomBarLayout {
         let model = cx.snapshot.model;
         frame
             .date
-            .paint(cx.painter, &self.texts.date(&model.clock), cx.tint);
-        let time = self.texts.clock.time(model.clock.minute_of_day);
+            .paint(cx.painter, &self.texts.date(&cx.snapshot.clock), cx.tint);
+        let time = self.texts.clock.time(cx.snapshot.clock.minute_of_day);
         frame.time.paint(cx.painter, &time, cx.tint);
         let location = match (&model.current_location, with_location) {
             (Some(name), true) => name.as_str(),

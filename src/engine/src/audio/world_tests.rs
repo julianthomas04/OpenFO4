@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use kira::sound::PlaybackState;
 
+use super::conditions::GameTime;
 use super::scheduler::{FLAG_ABRUPT_TRANSITION, FLAG_CYCLE_TRACKS, PlayPlan};
 use super::test_support::catalog::{
     MASTER_CATEGORY_MULTIPLIER, MUSIC_CATEGORY_MULTIPLIER, exterior_place, palette, silent, single,
@@ -66,7 +67,7 @@ fn frame(phase: Phase, seconds: f32, hour: f32, worldspace: Option<&str>) -> Aud
     AudioFrame {
         phase,
         dt: Duration::from_secs_f32(seconds),
-        hour,
+        time: GameTime::at_hour(hour),
         place: worldspace.map(exterior_place),
     }
 }

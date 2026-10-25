@@ -23,6 +23,37 @@ pub const IS_FIRST_PERSON: u16 = 391;
 pub const HAS_SILENT_RUNNING_PERK: u16 = 448;
 
 pub const GAME_HOUR_EDITOR_ID: &str = "GameHour";
+pub const GAME_DAYS_PASSED_EDITOR_ID: &str = "GameDaysPassed";
+
+/// The world clock as the condition layer reads it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GameTime {
+    /// The `GameHour` global: the hour of the day with the minutes as a fraction.
+    pub hour: f32,
+    /// The `GameDaysPassed` global: whole days passed plus the elapsed fraction of today.
+    pub days_passed: f32,
+}
+
+impl GameTime {
+    pub fn new(hour: f32, whole_days_passed: u32) -> Self {
+        Self {
+            hour,
+            days_passed: whole_days_passed as f32 + hour / HOURS_PER_DAY,
+        }
+    }
+
+    pub fn at_hour(hour: f32) -> Self {
+        Self::new(hour, 0)
+    }
+}
+
+const HOURS_PER_DAY: f32 = 24.0;
+
+#[derive(Debug, Clone, Copy)]
+enum LiveGlobal {
+    Hour,
+    DaysPassed,
+}
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ConditionError {
@@ -92,54 +123,62 @@ pub fn global_entries(catalog: &MusicCatalog) -> Vec<GlobalEntry> {
 /// A new game before any quest started; quest state is empty and `GameHour` follows the clock.
 #[derive(Debug, Clone)]
 pub struct FreshWorldContext {
-    hour: f32,
+    time: GameTime,
     globals: HashMap<String, f32>,
-    game_hour_names: Vec<String>,
+    live_globals: HashMap<String, LiveGlobal>,
 }
 
 impl FreshWorldContext {
     /// Globals are reachable by form key and by editor id (both case-insensitive). Every global whose
-    /// editor id is `GameHour` is answered from `hour` instead of its ESM value.
+    /// editor id is `GameHour` or `GameDaysPassed` is answered from the clock instead of its ESM
+    /// value. The clock starts at `hour` with no days passed; [`set_time`](Self::set_time) follows it.
     pub fn new(hour: f32, globals: impl IntoIterator<Item = GlobalEntry>) -> Self {
         let mut map = HashMap::new();
-        let mut game_hour_names = Vec::new();
+        let mut live_globals = HashMap::new();
         for entry in globals {
             let key = entry.key.to_ascii_lowercase();
             map.insert(key.clone(), entry.value);
             if let Some(editor_id) = entry.editor_id {
                 let editor_id = editor_id.to_ascii_lowercase();
-                if editor_id == GAME_HOUR_EDITOR_ID.to_ascii_lowercase() {
-                    game_hour_names.push(key);
-                    game_hour_names.push(editor_id.clone());
+                let live = [
+                    (GAME_HOUR_EDITOR_ID, LiveGlobal::Hour),
+                    (GAME_DAYS_PASSED_EDITOR_ID, LiveGlobal::DaysPassed),
+                ]
+                .into_iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(&editor_id));
+                if let Some((_, live)) = live {
+                    live_globals.insert(key, live);
+                    live_globals.insert(editor_id.clone(), live);
                 }
                 map.insert(editor_id, entry.value);
             }
         }
         Self {
-            hour,
+            time: GameTime::at_hour(hour),
             globals: map,
-            game_hour_names,
+            live_globals,
         }
     }
 }
 
 impl FreshWorldContext {
-    pub fn set_hour(&mut self, hour: f32) {
-        self.hour = hour;
+    pub fn set_time(&mut self, time: GameTime) {
+        self.time = time;
     }
 }
 
 impl ConditionContext for FreshWorldContext {
     fn game_hour(&self) -> f32 {
-        self.hour
+        self.time.hour
     }
 
     fn global(&self, key: &str) -> Option<f32> {
         let key = key.to_ascii_lowercase();
-        if self.game_hour_names.contains(&key) {
-            return Some(self.hour);
+        match self.live_globals.get(&key) {
+            Some(LiveGlobal::Hour) => Some(self.time.hour),
+            Some(LiveGlobal::DaysPassed) => Some(self.time.days_passed),
+            None => self.globals.get(&key).copied(),
         }
-        self.globals.get(&key).copied()
     }
 
     fn quest_running(&self, _quest: &str) -> bool {
@@ -388,6 +427,34 @@ mod tests {
         assert!(global_is("00003A:Fallout4.esm", 20.0));
         assert!(global_is("000038:Fallout4.esm", 9.783));
         assert!(global_is("gamehour", 9.783));
+    }
+
+    #[test]
+    fn game_days_passed_follows_the_clock_as_days_plus_the_fraction_of_today() {
+        let mut ctx = FreshWorldContext::new(
+            0.0,
+            [global_entry("000039:Fallout4.esm", "GameDaysPassed", 1.0)],
+        );
+        ctx.set_time(GameTime::new(12.0, 3));
+        assert_eq!(ctx.global("000039:Fallout4.esm"), Some(3.5));
+        assert_eq!(ctx.global("GameDaysPassed"), Some(3.5));
+        assert_eq!(ctx.global("gamedayspassed"), Some(3.5));
+        ctx.set_time(GameTime::new(18.0, 4));
+        assert_eq!(ctx.global("GameDaysPassed"), Some(4.75));
+    }
+
+    #[test]
+    fn the_hour_and_days_passed_globals_are_answered_independently() {
+        let mut ctx = FreshWorldContext::new(
+            0.0,
+            [
+                global_entry("000038:Fallout4.esm", "GameHour", 8.0),
+                global_entry("000039:Fallout4.esm", "GameDaysPassed", 1.0),
+            ],
+        );
+        ctx.set_time(GameTime::new(6.0, 2));
+        assert_eq!(ctx.global("GameHour"), Some(6.0));
+        assert_eq!(ctx.global("GameDaysPassed"), Some(2.25));
     }
 
     #[test]

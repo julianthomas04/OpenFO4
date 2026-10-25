@@ -90,12 +90,13 @@ use crate::anim::marker_timeline::{FIRST_PERSON_ASSETS_DIR, load_gait_timings};
 use crate::assets::AssetServer;
 use crate::assets::layout;
 use crate::assets::pipboy_art::ArtLibrary;
+use crate::audio::conditions::GameTime;
 use crate::audio::world_music_loader::{load_world_music, seed_from_clock};
 use crate::audio::{
     AudioError, AudioFrame, AudioSystem, Footsteps, PLACE_POLLS_PER_SECOND, PlacePoll,
 };
 use crate::bethesda_space::UNITS_FROM_ENGINE;
-use crate::game_flow::{GameFlow, SpawnLocation, SpawnPlace, StartMode};
+use crate::game_flow::{GameFlow, Phase, SpawnLocation, SpawnPlace, StartMode};
 use crate::rendering::water::ssr::constants::Surroundings;
 use crate::rendering::{
     anim_debug_panel::{AnimDebugPanel, characters_section},
@@ -169,7 +170,8 @@ use crate::rendering::{
 };
 use crate::sim::pipboy::PipBoyAction;
 use crate::sim::{
-    DynamicPose, MaterialBuoyancy, PlayerInput, PlayerMovement, SimCommand, SimWorld, water_physics,
+    ClockFrame, DynamicPose, MaterialBuoyancy, PlayerInput, PlayerMovement, SimCommand, SimWorld,
+    water_physics,
 };
 use crate::spawn_cell::SpawnCellTarget;
 use crate::startup::{StartupError, StartupTimer};
@@ -1619,6 +1621,10 @@ impl State {
         }
         pipboy.load_perk_grid(&device, &queue, surface_format)?;
         sim.set_pipboy_catalog(std::sync::Arc::new(pipboy_catalog));
+        let world_clock = crate::assets::db::DbClient::new(&db_path)
+            .and_then(|db| crate::assets::world_clock_start::load_world_clock(&db))
+            .map_err(StartupError::WorldClock)?;
+        sim.set_world_clock(world_clock);
 
         let cull_stats = CullStatsReadback::new(&device);
         let gpu_profiler = GpuProfiler::new(&device, &queue);
@@ -3274,7 +3280,10 @@ impl State {
         let frame = AudioFrame {
             phase,
             dt,
-            hour: self.sim.pipboy_snapshot().model.clock.hour(),
+            time: {
+                let clock = self.sim.world_clock();
+                GameTime::new(clock.hour(), clock.days_passed())
+            },
             place,
         };
         match &mut self.audio {
@@ -3309,8 +3318,12 @@ impl State {
         let pipboy_open = self.sim.pipboy_snapshot().model.open;
         self.sync_pipboy_session(pipboy_open);
         // The world stands still behind the Pip-Boy: render-side clocks get no time.
-        let world_dt = if pipboy_open { 0.0 } else { dt };
+        let world_dt = self.sim.world_dt(dt);
         self.world_seconds += world_dt;
+        self.sim.advance_world_clock(ClockFrame {
+            in_game: self.flow.phase() == Phase::InGame,
+            world_dt,
+        });
 
         // Apply a debug-UI worldspace selection before anything reads the
         // camera this frame: the streamer tears the old content down and reports
