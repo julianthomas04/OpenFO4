@@ -331,6 +331,16 @@ impl GameIni {
         })
     }
 
+    /// Like [`Self::require_positive`], and `None` when no INI sets the key. Only for the few
+    /// settings the game's own INIs omit, whose value the game takes from its built-in default
+    /// (the caller says which); a value that is present must still be valid.
+    pub fn optional_positive(&self, key: IniKey) -> Result<Option<f32>, IniError> {
+        match self.require_positive(key) {
+            Err(IniError::MissingKey { .. }) => Ok(None),
+            other => other.map(Some),
+        }
+    }
+
     fn entry(&self, key: IniKey) -> Result<&Entry, IniError> {
         self.entries
             .get(&key.name.to_ascii_lowercase())
@@ -715,6 +725,24 @@ mod tests {
         assert!(matches!(
             ini("").require_valid::<i32>(KEY, "never", |_| false),
             Err(IniError::MissingKey { .. })
+        ));
+    }
+
+    #[test]
+    fn an_optional_setting_is_none_when_absent_and_still_validated_when_present() {
+        let ini = ini("fSet=2.5
+fBad=-1
+fWord=big
+");
+        assert_eq!(ini.optional_positive(key("fSet")).unwrap(), Some(2.5));
+        assert_eq!(ini.optional_positive(key("fAbsent")).unwrap(), None);
+        assert!(matches!(
+            ini.optional_positive(key("fBad")),
+            Err(IniError::Invalid { .. })
+        ));
+        assert!(matches!(
+            ini.optional_positive(key("fWord")),
+            Err(IniError::Unparsable { .. })
         ));
     }
 

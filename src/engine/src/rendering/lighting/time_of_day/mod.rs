@@ -20,7 +20,7 @@ pub mod unmeasured;
 mod wrap;
 
 pub use blend::{SlotBlend, fog_daylight_weight, slot_blend};
-pub use climate_sky::{ClimateSky, ClimateSkyError, Moons};
+pub use climate_sky::{ClimateSky, ClimateSkyError, ClimateSunTextures, Moons};
 pub use climate_times::{ClimateTimes, ClimateTimesError, ClimateWindow};
 pub use day_time::{DayTime, DayTimeError};
 pub use game_config::{SkyGameConfig, SkyGameConfigError};

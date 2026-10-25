@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use glam::Vec3;
 
+use super::climate_sky::ClimateSunTextures;
 use super::moment::MoonSky;
 use super::moon::{MoonKind, MoonPhase};
 use super::stars::StarRotation;
@@ -41,6 +42,8 @@ pub struct SkyObjects {
     pub star_alpha: f32,
     /// The climate's sky model (`Sky\Stars.nif` in vanilla), when the database carries one.
     pub sky_model_path: Option<Arc<str>>,
+    /// The climate's sun and sun glare textures.
+    pub sun_textures: ClimateSunTextures,
 }
 
 #[cfg(test)]

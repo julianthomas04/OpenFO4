@@ -166,7 +166,7 @@ fn state_word(state: &AssetState) -> &'static str {
     }
 }
 
-/// `Sky assets: star texture loaded, star mesh loaded, moon 7 loaded, 1 failed`.
+/// `Sky assets: star texture loaded, star mesh loaded, sun loaded, sun glare loaded, moon 7 loaded, 1 failed`.
 pub fn sky_assets_label(status: &SkyAssetStatus) -> String {
     let count = |wanted: fn(&AssetState) -> bool| status.moon.iter().filter(|s| wanted(s)).count();
     let counts = [
@@ -188,9 +188,11 @@ pub fn sky_assets_label(status: &SkyAssetStatus) -> String {
         moon.join(", ")
     };
     format!(
-        "Sky assets: star texture {}, star mesh {}, moon {moon}",
+        "Sky assets: star texture {}, star mesh {}, sun {}, sun glare {}, moon {moon}",
         state_word(&status.star_texture),
         state_word(&status.star_mesh),
+        state_word(&status.sun_texture),
+        state_word(&status.sun_glare_texture),
     )
 }
 
@@ -453,7 +455,7 @@ mod tests {
     fn the_sky_assets_label_before_anything_is_requested() {
         assert_eq!(
             sky_assets_label(&SkyAssetStatus::default()),
-            "Sky assets: star texture not requested, star mesh not requested, moon not requested"
+            "Sky assets: star texture not requested, star mesh not requested, sun not requested, sun glare not requested, moon not requested"
         );
     }
 
@@ -462,6 +464,8 @@ mod tests {
         let mut status = SkyAssetStatus {
             star_texture: AssetState::Loaded,
             star_mesh: failed(),
+            sun_texture: AssetState::Loaded,
+            sun_glare_texture: failed(),
             ..SkyAssetStatus::default()
         };
         for (index, state) in status.moon.iter_mut().enumerate() {
@@ -473,7 +477,7 @@ mod tests {
         }
         assert_eq!(
             sky_assets_label(&status),
-            "Sky assets: star texture loaded, star mesh failed, moon 6 loaded, 1 placeholder, 1 failed"
+            "Sky assets: star texture loaded, star mesh failed, sun loaded, sun glare failed, moon 6 loaded, 1 placeholder, 1 failed"
         );
     }
 

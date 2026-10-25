@@ -10,7 +10,8 @@ use super::ambient::AmbientCube;
 use super::fog::{Fog, FogParams};
 use super::lerp::{Lerp, lerp_fields};
 use super::time_of_day::{
-    ClimateMoon, ClimateSky, ClimateTimes, SlotBlend, TimeSlot, fog_daylight_weight,
+    ClimateMoon, ClimateSky, ClimateSunTextures, ClimateTimes, SlotBlend, TimeSlot,
+    fog_daylight_weight,
 };
 use crate::rendering::post::depth_of_field::ImageSpaceDepthOfField;
 
@@ -73,6 +74,7 @@ impl Default for ImageSpaceHdr {
 pub(super) struct SlotValues {
     pub(super) sun_light: Vec3,
     pub(super) sun_disc: Vec3,
+    pub(super) sun_glare: Vec3,
     pub(super) sky_upper: Vec3,
     pub(super) sky_lower: Vec3,
     pub(super) horizon: Vec3,
@@ -86,6 +88,7 @@ pub(super) struct SlotValues {
 lerp_fields!(SlotValues {
     sun_light,
     sun_disc,
+    sun_glare,
     sky_upper,
     sky_lower,
     horizon,
@@ -157,6 +160,8 @@ pub struct ExteriorWeather {
     pub editor_id: Option<Arc<str>>,
     pub sun_light: Vec3,
     pub sun_disc: Vec3,
+    /// The colour of the sun's glare sprite.
+    pub sun_glare: Vec3,
     pub sky_upper: Vec3,
     pub sky_lower: Vec3,
     pub horizon: Vec3,
@@ -185,6 +190,7 @@ pub struct ExteriorWeatherSlots {
     climate_times: ClimateTimes,
     climate_sky: ClimateSky,
     moon: Option<ClimateMoon>,
+    sun_textures: ClimateSunTextures,
 }
 
 impl ExteriorWeatherSlots {
@@ -206,7 +212,13 @@ impl ExteriorWeatherSlots {
             climate_times,
             climate_sky,
             moon,
+            sun_textures: ClimateSunTextures::default(),
         }
+    }
+
+    pub(super) fn with_sun_textures(mut self, sun_textures: ClimateSunTextures) -> Self {
+        self.sun_textures = sun_textures;
+        self
     }
 
     #[cfg(test)]
@@ -231,6 +243,11 @@ impl ExteriorWeatherSlots {
         &self.climate_sky
     }
 
+    /// The climate's sun and sun glare textures.
+    pub fn sun_textures(&self) -> &ClimateSunTextures {
+        &self.sun_textures
+    }
+
     /// The climate's moon; `None` where it shows none.
     pub fn moon(&self) -> Option<&ClimateMoon> {
         self.moon.as_ref()
@@ -252,6 +269,7 @@ impl ExteriorWeatherSlots {
         let SlotValues {
             sun_light,
             sun_disc,
+            sun_glare,
             sky_upper,
             sky_lower,
             horizon,
@@ -266,6 +284,7 @@ impl ExteriorWeatherSlots {
             editor_id: self.editor_id.clone(),
             sun_light,
             sun_disc,
+            sun_glare,
             sky_upper,
             sky_lower,
             horizon,

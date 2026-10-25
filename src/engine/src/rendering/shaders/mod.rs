@@ -87,6 +87,15 @@ pub const SKY_MOON: ShaderSource = ShaderSource {
     ),
 };
 
+pub const SKY_SUN: ShaderSource = ShaderSource {
+    label: "sky_sun_shader",
+    wgsl: concat!(
+        include_str!("light_data.wgsl"),
+        include_str!("frame.wgsl"),
+        include_str!("sky_sun.wgsl"),
+    ),
+};
+
 pub const SKY_STARS: ShaderSource = ShaderSource {
     label: "sky_stars_shader",
     wgsl: concat!(
@@ -281,6 +290,7 @@ const ALL: &[&ShaderSource] = &[
     &TERRAIN,
     &SKY,
     &SKY_MOON,
+    &SKY_SUN,
     &SKY_STARS,
     &TONEMAP,
     &DEBUG_LINES,

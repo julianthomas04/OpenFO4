@@ -4,8 +4,11 @@
 
 use crate::rendering::{post::hdr_target::HDR_FORMAT, shaders::ShaderSource, texture::Texture};
 
-pub(super) const FRAME_GROUP: usize = 1;
 pub(super) const LAYER_GROUP: u32 = 3;
+
+/// The layouts of the world pass groups below [`LAYER_GROUP`], in group order: material, frame,
+/// instance.
+pub type WorldGroupLayouts<'a> = [&'a wgpu::BindGroupLayout; LAYER_GROUP as usize];
 
 const UNIFORM_BINDING: u32 = 0;
 const TEXTURE_BINDING: u32 = 1;
@@ -106,7 +109,7 @@ pub(super) fn bind_group(
 pub(super) struct LayerPipeline<'a> {
     pub label: &'a str,
     pub shader: &'a ShaderSource,
-    pub frame_layout: &'a wgpu::BindGroupLayout,
+    pub world_groups: WorldGroupLayouts<'a>,
     pub layer_layout: &'a wgpu::BindGroupLayout,
     pub vertex_buffers: &'a [Option<wgpu::VertexBufferLayout<'a>>],
     pub topology: wgpu::PrimitiveTopology,
@@ -120,9 +123,8 @@ pub(super) fn create_pipeline(
     recipe: &LayerPipeline<'_>,
 ) -> wgpu::RenderPipeline {
     let shader = recipe.shader.compile(device);
-    let mut layouts = [None; LAYER_GROUP as usize + 1];
-    layouts[FRAME_GROUP] = Some(recipe.frame_layout);
-    layouts[LAYER_GROUP as usize] = Some(recipe.layer_layout);
+    let [material, frame, instance] = recipe.world_groups.map(Some);
+    let layouts = [material, frame, instance, Some(recipe.layer_layout)];
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some(recipe.label),
         bind_group_layouts: &layouts,

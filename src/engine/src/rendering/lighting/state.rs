@@ -20,6 +20,7 @@ use crate::rendering::local_lights::LocalLightSettings;
 use crate::rendering::local_lights::cluster_grid::{ClusterDepth, cluster_grid};
 use crate::rendering::post::auto_exposure::AutoExposureParams;
 use crate::rendering::post::depth_of_field::ImageSpaceDepthOfField;
+use crate::rendering::post::night_sky::SunInput;
 use crate::rendering::shadows::{CascadeSet, ShadowState, lamps::LampShadowState};
 use crate::rendering::water::CameraWater;
 
@@ -459,6 +460,20 @@ impl LightingState {
         }
     }
 
+    /// The sun the sky draws: the disc's place and alpha, the disc colour (the panel's while the
+    /// sun is overridden) and the weather's glare colour, which the panel has no control for.
+    pub fn sun_input(&self) -> SunInput {
+        SunInput {
+            direction: self.sun_disc_direction(),
+            alpha: self.sun.daylight,
+            disc_color: self.sun.disc_color,
+            glare_color: self
+                .exterior_weather
+                .as_ref()
+                .map_or(self.sun.disc_color, |weather| weather.sun_glare),
+        }
+    }
+
     pub fn exterior_weather(&self) -> Option<&ExteriorWeather> {
         self.exterior_weather.as_ref()
     }
@@ -855,6 +870,7 @@ mod tests {
             editor_id: None,
             sun_light: Vec3::ONE,
             sun_disc: Vec3::ONE,
+            sun_glare: Vec3::ONE,
             sky_upper: Vec3::new(0.1, 0.2, 0.9),
             sky_lower: Vec3::new(0.3, 0.2, 0.1),
             horizon: Vec3::new(0.6, 0.7, 0.8),

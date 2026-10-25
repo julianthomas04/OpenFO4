@@ -10,21 +10,34 @@ use super::assets::{
     AssetFailureKind, AssetState, SkyAssetError, SkyAssetStatus, StarGeometry, load_star_geometry,
     moon_texture_key, star_texture_key,
 };
-use super::moon::{MoonLayer, MoonSizes, MoonUniform, PhaseTextures, moon_basis};
+use super::moon::{MoonLayer, MoonSizes, MoonUniform, PhaseTextures};
+use super::quad::quad_basis;
 use super::stars::{StarLayer, StarUniform};
-use super::{MoonInput, NightSky, NightSkyInput};
+use super::sun::SunInput;
+use super::{MoonInput, NightSky, NightSkyInput, SkySizes, WorldGroupLayouts};
 use crate::assets::types::mesh::{CpuMesh, Topology};
 use crate::rendering::gpu_test::test_device;
 use crate::rendering::lighting::frame_uniform::FrameUniform;
 use crate::rendering::lighting::time_of_day::unmeasured::{
     MOON_RADIANCE, STAR_RADIANCE, moon_angular_diameter_deg,
 };
-use crate::rendering::lighting::time_of_day::{MoonKind, MoonPhase, SkyObjects, StarRotation};
+use crate::rendering::lighting::time_of_day::{
+    ClimateSunTextures, MoonKind, MoonPhase, SkyObjects, StarRotation,
+};
 use crate::rendering::post::dof_test_support::{read_hdr, view_of};
 use crate::rendering::post::hdr_target::HDR_FORMAT;
 use crate::rendering::shaders;
 use crate::rendering::texture::Texture;
 use crate::rendering::vertex::Vertex;
+
+fn sun_input() -> SunInput {
+    SunInput {
+        direction: Vec3::Y,
+        alpha: 1.0,
+        disc_color: Vec3::ONE,
+        glare_color: Vec3::ONE,
+    }
+}
 
 fn assert_close(actual: Vec3, expected: Vec3) {
     assert!(
@@ -70,7 +83,7 @@ mod moon_maths {
 
     #[test]
     fn looking_down_the_view_axis_puts_the_quad_axes_on_the_screen_axes() {
-        let (right, up) = moon_basis(Vec3::NEG_Z);
+        let (right, up) = quad_basis(Vec3::NEG_Z);
         assert_close(right, Vec3::X);
         assert_close(up, Vec3::Y);
     }
@@ -85,7 +98,7 @@ mod moon_maths {
                     elevation.sin(),
                     -elevation.cos() * azimuth.cos(),
                 );
-                let (right, up) = moon_basis(direction);
+                let (right, up) = quad_basis(direction);
                 assert!((right.length() - 1.0).abs() < 1e-5);
                 assert!((up.length() - 1.0).abs() < 1e-5);
                 assert!(right.dot(up).abs() < 1e-5);
@@ -100,7 +113,7 @@ mod moon_maths {
     #[test]
     fn the_basis_stays_defined_at_the_zenith_and_nadir() {
         for direction in [Vec3::Y, Vec3::NEG_Y] {
-            let (right, up) = moon_basis(direction);
+            let (right, up) = quad_basis(direction);
             assert!(right.is_finite() && up.is_finite());
             assert!(right.dot(up).abs() < 1e-5);
             assert!((right.length() - 1.0).abs() < 1e-5);
@@ -400,32 +413,43 @@ mod shader_modules {
     }
 }
 
-mod gpu {
+pub(super) mod gpu {
     use super::*;
 
-    const SIZE: UVec2 = UVec2::new(16, 16);
+    pub(in super::super) const SIZE: UVec2 = UVec2::new(16, 16);
     const TEXTURE_EDGE: u32 = 16;
-    const SKY_CLEAR: f32 = 0.0;
+    pub(in super::super) const SKY_CLEAR: f32 = 0.0;
 
-    struct Rig {
-        device: wgpu::Device,
-        queue: wgpu::Queue,
+    pub(in super::super) struct Rig {
+        pub(in super::super) device: wgpu::Device,
+        pub(in super::super) queue: wgpu::Queue,
+        material_layout: wgpu::BindGroupLayout,
         frame_layout: wgpu::BindGroupLayout,
-        frame_group: wgpu::BindGroup,
+        instance_layout: wgpu::BindGroupLayout,
+        world_bind_groups: [wgpu::BindGroup; 3],
     }
 
-    /// A camera at the origin looking down -Z with a 90 degree view and the infinite reverse-Z
-    /// projection of the game.
-    fn frame_uniform() -> FrameUniform {
-        let mut uniform: FrameUniform = bytemuck::Zeroable::zeroed();
-        uniform.view_proj = Mat4::perspective_infinite_reverse_rh(FRAC_PI_2, 1.0, 0.1);
-        uniform
+    impl Rig {
+        /// Stand-ins of the world pass's material, frame and instance group layouts.
+        pub(in super::super) fn world_groups(&self) -> WorldGroupLayouts<'_> {
+            [
+                &self.material_layout,
+                &self.frame_layout,
+                &self.instance_layout,
+            ]
+        }
+
+        /// Binds every world group, as the world pass does once up front.
+        fn bind_world_groups(&self, pass: &mut wgpu::RenderPass<'_>) {
+            for (index, group) in (0..).zip(&self.world_bind_groups) {
+                pass.set_bind_group(index, group, &[]);
+            }
+        }
     }
 
-    fn rig(test: &str) -> Option<Rig> {
-        let (device, queue) = test_device(test)?;
-        let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("night_sky_test_frame_bgl"),
+    fn uniform_layout(device: &wgpu::Device, label: &str) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some(label),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -436,30 +460,141 @@ mod gpu {
                 },
                 count: None,
             }],
-        });
+        })
+    }
+
+    fn uniform_group(
+        device: &wgpu::Device,
+        label: &str,
+        layout: &wgpu::BindGroupLayout,
+        contents: &[u8],
+    ) -> wgpu::BindGroup {
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("night_sky_test_frame"),
-            contents: bytemuck::bytes_of(&frame_uniform()),
+            label: Some(label),
+            contents,
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let frame_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("night_sky_test_frame_group"),
-            layout: &frame_layout,
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: buffer.as_entire_binding(),
             }],
-        });
+        })
+    }
+
+    /// A draw of a pipeline with the world pass's layout, as the game issues before the sky. It
+    /// covers no pixel.
+    pub(in super::super) struct WorldDraw {
+        pipeline: wgpu::RenderPipeline,
+    }
+
+    impl WorldDraw {
+        pub(in super::super) fn new(rig: &Rig) -> Self {
+            let device = &rig.device;
+            let [material, frame, instance] = rig.world_groups().map(Some);
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("night_sky_test_world_layout"),
+                bind_group_layouts: &[material, frame, instance],
+                immediate_size: 0,
+            });
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("night_sky_test_world_shader"),
+                source: wgpu::ShaderSource::Wgsl(WORLD_DRAW_SHADER.into()),
+            });
+            let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("night_sky_test_world_pipeline"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(HDR_FORMAT.into())],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: Texture::DEPTH_FORMAT,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(wgpu::CompareFunction::Always),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            });
+            Self { pipeline }
+        }
+
+        pub(in super::super) fn draw(&self, pass: &mut wgpu::RenderPass<'_>) {
+            pass.set_pipeline(&self.pipeline);
+            pass.draw(0..3, 0..1);
+        }
+    }
+
+    const WORLD_DRAW_SHADER: &str = "
+        @group(0) @binding(0) var<uniform> material: vec4<f32>;
+        @group(1) @binding(0) var<uniform> frame: vec4<f32>;
+        @group(2) @binding(0) var<uniform> instance: vec4<f32>;
+        @vertex fn vs_main() -> @builtin(position) vec4<f32> {
+            return (material + frame + instance) * 0.0;
+        }
+        @fragment fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(0.0); }
+    ";
+
+    /// A camera at the origin looking down -Z with a 90 degree view and the infinite reverse-Z
+    /// projection of the game.
+    fn frame_uniform() -> FrameUniform {
+        let mut uniform: FrameUniform = bytemuck::Zeroable::zeroed();
+        uniform.view_proj = Mat4::perspective_infinite_reverse_rh(FRAC_PI_2, 1.0, 0.1);
+        uniform
+    }
+
+    pub(in super::super) fn rig(test: &str) -> Option<Rig> {
+        let (device, queue) = test_device(test)?;
+        let material_layout = uniform_layout(&device, "night_sky_test_material_bgl");
+        let frame_layout = uniform_layout(&device, "night_sky_test_frame_bgl");
+        let instance_layout = uniform_layout(&device, "night_sky_test_instance_bgl");
+        let unused = [0; 16];
+        let world_bind_groups = [
+            uniform_group(
+                &device,
+                "night_sky_test_material",
+                &material_layout,
+                &unused,
+            ),
+            uniform_group(
+                &device,
+                "night_sky_test_frame",
+                &frame_layout,
+                bytemuck::bytes_of(&frame_uniform()),
+            ),
+            uniform_group(
+                &device,
+                "night_sky_test_instance",
+                &instance_layout,
+                &unused,
+            ),
+        ];
         Some(Rig {
             device,
             queue,
+            material_layout,
             frame_layout,
-            frame_group,
+            instance_layout,
+            world_bind_groups,
         })
     }
 
     /// A bind group of the shape of the world pass texture feedback group.
-    fn feedback_group(rig: &Rig) -> wgpu::BindGroup {
+    pub(in super::super) fn feedback_group(rig: &Rig) -> wgpu::BindGroup {
         let layout = rig
             .device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -491,12 +626,12 @@ mod gpu {
         })
     }
 
-    fn white_texture(rig: &Rig, edge: u32) -> wgpu::TextureView {
+    pub(in super::super) fn white_texture(rig: &Rig, edge: u32) -> wgpu::TextureView {
         pattern_texture(rig, edge, |_, _| [255; 4])
     }
 
     /// A square sRGB texture whose texel at (column, row) is `texel`.
-    fn pattern_texture(
+    pub(in super::super) fn pattern_texture(
         rig: &Rig,
         edge: u32,
         texel: impl Fn(u32, u32) -> [u8; 4],
@@ -528,7 +663,11 @@ mod gpu {
     }
 
     /// Draws into a black target whose depth is `depth` and returns its texels, row by row.
-    fn render(rig: &Rig, depth: f32, draw: impl FnOnce(&mut wgpu::RenderPass<'_>)) -> Vec<Vec4> {
+    pub(in super::super) fn render(
+        rig: &Rig,
+        depth: f32,
+        draw: impl FnOnce(&mut wgpu::RenderPass<'_>),
+    ) -> Vec<Vec4> {
         let target = rig.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("night_sky_test_target"),
             size: wgpu::Extent3d {
@@ -591,19 +730,19 @@ mod gpu {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_bind_group(1, &rig.frame_group, &[]);
+            rig.bind_world_groups(&mut pass);
             draw(&mut pass);
         }
         rig.queue.submit([encoder.finish()]);
         read_hdr(&rig.device, &rig.queue, &target, SIZE)
     }
 
-    fn texel(texels: &[Vec4], column: u32, row: u32) -> Vec4 {
+    pub(in super::super) fn texel(texels: &[Vec4], column: u32, row: u32) -> Vec4 {
         texels[(row * SIZE.x + column) as usize]
     }
 
     fn moon_layer(rig: &Rig, phase_textures: PhaseTextures) -> (MoonLayer, [AssetState; 8]) {
-        let mut layer = MoonLayer::new(&rig.device, &rig.frame_layout);
+        let mut layer = MoonLayer::new(&rig.device, rig.world_groups());
         let states = layer.install(&rig.device, MoonKind::Masser, phase_textures);
         (layer, states)
     }
@@ -765,7 +904,7 @@ mod gpu {
     }
 
     fn star_layer(rig: &Rig) -> (StarLayer, [AssetState; 2]) {
-        let mut layer = StarLayer::new(&rig.device, &rig.frame_layout);
+        let mut layer = StarLayer::new(&rig.device, rig.world_groups());
         let texture = layer.install_texture(&rig.device, Ok(white_texture(rig, TEXTURE_EDGE)));
         let mesh = layer.install_mesh(&rig.device, Some(Ok(covering_dome())));
         (layer, [texture, mesh])
@@ -902,13 +1041,13 @@ mod gpu {
         let Some(rig) = rig("stars_without_a_model_or_a_texture_are_not_drawn_and_say_why") else {
             return;
         };
-        let mut no_model = StarLayer::new(&rig.device, &rig.frame_layout);
+        let mut no_model = StarLayer::new(&rig.device, rig.world_groups());
         no_model.install_texture(&rig.device, Ok(white_texture(&rig, TEXTURE_EDGE)));
         assert_eq!(
             no_model.install_mesh(&rig.device, None),
             AssetState::NotRequested
         );
-        let mut no_texture = StarLayer::new(&rig.device, &rig.frame_layout);
+        let mut no_texture = StarLayer::new(&rig.device, rig.world_groups());
         let state = no_texture.install_texture(
             &rig.device,
             Err(SkyAssetError::NotFound {
@@ -993,7 +1132,7 @@ mod gpu {
         };
         let (mut opaque_layer, _) = star_layer(&rig);
         let translucent = pattern_texture(&rig, TEXTURE_EDGE, |_, _| [255, 255, 255, HALF_ALPHA]);
-        let mut layer = StarLayer::new(&rig.device, &rig.frame_layout);
+        let mut layer = StarLayer::new(&rig.device, rig.world_groups());
         layer.install_texture(&rig.device, Ok(translucent));
         layer.install_mesh(&rig.device, Some(Ok(covering_dome())));
         let uniform = unturned(1.0, 1.0);
@@ -1064,7 +1203,7 @@ mod gpu {
     }
 
     fn turned_about_up(rig: &Rig, angle_rad: f32) -> Vec<Vec4> {
-        let mut layer = StarLayer::new(&rig.device, &rig.frame_layout);
+        let mut layer = StarLayer::new(&rig.device, rig.world_groups());
         layer.install_texture(&rig.device, Ok(white_texture(rig, TEXTURE_EDGE)));
         layer.install_mesh(&rig.device, Some(Ok(off_axis_star())));
         let rotation = StarRotation {
@@ -1108,6 +1247,8 @@ mod gpu {
             },
             star_alpha: 1.0,
             sky_model,
+            sun: sun_input(),
+            sun_textures: ClimateSunTextures::default(),
         }
     }
 
@@ -1134,8 +1275,8 @@ mod gpu {
             &rig.device,
             &rig.queue,
             root,
-            &rig.frame_layout,
-            MoonSizes::VANILLA,
+            rig.world_groups(),
+            SkySizes::VANILLA,
             moon,
             sky_model,
         )
@@ -1269,7 +1410,7 @@ mod sky_objects_mapping {
     use crate::rendering::lighting::time_of_day::MoonObject;
 
     #[test]
-    fn the_input_mirrors_the_sky_objects_but_for_the_sun() {
+    fn the_input_mirrors_the_sky_objects_and_carries_the_sun() {
         let objects = SkyObjects {
             sun_disc_direction: Vec3::Y,
             moon: Some(MoonObject {
@@ -1284,9 +1425,10 @@ mod sky_objects_mapping {
             },
             star_alpha: 0.75,
             sky_model_path: Some(Arc::from("sky\\stars.nif")),
+            sun_textures: ClimateSunTextures::new(Some("sky\\sun.dds"), None),
         };
 
-        let input = NightSkyInput::from(&objects);
+        let input = NightSkyInput::new(&objects, sun_input());
 
         assert_eq!(
             input.moon,
@@ -1300,11 +1442,13 @@ mod sky_objects_mapping {
         assert_eq!(input.star_rotation, objects.star_rotation);
         assert_eq!(input.star_alpha, 0.75);
         assert_eq!(input.sky_model, objects.sky_model_path);
+        assert_eq!(input.sun, sun_input());
+        assert_eq!(input.sun_textures, objects.sun_textures);
         let moonless = SkyObjects {
             moon: None,
             ..objects
         };
-        assert_eq!(NightSkyInput::from(&moonless).moon, None);
+        assert_eq!(NightSkyInput::new(&moonless, sun_input()).moon, None);
     }
 }
 
@@ -1337,29 +1481,16 @@ mod real_install {
     #[ignore = "needs OPENFO4_INSTALL_DIR with the converted sky textures"]
     fn only_the_installed_masser_new_moon_is_a_placeholder() {
         let name = "only_the_installed_masser_new_moon_is_a_placeholder";
-        let Some((device, queue)) = test_device(name) else {
+        let Some(rig) = super::gpu::rig(name) else {
             return;
         };
-        let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("night_sky_test_frame_bgl"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
         let model: Arc<str> = Arc::from("sky\\stars.nif");
         let mut sky = NightSky::new(
-            &device,
-            &queue,
+            &rig.device,
+            &rig.queue,
             &asset_root(),
-            &frame_layout,
-            MoonSizes::VANILLA,
+            rig.world_groups(),
+            SkySizes::VANILLA,
             Some(MoonKind::Masser),
             Some(&model),
         );
@@ -1377,9 +1508,11 @@ mod real_install {
             },
             star_alpha: 1.0,
             sky_model: Some(model),
+            sun: sun_input(),
+            sun_textures: ClimateSunTextures::default(),
         };
 
-        sky.update(&device, &queue, &input, 1.0);
+        sky.update(&rig.device, &rig.queue, &input, 1.0);
         let secunda = sky.asset_status().clone();
 
         for phase in MoonPhase::ALL {

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use serde::Deserialize;
 
 #[derive(Debug, thiserror::Error)]
@@ -23,6 +25,29 @@ pub struct ClimateSky {
     pub moons: Option<Moons>,
     #[serde(default)]
     pub model_path: Option<String>,
+}
+
+/// The sun sprite textures of a climate, as paths below the textures folder (`Sky\Sun_d.dds`).
+/// `None` where the climate names no texture.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClimateSunTextures {
+    pub sun: Option<Arc<str>>,
+    pub glare: Option<Arc<str>>,
+}
+
+impl ClimateSunTextures {
+    /// An empty name is no name.
+    pub fn new(sun: Option<&str>, glare: Option<&str>) -> Self {
+        let named = |path: Option<&str>| {
+            path.map(str::trim)
+                .filter(|path| !path.is_empty())
+                .map(Arc::from)
+        };
+        Self {
+            sun: named(sun),
+            glare: named(glare),
+        }
+    }
 }
 
 impl ClimateSky {
@@ -78,6 +103,17 @@ mod tests {
         let sky = ClimateSky::parse(r#"{"MoonPhaseLength":3}"#).unwrap();
         assert_eq!(sky.moon_phase_length, Some(3));
         assert_eq!(sky.moons, None);
+    }
+
+    #[test]
+    fn sun_texture_names_are_kept_and_blank_ones_are_none() {
+        let textures = ClimateSunTextures::new(Some(r"Sky\Sun_d.dds"), Some("  "));
+        assert_eq!(textures.sun.as_deref(), Some(r"Sky\Sun_d.dds"));
+        assert_eq!(textures.glare, None);
+        assert_eq!(
+            ClimateSunTextures::new(None, Some("")),
+            ClimateSunTextures::default()
+        );
     }
 
     #[test]

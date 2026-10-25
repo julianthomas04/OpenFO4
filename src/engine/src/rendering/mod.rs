@@ -138,7 +138,7 @@ use crate::rendering::{
         PostChain,
         depth_of_field::{BokehGate, DofCamera, select_frame},
         hdr_target::{HDR_FORMAT, clear_color},
-        night_sky::{MoonSizes, NightSky, NightSkyInput},
+        night_sky::{MoonSizes, NightSky, NightSkyInput, SkySizes},
         tonemap,
     },
     ragdoll_debug_panel::ragdoll_settings_section,
@@ -1230,12 +1230,20 @@ impl State {
                     masser: game.masser_size(),
                     secunda: game.secunda_size(),
                 });
+            let sizes = SkySizes {
+                moon: moon_sizes,
+                sun: settings.sun,
+            };
             NightSky::new(
                 &device,
                 &queue,
                 asset_server.asset_location(),
-                &frame_binding.layout,
-                moon_sizes,
+                [
+                    &world_pass_layout.material_bind_group_layout,
+                    &frame_binding.layout,
+                    &world_pass_layout.instance_bind_group_layout,
+                ],
+                sizes,
                 initial_moon,
                 initial_sky_model,
             )
@@ -3572,7 +3580,7 @@ impl State {
             self.night_sky.update(
                 &self.device,
                 &self.queue,
-                &NightSkyInput::from(objects),
+                &NightSkyInput::new(objects, self.lighting.sun_input()),
                 self.lighting.sky.radiance_scale,
             );
         }

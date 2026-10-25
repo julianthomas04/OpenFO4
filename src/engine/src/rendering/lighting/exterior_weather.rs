@@ -6,8 +6,8 @@ use serde::Deserialize;
 use super::ambient::AmbientCube;
 use super::cell_lighting::{RawColor, bethesda_faces_to_engine_order};
 use super::time_of_day::{
-    ClimateMoon, ClimateMoonError, ClimateSky, ClimateSkyError, ClimateTimes, ClimateTimesError,
-    TimeSlot,
+    ClimateMoon, ClimateMoonError, ClimateSky, ClimateSkyError, ClimateSunTextures, ClimateTimes,
+    ClimateTimesError, TimeSlot,
 };
 pub use super::weather_slots::{ExteriorWeather, ExteriorWeatherSlots, ImageSpaceHdr};
 use super::weather_slots::{FogColors, FogRange, SLOT_COUNT, SlotValues, WeatherFog};
@@ -142,6 +142,8 @@ struct ClimateInfo {
     times: ClimateTimes,
     sky: ClimateSky,
     moon: Option<ClimateMoon>,
+    /// Not in the climate JSON: [`load_climate`] reads the columns.
+    sun_textures: ClimateSunTextures,
 }
 
 impl ExteriorWeatherSlots {
@@ -265,7 +267,8 @@ impl ExteriorWeatherSlots {
             climate.times,
             climate.sky,
             climate.moon,
-        ))
+        )
+        .with_sun_textures(climate.sun_textures))
     }
 }
 
@@ -308,6 +311,7 @@ fn load_slot(
     Ok(SlotValues {
         sun_light: group("Sunlight")?,
         sun_disc: group("Sun")?,
+        sun_glare: group("SunGlare")?,
         sky_upper: group("SkyUpper")?,
         sky_lower: group("SkyLower")?,
         horizon: group("Horizon")?,
@@ -435,7 +439,10 @@ fn load_climate(db: &DbClient, climate: &str) -> Result<ClimateInfo, ExteriorWea
         .ok_or_else(|| ExteriorWeatherError::ClimateWithoutData {
             climate: climate.to_string(),
         })?;
-    parse_climate(climate, &data)
+    let mut info = parse_climate(climate, &data)?;
+    let (sun, glare) = db.get_climate_sun_textures(climate)?;
+    info.sun_textures = ClimateSunTextures::new(sun.as_deref(), glare.as_deref());
+    Ok(info)
 }
 
 fn parse_climate(climate: &str, json: &str) -> Result<ClimateInfo, ExteriorWeatherError> {
@@ -461,6 +468,7 @@ fn parse_climate(climate: &str, json: &str) -> Result<ClimateInfo, ExteriorWeath
             }
         })?,
         sky,
+        sun_textures: ClimateSunTextures::default(),
     })
 }
 
@@ -531,6 +539,7 @@ pub(super) mod fixtures {
         json!({
             "Sunlight": group(rgb(255, 0, 0)),
             "Sun": group(rgb(0, 255, 0)),
+            "SunGlare": group(rgb(255, 128, 0)),
             "SkyUpper": group(rgb(0, 0, 255)),
             "SkyLower": group(rgb(255, 255, 0)),
             "Horizon": group(rgb(0, 255, 255)),
@@ -662,6 +671,8 @@ mod tests {
         let weather = day_weather(row());
         assert_eq!(weather.sun_light, Vec3::new(1.0, 0.0, 0.0));
         assert_eq!(weather.sun_disc, Vec3::new(0.0, 1.0, 0.0));
+        assert_eq!(weather.sun_glare.x, 1.0);
+        assert_eq!(weather.sun_glare.z, 0.0);
         assert_eq!(weather.sky_upper, Vec3::new(0.0, 0.0, 1.0));
         assert_eq!(weather.sky_lower, Vec3::new(1.0, 1.0, 0.0));
         assert_eq!(weather.horizon, Vec3::new(0.0, 1.0, 1.0));
@@ -910,7 +921,7 @@ mod tests {
     fn every_colour_group_is_blended() {
         let mut colors = colors();
         for group in [
-            "Sunlight", "Sun", "SkyUpper", "SkyLower", "Horizon", "Stars",
+            "Sunlight", "Sun", "SunGlare", "SkyUpper", "SkyLower", "Horizon", "Stars",
         ] {
             colors[group] = per_slot(|slot| {
                 if slot == Night {
@@ -926,6 +937,7 @@ mod tests {
         for (name, colour) in [
             ("sun light", weather.sun_light),
             ("sun disc", weather.sun_disc),
+            ("sun glare", weather.sun_glare),
             ("sky upper", weather.sky_upper),
             ("sky lower", weather.sky_lower),
             ("horizon", weather.horizon),

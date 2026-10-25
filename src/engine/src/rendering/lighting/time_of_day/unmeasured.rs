@@ -23,6 +23,13 @@
 //!   intensity come from the weather slots.
 //! - Sun alpha: `fSunAlphaTransTime` is a number of hours; the sun's alpha ramps linearly over
 //!   that long, centred on the midpoint of each twilight window (see [`sun_alpha`]).
+//! - Sun size: `fSunBaseSize` (disc sprite) and `fSunGlareSize` (glare sprite) are in the
+//!   moon's unit, [`SUN_SIZE_UNITS_PER_DEGREE`] per degree of the sprite's quad edge. The
+//!   edge, not the visible disc: the sun texture's opaque core is a small part of it.
+//! - Sun brightness: the disc sprite shows at [`SUN_DISC_RADIANCE`] and the glare sprite at
+//!   [`SUN_GLARE_RADIANCE`] times the weather's Sun and `SunGlare` colours and the sky radiance
+//!   scale; both are cut at the horizon over [`SUN_HORIZON_FADE_SINE`]. `fSunMinimumGlareScale`
+//!   and the weather's own glare byte (not exported yet) are not applied.
 
 use std::f32::consts::PI;
 
@@ -264,6 +271,31 @@ pub const STAR_RADIANCE: f32 = 2.0;
 /// The apparent diameter in degrees of a moon whose size setting is `size`.
 pub fn moon_angular_diameter_deg(size: f32) -> f32 {
     size / MOON_SIZE_UNITS_PER_DEGREE
+}
+
+/// How many `fSunBaseSize` / `fSunGlareSize` units make one degree of the edge of the sun's
+/// sprite. Hypothesis: the sun's settings share the moon's unit, so vanilla sizes of 425 and 600
+/// give a 14.2 and a 20 degree quad. That is not the visible disc: the vanilla `Sun_d` texture
+/// is opaque (alpha above 0.9) only in a core 3% of the edge across, 0.4 degrees, about the
+/// size of the real sun; it is half transparent 10% across (1.4 degrees) and fades out softly
+/// towards the edge. A unit of its own is not needed to make that plausible, and the sizes
+/// cannot be degrees of the whole sprite (425 degrees), so the moon's unit is the working guess.
+pub const SUN_SIZE_UNITS_PER_DEGREE: f32 = MOON_SIZE_UNITS_PER_DEGREE;
+
+/// The sine of the elevation at which the sun sprites are fully faded in; they fade from 0 at the horizon.
+pub const SUN_HORIZON_FADE_SINE: f32 = 0.02;
+
+/// Radiance of a fully opaque, white sun disc texel at sky radiance scale 1: bright enough to
+/// saturate the core, low enough that the soft rim of the texture fades instead of
+/// saturating into a blob several degrees wide (60 did).
+pub const SUN_DISC_RADIANCE: f32 = 15.0;
+
+/// Radiance of a fully opaque, white sun glare texel at sky radiance scale 1.
+pub const SUN_GLARE_RADIANCE: f32 = 2.0;
+
+/// The edge in degrees of the sprite of a sun setting `size`.
+pub fn sun_sprite_edge_deg(size: f32) -> f32 {
+    size / SUN_SIZE_UNITS_PER_DEGREE
 }
 
 #[cfg(test)]

@@ -7,17 +7,13 @@ use glam::Vec3;
 use super::assets::{
     AssetState, PLACEHOLDER_MAX_EDGE, SkyAssetError, load_texture, moon_texture_key, report,
 };
-use super::layer::{self, LAYER_GROUP, LayerPipeline, finite_or_zero};
+use super::layer::{self, LAYER_GROUP, LayerPipeline, WorldGroupLayouts, finite_or_zero};
+use super::quad::quad_basis;
 use crate::rendering::lighting::time_of_day::unmeasured::MOON_RADIANCE;
 use crate::rendering::lighting::time_of_day::{MoonKind, MoonPhase};
 use crate::rendering::shaders;
 
 const MOON_VERTEX_COUNT: u32 = 4;
-/// Where the up axis of the moon quad points while the moon stands near the zenith or nadir
-/// and the world up axis cannot orient it.
-const POLAR_UP_FALLBACK: Vec3 = Vec3::NEG_Z;
-const POLAR_COS_LIMIT: f32 = 0.999;
-
 pub(super) type PhaseTextures = [Result<wgpu::TextureView, SkyAssetError>; MoonPhase::ALL.len()];
 pub(super) type PhaseStates = [AssetState; MoonPhase::ALL.len()];
 
@@ -41,19 +37,6 @@ impl MoonSizes {
             MoonKind::Secunda => self.secunda,
         }
     }
-}
-
-/// The unit right and up axes of the moon quad as seen from a camera looking along the unit
-/// `direction`, with the world up axis pointing up the picture. Where the moon passes the
-/// zenith or nadir the reference axis switches and the quad rolls by a sudden quarter turn.
-pub(super) fn moon_basis(direction: Vec3) -> (Vec3, Vec3) {
-    let reference = if direction.y.abs() > POLAR_COS_LIMIT {
-        POLAR_UP_FALLBACK
-    } else {
-        Vec3::Y
-    };
-    let right = direction.cross(reference).normalize();
-    (right, right.cross(direction))
 }
 
 /// Mirrors `MoonUniform` in `sky_moon.wgsl`.
@@ -85,7 +68,7 @@ impl MoonUniform {
         if visibility <= 0.0 || diameter_rad <= 0.0 {
             return None;
         }
-        let (right, up) = moon_basis(direction);
+        let (right, up) = quad_basis(direction);
         Some(Self {
             direction: direction.to_array(),
             half_extent: (diameter_rad / 2.0).tan(),
@@ -108,14 +91,14 @@ pub(super) struct MoonLayer {
 }
 
 impl MoonLayer {
-    pub(super) fn new(device: &wgpu::Device, frame_layout: &wgpu::BindGroupLayout) -> Self {
+    pub(super) fn new(device: &wgpu::Device, world_groups: WorldGroupLayouts<'_>) -> Self {
         let bind_group_layout = layer::bind_group_layout(device, "night_sky_moon_bgl");
         let pipeline = layer::create_pipeline(
             device,
             &LayerPipeline {
                 label: "Night Sky Moon Pipeline",
                 shader: &shaders::SKY_MOON,
-                frame_layout,
+                world_groups,
                 layer_layout: &bind_group_layout,
                 vertex_buffers: &[],
                 topology: wgpu::PrimitiveTopology::TriangleStrip,

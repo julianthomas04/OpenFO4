@@ -1,5 +1,5 @@
-//! The files of the night sky: the eight textures of a moon, the star texture and the star dome
-//! mesh. A file that is missing or unusable is a typed error, logged once; the object it belongs
+//! The files of the sky objects: the eight textures of a moon, the star texture, the star dome
+//! mesh and the two textures of the sun. A file that is missing or unusable is a typed error, logged once; the object it belongs
 //! to is then not drawn, and [`SkyAssetStatus`] says why.
 
 use std::io;
@@ -102,6 +102,8 @@ pub struct SkyAssetStatus {
     pub moon: [AssetState; MoonPhase::ALL.len()],
     pub star_texture: AssetState,
     pub star_mesh: AssetState,
+    pub sun_texture: AssetState,
+    pub sun_glare_texture: AssetState,
 }
 
 impl Default for SkyAssetStatus {
@@ -110,6 +112,8 @@ impl Default for SkyAssetStatus {
             moon: std::array::from_fn(|_| AssetState::NotRequested),
             star_texture: AssetState::NotRequested,
             star_mesh: AssetState::NotRequested,
+            sun_texture: AssetState::NotRequested,
+            sun_glare_texture: AssetState::NotRequested,
         }
     }
 }
@@ -120,6 +124,12 @@ pub(super) fn moon_texture_key(kind: MoonKind, phase: MoonPhase) -> String {
 
 pub(super) fn star_texture_key() -> String {
     sky_texture_key(STAR_TEXTURE_STEM)
+}
+
+/// The key of a sun texture the climate names by its path below the textures folder
+/// (`Sky\Sun_d.dds`).
+pub(super) fn sun_texture_key(path: &str) -> String {
+    texture_key(&path.to_ascii_lowercase().replace('/', "\\"))
 }
 
 fn sky_texture_key(stem: &str) -> String {

@@ -507,6 +507,13 @@ impl DbClient {
         weather::get_climate_data(climate, &self.conn)
     }
 
+    pub fn get_climate_sun_textures(
+        &self,
+        climate: &str,
+    ) -> rusqlite::Result<(Option<String>, Option<String>)> {
+        weather::get_climate_sun_textures(climate, &self.conn)
+    }
+
     pub fn get_image_space_data(&self, form_key: &str) -> rusqlite::Result<Option<String>> {
         weather::get_image_space_data(form_key, &self.conn)
     }

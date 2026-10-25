@@ -1777,6 +1777,34 @@ fn climate_and_image_space_data_are_returned_verbatim() {
     ));
 }
 
+#[test]
+fn climate_sun_textures_are_returned_and_may_be_null() {
+    let conn = schema_connection();
+    insert(
+        &conn,
+        "climates",
+        &[
+            ("form_key", text("CL")),
+            ("sun_texture", text(r"Sky\Sun_d.dds")),
+            ("sun_glare_texture", text(r"Sky\SunGlare.dds")),
+        ],
+    );
+    insert(&conn, "climates", &[("form_key", text("BARE"))]);
+    let db = client(conn);
+    assert_eq!(
+        db.get_climate_sun_textures("CL").unwrap(),
+        (
+            Some(r"Sky\Sun_d.dds".to_owned()),
+            Some(r"Sky\SunGlare.dds".to_owned())
+        )
+    );
+    assert_eq!(db.get_climate_sun_textures("BARE").unwrap(), (None, None));
+    assert!(matches!(
+        db.get_climate_sun_textures("missing").unwrap_err(),
+        rusqlite::Error::QueryReturnedNoRows
+    ));
+}
+
 // ------------------------------------------------- statics / misc records
 
 #[test]

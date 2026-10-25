@@ -5,7 +5,7 @@ use glam::{Mat4, Quat};
 use wgpu::util::DeviceExt;
 
 use super::assets::{AssetState, SkyAssetError, StarGeometry, report};
-use super::layer::{self, LAYER_GROUP, LayerPipeline, finite_or_zero};
+use super::layer::{self, LAYER_GROUP, LayerPipeline, WorldGroupLayouts, finite_or_zero};
 use crate::rendering::lighting::time_of_day::StarRotation;
 use crate::rendering::lighting::time_of_day::unmeasured::{STAR_HORIZON_FADE_SINE, STAR_RADIANCE};
 use crate::rendering::shaders;
@@ -83,14 +83,14 @@ pub(super) struct StarLayer {
 }
 
 impl StarLayer {
-    pub(super) fn new(device: &wgpu::Device, frame_layout: &wgpu::BindGroupLayout) -> Self {
+    pub(super) fn new(device: &wgpu::Device, world_groups: WorldGroupLayouts<'_>) -> Self {
         let bind_group_layout = layer::bind_group_layout(device, "night_sky_stars_bgl");
         let pipeline = layer::create_pipeline(
             device,
             &LayerPipeline {
                 label: "Night Sky Stars Pipeline",
                 shader: &shaders::SKY_STARS,
-                frame_layout,
+                world_groups,
                 layer_layout: &bind_group_layout,
                 vertex_buffers: &[Some(Vertex::desc())],
                 topology: wgpu::PrimitiveTopology::TriangleList,
