@@ -9,6 +9,7 @@ pub mod frame_binding;
 pub mod frame_uniform;
 pub mod interior_catalog;
 pub mod state;
+pub mod time_of_day;
 pub mod tonemap_settings;
 
 pub use frame_binding::FrameBinding;

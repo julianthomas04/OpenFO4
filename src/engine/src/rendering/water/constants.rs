@@ -20,6 +20,7 @@ use crate::rendering::game_frame::cb12::{
     FAR_FOG_HEIGHT_STRENGTH, FAR_RANGE_SCALE, NEAR_RANGE_SCALE, UNSET_FOG_RANGE,
 };
 use crate::rendering::lighting::frame_uniform::{FrameUniform, TIME_WRAP_SECONDS};
+use crate::rendering::lighting::time_of_day::ClimateTimes;
 
 /// Register counts of the binding slots the translated water shaders read.
 const CB0_LEN: usize = 8;
@@ -308,6 +309,17 @@ pub struct DaylightWindow {
     pub sunrise_end: f32,
     pub sunset_begin: f32,
     pub sunset_end: f32,
+}
+
+impl From<ClimateTimes> for DaylightWindow {
+    fn from(times: ClimateTimes) -> Self {
+        Self {
+            sunrise_begin: times.sunrise_begin(),
+            sunrise_end: times.sunrise_end(),
+            sunset_begin: times.sunset_begin(),
+            sunset_end: times.sunset_end(),
+        }
+    }
 }
 
 /// `cb0[2].w`, the daylight factor: 0 outside
@@ -747,6 +759,20 @@ mod tests {
         sunset_begin: 17.0,
         sunset_end: 19.0,
     };
+
+    #[test]
+    fn the_daylight_window_of_a_climate_carries_its_four_hours() {
+        let times = ClimateTimes::new(5.5, 8.0, 16.0, 20.5).unwrap();
+        assert_eq!(
+            DaylightWindow::from(times),
+            DaylightWindow {
+                sunrise_begin: 5.5,
+                sunrise_end: 8.0,
+                sunset_begin: 16.0,
+                sunset_end: 20.5,
+            }
+        );
+    }
 
     #[test]
     fn daylight_ramps_over_the_transition_around_sunrise_and_sunset() {
