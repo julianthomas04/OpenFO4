@@ -3757,7 +3757,15 @@ namespace AssetConverter
                 record.SunriseBegin,
                 record.SunriseEnd,
                 record.SunsetBegin,
-                record.SunsetEnd
+                record.SunsetEnd,
+                MoonPhaseLength = record.PhaseLength,
+                Moons = new
+                {
+                    Masser = record.Moons.HasFlag(Climate.Moon.Masser),
+                    Secunda = record.Moons.HasFlag(Climate.Moon.Secunda)
+                },
+                // Lowercased like model_path columns, which ModelPathNormalizer cannot reach inside JSON.
+                ModelPath = record.Model?.File?.ToLowerInvariant()
             };
             await conn.ExecuteAsync(@"INSERT OR REPLACE INTO climates (form_key, editor_id, sun_texture, sun_glare_texture, data) VALUES (@FormKey, @EditorId, @SunTex, @SunGlareTex, @Data)",
                 new { FormKey = formKey, EditorId = record.EditorID, SunTex = record.SunTexture, SunGlareTex = record.SunGlareTexture, Data = SafeSerialize(data) }, transaction);

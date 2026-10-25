@@ -87,6 +87,17 @@ namespace InstallerTests
         {
             var plugin = Plugin;
             plugin.AddClimate("FixtureClimate");
+            plugin.AddClimate("MasserClimate", climate =>
+            {
+                climate.PhaseLength = 4;
+                climate.Moons = Climate.Moon.Masser;
+                climate.Model = new Model { File = @"Sky\Stars.nif" };
+            });
+            plugin.AddClimate("TwinMoonClimate", climate =>
+            {
+                climate.PhaseLength = 63;
+                climate.Moons = Climate.Moon.Masser | Climate.Moon.Secunda;
+            });
             plugin.AddWorldspace("FixtureWorld").Climate.FormKey = plugin.FormKeyOf("FixtureClimate");
             DescribeWater(plugin);
             plugin.AddImageSpace("FixtureImageSpace", imageSpace =>

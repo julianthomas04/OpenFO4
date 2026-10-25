@@ -205,6 +205,45 @@ namespace InstallerTests
             Assert.All(imageSpaces.RootElement.EnumerateObject(), time => Assert.Equal(JsonValueKind.Null, time.Value.ValueKind));
         }
 
+        JsonElement ClimateData(string editorId)
+        {
+            var json = db.QuerySingle<string>("SELECT data FROM climates WHERE form_key = @key", new { key = db.KeyOf(editorId) });
+            return JsonDocument.Parse(json).RootElement;
+        }
+
+        [Fact]
+        public void Climate_WithOneMoonAndSkyModel_StoresPhaseLengthMoonFlagsAndLowercasedModelPath()
+        {
+            var data = ClimateData("MasserClimate");
+
+            Assert.Equal(4, data.GetProperty("MoonPhaseLength").GetInt32());
+            Assert.True(data.GetProperty("Moons").GetProperty("Masser").GetBoolean());
+            Assert.False(data.GetProperty("Moons").GetProperty("Secunda").GetBoolean());
+            Assert.Equal(@"sky\stars.nif", data.GetProperty("ModelPath").GetString());
+        }
+
+        [Fact]
+        public void Climate_WithBothMoonsAtMaximumPhaseLength_StoresBothFlagsAndNoModelPath()
+        {
+            var data = ClimateData("TwinMoonClimate");
+
+            Assert.Equal(63, data.GetProperty("MoonPhaseLength").GetInt32());
+            Assert.True(data.GetProperty("Moons").GetProperty("Masser").GetBoolean());
+            Assert.True(data.GetProperty("Moons").GetProperty("Secunda").GetBoolean());
+            Assert.False(data.TryGetProperty("ModelPath", out _));
+        }
+
+        [Fact]
+        public void Climate_WithoutMoonsOrModel_StoresZeroPhaseLengthAndNoMoonFlags()
+        {
+            var data = ClimateData("FixtureClimate");
+
+            Assert.Equal(0, data.GetProperty("MoonPhaseLength").GetInt32());
+            Assert.False(data.GetProperty("Moons").GetProperty("Masser").GetBoolean());
+            Assert.False(data.GetProperty("Moons").GetProperty("Secunda").GetBoolean());
+            Assert.False(data.TryGetProperty("ModelPath", out _));
+        }
+
         [Fact]
         public void Worldspace_ClimateLink_IsStoredForWeatherSelection()
         {

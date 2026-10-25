@@ -29,6 +29,11 @@ layers it collides with (`collides_with`, a JSON array of form keys in the recor
 `doors.trigger_bounds` holds the same JSON for the volume that triggers an automatic door, measured from the editor-marker geometry of its model
 (whole or fractional units); it is NULL for every other door.
 
+`climates.data` is JSON with the climate's `Weathers` (each with `Weather`, `Chance` and optional `Global`), the
+`SunriseBegin`, `SunriseEnd`, `SunsetBegin` and `SunsetEnd` times as `HH:MM:SS`, `MoonPhaseLength` (days each of the
+eight moon phases lasts) and `Moons`, which has a boolean for each of `Masser` and `Secunda`. `ModelPath` is the lowercased sky model
+(for example `sky\stars.nif`) and is absent when the climate has none.
+
 ## Finalization
 
 Material swaps are resolved at install time into final texture paths, so the
