@@ -1,12 +1,12 @@
-use super::environment_panel::environment_section;
 use super::state::{ExposureSettings, FogSettings, LightingState};
 use super::tonemap_settings::{TonemapOperator, TonemapSettings};
+use super::weather_panel::weather_section;
 
 const FOG_DISTANCE_MAX: f32 = 30000.0;
 const SHADOW_BIAS_MAX_TEXELS: f32 = 8.0;
 
 pub fn lighting_panel(ui: &mut egui::Ui, lighting: &mut LightingState) {
-    environment_section(ui, lighting);
+    weather_section(ui, lighting);
 
     ui.separator();
     ui.label("Sun");

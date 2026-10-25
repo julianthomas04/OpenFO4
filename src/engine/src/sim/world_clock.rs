@@ -70,6 +70,7 @@ pub struct WorldClock {
     minute_of_day: f64,
     days_passed: u32,
     time_scale: f32,
+    start_time_scale: f32,
     paused: bool,
 }
 
@@ -83,6 +84,7 @@ impl Default for WorldClock {
             minute_of_day: minute_of_day(start.hour),
             days_passed: start.days_passed,
             time_scale: start.time_scale,
+            start_time_scale: start.time_scale,
             paused: false,
         }
     }
@@ -100,6 +102,7 @@ impl WorldClock {
             minute_of_day: minute_of_day(start.hour),
             days_passed: start.days_passed,
             time_scale: start.time_scale,
+            start_time_scale: start.time_scale,
             paused: false,
         })
     }
@@ -165,6 +168,11 @@ impl WorldClock {
     /// Game minutes per real minute.
     pub fn time_scale(&self) -> f32 {
         self.time_scale
+    }
+
+    /// The time scale the clock started with: the game's `TimeScale` as loaded.
+    pub fn start_time_scale(&self) -> f32 {
+        self.start_time_scale
     }
 
     pub fn paused(&self) -> bool {
@@ -259,6 +267,18 @@ mod tests {
         assert_eq!(clock.time_scale(), 20.0);
         assert!(!clock.paused());
         assert_eq!(WorldClock::new(ClockStart::default()), Ok(clock));
+    }
+
+    #[test]
+    fn the_start_time_scale_survives_later_time_scale_changes() {
+        let mut clock = WorldClock::new(ClockStart {
+            time_scale: 6.0,
+            ..ClockStart::default()
+        })
+        .unwrap();
+        clock.set_time_scale(500.0).unwrap();
+        assert_eq!(clock.time_scale(), 500.0);
+        assert_eq!(clock.start_time_scale(), 6.0);
     }
 
     #[test]

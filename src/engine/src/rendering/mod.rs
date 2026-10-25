@@ -119,7 +119,7 @@ use crate::rendering::{
     lighting::{
         FrameBinding, LightingState, debug_panel::lighting_panel,
         exterior_weather::ExteriorWeather, interior_catalog::InteriorLightingCatalog,
-        state::FrameInputs,
+        state::FrameInputs, time_panel::time_panel,
     },
     line_buffer::LineBuffer,
     local_lights::{
@@ -2934,6 +2934,16 @@ impl State {
                                         .speed(1)
                                         .prefix("Camera Speed: "),
                                 );
+                            });
+
+                        egui::CollapsingHeader::new("Environment")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                let mut clock_edits = Vec::new();
+                                time_panel(ui, self.sim.world_clock(), &mut clock_edits);
+                                for edit in clock_edits {
+                                    self.sim.apply(SimCommand::SetWorldClock(edit));
+                                }
                             });
 
                         egui::CollapsingHeader::new("Lighting")
