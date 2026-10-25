@@ -67,6 +67,72 @@ namespace InstallerTests
             Assert.Equal(@"Doors\Door01.nif", model);
         }
 
+        [Fact]
+        public void Door_ObjectBounds_AreMinMaxJson()
+        {
+            var json = db.QuerySingle<string>("SELECT bounds FROM doors WHERE form_key = @key", new { key = db.KeyOf("DoorBase") });
+
+            Assert.Equal("""{"Min":{"X":-40,"Y":-6,"Z":0},"Max":{"X":40,"Y":6,"Z":200}}""", json);
+        }
+
+        [Fact]
+        public void Door_TriggerBounds_AreNullUntilTheMarkerStepFillsThem()
+        {
+            var json = db.QuerySingle<string?>("SELECT trigger_bounds FROM doors WHERE form_key = @key", new { key = db.KeyOf("DoorBase") });
+
+            Assert.Null(json);
+        }
+
+        [Fact]
+        public void CollisionLayerIndex_IsIndexedForLookupByLayerNumber()
+        {
+            var indexed = db.QuerySingle<long>("SELECT COUNT(*) FROM pragma_index_info('idx_collision_layers_index') WHERE name = 'layer_index'");
+
+            Assert.Equal(1, indexed);
+        }
+
+        [Fact]
+        public void Static_ObjectBounds_KeepTheExactJsonFormat()
+        {
+            Assert.Equal("""{"Min":{"X":-10,"Y":-20,"Z":-30},"Max":{"X":10,"Y":20,"Z":30}}""", Static("WallStatic").Bounds);
+        }
+
+        sealed class CollisionLayerRow
+        {
+            public string? EditorId { get; init; }
+            public long? LayerIndex { get; init; }
+            public long? Flags { get; init; }
+            public string? CollidesWith { get; init; }
+        }
+
+        CollisionLayerRow CollisionLayer(string editorId) =>
+            db.QuerySingle<CollisionLayerRow>("SELECT * FROM collision_layers WHERE form_key = @key", new { key = db.KeyOf(editorId) });
+
+        [Fact]
+        public void CollisionLayer_StoresIndexAndRawFlags()
+        {
+            var row = CollisionLayer("LayerStatic");
+
+            Assert.Equal("LayerStatic", row.EditorId);
+            Assert.Equal(1, row.LayerIndex);
+            Assert.Equal((long)(uint)Mutagen.Bethesda.Fallout4.CollisionLayer.Flag.TriggerVolume, row.Flags);
+        }
+
+        [Fact]
+        public void CollisionLayer_CollidesWith_IsJsonArrayOfFormKeysInAuthoredOrder()
+        {
+            var collidesWith = JsonSerializer.Deserialize<string[]>(CollisionLayer("LayerCharacter").CollidesWith!);
+
+            Assert.NotNull(collidesWith);
+            Assert.Equal([db.KeyOf("LayerStatic"), db.KeyOf("LayerCharacter")], collidesWith);
+        }
+
+        [Fact]
+        public void CollisionLayer_WithoutCollidesWithList_StoresNull()
+        {
+            Assert.Null(CollisionLayer("LayerIsolated").CollidesWith);
+        }
+
         sealed class LightRow
         {
             public double Radius { get; init; }

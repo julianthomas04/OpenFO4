@@ -59,6 +59,15 @@ namespace InstallerTests
         {
             var record = _mod.Doors.AddNew(editorId);
             record.Model = new Model { File = model };
+            record.ObjectBounds = new ObjectBounds { First = new P3Int16(-40, -6, 0), Second = new P3Int16(40, 6, 200) };
+            Register(editorId, record.FormKey);
+            return record;
+        }
+
+        public CollisionLayer AddCollisionLayer(string editorId, Action<CollisionLayer>? configure = null)
+        {
+            var record = _mod.CollisionLayers.AddNew(editorId);
+            configure?.Invoke(record);
             Register(editorId, record.FormKey);
             return record;
         }

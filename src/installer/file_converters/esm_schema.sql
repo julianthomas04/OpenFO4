@@ -688,7 +688,9 @@ CREATE TABLE IF NOT EXISTS doors (
     open_sound TEXT,
     close_sound TEXT,
     flags TEXT,                         -- JSON
-    is_marker INTEGER DEFAULT 0         -- ESM major record flag 0x800000
+    is_marker INTEGER DEFAULT 0,        -- ESM major record flag 0x800000
+    bounds TEXT,                        -- JSON: min/max coordinates (OBND)
+    trigger_bounds TEXT                 -- JSON: min/max coordinates of the model's editor-marker geometry, automatic doors only
 );
 
 CREATE TABLE IF NOT EXISTS lights (
@@ -1131,7 +1133,13 @@ CREATE TABLE IF NOT EXISTS bendable_splines          (form_key TEXT PRIMARY KEY,
 CREATE TABLE IF NOT EXISTS body_part_datas           (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS camera_paths              (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS camera_shots              (form_key TEXT PRIMARY KEY, editor_id TEXT);
-CREATE TABLE IF NOT EXISTS collision_layers          (form_key TEXT PRIMARY KEY, editor_id TEXT);
+CREATE TABLE IF NOT EXISTS collision_layers (
+    form_key TEXT PRIMARY KEY REFERENCES records(form_key),
+    editor_id TEXT,
+    layer_index INTEGER,                -- COLL BNAM layer index (matches the layer id Havok bodies carry)
+    flags INTEGER,                      -- COLL FNAM raw flags
+    collides_with TEXT                  -- JSON: Array of collision layer form keys (CNAM)
+);
 CREATE TABLE IF NOT EXISTS color_records             (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS debrises                  (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS default_object_managers   (form_key TEXT PRIMARY KEY, editor_id TEXT);

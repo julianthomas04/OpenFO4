@@ -9,6 +9,7 @@
 
 use openfo4::assets::db::DbClient;
 use openfo4::assets::db::schema::DbSchema;
+use openfo4::assets::db::teleports::{DoorLocation, WalkInDoors};
 use openfo4::assets::db::water_placement::CellWaterHeight;
 use rusqlite::Connection;
 use rusqlite::types::Value;
@@ -1312,6 +1313,237 @@ fn teleport_into_a_cell_picks_the_lowest_source_ref() {
         "door_a"
     );
     assert!(db.get_teleport_into_cell("EXT").unwrap().is_none());
+}
+
+// ---------------------------------------------------------- walk-in doors
+
+const BOUNDS_JSON: &str = r#"{"Min":{"X":-64,"Y":-8,"Z":0},"Max":{"X":64,"Y":8,"Z":192}}"#;
+
+/// The schema file gains `doors.trigger_bounds` with the installer; this keeps the tests valid
+/// either side of that change.
+fn with_trigger_bounds_column(conn: Connection, present: bool) -> Connection {
+    let has_column: bool = conn
+        .query_row(
+            "SELECT count(*) > 0 FROM pragma_table_info('doors') WHERE name = 'trigger_bounds'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    match (has_column, present) {
+        (false, true) => conn
+            .execute_batch("ALTER TABLE doors ADD COLUMN trigger_bounds TEXT;")
+            .unwrap(),
+        (true, false) => conn
+            .execute_batch("ALTER TABLE doors DROP COLUMN trigger_bounds;")
+            .unwrap(),
+        _ => {}
+    }
+    conn
+}
+
+fn walk_in_world() -> Connection {
+    let conn = with_trigger_bounds_column(teleport_world(), true);
+    insert(
+        &conn,
+        "doors",
+        &[
+            ("form_key", text("AUTO")),
+            ("flags", text("2")),
+            ("trigger_bounds", text(BOUNDS_JSON)),
+        ],
+    );
+    insert(
+        &conn,
+        "doors",
+        &[
+            ("form_key", text("AUTO_NO_TEXT")),
+            ("flags", text("66")),
+            ("trigger_bounds", text(BOUNDS_JSON)),
+        ],
+    );
+    insert(
+        &conn,
+        "doors",
+        &[
+            ("form_key", text("PLAIN")),
+            ("flags", text("0")),
+            ("trigger_bounds", text(BOUNDS_JSON)),
+        ],
+    );
+    conn
+}
+
+fn placed_door(
+    conn: &Connection,
+    form_key: &str,
+    cell: &str,
+    base: &str,
+    extra: &[(&'static str, Value)],
+) {
+    let mut row = placed(form_key, cell, (10.0, 20.0, 30.0));
+    let overridden =
+        |column: &str| column == "base_object" || extra.iter().any(|(name, _)| *name == column);
+    row.retain(|(column, _)| !overridden(column));
+    row.push(("base_object", text(base)));
+    row.extend(extra.iter().cloned());
+    insert(conn, "placed_objects", &row);
+    teleport(conn, form_key, "dest_int");
+}
+
+#[test]
+fn walk_in_doors_are_the_automatic_doors_with_location_pose_and_bounds() {
+    let conn = walk_in_world();
+    placed_door(
+        &conn,
+        "outdoor",
+        "EXT",
+        "AUTO",
+        &[("scale", real(1.5)), ("rotation_z", real(0.5))],
+    );
+    placed_door(&conn, "indoor", "INT", "AUTO_NO_TEXT", &[]);
+    placed_door(&conn, "ordinary", "EXT", "PLAIN", &[]);
+    let doors = client(conn).get_walk_in_doors().unwrap();
+
+    assert_eq!(doors.without_bounds, Vec::<String>::new());
+    assert!(doors.rejected.is_empty(), "{:?}", doors.rejected);
+    assert_eq!(doors.doors.len(), 2);
+    let indoor = &doors.doors[0];
+    assert_eq!(indoor.source_ref, "indoor");
+    assert_eq!(
+        indoor.location,
+        DoorLocation::Interior { cell: "INT".into() }
+    );
+    let outdoor = &doors.doors[1];
+    assert_eq!(outdoor.source_ref, "outdoor");
+    assert_eq!(
+        outdoor.location,
+        DoorLocation::Exterior {
+            worldspace: "WS".into()
+        }
+    );
+    assert_eq!(outdoor.position, [10.0, 20.0, 30.0]);
+    assert_eq!(outdoor.rotation, [0.0, 0.0, 0.5]);
+    assert_eq!(outdoor.scale, 1.5);
+    assert_eq!(outdoor.bounds.min, [-64.0, -8.0, 0.0]);
+    assert_eq!(outdoor.bounds.max, [64.0, 8.0, 192.0]);
+}
+
+#[test]
+fn walk_in_doors_exclude_refs_that_start_disabled_or_hidden() {
+    let conn = walk_in_world();
+    placed_door(&conn, "on", "EXT", "AUTO", &[]);
+    placed_door(
+        &conn,
+        "disabled",
+        "EXT",
+        "AUTO",
+        &[("is_initially_disabled", int(1))],
+    );
+    placed_door(
+        &conn,
+        "hidden",
+        "EXT",
+        "AUTO",
+        &[("initially_hidden", int(1))],
+    );
+    let doors = client(conn).get_walk_in_doors().unwrap();
+    let refs: Vec<_> = doors.doors.iter().map(|d| d.source_ref.as_str()).collect();
+    assert_eq!(refs, ["on"]);
+}
+
+#[test]
+fn walk_in_doors_without_trigger_bounds_are_reported_not_defaulted() {
+    let conn = walk_in_world();
+    conn.execute(
+        "UPDATE doors SET trigger_bounds = NULL WHERE form_key = 'AUTO'",
+        [],
+    )
+    .unwrap();
+    placed_door(&conn, "nobounds", "EXT", "AUTO", &[]);
+    placed_door(&conn, "fine", "EXT", "AUTO_NO_TEXT", &[]);
+    let doors = client(conn).get_walk_in_doors().unwrap();
+    assert_eq!(doors.without_bounds, ["nobounds"]);
+    assert_eq!(doors.doors.len(), 1);
+    assert_eq!(doors.doors[0].source_ref, "fine");
+}
+
+#[test]
+fn walk_in_doors_from_a_database_without_the_trigger_bounds_column_report_every_ref() {
+    let conn = with_trigger_bounds_column(schema_connection(), false);
+    insert(
+        &conn,
+        "cells",
+        &[("form_key", text("INT")), ("is_interior", int(1))],
+    );
+    insert(
+        &conn,
+        "placed_objects",
+        &placed("dest_int", "INT", (0.0, 0.0, 0.0)),
+    );
+    insert(
+        &conn,
+        "doors",
+        &[("form_key", text("AUTO")), ("flags", text("2"))],
+    );
+    placed_door(&conn, "legacy", "INT", "AUTO", &[]);
+    let doors = client(conn).get_walk_in_doors().unwrap();
+    assert_eq!(doors.doors.len(), 0);
+    assert_eq!(doors.without_bounds, ["legacy"]);
+}
+
+fn rejected_refs(doors: &WalkInDoors) -> Vec<String> {
+    doors.rejected.iter().map(ToString::to_string).collect()
+}
+
+fn walk_in_refs(doors: &WalkInDoors) -> Vec<&str> {
+    doors.doors.iter().map(|d| d.source_ref.as_str()).collect()
+}
+
+#[test]
+fn walk_in_doors_with_malformed_flags_or_bounds_are_rejected_alone_naming_the_ref() {
+    let conn = walk_in_world();
+    conn.execute("UPDATE doors SET flags = 'x' WHERE form_key = 'PLAIN'", [])
+        .unwrap();
+    placed_door(&conn, "badflags", "EXT", "PLAIN", &[]);
+    placed_door(&conn, "fine", "EXT", "AUTO", &[]);
+    let doors = client(conn).get_walk_in_doors().unwrap();
+    let rejected = rejected_refs(&doors);
+    assert!(
+        rejected.len() == 1 && rejected[0].contains("badflags"),
+        "{rejected:?}"
+    );
+    assert_eq!(walk_in_refs(&doors), ["fine"]);
+
+    let conn = walk_in_world();
+    conn.execute(
+        "UPDATE doors SET trigger_bounds = '{\"Min\":1}' WHERE form_key = 'AUTO'",
+        [],
+    )
+    .unwrap();
+    placed_door(&conn, "badbounds", "EXT", "AUTO", &[]);
+    placed_door(&conn, "fine", "EXT", "AUTO_NO_TEXT", &[]);
+    let doors = client(conn).get_walk_in_doors().unwrap();
+    let rejected = rejected_refs(&doors);
+    assert!(
+        rejected.len() == 1 && rejected[0].contains("badbounds"),
+        "{rejected:?}"
+    );
+    assert_eq!(walk_in_refs(&doors), ["fine"]);
+}
+
+#[test]
+fn walk_in_doors_standing_in_an_exterior_cell_without_a_worldspace_are_rejected_naming_the_ref() {
+    let conn = walk_in_world();
+    insert(&conn, "cells", &cell_row("ORPHAN", None, Some((0, 0))));
+    placed_door(&conn, "lost", "ORPHAN", "AUTO", &[]);
+    placed_door(&conn, "fine", "EXT", "AUTO", &[]);
+    let doors = client(conn).get_walk_in_doors().unwrap();
+    let rejected = rejected_refs(&doors);
+    assert!(
+        rejected.len() == 1 && rejected[0].contains("lost"),
+        "{rejected:?}"
+    );
+    assert_eq!(walk_in_refs(&doors), ["fine"]);
 }
 
 // ---------------------------------------------------------- material swaps
@@ -2980,4 +3212,113 @@ fn a_database_with_only_some_navmesh_columns_is_rejected() {
     )
     .unwrap();
     assert!(DbClient::from_connection(conn).is_err());
+}
+
+fn seed_collision_layer(
+    conn: &Connection,
+    form_key: &str,
+    editor_id: &str,
+    index: i64,
+    flags: i64,
+    collides_with: Value,
+) {
+    insert(
+        conn,
+        "collision_layers",
+        &[
+            ("form_key", text(form_key)),
+            ("editor_id", text(editor_id)),
+            ("layer_index", int(index)),
+            ("flags", int(flags)),
+            ("collides_with", collides_with),
+        ],
+    );
+}
+
+fn seed_character_layers(conn: &Connection) {
+    seed_collision_layer(
+        conn,
+        "08877F:Fallout4.esm",
+        "L_CHARCONTROLLER",
+        30,
+        0,
+        text(r#"["0D8121:Fallout4.esm"]"#),
+    );
+    seed_collision_layer(
+        conn,
+        "0D8121:Fallout4.esm",
+        "L_CHARBUMPER",
+        56,
+        0,
+        text(r#"["08877F:Fallout4.esm"]"#),
+    );
+}
+
+#[test]
+fn player_collision_layers_resolve_from_the_stored_rows() {
+    use openfo4::assets::db::collision_layers::LayerSolidity;
+    let conn = schema_connection();
+    seed_character_layers(&conn);
+    seed_collision_layer(
+        &conn,
+        "000001:Fallout4.esm",
+        "L_STATIC",
+        1,
+        0,
+        text(r#"["08877F:Fallout4.esm"]"#),
+    );
+    seed_collision_layer(&conn, "000002:Fallout4.esm", "L_NAVCUT", 49, 5, Value::Null);
+    seed_collision_layer(
+        &conn,
+        "000003:Fallout4.esm",
+        "L_NONCOLLIDABLE",
+        15,
+        0,
+        text(r#"["000001:Fallout4.esm"]"#),
+    );
+    let layers = client(conn).get_player_collision_layers().unwrap();
+    assert_eq!(layers.solidity(Some(1)), LayerSolidity::Solid);
+    assert_eq!(layers.solidity(Some(49)), LayerSolidity::NeverTouchesPlayer);
+    assert_eq!(layers.solidity(Some(15)), LayerSolidity::NeverTouchesPlayer);
+    assert_eq!(layers.solidity(Some(99)), LayerSolidity::SolidUnknown);
+}
+
+#[test]
+fn player_collision_layers_keep_everything_solid_on_a_database_from_an_older_installer() {
+    use openfo4::assets::db::collision_layers::LayerSolidity;
+    let conn = legacy_connection(&[
+        ("collision_layers", "layer_index"),
+        ("collision_layers", "flags"),
+        ("collision_layers", "collides_with"),
+    ]);
+    let layers = client(conn).get_player_collision_layers().unwrap();
+    assert_eq!(layers.solidity(Some(49)), LayerSolidity::Solid);
+}
+
+#[test]
+fn player_collision_layers_keep_everything_solid_without_the_character_layers() {
+    use openfo4::assets::db::collision_layers::LayerSolidity;
+    let conn = schema_connection();
+    seed_collision_layer(&conn, "000002:Fallout4.esm", "L_NAVCUT", 49, 5, Value::Null);
+    let layers = client(conn).get_player_collision_layers().unwrap();
+    assert_eq!(layers.solidity(Some(49)), LayerSolidity::Solid);
+}
+
+#[test]
+fn a_malformed_collides_with_list_is_an_error() {
+    let conn = schema_connection();
+    seed_character_layers(&conn);
+    seed_collision_layer(
+        &conn,
+        "000004:Fallout4.esm",
+        "L_BAD",
+        7,
+        0,
+        text("not json"),
+    );
+    let error = client(conn).get_player_collision_layers().unwrap_err();
+    assert!(
+        format!("{error:#}").contains("000004:Fallout4.esm"),
+        "{error:#}"
+    );
 }

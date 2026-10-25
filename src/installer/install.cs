@@ -60,6 +60,31 @@ if (args.Length > 0 && InstallerPaths.IsPackaged && !args[0].StartsWith("--", St
     Environment.ExitCode = InstallSession.ExitFailed;
     return;
 }
+if (args.Length > 0 && !args[0].StartsWith("--", StringComparison.Ordinal))
+{
+    // Every dev subcommand takes the headless install's --install-dir and --game-dir; omitted, they stay the development defaults.
+    try
+    {
+        var target = DevCommandLocations.Resolve(args, Environment.GetEnvironmentVariable, fo4Location, InstallerPaths.DevInstallFolder);
+        locations = target.Locations;
+        args = target.Arguments;
+    }
+    catch (LaunchArgumentException ex)
+    {
+        Console.Error.WriteLine($"ERROR: {ex.Message}");
+        Environment.ExitCode = InstallSession.ExitFailed;
+        return;
+    }
+    fo4Location = locations.Fo4Location;
+    stagingRoot = locations.StagingRoot;
+    assetsRoot = locations.AssetsRoot;
+    meshesOut = locations.MeshesOut;
+    texturesOut = locations.TexturesOut;
+    dataOut = locations.DataOut;
+    fontsOut = locations.FontsOut;
+    pipboyArtOut = locations.PipboyArtOut;
+    uiLayoutOut = locations.UiLayoutOut;
+}
 if (args.Length > 0)
 {
     switch (args[0])
@@ -187,12 +212,17 @@ if (args.Length > 0)
                     Strings = StringTables.Extract(fo4Location, stagingRoot, GameLanguage.Resolve(fo4Location, settingsDirectory)),
                     Memory = devMemory.Value,
                 };
-                esmOnly.LoadESM(esmOnlySrc);
-                ModcSwapSynthesizer.Run(dbOnlyPath, meshesOut, stagingRoot, texturesOut);
-                LodWaterStage.Run(Path.Combine(fo4Location, "Data"), dbOnlyPath);
-                LodBackfill.Run(dbOnlyPath, meshesOut);
-                ModelPathNormalizer.Run(dbOnlyPath);
-                Console.WriteLine($"Database rebuilt at {dbOnlyPath}");
+                RunConversionCommand(() =>
+                {
+                    esmOnly.LoadESM(esmOnlySrc);
+                    ModcSwapSynthesizer.Run(dbOnlyPath, meshesOut, stagingRoot, texturesOut);
+                    LodWaterStage.Run(Path.Combine(fo4Location, "Data"), dbOnlyPath);
+                    LodBackfill.Run(dbOnlyPath, meshesOut);
+                    DoorTriggerBounds.RunOnGame(dbOnlyPath, Path.Combine(fo4Location, "Data"));
+                    ModelPathNormalizer.Run(dbOnlyPath);
+                    Console.WriteLine($"Database rebuilt at {dbOnlyPath}");
+                    return true;
+                });
                 return;
             }
         case "lod-water-only":
@@ -481,6 +511,9 @@ static void ReloadEsmTables(string tablesCsv, string dbPath, string esmSource, s
     if (plan.ReloadsMaterialSwaps &&
         !RunReloadPostStep("MODC synthesis", "rerun `esm-only --tables material_swaps` to retry",
             () => ModcSwapSynthesizer.Run(dbPath, meshesOut, stagingRoot, texturesOut))) return;
+    if (plan.Tables.Contains("doors") &&
+        !RunReloadPostStep("door trigger bounds", "rerun `esm-only --tables doors` to retry",
+            () => DoorTriggerBounds.RunOnGame(dbPath, Path.Combine(fo4Location, "Data")))) return;
     if (plan.Tables.Contains("statics") &&
         !RunReloadPostStep("LOD backfill", "rerun `esm-only --tables statics` to retry",
             () => LodBackfill.Run(dbPath, meshesOut))) return;
@@ -492,7 +525,7 @@ static void ReloadEsmTables(string tablesCsv, string dbPath, string esmSource, s
 static bool RunReloadPostStep(string name, string retryHint, Action step)
 {
     try { step(); return true; }
-    catch (Exception e) when (e is SqliteException or IOException)
+    catch (Exception e) when (e is SqliteException or IOException or DoorTriggerBoundsException)
     {
         FailReload($"Tables were reloaded, but post-step '{name}' failed: {e.Message}. To finish, {retryHint}.");
         return false;

@@ -7,6 +7,7 @@ use std::sync::Arc;
 use glam::{Quat, Vec3};
 
 use super::water_materials::WaterBodyProps;
+use crate::assets::db::collision_layers::{LayerSolidity, PlayerCollisionLayers};
 
 /// One collision shape in a GLB's local space. Sidecar writers already
 /// applied the engine convention (Y-up, x0.1 scale, Z negated), so these
@@ -187,6 +188,8 @@ pub struct CellColliderBatch {
 #[derive(Clone)]
 pub struct SidecarData {
     pub shapes: Arc<Vec<PartShape>>,
+    /// Shapes left out because their layer never touches the player.
+    pub dropped_for_player: usize,
 }
 
 // The `.col.json` may also carry top-level `dynamic`/`mass`; serde ignores them
@@ -214,14 +217,45 @@ pub(super) struct RawShape {
     pub(super) node: Option<String>,
     /// BGS material hash; absent or 0 = none.
     pub(super) material: Option<u32>,
+    /// Havok filter layer (0-127); absent or unreadable = undecodable, kept solid.
+    #[serde(default, deserialize_with = "lenient_layer")]
+    pub(super) layer: ShapeLayer,
+}
+
+/// A shape's `layer` key as found in the sidecar.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ShapeLayer {
+    #[default]
+    Absent,
+    Valid(u8),
+    /// Present but not an integer in 0..=255.
+    Unreadable,
+}
+
+/// Reads `layer` without ever failing the sidecar: an odd value only makes that
+/// shape's layer unreadable.
+fn lenient_layer<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<ShapeLayer, D::Error> {
+    let value = <serde_json::Value as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(match value {
+        serde_json::Value::Null => ShapeLayer::Absent,
+        other => other
+            .as_u64()
+            .and_then(|layer| u8::try_from(layer).ok())
+            .map_or(ShapeLayer::Unreadable, ShapeLayer::Valid),
+    })
 }
 
 /// Read and parse a loose `.col.json` sidecar file. `None` = missing, unreadable,
 /// or unparseable (caller spawns no collider). Read lazily — only on a cold
 /// `cache/physics` miss, when the bake actually needs the geometry.
-pub fn load_sidecar_file(col_json_path: &str) -> Option<SidecarData> {
+pub fn load_sidecar_file(
+    col_json_path: &str,
+    layers: &PlayerCollisionLayers,
+) -> Option<SidecarData> {
     let bytes = std::fs::read(col_json_path).ok()?;
-    parse_sidecar_bytes(&bytes, col_json_path)
+    parse_sidecar_bytes(&bytes, col_json_path, layers)
 }
 
 /// The manifest key for a runtime mesh path: lowercased and backslash-separated,
@@ -304,8 +338,13 @@ impl ManifestRow {
 /// Parse a `.col.json` collision payload from its raw bytes. `label` is the mesh
 /// path, used only for diagnostics. `None` means the payload was unparseable —
 /// the caller spawns no collider. Malformed individual shapes are skipped with a
-/// warning instead of failing the whole sidecar.
-pub fn parse_sidecar_bytes(bytes: &[u8], label: &str) -> Option<SidecarData> {
+/// warning instead of failing the whole sidecar. Shapes on a layer that never
+/// touches the player (per `layers`) are left out before baking.
+pub fn parse_sidecar_bytes(
+    bytes: &[u8],
+    label: &str,
+    layers: &PlayerCollisionLayers,
+) -> Option<SidecarData> {
     let raw: RawSidecar = match serde_json::from_slice(bytes) {
         Ok(r) => r,
         Err(e) => {
@@ -313,9 +352,9 @@ pub fn parse_sidecar_bytes(bytes: &[u8], label: &str) -> Option<SidecarData> {
             return None;
         }
     };
-    let total = raw.shapes.len();
-    let shapes: Vec<PartShape> = raw
-        .shapes
+    let (solid, dropped_for_player) = keep_player_solid(raw.shapes, layers, label);
+    let total = solid.len();
+    let shapes: Vec<PartShape> = solid
         .into_iter()
         .filter_map(|raw| {
             let node = raw.node.clone();
@@ -337,7 +376,48 @@ pub fn parse_sidecar_bytes(bytes: &[u8], label: &str) -> Option<SidecarData> {
     }
     Some(SidecarData {
         shapes: Arc::new(shapes),
+        dropped_for_player,
     })
+}
+
+/// The shapes that can touch the player, and how many were left out.
+fn keep_player_solid(
+    shapes: Vec<RawShape>,
+    layers: &PlayerCollisionLayers,
+    label: &str,
+) -> (Vec<RawShape>, usize) {
+    let total = shapes.len();
+    let kept: Vec<RawShape> = shapes
+        .into_iter()
+        .filter(|shape| {
+            let layer = match shape.layer {
+                ShapeLayer::Absent => None,
+                ShapeLayer::Valid(layer) => Some(layer),
+                ShapeLayer::Unreadable => {
+                    crate::utils::warn_once(&format!("collision-layer-unreadable:{label}"), || {
+                        format!("collision: {label} has a shape whose layer is not an integer in 0..=255; it stays solid")
+                    });
+                    return true;
+                }
+            };
+            match layers.solidity(layer) {
+                LayerSolidity::Solid => true,
+                LayerSolidity::NeverTouchesPlayer => false,
+                LayerSolidity::SolidUnknown => {
+                    if let Some(layer) = layer {
+                        crate::utils::warn_once(&format!("collision-layer-unknown:{layer}"), || {
+                            format!(
+                                "collision: layer {layer} has no collision_layers row or no collides-with list; its shapes stay solid"
+                            )
+                        });
+                    }
+                    true
+                }
+            }
+        })
+        .collect();
+    let dropped = total - kept.len();
+    (kept, dropped)
 }
 
 pub(super) fn convert_shape(s: RawShape) -> Option<ColShape> {
@@ -403,6 +483,39 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+    use crate::assets::db::collision_layers::CollisionLayerRow;
+
+    fn all_solid() -> PlayerCollisionLayers {
+        PlayerCollisionLayers::all_solid()
+    }
+
+    fn layer_row(
+        form_key: &str,
+        editor_id: &str,
+        index: i64,
+        flags: i64,
+        collides_with: Option<&[&str]>,
+    ) -> CollisionLayerRow {
+        CollisionLayerRow {
+            form_key: form_key.to_owned(),
+            editor_id: Some(editor_id.to_owned()),
+            layer_index: Some(index),
+            flags: Some(flags),
+            collides_with: collides_with.map(|keys| keys.iter().map(|k| (*k).to_owned()).collect()),
+        }
+    }
+
+    /// Layer 1 solid (lists the controller), 12 trigger, 15 never touches the player.
+    fn sample_layers() -> PlayerCollisionLayers {
+        PlayerCollisionLayers::from_rows(&[
+            layer_row("A:x.esm", "L_CHARCONTROLLER", 30, 0, Some(&["B:x.esm"])),
+            layer_row("B:x.esm", "L_CHARBUMPER", 56, 0, Some(&["A:x.esm"])),
+            layer_row("C:x.esm", "L_STATIC", 1, 0, Some(&["A:x.esm"])),
+            layer_row("D:x.esm", "L_TRIGGER", 12, 3, Some(&["A:x.esm"])),
+            layer_row("E:x.esm", "L_NONCOLLIDABLE", 15, 0, Some(&["C:x.esm"])),
+        ])
+        .unwrap()
+    }
 
     #[test]
     fn a_cell_that_lost_its_objects_keeps_terrain_but_a_landless_one_has_no_ground() {
@@ -516,10 +629,104 @@ mod tests {
                 { "type": "sphere" },
             ],
         });
-        let parsed = parse_sidecar_bytes(&serde_json::to_vec(&sidecar).unwrap(), "test").unwrap();
+        let parsed =
+            parse_sidecar_bytes(&serde_json::to_vec(&sidecar).unwrap(), "test", &all_solid())
+                .unwrap();
         assert_eq!(parsed.shapes.len(), 1);
         assert_eq!(parsed.shapes[0].node.as_deref(), Some("Door"));
         assert_eq!(parsed.shapes[0].joint, None);
+    }
+
+    #[test]
+    fn parse_keeps_only_shapes_that_can_touch_the_player() {
+        let sidecar = json!({
+            "shapes": [
+                { "type": "sphere", "radius": 1.0, "layer": 1, "node": "wall" },
+                { "type": "sphere", "radius": 1.0, "layer": 12 },
+                { "type": "sphere", "radius": 1.0, "layer": 15 },
+                { "type": "sphere", "radius": 1.0, "layer": 99, "node": "unknown row" },
+                { "type": "sphere", "radius": 1.0, "node": "no layer" },
+            ],
+        });
+        let parsed = parse_sidecar_bytes(
+            &serde_json::to_vec(&sidecar).unwrap(),
+            "test",
+            &sample_layers(),
+        )
+        .unwrap();
+        let nodes: Vec<_> = parsed.shapes.iter().map(|s| s.node.as_deref()).collect();
+        assert_eq!(nodes, [Some("wall"), Some("unknown row"), Some("no layer")]);
+        assert_eq!(parsed.dropped_for_player, 2);
+    }
+
+    #[test]
+    fn an_unreadable_layer_keeps_that_shape_solid_without_failing_the_sidecar() {
+        let sidecar = json!({
+            "shapes": [
+                { "type": "sphere", "radius": 1.0, "layer": 300, "node": "too big" },
+                { "type": "sphere", "radius": 1.0, "layer": -1, "node": "negative" },
+                { "type": "sphere", "radius": 1.0, "layer": "x", "node": "text" },
+                { "type": "sphere", "radius": 1.0, "layer": 1.5, "node": "fraction" },
+                { "type": "sphere", "radius": 1.0, "layer": null, "node": "null" },
+                { "type": "sphere", "radius": 1.0, "layer": 15, "node": "dropped" },
+            ],
+        });
+        let parsed = parse_sidecar_bytes(
+            &serde_json::to_vec(&sidecar).unwrap(),
+            "test",
+            &sample_layers(),
+        )
+        .unwrap();
+        let nodes: Vec<_> = parsed
+            .shapes
+            .iter()
+            .map(|s| s.node.as_deref().unwrap())
+            .collect();
+        assert_eq!(nodes, ["too big", "negative", "text", "fraction", "null"]);
+        assert_eq!(parsed.dropped_for_player, 1);
+    }
+
+    #[test]
+    fn a_sidecar_whose_shapes_all_miss_the_player_parses_to_no_shapes() {
+        let sidecar =
+            json!({ "shapes": [{ "type": "box", "half_extents": [1.0, 1.0, 1.0], "layer": 12 }] });
+        let parsed = parse_sidecar_bytes(
+            &serde_json::to_vec(&sidecar).unwrap(),
+            "test",
+            &sample_layers(),
+        )
+        .unwrap();
+        assert!(parsed.shapes.is_empty());
+        assert_eq!(parsed.dropped_for_player, 1);
+    }
+
+    #[test]
+    fn dropped_shapes_are_not_counted_as_malformed_and_malformed_ones_still_are() {
+        let sidecar = json!({
+            "shapes": [
+                { "type": "sphere", "radius": 1.0, "layer": 1 },
+                { "type": "sphere", "layer": 1 },
+                { "type": "sphere", "layer": 15 },
+            ],
+        });
+        let parsed = parse_sidecar_bytes(
+            &serde_json::to_vec(&sidecar).unwrap(),
+            "test",
+            &sample_layers(),
+        )
+        .unwrap();
+        assert_eq!(parsed.shapes.len(), 1);
+        assert_eq!(parsed.dropped_for_player, 1);
+    }
+
+    #[test]
+    fn without_layer_knowledge_nothing_is_dropped() {
+        let sidecar = json!({ "shapes": [{ "type": "sphere", "radius": 1.0, "layer": 15 }] });
+        let parsed =
+            parse_sidecar_bytes(&serde_json::to_vec(&sidecar).unwrap(), "test", &all_solid())
+                .unwrap();
+        assert_eq!(parsed.shapes.len(), 1);
+        assert_eq!(parsed.dropped_for_player, 0);
     }
 
     #[test]
@@ -530,7 +737,9 @@ mod tests {
                 { "type": "sphere", "radius": 0.5 },
             ],
         });
-        let parsed = parse_sidecar_bytes(&serde_json::to_vec(&sidecar).unwrap(), "test").unwrap();
+        let parsed =
+            parse_sidecar_bytes(&serde_json::to_vec(&sidecar).unwrap(), "test", &all_solid())
+                .unwrap();
         assert_eq!(parsed.shapes[0].material, 2_052_480_620);
         assert_eq!(parsed.shapes[1].material, 0);
     }
@@ -538,15 +747,17 @@ mod tests {
     #[test]
     fn parse_ignores_the_dynamic_and_mass_keys() {
         let sidecar = json!({ "shapes": [], "dynamic": true, "mass": 12.5 });
-        let parsed = parse_sidecar_bytes(&serde_json::to_vec(&sidecar).unwrap(), "test").unwrap();
+        let parsed =
+            parse_sidecar_bytes(&serde_json::to_vec(&sidecar).unwrap(), "test", &all_solid())
+                .unwrap();
         assert!(parsed.shapes.is_empty());
     }
 
     #[test]
     fn parse_rejects_unparseable_payloads() {
-        assert!(parse_sidecar_bytes(b"{ nope", "test").is_none());
+        assert!(parse_sidecar_bytes(b"{ nope", "test", &all_solid()).is_none());
         assert!(
-            parse_sidecar_bytes(b"{}", "test").is_none(),
+            parse_sidecar_bytes(b"{}", "test", &all_solid()).is_none(),
             "no shapes key"
         );
     }
@@ -557,13 +768,19 @@ mod tests {
         let path = dir.path().join("a.col.json");
         std::fs::write(&path, br#"{"shapes":[{"type":"sphere","radius":1.0}]}"#).unwrap();
         assert_eq!(
-            load_sidecar_file(path.to_str().unwrap())
+            load_sidecar_file(path.to_str().unwrap(), &all_solid())
                 .unwrap()
                 .shapes
                 .len(),
             1
         );
-        assert!(load_sidecar_file(dir.path().join("b.col.json").to_str().unwrap()).is_none());
+        assert!(
+            load_sidecar_file(
+                dir.path().join("b.col.json").to_str().unwrap(),
+                &all_solid()
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -636,7 +853,7 @@ mod tests {
     proptest::proptest! {
         #[test]
         fn arbitrary_sidecar_bytes_never_panic(bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..300)) {
-            let _ = parse_sidecar_bytes(&bytes, "fuzz");
+            let _ = parse_sidecar_bytes(&bytes, "fuzz", &all_solid());
         }
 
         #[test]

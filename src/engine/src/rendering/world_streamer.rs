@@ -12,6 +12,7 @@ use crate::anim::{AnimationRig, JointIndex};
 use crate::assets::AssetServer;
 use crate::assets::db::DbClient;
 use crate::assets::db::addon_nodes::AddonNodes;
+use crate::assets::db::collision_layers::PlayerCollisionLayers;
 use crate::assets::db::landscapes::Landscape;
 use crate::assets::db::lights::Light;
 use crate::assets::db::material_swaps::SwapEntry;
@@ -226,6 +227,36 @@ enum CellRequest {
         grid: (i32, i32),
         epoch: u64,
     },
+}
+
+/// The interior cell request could not reach the cell workers: their request channel is closed.
+#[derive(Debug, thiserror::Error)]
+#[error("interior cell {cell_form_key} request not sent: the cell worker channel is closed")]
+pub struct InteriorRequestError {
+    pub cell_form_key: String,
+}
+
+/// Marks `grid` pending and sends its interior request; a failed send leaves `grid` not
+/// pending so the streamer never waits for a cell that was never requested.
+fn request_interior(
+    tx: &crossbeam_channel::Sender<CellRequest>,
+    pending: &mut HashSet<(i32, i32)>,
+    cell_form_key: &str,
+    grid: (i32, i32),
+    epoch: u64,
+) -> Result<(), InteriorRequestError> {
+    pending.insert(grid);
+    tx.send(CellRequest::Interior {
+        cell_form_key: cell_form_key.to_string(),
+        grid,
+        epoch,
+    })
+    .map_err(|_| {
+        pending.remove(&grid);
+        InteriorRequestError {
+            cell_form_key: cell_form_key.to_string(),
+        }
+    })
 }
 
 impl CellRequest {
@@ -1225,6 +1256,10 @@ impl WorldStreamer {
         let light_lookup = build_light_lookup(&lights, db.schema().light_columns_present);
         let light_models = build_light_models(&lights);
         let addon_nodes = db.get_addon_nodes()?;
+        let player_layers = db.get_player_collision_layers().unwrap_or_else(|error| {
+            error!("collision layers unreadable ({error:#}); every collision shape stays solid");
+            PlayerCollisionLayers::all_solid()
+        });
 
         // Material swaps (FO4 MSWP): base-record swaps (MODS) + the
         // pre-resolved substitution entries. A ref-level swap (XMSP) comes per
@@ -1333,6 +1368,7 @@ impl WorldStreamer {
             collision_manifest: load_manifest(&format!(
                 "{asset_root}/{MESHES_DIR}/collision_manifest.json"
             )),
+            player_layers: player_layers.clone(),
             resident_textures,
             texture_policy,
             demand_view: Mutex::new(DemandView::default()),
@@ -1340,9 +1376,7 @@ impl WorldStreamer {
             collider_cache: SharedCache::new(COLLIDER_CACHE_CAP),
             layout_cache: SharedCache::new(LAYOUT_CACHE_CAP),
             dds_cache: SharedCache::new(DDS_CACHE_MAX_BYTES),
-            bake_cache: crate::sim::bake::ShapeBakeCache::new(crate::sim::bake::physics_cache_dir(
-                asset_root,
-            )),
+            bake_cache: new_bake_cache(asset_root, &player_layers),
             ws_editor_ids: Mutex::new(HashMap::new()),
             tile_exists: Mutex::new(HashMap::new()),
             persistent_by_grid: Mutex::new(HashMap::new()),
@@ -3521,13 +3555,16 @@ impl WorldStreamer {
     /// in the collision ring however the player moves. Returns the player start
     /// position (`start_world_pos`); the caller applies the queued collider
     /// removals + `flush_colliders`, enables sim interior mode, then teleports.
+    ///
+    /// Fails when the cell request cannot be sent. The old content is already torn down
+    /// by then and no cell is pending, so the caller must not teleport into the void.
     pub(crate) fn enter_interior(
         &mut self,
         cell_form_key: &str,
         grid: (i32, i32),
         start_world_pos: Vec3,
         targets: &mut StreamTargets,
-    ) -> Vec3 {
+    ) -> Result<Vec3, InteriorRequestError> {
         self.teardown_resident(targets);
         self.interior_cell = Some(cell_form_key.to_string());
         self.set_demand_camera(None);
@@ -3541,19 +3578,20 @@ impl WorldStreamer {
 
         // One frozen cell, requested directly by form_key: no ring, no LOD, and
         // no worldspace-persistent prefetch (interiors have none).
-        self.pending_cells.insert(grid);
-        let _ = self.db_worker_tx.send(CellRequest::Interior {
-            cell_form_key: cell_form_key.to_string(),
+        request_interior(
+            &self.db_worker_tx,
+            &mut self.pending_cells,
+            cell_form_key,
             grid,
-            epoch: self.epoch,
-        });
+            self.epoch,
+        )?;
 
         info!(
             "Interior -> {} (epoch {}), start cell ({}, {})",
             cell_form_key, self.epoch, grid.0, grid.1
         );
 
-        start_world_pos
+        Ok(start_world_pos)
     }
 
     /// Whether a single interior cell is loaded in place of a worldspace.
@@ -4020,6 +4058,9 @@ struct WorkerShared {
     /// collision". The bulky shapes are read lazily from the loose sidecar only
     /// when a cold `.colbin` miss forces a bake.
     collision_manifest: HashMap<String, CollisionMeta>,
+    /// Which collision layers never touch the player; static sidecar shapes on
+    /// those layers are left out of the bake.
+    player_layers: PlayerCollisionLayers,
     /// `TextureArray`'s path mirror (see `TextureArray::resident_paths`):
     /// workers skip pre-reading DDS files that are already GPU-resident.
     resident_textures: Arc<Mutex<HashSet<String>>>,
@@ -4316,9 +4357,13 @@ fn prepare_submesh(
 /// Loose-sidecar shape loader: `foo.glb` -> `{asset_root}/foo.col.json`. `None`
 /// means no collider (missing or unparseable sidecar). Read only on a cold
 /// `.colbin` miss.
-fn load_collider_sidecar(asset_root: &str, path: &str) -> Option<SidecarData> {
+fn load_collider_sidecar(
+    asset_root: &str,
+    path: &str,
+    layers: &PlayerCollisionLayers,
+) -> Option<SidecarData> {
     let stem = path.strip_suffix(".glb")?;
-    load_sidecar_file(&format!("{asset_root}/{stem}.col.json"))
+    load_sidecar_file(&format!("{asset_root}/{stem}.col.json"), layers)
 }
 
 /// `foo.glb` -> `{asset_root}/foo.col.json`, the sidecar carrying the ragdoll bodies.
@@ -4334,21 +4379,33 @@ fn ragdoll_sidecar_path(asset_root: &str, path: &str) -> Option<String> {
 /// so an empty result here means the sidecar is missing/unreadable/degenerate
 /// (manifest⇄disk drift) — warned once rather than silently dropping the
 /// collider, since the static collider path is otherwise silent.
+///
+/// Dynamic meshes keep every shape: their bodies also collide with the world
+/// and each other, so only static geometry is thinned by player layers.
 fn load_collision_shapes(shared: &WorkerShared, path: &str) -> Arc<Vec<PartShape>> {
     let key = [path.to_string()];
-    let shapes = shared
+    let layers = if is_havok_dynamic(shared, path) {
+        &PlayerCollisionLayers::all_solid()
+    } else {
+        &shared.player_layers
+    };
+    let sidecar = shared
         .collider_cache
         .resolve(
             &key,
-            |p| load_collider_sidecar(&shared.asset_root, p),
+            |p| load_collider_sidecar(&shared.asset_root, p, layers),
             |_| 1,
         )
         .get(path)
         .cloned()
-        .flatten()
-        .map(|sd| sd.shapes)
-        .unwrap_or_default();
-    if shapes.is_empty() {
+        .flatten();
+    let dropped_for_player = sidecar.as_ref().map_or(0, |sd| sd.dropped_for_player);
+    let shapes = sidecar.map(|sd| sd.shapes).unwrap_or_default();
+    if shapes.is_empty() && dropped_for_player > 0 {
+        tracing::debug!(
+            "collision: every shape of {path} ({dropped_for_player}) sits on a layer that never touches the player; no collider"
+        );
+    } else if shapes.is_empty() {
         crate::utils::warn_once(path, || {
             format!(
                 "collision: manifest lists collision for {path} but its sidecar loaded no \
@@ -4357,6 +4414,15 @@ fn load_collision_shapes(shared: &WorkerShared, path: &str) -> Arc<Vec<PartShape
         });
     }
     bind_shapes_to_joints(shared, path, shapes)
+}
+
+/// The shape bake cache of an install, keyed by the layer table its sidecars are filtered with.
+fn new_bake_cache(
+    asset_root: &str,
+    layers: &PlayerCollisionLayers,
+) -> crate::sim::bake::ShapeBakeCache {
+    crate::sim::bake::ShapeBakeCache::new(crate::sim::bake::physics_cache_dir(asset_root))
+        .with_player_layers(layers)
 }
 
 fn bake_cell_colliders(
@@ -4375,9 +4441,13 @@ fn bake_cell_colliders(
 /// (logged once) when the mesh has no usable collision: its water is drawn
 /// but covers no position for height queries.
 fn load_water_volume(shared: &WorkerShared, path: &str) -> Option<Arc<VolumeShapes>> {
-    let volume = load_collider_sidecar(&shared.asset_root, path)
-        .and_then(|sidecar| VolumeShapes::from_sidecar(&sidecar.shapes, path))
-        .map(Arc::new);
+    let volume = load_collider_sidecar(
+        &shared.asset_root,
+        path,
+        &PlayerCollisionLayers::all_solid(),
+    )
+    .and_then(|sidecar| VolumeShapes::from_sidecar(&sidecar.shapes, path))
+    .map(Arc::new);
     if volume.is_none() {
         crate::utils::warn_once(&format!("water-volume:{path}"), || {
             format!(
@@ -5880,10 +5950,15 @@ fn build_base_object_lookup(
         );
     }
     for s in rows_or_warn("get_doors", db.get_doors()) {
+        // Automatic doors are walk-in triggers (see `rendering::walk_in`), not geometry.
+        let automatic = s.is_automatic().unwrap_or_else(|error| {
+            tracing::warn!("{error}; the door is placed as an ordinary door");
+            false
+        });
         insert(
             &s.form_key,
             &s.model_path,
-            s.is_marker,
+            s.is_marker || automatic,
             None,
             false,
             false,
@@ -6035,6 +6110,53 @@ mod tests {
     use bytemuck::Zeroable;
 
     use super::*;
+
+    #[test]
+    fn the_bake_cache_is_keyed_by_the_players_layer_table() {
+        use crate::assets::db::collision_layers::fixtures::dropping_layer;
+        let install = tempfile::tempdir().unwrap();
+        let assets = install.path().join("assets");
+        let assets = assets.to_str().unwrap();
+        let unfiltered = new_bake_cache(assets, &PlayerCollisionLayers::all_solid());
+        let filtered = new_bake_cache(assets, &dropping_layer(12));
+        assert_ne!(unfiltered.layer_table(), filtered.layer_table());
+        assert_eq!(
+            filtered.layer_table(),
+            new_bake_cache(assets, &dropping_layer(12)).layer_table()
+        );
+    }
+
+    #[test]
+    fn interior_request_is_pending_and_delivered_when_the_workers_listen() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut pending = HashSet::new();
+
+        request_interior(&tx, &mut pending, "Cell:1", (3, 4), 7).unwrap();
+
+        assert!(pending.contains(&(3, 4)));
+        match rx.try_recv().unwrap() {
+            CellRequest::Interior {
+                cell_form_key,
+                grid,
+                epoch,
+            } => {
+                assert_eq!((cell_form_key.as_str(), grid, epoch), ("Cell:1", (3, 4), 7));
+            }
+            _ => panic!("expected an interior request"),
+        }
+    }
+
+    #[test]
+    fn failed_interior_request_reports_the_cell_and_leaves_nothing_pending() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        drop(rx);
+        let mut pending = HashSet::from([(9, 9)]);
+
+        let error = request_interior(&tx, &mut pending, "Cell:1", (3, 4), 7).unwrap_err();
+
+        assert_eq!(error.cell_form_key, "Cell:1");
+        assert_eq!(pending, HashSet::from([(9, 9)]));
+    }
 
     fn landscape() -> Landscape {
         Landscape {

@@ -71,6 +71,9 @@ pub mod ui_colour;
 pub mod ui_fonts;
 pub mod version_overlay;
 pub mod vertex;
+mod walk_in;
+mod walk_in_hook;
+mod walk_in_trace;
 pub mod water;
 pub mod window_surface;
 pub mod world_streamer;
@@ -173,7 +176,7 @@ use crate::startup::{StartupError, StartupTimer};
 use crate::utils;
 use crate::video::{MenuVideo, VideoCommand, VideoError};
 use crate::water_world::{Scope as WaterScope, SharedWaterWorld, WaterWorld, physics_query};
-use activation::Activation;
+use activation::{Activation, TeleportRefusal, teleport_gate};
 use addon_nodes::AddonFx;
 use animated_objects::AnimatedObjects;
 use auto_anim::AutoAnim;
@@ -191,6 +194,9 @@ use shaders::startup::EffectValidation;
 use startup_reads::StartupDbReads;
 use ui_colour::UiColourSet;
 use ui_fonts::UiFonts;
+use walk_in::{PlayerLocation, WalkInTriggers};
+use walk_in_hook::{HookAction, HookFrame, WalkInDevHook};
+use walk_in_trace::{BLOCKER_RAY_GAP_UNITS, WalkInTrace, trace_line};
 
 // 00003C:Fallout4.esm // Commonwealth
 const WORLDSPACE: &str = crate::game_flow::spawn_locations::COMMONWEALTH;
@@ -595,6 +601,9 @@ pub struct State {
     /// boot. Looked up O(1) by the activation raycast (E) and the debug
     /// `is_interactible` readout — no DB query at runtime.
     teleports: std::collections::HashMap<String, ResolvedTarget>,
+    /// Trigger volumes of the walk-in (automatic) load doors; their sources are keys of
+    /// `teleports`.
+    walk_in: WalkInTriggers,
     /// A load door activated this frame (E), applied next `update` like
     /// `pending_interior`.
     pending_teleport: Option<ResolvedTarget>,
@@ -606,6 +615,13 @@ pub struct State {
     auto_activate: Vec<String>,
     auto_idx: usize,
     auto_cooldown: u32,
+    /// Dev override (`OPENFO4_AUTO_WALK_IN="ref1,ref2,..."`): walk the player into the listed
+    /// walk-in doors so the real detector fires.
+    walk_in_hook: WalkInDevHook,
+    /// The walk-in door the detector fired for in the last sampled frame.
+    walk_in_fired: Option<String>,
+    /// `OPENFO4_WALK_IN_TRACE=1`: diagnostic trace of the distance to the nearest trigger.
+    walk_in_trace: Option<WalkInTrace>,
     /// Resident animated placed objects (doors, containers, ...) and their playback.
     animated_objects: AnimatedObjects,
     /// Skinned replacements of ragdolls that moved (`OPENFO4_RAGDOLL_POKE` pokes one for checks).
@@ -842,17 +858,257 @@ impl State {
         map
     }
 
+    /// Trigger volumes of the enabled automatic load doors. A door with an unusable row is
+    /// reported and left out; when the doors cannot be read at all there are none, reported.
+    fn build_walk_in(db_path: &str) -> WalkInTriggers {
+        let doors =
+            match crate::assets::db::DbClient::new(db_path).and_then(|db| db.get_walk_in_doors()) {
+                Ok(doors) => doors,
+                Err(e) => {
+                    tracing::error!("walk-in doors unavailable: {e}");
+                    return WalkInTriggers::default();
+                }
+            };
+        for rejected in &doors.rejected {
+            tracing::error!("walk-in door left out: {rejected}");
+        }
+        if !doors.without_bounds.is_empty() {
+            tracing::error!(
+                "{} walk-in doors have no trigger bounds (database predates door trigger bounds extraction, re-run the installer); they cannot be walked into",
+                doors.without_bounds.len()
+            );
+        }
+        let (triggers, report) = WalkInTriggers::build(&doors.doors);
+        for source_ref in &report.degenerate_bounds {
+            tracing::warn!(
+                "walk-in door {source_ref} has a collapsed trigger bound; only the reach spans that axis"
+            );
+        }
+        for source_ref in &report.non_finite {
+            tracing::error!(
+                "walk-in door {source_ref} has a non-finite placement or bound; it has no trigger"
+            );
+        }
+        tracing::info!(
+            "walk-in doors: {} trigger volumes",
+            doors.doors.len() - report.non_finite.len()
+        );
+        triggers
+    }
+
+    /// Moves the player to `pos` outside any load. The walk-in detector starts over: arriving
+    /// somewhere is not walking into a door.
+    fn teleport_player(&mut self, pos: Vec3) {
+        self.walk_in.rearm();
+        self.sim.apply(SimCommand::TeleportPlayer { pos });
+    }
+
+    /// Queues the teleport of the walk-in door the player just entered, if any. Only while
+    /// walking with the world running: sampling during a pending teleport would spend the
+    /// entering edge on a refused request.
+    fn sample_walk_in(&mut self, pipboy_open: bool, dt: f32) {
+        self.walk_in_fired = None;
+        if self.input_mode != InputMode::Walk || pipboy_open || self.pending_teleport.is_some() {
+            return;
+        }
+        let body = self.sim.player_body();
+        let location = match self.streamer.current_interior() {
+            Some(cell) => PlayerLocation::Interior(cell),
+            None => PlayerLocation::Exterior(&self.streamer.worldspace),
+        };
+        let fired = self
+            .walk_in
+            .sample(location, body.as_ref())
+            .map(str::to_owned);
+        self.trace_walk_in(dt, fired.as_deref());
+        let Some(source_ref) = fired else {
+            return;
+        };
+        tracing::info!("WALK_IN ref={source_ref}");
+        match self.queue_teleport(&source_ref) {
+            Ok(()) => {}
+            Err(refusal @ TeleportRefusal::UnknownSource(_)) => {
+                tracing::warn!("walk-in of {source_ref} has no usable destination: {refusal}");
+            }
+            Err(refusal) => tracing::debug!("walk-in of {source_ref} refused: {refusal}"),
+        }
+        self.walk_in_fired = Some(source_ref);
+    }
+
+    /// The `OPENFO4_WALK_IN_TRACE` lines: where the player stands against the nearest trigger and,
+    /// close to it, what the rays toward its centre hit first.
+    fn trace_walk_in(&mut self, dt: f32, fired: Option<&str>) {
+        let Some(trace) = self.walk_in_trace.as_mut() else {
+            return;
+        };
+        let Some(body) = self.sim.player_body() else {
+            return;
+        };
+        let location = match self.streamer.current_interior() {
+            Some(cell) => PlayerLocation::Interior(cell),
+            None => PlayerLocation::Exterior(&self.streamer.worldspace),
+        };
+        let Some(probe) = self.walk_in.probe(location, &body) else {
+            return;
+        };
+        if !trace.should_log(dt, &probe, fired.is_some()) {
+            return;
+        }
+        tracing::info!("{}", trace_line(&probe, fired.is_some()));
+        if probe.gap_units >= BLOCKER_RAY_GAP_UNITS || probe.horizontal_to_center == Vec3::ZERO {
+            return;
+        }
+        for (height, origin) in ["centre", "head", "feet"]
+            .into_iter()
+            .zip(probe.ray_origins)
+        {
+            let hit = self.sim.debug_ray_hit(
+                origin,
+                probe.horizontal_to_center,
+                probe.horizontal_distance,
+            );
+            let outcome = hit.map_or_else(
+                || "clear".to_owned(),
+                |hit| {
+                    format!(
+                        "first_hit_ref={} model={} dist={:.1}",
+                        hit.ref_id.as_deref().unwrap_or("none"),
+                        hit.mesh_path,
+                        hit.dist * crate::bethesda_space::UNITS_FROM_ENGINE
+                    )
+                },
+            );
+            tracing::info!(
+                "WALK_IN_TRACE blocker ref={} height={height} {outcome}",
+                probe.source_ref
+            );
+        }
+    }
+
+    fn describe_location(&self) -> String {
+        match self.streamer.current_interior() {
+            Some(cell) => format!("interior {cell}"),
+            None => format!("exterior {}", self.streamer.worldspace),
+        }
+    }
+
+    /// Carries out the `OPENFO4_AUTO_WALK_IN` dev hook: the moves go through the sim like the
+    /// player's own, so the real detector decides; everything the hook observes is logged.
+    fn tick_walk_in_hook(&mut self) {
+        if !self.walk_in_hook.is_active() {
+            return;
+        }
+        let fired = self.walk_in_fired.take();
+        let frame = HookFrame {
+            player_spawned: self.sim.player_eye().is_some(),
+            teleport_pending: self.pending_teleport.is_some(),
+            fired: fired.as_deref(),
+        };
+        match self.walk_in_hook.tick(frame) {
+            HookAction::None | HookAction::Fired { .. } => {}
+            HookAction::PlaceAtApproach { source_ref } => {
+                let Some(line) = self.walk_line_for_hook(&source_ref) else {
+                    return;
+                };
+                self.teleport_player(line.approach);
+            }
+            HookAction::CrossThrough { source_ref } => {
+                let Some(line) = self.walk_line_for_hook(&source_ref) else {
+                    return;
+                };
+                self.sim
+                    .apply(SimCommand::TeleportPlayer { pos: line.through });
+            }
+            HookAction::DidNotFire { source_ref } => tracing::warn!(
+                "WALK_IN did not fire ref={source_ref} after crossing its trigger (player in {})",
+                self.describe_location()
+            ),
+            HookAction::Arrived { source_ref } => tracing::info!(
+                "WALK_IN arrived ref={source_ref} location={}",
+                self.describe_location()
+            ),
+            HookAction::DidNotArrive { source_ref } => {
+                tracing::warn!("WALK_IN did not arrive after firing ref={source_ref}");
+            }
+            HookAction::FiredAfterArrival {
+                arrived_ref,
+                fired_ref,
+            } => tracing::error!(
+                "WALK_IN fired ref={fired_ref} right after arriving from ref={arrived_ref}"
+            ),
+            HookAction::Finished => tracing::info!("WALK_IN hook finished"),
+        }
+    }
+
+    /// The hook's walk line for a door, or a warning and a skip when there is none.
+    fn walk_line_for_hook(&mut self, source_ref: &str) -> Option<walk_in::WalkLine> {
+        let Some(body) = self.sim.player_body() else {
+            tracing::warn!("WALK_IN ref={source_ref} skipped: the player has no body");
+            self.walk_in_hook.skip_current();
+            return None;
+        };
+        let line = self.walk_in.walk_line(source_ref, body.radius);
+        if line.is_none() {
+            tracing::warn!("WALK_IN ref={source_ref} has no trigger volume; skipped");
+            self.walk_in_hook.skip_current();
+        }
+        line
+    }
+
     /// What the player is currently aiming at within activation reach, if it can
     /// be activated: a load door or an animated object. Shared by the E-press
     /// activation and (via a precomputed bool) the crosshair and the debug
     /// `is_interactible` readout, so all agree exactly.
-    fn aimed_activation(&self) -> Option<Activation<'_>> {
-        let hit = self.sim.debug_ray_hit(
-            self.camera.eye,
-            self.camera_controller.forward(),
-            ACTIVATE_REACH,
+    fn aimed_activation(&self) -> Option<Activation> {
+        activation::resolve(&self.aimed_ref()?, &self.teleports, &self.animated_objects)
+    }
+
+    /// The ref id of the object under the crosshair within activation reach.
+    fn aimed_ref(&self) -> Option<String> {
+        self.sim
+            .debug_ray_hit(
+                self.camera.eye,
+                self.camera_controller.forward(),
+                ACTIVATE_REACH,
+            )?
+            .ref_id
+    }
+
+    /// The one entry for every request to teleport through a load door, by the door's ref id.
+    /// Only a spawned player with no teleport already pending may queue one; the teleport
+    /// itself runs in `update`. The menu spawn path (`begin_play`) bypasses this gate: the
+    /// player is not spawned there by design.
+    fn queue_teleport(&mut self, source_ref: &str) -> Result<(), TeleportRefusal> {
+        teleport_gate(
+            self.sim.player_eye().is_some(),
+            self.pending_teleport.is_some(),
         )?;
-        activation::resolve(&hit.ref_id?, &self.teleports, &self.animated_objects)
+        let target = self
+            .teleports
+            .get(source_ref)
+            .ok_or_else(|| TeleportRefusal::UnknownSource(source_ref.to_string()))?;
+        self.pending_teleport = Some(target.clone());
+        Ok(())
+    }
+
+    /// E-press: queues the aimed load door's teleport or toggles the aimed animated object.
+    fn activate_aimed(&mut self) {
+        let Some(ref_id) = self.aimed_ref() else {
+            return;
+        };
+        match activation::resolve(&ref_id, &self.teleports, &self.animated_objects) {
+            Some(Activation::Teleport) => {
+                if let Err(refusal) = self.queue_teleport(&ref_id) {
+                    tracing::debug!("activation of {ref_id} refused: {refusal}");
+                }
+            }
+            Some(Activation::Animate(entity)) => {
+                if let Err(error) = self.animated_objects.toggle(entity) {
+                    tracing::warn!("activation: {error}");
+                }
+            }
+            None => {}
+        }
     }
 
     /// Assembles the renderer state on the startup worker from the main thread's boot parts.
@@ -1287,6 +1543,7 @@ impl State {
             interior_lighting,
             interiors,
             teleports,
+            walk_in,
             player_movement,
             buoyancy_table,
         } = match db_reads.join() {
@@ -1449,6 +1706,7 @@ impl State {
             world_mode: DebugWorldMode::Worldspace,
             interior_filter: String::new(),
             teleports,
+            walk_in,
             pending_teleport: spawn_target,
             auto_activate: std::env::var("OPENFO4_AUTO_ACTIVATE")
                 .ok()
@@ -1461,6 +1719,12 @@ impl State {
                 .unwrap_or_default(),
             auto_idx: 0,
             auto_cooldown: 0,
+            walk_in_hook: WalkInDevHook::from_list(
+                &std::env::var("OPENFO4_AUTO_WALK_IN").unwrap_or_default(),
+                AUTO_ACTIVATE_COOLDOWN_FRAMES,
+            ),
+            walk_in_fired: None,
+            walk_in_trace: WalkInTrace::from_env(),
             animated_objects: AnimatedObjects::default(),
             ragdoll_objects: RagdollObjects::default(),
             auto_anim: AutoAnim::from_env(),
@@ -2652,6 +2916,7 @@ impl State {
                                     if fly {
                                         self.input_mode = InputMode::Fly;
                                     } else {
+                                        self.walk_in.rearm();
                                         self.sim.apply(SimCommand::TeleportPlayer {
                                             pos: self.camera.eye,
                                         });
@@ -2831,6 +3096,7 @@ impl State {
     /// terrain at a grid that numerically aliases the new start.
     fn apply_stream_teleport(&mut self, start: Vec3) {
         stream_settle::apply_teardown(&mut self.sim, self.streamer.take_sim_commands());
+        self.walk_in.rearm();
         self.camera.eye = start;
         self.sim.apply(SimCommand::SpawnPlayer { pos: start });
     }
@@ -3087,7 +3353,7 @@ impl State {
             if let Some((grid, start_pos)) = target {
                 let start = self.with_stream_targets(asset_server, |streamer, targets| {
                     streamer.enter_interior(&fk, grid, start_pos, targets)
-                });
+                })?;
                 self.sim.apply(SimCommand::SetInteriorMode(true));
                 self.input_mode = InputMode::Walk;
                 self.apply_stream_teleport(start);
@@ -3105,16 +3371,28 @@ impl State {
                 self.auto_cooldown -= 1;
             } else if self.sim.player_eye().is_some() {
                 let r = self.auto_activate[self.auto_idx].clone();
-                if let Some(t) = self.teleports.get(&r) {
-                    self.pending_teleport = Some(t.clone());
-                    tracing::info!("OPENFO4_AUTO_ACTIVATE[{}]: {r}", self.auto_idx);
-                } else {
-                    tracing::warn!("OPENFO4_AUTO_ACTIVATE: {r} not in teleport map");
+                let hop_consumed = match self.queue_teleport(&r) {
+                    Ok(()) => {
+                        tracing::info!("OPENFO4_AUTO_ACTIVATE[{}]: {r}", self.auto_idx);
+                        true
+                    }
+                    Err(refusal @ TeleportRefusal::UnknownSource(_)) => {
+                        tracing::warn!("OPENFO4_AUTO_ACTIVATE: {refusal}");
+                        true
+                    }
+                    Err(refusal) => {
+                        tracing::debug!("OPENFO4_AUTO_ACTIVATE: {r} deferred: {refusal}");
+                        false
+                    }
+                };
+                if hop_consumed {
+                    self.auto_idx += 1;
+                    self.auto_cooldown = AUTO_ACTIVATE_COOLDOWN_FRAMES;
                 }
-                self.auto_idx += 1;
-                self.auto_cooldown = AUTO_ACTIVATE_COOLDOWN_FRAMES;
             }
         }
+
+        self.tick_walk_in_hook();
 
         // Apply a load-door activation (E): the same teardown + teleport path as
         // the debug pickers, but the arrival position, grid and facing all come
@@ -3123,11 +3401,14 @@ impl State {
         if let Some(t) = self.pending_teleport.take() {
             self.with_stream_targets(asset_server, |streamer, targets| {
                 if t.is_interior {
-                    streamer.enter_interior(&t.cell_form_key, t.grid, t.start_pos, targets);
+                    streamer
+                        .enter_interior(&t.cell_form_key, t.grid, t.start_pos, targets)
+                        .map(drop)
                 } else {
                     streamer.switch_worldspace(&t.worldspace, t.grid, targets);
+                    Ok(())
                 }
-            });
+            })?;
             self.sim.apply(SimCommand::SetInteriorMode(t.is_interior));
             self.input_mode = InputMode::Walk;
             if let Some(yaw) = t.yaw {
@@ -3169,6 +3450,7 @@ impl State {
                 self.sim
                     .apply(SimCommand::SetPlayerInput(self.player_input()));
                 self.sim.tick(dt);
+                self.sample_walk_in(pipboy_open, dt);
                 // Until the player has spawned onto the ground the camera
                 // holds its last position (initial load, teleports).
                 if let Some(eye) = self.sim.player_eye() {
@@ -3777,15 +4059,7 @@ impl State {
             // Activate the load door under the crosshair. Record intent only; the
             // teleport (streamer teardown + player move) needs `asset_server` and
             // runs in `update`, like the debug pickers.
-            match self.aimed_activation() {
-                Some(Activation::Teleport(target)) => self.pending_teleport = Some(target.clone()),
-                Some(Activation::Animate(entity)) => {
-                    if let Err(error) = self.animated_objects.toggle(entity) {
-                        tracing::warn!("activation: {error}");
-                    }
-                }
-                None => {}
-            }
+            self.activate_aimed();
         } else {
             // Both key maps stay fresh regardless of mode (same physical
             // keys, different meanings), so neither holds stale pressed
@@ -3857,9 +4131,7 @@ impl State {
         self.input_mode = match self.input_mode {
             InputMode::Walk => InputMode::Fly,
             InputMode::Fly => {
-                self.sim.apply(SimCommand::TeleportPlayer {
-                    pos: self.camera.eye,
-                });
+                self.teleport_player(self.camera.eye);
                 InputMode::Walk
             }
         };

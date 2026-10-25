@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use super::{
     InteriorLightingCatalog, InteriorOption, MaterialBuoyancy, PlayerMovement, ResolvedTarget,
-    State, WorldspaceOption, material_buoyancy_table, world_streamer,
+    State, WorldspaceOption, material_buoyancy_table, walk_in::WalkInTriggers, world_streamer,
 };
 use crate::assets::db::DbClient;
 use crate::game_flow::{SpawnLocation, StartMode, spawn_locations::resolve_spawn_locations};
@@ -16,6 +16,7 @@ pub(super) struct StartupDbReads {
     pub interior_lighting: Option<InteriorLightingCatalog>,
     pub interiors: Vec<InteriorOption>,
     pub teleports: HashMap<String, ResolvedTarget>,
+    pub walk_in: WalkInTriggers,
     pub player_movement: PlayerMovement,
     pub buoyancy_table: Option<MaterialBuoyancy>,
 }
@@ -36,6 +37,7 @@ impl StartupDbReads {
             interior_lighting: InteriorLightingCatalog::load_or_report(db_path),
             interiors: State::build_interiors(db_path),
             teleports: State::build_teleports(db_path),
+            walk_in: State::build_walk_in(db_path),
             player_movement: Self::load_player_movement(db_path),
             buoyancy_table: material_buoyancy_table(db_path),
         })

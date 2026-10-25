@@ -361,13 +361,17 @@ namespace AssetConverter.Pipeline
         /// </summary>
         public void FinalizeDatabase(DeferredLateBakes lateBakes, Task databaseLoaded, LodWaterHeights lodWater)
         {
-            int phase = InstallProgress.BeginPhase(InstallSteps.FinalizeDatabase, 5);
-            RunFinalizeStep(phase, "MODC material swaps",
-                () => ModcSwapSynthesizer.Run(_paths.DatabasePath, _paths.MeshesOut, _paths.StagingRoot, _paths.TexturesOut, _ct));
-            RunFinalizeStep(phase, "late palette bakes", () => lateBakes.Drain(databaseLoaded, _paths.StagingRoot, _paths.TexturesOut));
-            RunFinalizeStep(phase, "LOD water", () => LodWaterStage.WriteTable(_paths.DatabasePath, lodWater));
-            RunFinalizeStep(phase, "LOD backfill", () => LodBackfill.Run(_paths.DatabasePath, _paths.MeshesOut));
-            RunFinalizeStep(phase, "model path normalization", () => ModelPathNormalizer.Run(_paths.DatabasePath));
+            (string Detail, Action Run)[] steps =
+            [
+                ("MODC material swaps", () => ModcSwapSynthesizer.Run(_paths.DatabasePath, _paths.MeshesOut, _paths.StagingRoot, _paths.TexturesOut, _ct)),
+                ("late palette bakes", () => lateBakes.Drain(databaseLoaded, _paths.StagingRoot, _paths.TexturesOut)),
+                ("LOD water", () => LodWaterStage.WriteTable(_paths.DatabasePath, lodWater)),
+                ("LOD backfill", () => LodBackfill.Run(_paths.DatabasePath, _paths.MeshesOut)),
+                ("door trigger bounds", () => DoorTriggerBounds.RunOnGame(_paths.DatabasePath, _paths.GameDataDirectory)),
+                ("model path normalization", () => ModelPathNormalizer.Run(_paths.DatabasePath)),
+            ];
+            int phase = InstallProgress.BeginPhase(InstallSteps.FinalizeDatabase, steps.Length);
+            foreach (var (detail, run) in steps) RunFinalizeStep(phase, detail, run);
             InstallProgress.EndPhase(phase);
         }
 

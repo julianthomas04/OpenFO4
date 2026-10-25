@@ -74,6 +74,8 @@ const PIPBOY_TABLES_FIX: &str =
     "esm-only --tables worldspaces,map_markers,perks,perk_chart,special_attributes";
 const WEAPON_DEFAULT_MODS_COLUMNS: &[&str] = &["default_mods"];
 const OBJECT_MOD_MODEL_COLUMNS: &[&str] = &["model_path", "attach_point_name"];
+const DOOR_TRIGGER_BOUNDS_COLUMNS: &[&str] = &["trigger_bounds"];
+const COLLISION_LAYER_COLUMNS: &[&str] = &["layer_index", "flags", "collides_with"];
 const NAVMESH_COLUMNS: &[&str] = &[
     "form_id",
     "cell",
@@ -113,6 +115,8 @@ pub enum ColumnGroup {
     WeaponDefaultMods,
     ObjectModModel,
     Navmesh,
+    CollisionLayer,
+    DoorTriggerBounds,
 }
 
 impl std::fmt::Display for ColumnGroup {
@@ -137,6 +141,8 @@ impl std::fmt::Display for ColumnGroup {
             Self::WeaponDefaultMods => "weapon default mods",
             Self::ObjectModModel => "object modification model",
             Self::Navmesh => "navmesh",
+            Self::CollisionLayer => "collision layer",
+            Self::DoorTriggerBounds => "door trigger bounds",
         })
     }
 }
@@ -340,6 +346,8 @@ pub struct DbSchema {
     pub weapon_default_mods_column_present: bool,
     pub object_mod_model_columns_present: bool,
     pub navmesh_columns_present: bool,
+    pub collision_layer_columns_present: bool,
+    pub door_trigger_bounds_column_present: bool,
 }
 
 impl DbSchema {
@@ -457,6 +465,18 @@ impl DbSchema {
                 ColumnGroup::Navmesh,
                 "navigation_meshes",
                 NAVMESH_COLUMNS,
+            )?,
+            collision_layer_columns_present: column_group_present(
+                conn,
+                ColumnGroup::CollisionLayer,
+                "collision_layers",
+                COLLISION_LAYER_COLUMNS,
+            )?,
+            door_trigger_bounds_column_present: column_group_present(
+                conn,
+                ColumnGroup::DoorTriggerBounds,
+                "doors",
+                DOOR_TRIGGER_BOUNDS_COLUMNS,
             )?,
         })
     }
@@ -581,6 +601,14 @@ pub fn activator_water_select_list(schema: DbSchema, prefix: &str) -> String {
     select_list(
         ACTIVATOR_WATER_COLUMNS,
         schema.activator_water_column_present,
+        prefix,
+    )
+}
+
+pub fn door_trigger_bounds_select_list(schema: DbSchema, prefix: &str) -> String {
+    select_list(
+        DOOR_TRIGGER_BOUNDS_COLUMNS,
+        schema.door_trigger_bounds_column_present,
         prefix,
     )
 }

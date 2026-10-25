@@ -14,8 +14,8 @@
 //! [`BakedCellColliders`] is private to `sim`; rapier types remain unnameable
 //! outside this module tree even though the value travels through rendering.
 
-use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -30,6 +30,7 @@ use super::cache_purge::{spawn_purge, versioned_dir_name};
 use super::collision::{CellColliderBatch, ColShape, PartShape, TerrainColliderSpec};
 use super::ragdoll_spec::{RagdollSpec, load_ragdoll_spec};
 use super::sidecar_hash::{SidecarHasher, SidecarLookup};
+use crate::assets::db::collision_layers::PlayerCollisionLayers;
 use crate::assets::layout::{CACHE_DIR, PHYSICS_CACHE_DIR};
 use crate::shared_cache::SharedCache;
 
@@ -43,8 +44,9 @@ use crate::shared_cache::SharedCache;
 /// on read, so a stale hash can only cause a rebuild, never wrong geometry), so
 /// no bump is needed for that. Respelling the mesh path inside the key (it starts
 /// with the layout's `meshes\` root) re-keys every blob the same way, but is
-/// bumped so that the purge removes the orphans.
-const COLLIDER_CACHE_VERSION: u32 = 5;
+/// bumped so that the purge removes the orphans. Changing which shapes a sidecar
+/// bakes (e.g. dropping layers that never touch the player) bumps it too.
+const COLLIDER_CACHE_VERSION: u32 = 6;
 
 pub(crate) const TRIMESH_FLAGS: TriMeshFlags = TriMeshFlags::FIX_INTERNAL_EDGES
     .union(TriMeshFlags::MERGE_DUPLICATE_VERTICES)
@@ -167,6 +169,9 @@ pub struct ShapeBakeCache {
     disk_dir: Option<PathBuf>,
     /// Content hashes of the `.col.json` sidecars that key the object blobs.
     sidecar_hashes: SidecarHasher,
+    /// Fingerprint of the player layer table the sidecars are filtered by; part of every
+    /// object blob key, so a changed table cannot be served stale blobs.
+    layer_table: u64,
 }
 
 const BAKE_CACHE_CAP: u64 = 512;
@@ -282,6 +287,7 @@ impl ShapeBakeCache {
         Self {
             cache: SharedCache::new(BAKE_CACHE_CAP),
             ragdoll_cache: SharedCache::new(RAGDOLL_BAKE_CACHE_CAP),
+            layer_table: PlayerCollisionLayers::all_solid().fingerprint(),
             sidecar_hashes: SidecarHasher::new(
                 disk_dir.as_deref(),
                 disk_dir
@@ -401,6 +407,18 @@ impl ShapeBakeCache {
         built
     }
 
+    /// Keys the object blobs by the layer table the sidecars are filtered with.
+    #[must_use]
+    pub fn with_player_layers(mut self, layers: &PlayerCollisionLayers) -> Self {
+        self.layer_table = layers.fingerprint();
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn layer_table(&self) -> u64 {
+        self.layer_table
+    }
+
     /// Bake every shape `add_cell` will need for this batch, building
     /// uncached (path, scale) pairs in parallel. `load_shapes` fetches a mesh's
     /// raw collision shapes by path; `joint_fingerprint` names the animated
@@ -460,6 +478,13 @@ impl ShapeBakeCache {
                     .or_insert(placement.scale);
             }
         }
+        let dynamic_paths: HashSet<&str> = batch
+            .objects
+            .iter()
+            .filter(|group| group.dynamic)
+            .map(|group| group.path.as_str())
+            .collect();
+        let unfiltered_table = PlayerCollisionLayers::all_solid().fingerprint();
         let keys: Vec<ShapeKey> = sources.keys().cloned().collect();
         let resolved = self.cache.resolve(
             &keys,
@@ -468,9 +493,20 @@ impl ShapeBakeCache {
                 let sidecar = sidecar_path(&key.0).map_or(SidecarLookup::Absent, |path| {
                     self.sidecar_hashes.lookup(&path)
                 });
+                let layer_table = if dynamic_paths.contains(key.0.as_str()) {
+                    unfiltered_table
+                } else {
+                    self.layer_table
+                };
                 let build = || build_shapes(&load_shapes(&key.0), scale, &key.0);
                 Arc::new(
-                    match object_disk_key(&key.0, key.1, joint_fingerprint(&key.0), sidecar) {
+                    match object_disk_key(
+                        &key.0,
+                        key.1,
+                        joint_fingerprint(&key.0),
+                        sidecar,
+                        layer_table,
+                    ) {
                         Some(disk_key) => self.cached_or_build(&disk_key, build),
                         None => build(),
                     },
@@ -554,6 +590,7 @@ fn object_disk_key(
     scale_bits: u32,
     joint_fingerprint: Option<u64>,
     sidecar: SidecarLookup,
+    layer_table: u64,
 ) -> Option<String> {
     let sidecar = match sidecar {
         SidecarLookup::Absent => String::new(),
@@ -564,7 +601,7 @@ fn object_disk_key(
         .map(|fingerprint| format!("|j{fingerprint:016x}"))
         .unwrap_or_default();
     Some(format!(
-        "obj|{mesh_path}|{scale_bits}|{}{joints}{sidecar}|v{COLLIDER_CACHE_VERSION}",
+        "obj|{mesh_path}|{scale_bits}|{}{joints}{sidecar}|l{layer_table:016x}|v{COLLIDER_CACHE_VERSION}",
         TRIMESH_FLAGS.bits(),
     ))
 }
@@ -754,6 +791,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::assets::db::collision_layers::fixtures::dropping_layer;
     use crate::sim::collision::{
         CellColliderBatch, ObjectColliderGroup, Placement, TerrainCollision,
     };
@@ -943,7 +981,7 @@ mod tests {
     fn the_object_key_follows_sidecar_content_and_ignores_nothing_else() {
         let hashed = |bytes: &[u8]| SidecarLookup::Hashed(SidecarHash::of_bytes(bytes));
         let key = |sidecar: SidecarLookup, joints: Option<u64>, scale: u32| {
-            object_disk_key("a.glb", scale, joints, sidecar).unwrap()
+            object_disk_key("a.glb", scale, joints, sidecar, 0).unwrap()
         };
         let base = key(hashed(b"a"), None, 1);
         assert_eq!(base, key(hashed(b"a"), None, 1));
@@ -955,9 +993,82 @@ mod tests {
     }
 
     #[test]
+    fn the_object_key_follows_the_player_layer_table() {
+        let key = |table: &PlayerCollisionLayers| {
+            object_disk_key("a.glb", 1, None, SidecarLookup::Absent, table.fingerprint()).unwrap()
+        };
+        assert_eq!(key(&dropping_layer(12)), key(&dropping_layer(12)));
+        assert_ne!(key(&dropping_layer(12)), key(&dropping_layer(13)));
+        assert_ne!(
+            key(&dropping_layer(12)),
+            key(&PlayerCollisionLayers::all_solid())
+        );
+    }
+
+    fn batch_of(dynamic: bool) -> CellColliderBatch {
+        CellColliderBatch {
+            terrain: TerrainCollision::Absent,
+            objects: vec![object_group(
+                MESH,
+                vec![placement("0A0001:Fallout4.esm", Vec3::ZERO)],
+                dynamic,
+                None,
+            )],
+        }
+    }
+
+    /// Bakes `batch` into `dir` with a cache keyed by `layers`; returns how often the shapes were loaded.
+    fn loads_when_baking(
+        dir: &Path,
+        layers: &PlayerCollisionLayers,
+        batch: &CellColliderBatch,
+    ) -> usize {
+        let counter = AtomicUsize::new(0);
+        bake_crate(
+            &ShapeBakeCache::new(dir.to_owned()).with_player_layers(layers),
+            batch,
+            0.5,
+            None,
+            &counter,
+        );
+        loads(&counter)
+    }
+
+    #[test]
+    fn a_changed_layer_table_rebakes_static_meshes_from_the_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch = batch_of(false);
+        let all_solid = PlayerCollisionLayers::all_solid();
+        assert_eq!(loads_when_baking(dir.path(), &all_solid, &batch), 1);
+        assert_eq!(
+            loads_when_baking(dir.path(), &all_solid, &batch),
+            0,
+            "same table stays warm"
+        );
+        assert_eq!(
+            loads_when_baking(dir.path(), &dropping_layer(12), &batch),
+            1
+        );
+    }
+
+    #[test]
+    fn a_changed_layer_table_keeps_dynamic_meshes_warm_because_they_are_never_filtered() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch = batch_of(true);
+        assert_eq!(
+            loads_when_baking(dir.path(), &PlayerCollisionLayers::all_solid(), &batch),
+            1
+        );
+        assert_eq!(
+            loads_when_baking(dir.path(), &dropping_layer(12), &batch),
+            0
+        );
+    }
+
+    #[test]
     fn an_unreadable_sidecar_gets_no_disk_key() {
         assert_eq!(
-            object_disk_key("a.glb", 1, None, SidecarLookup::Unreadable),
+            object_disk_key("a.glb", 1, None, SidecarLookup::Unreadable, 0),
             None
         );
     }
@@ -1488,10 +1599,10 @@ mod tests {
     }
 
     #[test]
-    fn blobs_baked_without_materials_live_in_an_older_version_directory() {
+    fn blobs_baked_before_layer_filtering_live_in_an_older_version_directory() {
         let current = physics_cache_dir("install/assets");
-        assert_eq!(current.file_name().unwrap(), "v5");
-        assert_ne!(current.file_name().unwrap(), "v4");
+        assert_eq!(current.file_name().unwrap(), "v6");
+        assert_ne!(current.file_name().unwrap(), "v5");
     }
 
     fn ragdoll_batch(sidecar: &Path) -> CellColliderBatch {

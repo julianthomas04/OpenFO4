@@ -4,6 +4,10 @@
 //! the hot streaming path.
 
 use rusqlite::{Connection, OptionalExtension};
+use serde::Deserialize;
+
+use super::doors::{DoorFlagsError, flags_are_automatic};
+use super::schema::{DbSchema, door_trigger_bounds_select_list};
 
 /// A source load door and the cell/position/rotation it teleports to. Positions
 /// are Bethesda world units and `dest_rot_z` is radians, exactly as stored —
@@ -81,4 +85,183 @@ pub fn get_into_cell(
 pub fn count(conn: &Connection) -> anyhow::Result<usize> {
     let n: i64 = conn.query_row("SELECT count(*) FROM placed_teleports", [], |r| r.get(0))?;
     Ok(n as usize)
+}
+
+/// Where a walk-in door stands: an interior cell, or a worldspace (exterior
+/// doors are position-based, many live in the worldspace's persistent cell).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum DoorLocation {
+    Interior { cell: String },
+    Exterior { worldspace: String },
+}
+
+/// A door's trigger volume (`doors.trigger_bounds`), door-local, Bethesda units, Z-up.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DoorTriggerBounds {
+    pub min: [f64; 3],
+    pub max: [f64; 3],
+}
+
+#[derive(Deserialize)]
+struct JsonPoint {
+    #[serde(rename = "X")]
+    x: f64,
+    #[serde(rename = "Y")]
+    y: f64,
+    #[serde(rename = "Z")]
+    z: f64,
+}
+
+#[derive(Deserialize)]
+struct JsonBounds {
+    #[serde(rename = "Min")]
+    min: JsonPoint,
+    #[serde(rename = "Max")]
+    max: JsonPoint,
+}
+
+impl DoorTriggerBounds {
+    fn parse(json: &str) -> Result<Self, serde_json::Error> {
+        let JsonBounds { min, max } = serde_json::from_str(json)?;
+        Ok(Self {
+            min: [min.x, min.y, min.z],
+            max: [max.x, max.y, max.z],
+        })
+    }
+}
+
+/// A placed automatic load door and its trigger volume. Position and rotation
+/// are Bethesda units and radians, exactly as stored.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WalkInDoor {
+    pub source_ref: String,
+    pub location: DoorLocation,
+    pub position: [f64; 3],
+    pub rotation: [f64; 3],
+    pub scale: f64,
+    pub bounds: DoorTriggerBounds,
+}
+
+/// Walk-in doors with a usable trigger volume, plus the refs that could not
+/// get one because the database carries no bounds for them (converted before
+/// the installer extracted door trigger bounds); the caller reports those once.
+#[derive(Debug, Default)]
+pub struct WalkInDoors {
+    pub doors: Vec<WalkInDoor>,
+    pub without_bounds: Vec<String>,
+    /// Load doors whose row is unusable; each is left out on its own.
+    pub rejected: Vec<WalkInDoorError>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum WalkInDoorError {
+    #[error(transparent)]
+    Flags(#[from] DoorFlagsError),
+    #[error("door ref {source_ref}: bounds are malformed: {reason}")]
+    MalformedBounds { source_ref: String, reason: String },
+    #[error("door ref {source_ref} stands in a non-interior cell without a worldspace")]
+    ExteriorCellWithoutWorldspace { source_ref: String },
+}
+
+struct WalkInRow {
+    source_ref: String,
+    flags: Option<String>,
+    bounds: Option<String>,
+    is_interior: bool,
+    cell: String,
+    worldspace: Option<String>,
+    position: [f64; 3],
+    rotation: [f64; 3],
+    scale: f64,
+}
+
+/// Automatic load doors that are enabled at game start. Refs that start
+/// disabled or hidden stay out: nothing in the engine enables them later.
+pub fn get_walk_in_doors(conn: &Connection, schema: DbSchema) -> anyhow::Result<WalkInDoors> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT t.source_ref, d.flags, {bounds}, c.is_interior, c.form_key, c.worldspace,
+                po.position_x, po.position_y, po.position_z,
+                po.rotation_x, po.rotation_y, po.rotation_z, po.scale
+         FROM placed_teleports t
+         JOIN placed_objects po ON po.form_key = t.source_ref
+         JOIN doors d ON d.form_key = po.base_object
+         JOIN cells c ON c.form_key = po.cell_form_key
+         WHERE po.is_initially_disabled = 0 AND po.initially_hidden = 0
+         ORDER BY t.source_ref",
+        bounds = door_trigger_bounds_select_list(schema, "d."),
+    ))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(WalkInRow {
+                source_ref: row.get(0)?,
+                flags: row.get(1)?,
+                bounds: row.get(2)?,
+                is_interior: row.get(3)?,
+                cell: row.get(4)?,
+                worldspace: row.get(5)?,
+                position: [row.get(6)?, row.get(7)?, row.get(8)?],
+                rotation: [row.get(9)?, row.get(10)?, row.get(11)?],
+                scale: row.get(12)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut result = WalkInDoors::default();
+    for row in rows {
+        match walk_in_door(row) {
+            Ok(WalkInRowOutcome::Door(door)) => result.doors.push(door),
+            Ok(WalkInRowOutcome::WithoutBounds(source_ref)) => {
+                result.without_bounds.push(source_ref);
+            }
+            Ok(WalkInRowOutcome::NotAutomatic) => {}
+            Err(error) => result.rejected.push(error),
+        }
+    }
+    Ok(result)
+}
+
+enum WalkInRowOutcome {
+    Door(WalkInDoor),
+    WithoutBounds(String),
+    NotAutomatic,
+}
+
+fn walk_in_door(row: WalkInRow) -> Result<WalkInRowOutcome, WalkInDoorError> {
+    if !flags_are_automatic(
+        &format!("door ref {}", row.source_ref),
+        row.flags.as_deref(),
+    )? {
+        return Ok(WalkInRowOutcome::NotAutomatic);
+    }
+    let Some(bounds_json) = row.bounds.as_deref() else {
+        return Ok(WalkInRowOutcome::WithoutBounds(row.source_ref));
+    };
+    let bounds =
+        DoorTriggerBounds::parse(bounds_json).map_err(|e| WalkInDoorError::MalformedBounds {
+            source_ref: row.source_ref.clone(),
+            reason: e.to_string(),
+        })?;
+    let location = door_location(&row)?;
+    Ok(WalkInRowOutcome::Door(WalkInDoor {
+        source_ref: row.source_ref,
+        location,
+        position: row.position,
+        rotation: row.rotation,
+        scale: row.scale,
+        bounds,
+    }))
+}
+
+fn door_location(row: &WalkInRow) -> Result<DoorLocation, WalkInDoorError> {
+    if row.is_interior {
+        return Ok(DoorLocation::Interior {
+            cell: row.cell.clone(),
+        });
+    }
+    row.worldspace
+        .clone()
+        .map(|worldspace| DoorLocation::Exterior { worldspace })
+        .ok_or_else(|| WalkInDoorError::ExteriorCellWithoutWorldspace {
+            source_ref: row.source_ref.clone(),
+        })
 }

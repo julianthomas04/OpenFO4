@@ -471,6 +471,7 @@ namespace AssetConverter
             "CREATE INDEX IF NOT EXISTS idx_navmesh_ws_grid ON navigation_meshes(worldspace, grid_x, grid_y)",
             "CREATE INDEX IF NOT EXISTS idx_navmesh_cell ON navigation_meshes(cell)",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_navmesh_form_id ON navigation_meshes(form_id)",
+            "CREATE INDEX IF NOT EXISTS idx_collision_layers_index ON collision_layers(layer_index)",
         };
 
         // grasses.flags was TEXT (enum rendered as a string); the column is now the raw INTEGER bitfield. SQLite cannot
@@ -638,6 +639,11 @@ namespace AssetConverter
             ("footsteps", "impact_data_set", "TEXT"),
             ("impacts", "player_sound", "TEXT"),
             ("impacts", "npc_sound", "TEXT"),
+            ("collision_layers", "layer_index", "INTEGER"),
+            ("collision_layers", "flags", "INTEGER"),
+            ("collision_layers", "collides_with", "TEXT"),
+            ("doors", "bounds", "TEXT"),
+            ("doors", "trigger_bounds", "TEXT"),
         };
 
         private async Task AddColumnIfMissingAsync(string table, string column, string type)
@@ -885,6 +891,9 @@ namespace AssetConverter
                 return null;
             }
         }
+
+        protected string? SerializeObjectBounds(IObjectBoundsGetter? bounds) =>
+            SafeSerialize(bounds == null ? null : ObjectBoundsJson.From(bounds), "ObjectBounds");
 
         protected int TotalProcessed { get; set; }
 
@@ -2396,6 +2405,48 @@ namespace AssetConverter
         }
     }
 
+    internal static class ObjectBoundsJson
+    {
+        internal readonly record struct Point(short X, short Y, short Z);
+        internal readonly record struct Box(Point Min, Point Max);
+
+        internal readonly record struct FloatPoint(float X, float Y, float Z);
+        internal readonly record struct FloatBox(FloatPoint Min, FloatPoint Max);
+
+        internal static Box From(IObjectBoundsGetter bounds) => new(
+            new Point(bounds.First.X, bounds.First.Y, bounds.First.Z),
+            new Point(bounds.Second.X, bounds.Second.Y, bounds.Second.Z));
+    }
+
+    public class CollisionLayerProcessor : BaseRecordProcessor<ICollisionLayerGetter>
+    {
+        protected override async Task ProcessSpecificRecordAsync(ICollisionLayerGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
+        {
+            const string sql = @"
+                INSERT OR REPLACE INTO collision_layers (form_key, editor_id, layer_index, flags, collides_with)
+                VALUES (@FormKey, @EditorId, @LayerIndex, @Flags, @CollidesWith)";
+
+            var tally = ReadFailureTally.Shared;
+            long? layerIndex = tally.Read("COLL Index", record.EditorID, () => (long?)record.Index, (long?)null);
+            long? flags = tally.Read("COLL Flags", record.EditorID, () => (long?)(uint)record.Flags, (long?)null);
+            string? collidesWith = tally.Read("COLL CollidesWith", record.EditorID, () => SafeSerialize(CollidesWithKeys(record), "CollidesWith"), (string?)null);
+
+            await conn.ExecuteAsync(sql, new
+            {
+                FormKey = formKey,
+                EditorId = record.EditorID,
+                LayerIndex = layerIndex,
+                Flags = flags,
+                CollidesWith = collidesWith
+            }, transaction);
+        }
+
+        internal static List<string>? CollidesWithKeys(ICollisionLayerGetter record) =>
+            record.CollidesWith?.Select(link => link.IsNull
+                ? throw new InvalidDataException("CNAM contains a null collision layer link")
+                : link.FormKey.ToString()).ToList();
+    }
+
     public class StaticProcessor : BaseRecordProcessor<IStaticGetter>
     {
         protected override async Task ProcessSpecificRecordAsync(IStaticGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
@@ -2404,11 +2455,7 @@ namespace AssetConverter
                 INSERT OR REPLACE INTO statics (form_key, editor_id, model_path, material_object, has_distant_lod, bounds, alternate_textures, is_marker)
                 VALUES (@FormKey, @EditorId, @ModelPath, @MaterialObject, @HasDistantLOD, @Bounds, @AlternateTextures, @IsMarker)";
 
-            string? bounds = SafeSerialize(record.ObjectBounds == null ? null : new
-            {
-                Min = new { record.ObjectBounds.First.X, record.ObjectBounds.First.Y, record.ObjectBounds.First.Z },
-                Max = new { record.ObjectBounds.Second.X, record.ObjectBounds.Second.Y, record.ObjectBounds.Second.Z }
-            });
+            string? bounds = SerializeObjectBounds(record.ObjectBounds);
 
             string? material = record.Material.IsNull ? null : record.Material.FormKey.ToString();
             int hasDistantLod = (record.DistantLods?.Count > 0) ? 1 : 0;
@@ -2741,8 +2788,8 @@ namespace AssetConverter
     {
         protected override async Task ProcessSpecificRecordAsync(IDoorGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
         {
-            const string sql = @"INSERT OR REPLACE INTO doors (form_key, editor_id, name, model_path, open_sound, close_sound, flags, is_marker)
-                VALUES (@FormKey, @EditorId, @Name, @ModelPath, @OpenSound, @CloseSound, @Flags, @IsMarker)";
+            const string sql = @"INSERT OR REPLACE INTO doors (form_key, editor_id, name, model_path, open_sound, close_sound, flags, is_marker, bounds)
+                VALUES (@FormKey, @EditorId, @Name, @ModelPath, @OpenSound, @CloseSound, @Flags, @IsMarker, @Bounds)";
             await conn.ExecuteAsync(sql, new
             {
                 FormKey = formKey,
@@ -2752,7 +2799,8 @@ namespace AssetConverter
                 OpenSound = record.OpenSound.IsNull ? (string?)null : record.OpenSound.FormKey.ToString(),
                 CloseSound = record.CloseSound.IsNull ? (string?)null : record.CloseSound.FormKey.ToString(),
                 Flags = SafeSerialize(record.Flags),
-                IsMarker = (record.MajorRecordFlagsRaw & 0x800000) != 0 ? 1 : 0
+                IsMarker = (record.MajorRecordFlagsRaw & 0x800000) != 0 ? 1 : 0,
+                Bounds = SerializeObjectBounds(record.ObjectBounds)
             }, transaction);
         }
     }

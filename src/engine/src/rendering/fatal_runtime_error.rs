@@ -1,3 +1,4 @@
+use super::world_streamer::InteriorRequestError;
 use crate::audio::AudioError;
 use crate::rendering::device_loss::DeviceLost;
 
@@ -8,4 +9,6 @@ pub enum FatalRuntimeError {
     DeviceLost(#[from] DeviceLost),
     #[error(transparent)]
     Audio(#[from] AudioError),
+    #[error("cell streaming workers stopped: {0}")]
+    CellWorkersStopped(#[from] InteriorRequestError),
 }
