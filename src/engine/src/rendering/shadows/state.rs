@@ -1,7 +1,7 @@
 use glam::{Mat4, UVec4, Vec3, Vec4};
 
 use super::cascade_cache::{CascadeCache, ReasonCounts};
-use super::cascades::CascadeSet;
+use super::cascades::{CascadeSet, GridAnchors};
 use super::lamps::ShadowInvalidations;
 use super::settings::{ShadowConfig, ShadowSettings};
 use crate::rendering::camera::Camera;
@@ -25,6 +25,7 @@ pub struct ShadowState {
     pub settings: ShadowSettings,
     frozen: Option<CascadeSet>,
     cache: CascadeCache,
+    anchors: GridAnchors,
 }
 
 impl ShadowState {
@@ -34,6 +35,7 @@ impl ShadowState {
             config,
             settings: ShadowSettings::default(),
             frozen: None,
+            anchors: GridAnchors::default(),
         }
     }
 
@@ -55,6 +57,7 @@ impl ShadowState {
     pub fn discard_cached_cascades(&mut self) {
         self.cache.discard();
         self.frozen = None;
+        self.anchors.reset();
     }
 
     /// Refits every frame unless frozen, in which case the cascades fitted when
@@ -71,6 +74,7 @@ impl ShadowState {
             to_sun,
             &self.config,
             self.cache.settings.eye_centered_from,
+            &mut self.anchors,
         );
         let resolved = self.cache.resolve(fitted);
         self.frozen = self.settings.freeze_cascades.then(|| resolved.clone());
