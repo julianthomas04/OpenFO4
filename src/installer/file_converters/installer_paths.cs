@@ -25,17 +25,6 @@ namespace AssetConverter
         /// <summary>True for an installer that carries its own payload; known without unpacking it.</summary>
         internal static bool IsPackaged { get; } = InstallerResourceLocator.IsPackaged(typeof(InstallerPaths).Assembly);
 
-        const string DevInstallParent = "test_installation";
-
-        /// <summary>The install root the dev commands and a headless run without <c>--install-dir</c> use; null for a packaged installer.</summary>
-        internal static string? DevInstallFolder => IsPackaged ? null : DevInstallFolderIn(FindRepoRoot());
-
-        /// <summary>
-        /// The install root of a checkout at <paramref name="repoRoot"/>: the same one the installer window picks when <c>test_installation</c> is
-        /// the chosen folder, so <c>test_installation</c> itself when it holds an install and <c>test_installation\OpenFO4</c> otherwise.
-        /// </summary>
-        internal static string DevInstallFolderIn(string repoRoot) => InstallFolderRules.InstallRoot(Path.Combine(repoRoot, DevInstallParent));
-
         /// <summary>Absolute path of a resource given relative to the resource root; throws if it does not exist.</summary>
         public static string Require(string repoRelativePath) => Resources.Require(repoRelativePath);
 

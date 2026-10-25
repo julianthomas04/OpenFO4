@@ -11,8 +11,8 @@ namespace InstallerTests.Ui
 
         public GameLauncherTests()
         {
-            Environment.SetEnvironmentVariable(InstallDir, @"D:\dev\test_installation");
-            Environment.SetEnvironmentVariable(AssetRoot, @"D:\dev\test_installation\assets");
+            Environment.SetEnvironmentVariable(InstallDir, @"D:\install");
+            Environment.SetEnvironmentVariable(AssetRoot, @"D:\install\assets");
             Environment.SetEnvironmentVariable(Unrelated, "kept");
         }
 

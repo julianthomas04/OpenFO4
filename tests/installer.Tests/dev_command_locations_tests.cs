@@ -6,14 +6,26 @@ namespace InstallerTests
 {
     public sealed class DevCommandLocationsTests : IDisposable
     {
-        const string DefaultGame = @"Z:\Games\Fallout 4";
-        const string DefaultInstall = @"C:\repo\test_installation\OpenFO4";
+        const string SteamGame = @"S:\Steam\Fallout 4";
 
         readonly TempDirectory _directory = new();
 
         public void Dispose() => _directory.Dispose();
 
         static string? NoEnvironment(string _) => null;
+
+        static string? SteamIsNotAsked() => throw new InvalidOperationException("Steam was asked although a game folder was named.");
+
+        static DevCommandTarget Resolve(string[] args, Func<string, string?>? environment = null, Func<string?>? detectGameFolder = null) =>
+            DevCommandLocations.Resolve(args, environment ?? NoEnvironment, detectGameFolder ?? (() => SteamGame));
+
+        static Func<string, string?> Environment(string? game = null, string? install = null) =>
+            variable => variable switch
+            {
+                HeadlessLocations.GameFolderVariable => game,
+                HeadlessLocations.InstallFolderVariable => install,
+                _ => null,
+            };
 
         string MakeGameFolder()
         {
@@ -32,13 +44,62 @@ namespace InstallerTests
         }
 
         [Fact]
-        public void WithoutOptions_BothFoldersKeepTheirDefaults()
+        public void WithoutOptionsTheGameFolderIsSteamsAndTheInstallFolderTheVariables()
         {
-            var target = DevCommandLocations.Resolve(["collision-only"], NoEnvironment, DefaultGame, DefaultInstall);
+            string install = MakeInstall();
 
-            Assert.Equal(DefaultGame, target.Locations.Fo4Location);
-            Assert.Equal(DefaultInstall, target.Locations.InstallRoot);
+            var target = Resolve(["collision-only"], Environment(install: install));
+
+            Assert.Equal(SteamGame, target.Locations.Fo4Location);
+            Assert.Equal(install, target.Locations.InstallRoot);
             Assert.Equal(["collision-only"], target.Arguments);
+        }
+
+        [Fact]
+        public void TheVariablesWinOverSteamAndTheOptionsWinOverTheVariables()
+        {
+            string envGame = MakeGameFolder();
+            string envInstall = MakeInstall("env-install");
+            string flagInstall = MakeInstall("flag-install");
+
+            var fromVariables = Resolve(["collision-only"], Environment(envGame, envInstall), SteamIsNotAsked);
+            var flagOverVariable = Resolve(["collision-only", "--install-dir", flagInstall], Environment(envGame, envInstall), SteamIsNotAsked);
+
+            Assert.Equal(envGame, fromVariables.Locations.Fo4Location);
+            Assert.Equal(envInstall, fromVariables.Locations.InstallRoot);
+            Assert.Equal(flagInstall, flagOverVariable.Locations.InstallRoot);
+        }
+
+        [Fact]
+        public void ABlankVariableCountsAsUnset()
+        {
+            string install = MakeInstall();
+
+            var blankGame = Resolve(["collision-only"], Environment(game: "  ", install: install));
+            var blankInstall = Assert.Throws<LaunchArgumentException>(() => Resolve(["collision-only"], Environment(install: "  ")));
+
+            Assert.Equal(SteamGame, blankGame.Locations.Fo4Location);
+            Assert.Contains(HeadlessLocations.InstallFolderVariable, blankInstall.Message);
+        }
+
+        [Fact]
+        public void AGameFolderNamedByTheVariableIsValidatedLikeTheOption()
+        {
+            string notAGame = Path.Combine(_directory.Path, "not-a-game");
+            Directory.CreateDirectory(notAGame);
+
+            var failure = Assert.Throws<LaunchArgumentException>(() => Resolve(["collision-only"], Environment(game: notAGame, install: MakeInstall())));
+
+            Assert.Contains("no Data folder", failure.Message);
+        }
+
+        [Fact]
+        public void AGameFolderNoOneKnowsIsRefusedWithTheOptionAndTheVariableToUse()
+        {
+            var failure = Assert.Throws<LaunchArgumentException>(() => Resolve(["collision-only", "--install-dir", MakeInstall()], detectGameFolder: () => null));
+
+            Assert.Contains("--game-dir", failure.Message);
+            Assert.Contains(HeadlessLocations.GameFolderVariable, failure.Message);
         }
 
         [Fact]
@@ -47,8 +108,8 @@ namespace InstallerTests
             string game = MakeGameFolder();
             string install = MakeInstall();
 
-            var spaced = DevCommandLocations.Resolve(["collision-only", "--install-dir", install, "--game-dir", game], NoEnvironment, DefaultGame, DefaultInstall);
-            var equals = DevCommandLocations.Resolve(["collision-only", $"--install-dir={install}", $"--game-dir={game}"], NoEnvironment, DefaultGame, DefaultInstall);
+            var spaced = Resolve(["collision-only", "--install-dir", install, "--game-dir", game]);
+            var equals = Resolve(["collision-only", $"--install-dir={install}", $"--game-dir={game}"]);
 
             Assert.All(new[] { spaced, equals }, target =>
             {
@@ -64,7 +125,7 @@ namespace InstallerTests
             string chosen = MakeInstall("chosen");
             string nested = MakeInstall(Path.Combine("chosen", "OpenFO4"));
 
-            var target = DevCommandLocations.Resolve(["esm-only", "--install-dir", Path.Combine(_directory.Path, "chosen")], NoEnvironment, DefaultGame, DefaultInstall);
+            var target = Resolve(["esm-only", "--install-dir", Path.Combine(_directory.Path, "chosen")]);
 
             Assert.Equal(chosen, target.Locations.InstallRoot);
             Assert.NotEqual(nested, target.Locations.InstallRoot);
@@ -77,7 +138,7 @@ namespace InstallerTests
             Directory.CreateDirectory(chosen);
             string nested = MakeInstall(Path.Combine("parent", InstallFolderRules.InstallFolderName));
 
-            var target = DevCommandLocations.Resolve(["esm-only", "--install-dir", chosen], NoEnvironment, DefaultGame, DefaultInstall);
+            var target = Resolve(["esm-only", "--install-dir", chosen]);
 
             Assert.Equal(nested, target.Locations.InstallRoot);
         }
@@ -87,7 +148,7 @@ namespace InstallerTests
         {
             string install = MakeInstall();
 
-            var target = DevCommandLocations.Resolve(["esm-only", "--install-dir", install, "--tables", "statics,doors"], NoEnvironment, DefaultGame, DefaultInstall);
+            var target = Resolve(["esm-only", "--install-dir", install, "--tables", "statics,doors"]);
 
             Assert.True(EsmOnlyArguments.TryParse(target.Arguments, out string? tables));
             Assert.Equal("statics,doors", tables);
@@ -100,7 +161,7 @@ namespace InstallerTests
             Directory.CreateDirectory(empty);
 
             var failure = Assert.Throws<LaunchArgumentException>(() =>
-                DevCommandLocations.Resolve(["collision-only", "--install-dir", empty], NoEnvironment, DefaultGame, DefaultInstall));
+                Resolve(["collision-only", "--install-dir", empty]));
 
             Assert.Contains("does not hold an OpenFO4 install", failure.Message);
             Assert.Contains(empty, failure.Message);
@@ -113,7 +174,7 @@ namespace InstallerTests
             Directory.CreateDirectory(notAGame);
 
             var failure = Assert.Throws<LaunchArgumentException>(() =>
-                DevCommandLocations.Resolve(["collision-only", "--game-dir", notAGame], NoEnvironment, DefaultGame, DefaultInstall));
+                Resolve(["collision-only", "--game-dir", notAGame]));
 
             Assert.Contains("no Data folder", failure.Message);
         }
@@ -122,7 +183,7 @@ namespace InstallerTests
         public void AMissingGameFolderIsRefused()
         {
             Assert.Throws<LaunchArgumentException>(() =>
-                DevCommandLocations.Resolve(["collision-only", "--game-dir", Path.Combine(_directory.Path, "absent")], NoEnvironment, DefaultGame, DefaultInstall));
+                Resolve(["collision-only", "--game-dir", Path.Combine(_directory.Path, "absent")]));
         }
 
         [Theory]
@@ -130,13 +191,16 @@ namespace InstallerTests
         [InlineData("--game-dir")]
         public void AnOptionWithoutAValueIsRefused(string option)
         {
-            Assert.Throws<LaunchArgumentException>(() => DevCommandLocations.Resolve(["collision-only", option], NoEnvironment, DefaultGame, DefaultInstall));
+            Assert.Throws<LaunchArgumentException>(() => Resolve(["collision-only", option]));
         }
 
         [Fact]
-        public void WithoutAnyInstallFolderTheCommandIsRefused()
+        public void WithoutAnyInstallFolderTheCommandIsRefusedWithTheOptionAndTheVariableToUse()
         {
-            Assert.Throws<LaunchArgumentException>(() => DevCommandLocations.Resolve(["collision-only"], NoEnvironment, DefaultGame, defaultInstallFolder: null));
+            var failure = Assert.Throws<LaunchArgumentException>(() => Resolve(["collision-only"]));
+
+            Assert.Contains("--install-dir", failure.Message);
+            Assert.Contains(HeadlessLocations.InstallFolderVariable, failure.Message);
         }
 
         [Fact]
