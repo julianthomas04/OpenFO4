@@ -42,15 +42,6 @@ namespace AssetConverter
             Console.WriteLine($"Database path: {_dbPath}");
         }
 
-        public ESMLoader()
-        {
-            string installRoot = InstallerPaths.DevInstallFolder
-                ?? throw new InvalidOperationException("A packaged installer has no development install folder; give the database path.");
-            string dataDirectory = Path.Combine(installRoot, InstallLayout.AssetsFolder, InstallLayout.DataFolder);
-            _dbPath = Path.Combine(dataDirectory, "data.db");
-            Console.WriteLine($"Database path: {_dbPath}");
-        }
-
         public void LoadESM(string path, int progressPhase = -1, CancellationToken ct = default)
         {
             LoadESMAsync(path, progressPhase, ct).GetAwaiter().GetResult();

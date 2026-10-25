@@ -6,22 +6,26 @@ namespace AssetConverter
     internal sealed record DevCommandTarget(InstallLocations Locations, string[] Arguments);
 
     /// <summary>
-    /// Resolves <c>--install-dir</c> and <c>--game-dir</c> for the dev subcommands, parsed by <see cref="LaunchArguments"/> like a headless install's.
-    /// An option that is given is validated; one that is omitted keeps the development default, as it is.
+    /// Resolves the folders of a dev subcommand, with <c>--install-dir</c> and <c>--game-dir</c> parsed by <see cref="LaunchArguments"/> like a headless install's:
+    /// the game folder is the flag, else <see cref="HeadlessLocations.GameFolderVariable"/>, else what Steam knows; the install folder is the flag, else
+    /// <see cref="HeadlessLocations.InstallFolderVariable"/>. A folder named by a flag or variable is validated.
     /// </summary>
     internal static class DevCommandLocations
     {
         /// <param name="args">The full argument list; <c>args[0]</c> is the subcommand.</param>
-        /// <param name="defaultGameFolder">The game folder when <c>--game-dir</c> is omitted.</param>
-        /// <param name="defaultInstallFolder">The install root when <c>--install-dir</c> is omitted.</param>
-        /// <exception cref="LaunchArgumentException">An option has no value or names a folder that cannot be used.</exception>
-        public static DevCommandTarget Resolve(string[] args, Func<string, string?> getEnvironmentVariable, string defaultGameFolder, string? defaultInstallFolder)
+        /// <param name="detectGameFolder">The game folder Steam knows; asked only when neither the flag nor the variable names one.</param>
+        /// <exception cref="LaunchArgumentException">An option has no value, a folder is named nowhere, or a named folder cannot be used.</exception>
+        public static DevCommandTarget Resolve(string[] args, Func<string, string?> getEnvironmentVariable, Func<string?> detectGameFolder)
         {
             var launch = LaunchArguments.Parse(args, getEnvironmentVariable);
-            string game = launch.GameDirectory is { } chosenGame ? ValidGameFolder(chosenGame) : defaultGameFolder;
-            string install = launch.InstallDirectory is { } chosenInstall
+            string game = (launch.GameDirectory ?? HeadlessLocations.Named(getEnvironmentVariable, HeadlessLocations.GameFolderVariable)) is { } chosenGame
+                ? ValidGameFolder(chosenGame)
+                : detectGameFolder() ?? throw new LaunchArgumentException(
+                    $"The Fallout 4 folder is unknown and Steam did not know it either: pass {LaunchArguments.GameDirectoryFlag} <folder> or set {HeadlessLocations.GameFolderVariable}.");
+            string install = (launch.InstallDirectory ?? HeadlessLocations.Named(getEnvironmentVariable, HeadlessLocations.InstallFolderVariable)) is { } chosenInstall
                 ? ValidInstallRoot(chosenInstall)
-                : defaultInstallFolder ?? throw new LaunchArgumentException($"Pass {LaunchArguments.InstallDirectoryFlag} <folder>: there is no default install folder.");
+                : throw new LaunchArgumentException(
+                    $"The install folder is unknown: pass {LaunchArguments.InstallDirectoryFlag} <folder> or set {HeadlessLocations.InstallFolderVariable}.");
             return new DevCommandTarget(new InstallLocations(game, install), WithoutFolderOptions(args));
         }
 
@@ -49,7 +53,7 @@ namespace AssetConverter
 
         private static string ValidGameFolder(string chosen)
         {
-            string full = Full(chosen);
+            string full = HeadlessLocations.Full(chosen);
             if (!Directory.Exists(Path.Combine(full, "Data")))
                 throw new LaunchArgumentException($"{LaunchArguments.GameDirectoryFlag} '{full}' is not a Fallout 4 folder: it has no Data folder.");
             return full;
@@ -57,22 +61,10 @@ namespace AssetConverter
 
         private static string ValidInstallRoot(string chosen)
         {
-            string root = InstallFolderRules.InstallRoot(Full(chosen));
+            string root = InstallFolderRules.InstallRoot(HeadlessLocations.Full(chosen));
             if (!new InstallLocations("", root).HoldsInstall())
                 throw new LaunchArgumentException($"{LaunchArguments.InstallDirectoryFlag} '{chosen}' does not hold an OpenFO4 install (looked in {root}).");
             return root;
-        }
-
-        private static string Full(string folder)
-        {
-            try
-            {
-                return InstallFolderRules.FullPath(folder);
-            }
-            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException)
-            {
-                throw new LaunchArgumentException($"'{folder}' is not a valid folder path: {ex.Message}");
-            }
         }
     }
 }

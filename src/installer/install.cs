@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO.Compression;
 using AssetConverter;
@@ -19,26 +20,9 @@ ParentConsole.Attach();
 // can just launch the engine. Idempotent: skips BA2
 // extractions whose output directories are already populated.
 
-// Source: Fallout 4 install. OPENFO4_FO4_DIR overrides (benchmarks / users
-// with the game elsewhere). The headless install and the dev subcommands use these
-// two locations as they are; the installer window asks for both (it starts with
-// OPENFO4_FO4_DIR as the game folder when that is set).
-const string DevGameFolder = "Z:\\Games\\Fallout 4";
-string? fo4Override = Environment.GetEnvironmentVariable("OPENFO4_FO4_DIR");
-string fo4Location = fo4Override ?? DevGameFolder;
-
-// Install root; the layout below it is docs/install-contract.md's. A packaged installer has no dev install folder:
-// it installs where the window or --install-dir says, and the dev subcommands below are not available in it.
-var locations = new InstallLocations(fo4Location, InstallerPaths.DevInstallFolder ?? "");
-string stagingRoot = locations.StagingRoot;
-string assetsRoot = locations.AssetsRoot;
-string meshesOut = locations.MeshesOut;
-string texturesOut = locations.TexturesOut;
-string dataOut = locations.DataOut;
-string fontsOut = locations.FontsOut;
-string pipboyArtOut = locations.PipboyArtOut;
-string uiLayoutOut = locations.UiLayoutOut;
-string settingsDirectory = Environment.GetEnvironmentVariable(LaunchArguments.SettingsDirectoryVariable) ?? GameIniFiles.DocumentsDirectory();
+// The installer window asks for the game and install folders (it starts with OPENFO4_FO4_DIR as the game folder when that is set);
+// the headless install and the dev subcommands take them from flags and variables, see HeadlessLocations.
+string? fo4Override = Environment.GetEnvironmentVariable(HeadlessLocations.GameFolderVariable);
 
 // The dev subcommands share one budget, announced the first time a command that reserves memory asks for it.
 var devMemory = new Lazy<MemoryBudget>(() =>
@@ -60,31 +44,8 @@ if (args.Length > 0 && InstallerPaths.IsPackaged && !args[0].StartsWith("--", St
     Environment.ExitCode = InstallSession.ExitFailed;
     return;
 }
-if (args.Length > 0 && !args[0].StartsWith("--", StringComparison.Ordinal))
-{
-    // Every dev subcommand takes the headless install's --install-dir and --game-dir; omitted, they stay the development defaults.
-    try
-    {
-        var target = DevCommandLocations.Resolve(args, Environment.GetEnvironmentVariable, fo4Location, InstallerPaths.DevInstallFolder);
-        locations = target.Locations;
-        args = target.Arguments;
-    }
-    catch (LaunchArgumentException ex)
-    {
-        Console.Error.WriteLine($"ERROR: {ex.Message}");
-        Environment.ExitCode = InstallSession.ExitFailed;
-        return;
-    }
-    fo4Location = locations.Fo4Location;
-    stagingRoot = locations.StagingRoot;
-    assetsRoot = locations.AssetsRoot;
-    meshesOut = locations.MeshesOut;
-    texturesOut = locations.TexturesOut;
-    dataOut = locations.DataOut;
-    fontsOut = locations.FontsOut;
-    pipboyArtOut = locations.PipboyArtOut;
-    uiLayoutOut = locations.UiLayoutOut;
-}
+string[] commandLine = args;
+if (args.Length > 0 && !args[0].StartsWith("--", StringComparison.Ordinal)) args = DevCommandLocations.WithoutFolderOptions(args);
 if (args.Length > 0)
 {
     switch (args[0])
@@ -105,6 +66,45 @@ if (args.Length > 0)
             if (args.Length < 3) { Console.Error.WriteLine("pex-emit-all requires <scripts-dir> <out-dir>"); return; }
             PapyrusLuaTranspiler.ConvertToLuaBatched(args[1], args[2], Path.Combine(Environment.CurrentDirectory, "papyrus_lua.log"));
             return;
+        case "bench-ba2":
+            {
+                // Dev/bench-only: extract one BA2 with either the legacy serial
+                // unpacker or the pipelined parallel one, into a throwaway dir.
+                // Usage: installer bench-ba2 <archive.ba2> <outDir> <serial|parallel> [dop]
+                if (args.Length < 4) { Console.Error.WriteLine("bench-ba2 requires <archive> <outDir> <serial|parallel> [dop]"); return; }
+                var benchSw = Stopwatch.StartNew();
+                if (args[2] == "-") { Console.Error.WriteLine("outDir required"); return; }
+                Directory.CreateDirectory(args[2]);
+                if (args[3] == "serial")
+                {
+                    BA2Unpacker.Unpack(args[1], args[2]);
+                }
+                else
+                {
+                    int? dop = args.Length > 4 ? int.Parse(args[4], CultureInfo.InvariantCulture) : null;
+                    BA2ParallelUnpacker.Unpack(args[1], args[2], devMemory.Value, dop);
+                }
+                benchSw.Stop();
+                Console.WriteLine($"BENCH bench-ba2 mode={args[3]} archive={Path.GetFileName(args[1])} elapsed={benchSw.Elapsed.TotalSeconds:F1}s");
+                return;
+            }
+    }
+}
+if (args.Length > 0 && !args[0].StartsWith("--", StringComparison.Ordinal))
+{
+    if (!TryResolveLocations(commandLine, out InstallLocations? devLocations)) return;
+    string fo4Location = devLocations.Fo4Location;
+    string stagingRoot = devLocations.StagingRoot;
+    string assetsRoot = devLocations.AssetsRoot;
+    string meshesOut = devLocations.MeshesOut;
+    string texturesOut = devLocations.TexturesOut;
+    string dataOut = devLocations.DataOut;
+    string fontsOut = devLocations.FontsOut;
+    string pipboyArtOut = devLocations.PipboyArtOut;
+    string uiLayoutOut = devLocations.UiLayoutOut;
+    string settingsDirectory = Environment.GetEnvironmentVariable(LaunchArguments.SettingsDirectoryVariable) ?? GameIniFiles.DocumentsDirectory();
+    switch (args[0])
+    {
         case "nif-convert":
             // Dev-only single-file conversion (no BGSM cache / texture index).
             if (args.Length < 3) { Console.Error.WriteLine("nif-convert requires <src.nif> <dest.glb> [materials-root]"); return; }
@@ -134,7 +134,7 @@ if (args.Length > 0)
                 InstallOperations.UseEffectShaderCatalog(fo4Location);
                 NifConverter.ConvertToGltfBatched(Path.Combine(stagingRoot, "Meshes"), meshesOut, bgsmScanRoot: stagingRoot, memory: devMemory.Value);
                 ExtractCollisionFromStaging(stagingRoot, meshesOut, devMemory.Value);
-                HavokAnimationStage.ExtractActorHkx(locations, memory: devMemory.Value);
+                HavokAnimationStage.ExtractActorHkx(devLocations, memory: devMemory.Value);
                 HavokAnimationStage.Convert(stagingRoot, meshesOut, memory: devMemory.Value);
                 Console.WriteLine($"Meshes reconverted in {ProgressFormatter.Invariant.Duration(tMeshOnly.Elapsed)}");
                 return;
@@ -146,7 +146,7 @@ if (args.Length > 0)
                 // rewrites the skeleton / clip-pack GLBs under assets\meshes\Actors.
                 var tAnimOnly = Stopwatch.StartNew();
                 Directory.CreateDirectory(stagingRoot);
-                HavokAnimationStage.ExtractActorHkx(locations, memory: devMemory.Value);
+                HavokAnimationStage.ExtractActorHkx(devLocations, memory: devMemory.Value);
                 HavokAnimationStage.Convert(stagingRoot, meshesOut, memory: devMemory.Value);
                 Console.WriteLine($"Animations converted in {ProgressFormatter.Invariant.Duration(tAnimOnly.Elapsed)}");
                 return;
@@ -160,7 +160,7 @@ if (args.Length > 0)
                 // ExtractFo4Collision always passes --skip-existing and a warm sidecar
                 // would never pick up a change of the extractor.
                 var tColOnly = Stopwatch.StartNew();
-                new PipelineStages(locations, devMemory.Value, CancellationToken.None).EnsureStagedMeshArchives();
+                new PipelineStages(devLocations, devMemory.Value, CancellationToken.None).EnsureStagedMeshArchives();
                 CollisionSidecars.Purge(meshesOut);
                 ExtractCollisionFromStaging(stagingRoot, meshesOut, devMemory.Value);
                 Console.WriteLine($"Collision sidecars regenerated in {ProgressFormatter.Invariant.Duration(tColOnly.Elapsed)}");
@@ -182,15 +182,15 @@ if (args.Length > 0)
                 // Usage: installer esm-only [--tables <table>[,<table>...]]
                 // With --tables only those tables are cleared and re-filled in the
                 // existing database (see ESMLoader.ReloadTablesAsync).
-                string dbOnlyPath = Path.Combine(dataOut, "data.db");
-                string esmOnlySrc = ResolveFallout4Esm(stagingRoot, fo4Location);
-
                 if (!EsmOnlyArguments.TryParse(args, out string? tablesCsv))
                 {
                     Console.Error.WriteLine("Usage: esm-only [--tables <table>[,<table>...]]");
                     Environment.ExitCode = 1;
                     return;
                 }
+                string dbOnlyPath = Path.Combine(dataOut, "data.db");
+                string esmOnlySrc = ResolveFallout4Esm(stagingRoot, fo4Location);
+
                 if (tablesCsv != null)
                 {
                     ReloadEsmTables(tablesCsv, dbOnlyPath, esmOnlySrc, fo4Location, settingsDirectory, stagingRoot, texturesOut, meshesOut, devMemory.Value);
@@ -260,7 +260,7 @@ if (args.Length > 0)
             // Everything is converted again; the plan (tool, archives, entries) is made before any existing output is touched, so a failing plan costs nothing.
             RunConversionCommand(() =>
             {
-                new PipelineStages(locations, devMemory.Value, CancellationToken.None).ConvertAudio(force: true);
+                new PipelineStages(devLocations, devMemory.Value, CancellationToken.None).ConvertAudio(force: true);
                 return true;
             });
             return;
@@ -269,7 +269,7 @@ if (args.Length > 0)
             // Everything is converted again; the plan (tools, folder, videos) is made before any existing output is touched.
             RunConversionCommand(() =>
             {
-                new PipelineStages(locations, devMemory.Value, CancellationToken.None).ConvertVideo(force: true);
+                new PipelineStages(devLocations, devMemory.Value, CancellationToken.None).ConvertVideo(force: true);
                 return true;
             });
             return;
@@ -277,28 +277,6 @@ if (args.Length > 0)
             // Dev-only re-run of the shader translation step: Shaders.ba2 -> assets\shaders (WGSL + manifest.json).
             ShaderTranslateStep.Run(fo4Location, assetsRoot, InstallerPaths.Require(ShaderManifestReader.RepoRelativePath));
             return;
-        case "bench-ba2":
-            {
-                // Dev/bench-only: extract one BA2 with either the legacy serial
-                // unpacker or the pipelined parallel one, into a throwaway dir.
-                // Usage: installer bench-ba2 <archive.ba2> <outDir> <serial|parallel> [dop]
-                if (args.Length < 4) { Console.Error.WriteLine("bench-ba2 requires <archive> <outDir> <serial|parallel> [dop]"); return; }
-                var benchSw = Stopwatch.StartNew();
-                if (args[2] == "-") { Console.Error.WriteLine("outDir required"); return; }
-                Directory.CreateDirectory(args[2]);
-                if (args[3] == "serial")
-                {
-                    BA2Unpacker.Unpack(args[1], args[2]);
-                }
-                else
-                {
-                    int? dop = args.Length > 4 ? int.Parse(args[4], CultureInfo.InvariantCulture) : null;
-                    BA2ParallelUnpacker.Unpack(args[1], args[2], devMemory.Value, dop);
-                }
-                benchSw.Stop();
-                Console.WriteLine($"BENCH bench-ba2 mode={args[3]} archive={Path.GetFileName(args[1])} elapsed={benchSw.Elapsed.TotalSeconds:F1}s");
-                return;
-            }
         case "bench-nif":
             {
                 // Dev/bench-only: NIF -> GLB conversion against the existing
@@ -346,10 +324,15 @@ if (args.Length > 0)
                 new MovementTypeProcessor().ProcessRecordsAsync(movtMod.MovementTypes, "MOVT", movtConn).GetAwaiter().GetResult();
                 return;
             }
+        default:
+            Console.Error.WriteLine($"ERROR: unknown command '{args[0]}'.");
+            Environment.ExitCode = InstallSession.ExitFailed;
+            return;
     }
 }
 
 LaunchArguments launch;
+InstallLocations locations;
 try
 {
     launch = LaunchArguments.Parse(args, Environment.GetEnvironmentVariable);
@@ -366,7 +349,7 @@ if (launch.Headless)
 {
     try
     {
-        locations = HeadlessLocations.Resolve(launch, fo4Override, InstallerPaths.IsPackaged ? null : DevGameFolder, InstallerPaths.DevInstallFolder);
+        locations = HeadlessLocations.ForHeadlessInstall(launch, Environment.GetEnvironmentVariable);
     }
     catch (LaunchArgumentException ex)
     {
@@ -387,7 +370,7 @@ if (launch.Headless)
 else
 {
     var setup = new SetupViewModel(
-        launch.GameDirectory ?? fo4Override ?? InstallFolderRules.DefaultGameFolder(SteamGameFolderLocator.FromRegistry(), note => Console.WriteLine($"Game folder detection: {note}")) ?? "", launch.KeepStaging,
+        launch.GameDirectory ?? fo4Override ?? DetectGameFolder() ?? "", launch.KeepStaging,
         launch.SettingsDirectory ?? GameIniFiles.DocumentsDirectory());
     var viewModel = new InstallerViewModel(setup);
     var window = InstallerWindowHost.StartOrExit(viewModel);
@@ -435,6 +418,26 @@ static void RunConversionCommand(Func<bool> convert)
     {
         Console.Error.WriteLine($"ERROR: {ex.Message}");
         Environment.ExitCode = InstallSession.ExitFailed;
+    }
+}
+
+static string? DetectGameFolder() =>
+    InstallFolderRules.DefaultGameFolder(SteamGameFolderLocator.FromRegistry(), note => Console.WriteLine($"Game folder detection: {note}"));
+
+// Dev subcommands take their folders as a headless install does; a folder named nowhere is reported like a bad argument.
+static bool TryResolveLocations(string[] commandLine, [NotNullWhen(true)] out InstallLocations? locations)
+{
+    try
+    {
+        locations = DevCommandLocations.Resolve(commandLine, Environment.GetEnvironmentVariable, DetectGameFolder).Locations;
+        return true;
+    }
+    catch (LaunchArgumentException ex)
+    {
+        Console.Error.WriteLine($"ERROR: {ex.Message}");
+        Environment.ExitCode = InstallSession.ExitFailed;
+        locations = null;
+        return false;
     }
 }
 
