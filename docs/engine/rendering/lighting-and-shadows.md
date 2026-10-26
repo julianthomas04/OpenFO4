@@ -8,22 +8,29 @@ fallback for cells that have no usable data.
 
 ## Time of day
 
-The exterior follows the world clock. The weather's eight time slots (Sunrise,
-Day, Sunset, Night and the four Early/Late slots) are loaded once. Each frame the
-clock picks the two slots around the current time and blends their colours, light
-scales, exposure, ambient and depth of field in linear space. Fog distances exist
-only for Day and Night and are blended by how much daylight the moment has; fog that
-is on in one of the two and off in the other switches at the midpoint instead of
-blending.
+The exterior follows the [world clock](../simulation.md#world-clock). The
+weather's eight time slots (Sunrise, Day, Sunset, Night and the four Early/Late
+slots) are loaded once. Each frame the two slots around the current hour are
+blended in linear space: colours, light scales, exposure, ambient and depth of
+field. Fog distances exist only for Day and Night and follow how much daylight
+the moment has. Fog that is on in one and off in the other switches at the
+midpoint.
 
-The one directional light is whichever of the sun and the moon is up, with the
-weather's Sunlight colour of the current slot, so the night slot lights the world
-by the moon. Its direction turns from the sun to the moon as the sun fades, its strength
-fades with the elevation of the sun or the moon, and the
-sun shadows follow it and turn off only when neither body gives light. The sun
-disc in the sky always sits at the sun's own position, and its alpha and the
-water's daylight factor ramp around sunrise and sunset over the game's
-`fSunAlphaTransTime`.
+The one directional light is the sun or the moon, whichever is up, coloured by
+the current slot's Sunlight. Its direction turns from the sun to the moon as the
+sun fades, and its strength follows the elevation of the body. Sun shadows
+follow that light and switch off only when neither body gives light. The sun
+disc always sits at the sun's own position. Its alpha and the water's daylight
+factor ramp around sunrise and sunset over `fSunAlphaTransTime`.
+
+Interiors keep their per-cell lighting and are not affected by the clock.
+
+The game data does not pin down every rule of the sky. These are working
+assumptions (`time_of_day/unmeasured.rs`) pending in-game measurement: the slot
+keyframes inside the twilight windows, the sun's arc, the moon's path and phase
+over the days, the star dome's rotation, the apparent size of the moon, the
+brightness of moon and stars, and how the sun and moon light fade with
+elevation.
 
 ## Placed lights
 
