@@ -4,7 +4,6 @@ use glam::{UVec2, Vec2, Vec3};
 
 use super::{EYE, GENERATION, downpour};
 use crate::bethesda_space::ENGINE_UNITS_PER_METER;
-use crate::rendering::rain::material::STREAK_BASE_COLOR;
 use crate::rendering::rain::motion::{DropDrift, drop_count, splash_count};
 use crate::rendering::rain::occlusion::{EXTENT, HEIGHT_RANGE, OcclusionWindow};
 use crate::rendering::rain::tuning::{
@@ -12,7 +11,7 @@ use crate::rendering::rain::tuning::{
     STREAK_OPACITY, STREAK_WIDTH_SCALE,
 };
 use crate::rendering::rain::uniform::{Draws, Fall, RainUniform};
-use crate::rendering::rain::{RainInput, RainView};
+use crate::rendering::rain::{RainInput, RainView, StreakMaterial};
 use crate::rendering::shaders;
 
 fn view() -> RainView {
@@ -176,10 +175,15 @@ fn the_looks_of_the_rain_are_handed_over_as_tuned() {
 #[test]
 fn the_streaks_catch_the_light_through_the_raindrop_material_and_the_splashes_as_it_is() {
     let light = Vec3::new(0.2, 0.4, 0.8);
+    let base_color = Vec3::new(0.5, 0.25, 1.0);
 
     let uniform = uniform_of(
         &RainInput {
             tint: light,
+            streak_material: StreakMaterial {
+                base_color,
+                ..StreakMaterial::FALLBACK
+            },
             ..downpour()
         },
         &view(),
@@ -188,7 +192,7 @@ fn the_streaks_catch_the_light_through_the_raindrop_material_and_the_splashes_as
     assert_eq!(uniform.tint, light.extend(0.0).to_array());
     assert_eq!(
         uniform.streak_tint,
-        (light * STREAK_BASE_COLOR).extend(0.0).to_array()
+        (light * base_color).extend(0.0).to_array()
     );
 }
 

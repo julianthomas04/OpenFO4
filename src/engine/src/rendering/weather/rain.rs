@@ -5,10 +5,12 @@ use glam::Vec3;
 
 use super::frame::WeatherFrame;
 use super::library::WeatherLibrary;
+use super::particle_material::ParticleMaterialData;
 use crate::bethesda_space::UNITS_TO_ENGINE;
 use crate::random::SplitMix64;
+use crate::rendering::effects::pipeline::wgpu_factor;
 use crate::rendering::rain::impacts::rain_impacts;
-use crate::rendering::rain::{RainInput, wind_drift};
+use crate::rendering::rain::{RainInput, StreakMaterial, wind_drift};
 use crate::rendering::water::displacement::state::QUAD_SIZE;
 use crate::weather::{WeatherFlag, WeatherId};
 
@@ -57,7 +59,21 @@ pub fn rain_input(
         texture: params.texture.clone(),
         wind: wind_drift(frame.wind.speed, frame.wind.heading),
         tint,
+        streak_material: params
+            .material_data
+            .as_ref()
+            .map_or(StreakMaterial::FALLBACK, streak_material),
     }))
+}
+
+/// The weathers without material data are reported once by the library loader.
+fn streak_material(material: &ParticleMaterialData) -> StreakMaterial {
+    StreakMaterial {
+        blend: material
+            .blend_factors()
+            .map(|(src, dst)| (wgpu_factor(src), wgpu_factor(dst))),
+        base_color: material.base_color(),
+    }
 }
 
 /// Where the rain strikes the water around the player.
@@ -98,6 +114,7 @@ mod tests {
     use glam::Vec2;
 
     use super::*;
+    use crate::assets::types::effect_material::BlendFactor;
     use crate::rendering::weather::PrecipitationFrame;
     use crate::rendering::weather::WindFrame;
     use crate::rendering::weather::frame::fixtures::{A, B, DAY, dry, library, settled, weather};
@@ -149,6 +166,68 @@ mod tests {
         let rain = input(&library, &frame_of(&library, A));
 
         assert_eq!(rain.texture, None);
+    }
+
+    #[test]
+    fn the_streaks_blend_and_colour_as_the_material_data_says() {
+        let library = library();
+
+        let rain = input(&library, &frame_of(&library, A));
+
+        assert_eq!(
+            rain.streak_material,
+            StreakMaterial {
+                blend: Some((wgpu::BlendFactor::SrcAlpha, wgpu::BlendFactor::One)),
+                base_color: Vec3::new(205.0, 213.0, 220.0) / 255.0,
+            }
+        );
+    }
+
+    #[test]
+    fn every_stored_blend_reaches_the_streaks() {
+        let mut multiplicative = weather("A");
+        let material = multiplicative
+            .precipitation
+            .as_mut()
+            .unwrap()
+            .material_data
+            .as_mut()
+            .unwrap();
+        material.blend_src = BlendFactor::DstColor;
+        material.blend_dst = BlendFactor::One;
+        let mut unblended = weather("A");
+        unblended
+            .precipitation
+            .as_mut()
+            .unwrap()
+            .material_data
+            .as_mut()
+            .unwrap()
+            .blend_enabled = false;
+
+        let blend_of = |weather| {
+            let library = library_of(vec![weather]);
+            input(&library, &frame_of(&library, A))
+                .streak_material
+                .blend
+        };
+
+        assert_eq!(
+            blend_of(multiplicative),
+            Some((wgpu::BlendFactor::Dst, wgpu::BlendFactor::One))
+        );
+        assert_eq!(blend_of(unblended), None);
+    }
+
+    #[test]
+    fn a_weather_without_material_data_falls_back_to_the_raindrop_material() {
+        let mut without = weather("A");
+        without.precipitation.as_mut().unwrap().material_data = None;
+        let library = library_of(vec![without]);
+
+        let rain = input(&library, &frame_of(&library, A));
+
+        assert_eq!(rain.streak_material, StreakMaterial::FALLBACK);
     }
 
     #[test]

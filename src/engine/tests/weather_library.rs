@@ -2,9 +2,10 @@
 //! in-memory `SQLite` database, seeded with plain SQL.
 
 use openfo4::assets::db::DbClient;
+use openfo4::assets::types::effect_material::BlendFactor;
 use openfo4::rendering::lighting::exterior_weather::{ExteriorWeatherError, ExteriorWeatherSlots};
 use openfo4::rendering::weather::{
-    StartupWeather, StartupWeatherError, WeatherLibrary, WeatherLibraryError,
+    StartupWeather, StartupWeatherError, WeatherDef, WeatherLibrary, WeatherLibraryError,
 };
 use openfo4::weather::{SoundKind, WeatherId, WeatherTableError};
 use rusqlite::Connection;
@@ -186,6 +187,17 @@ fn seeded(climate_weathers: &Json) -> Connection {
             ("form_key", text(RAIN_GEOMETRY)),
             ("particle_texture", text("textures\\rain.dds")),
             (
+                "particle_material_data",
+                text(
+                    &json!({
+                        "blend_enabled": true, "blend_src": "src_alpha", "blend_dst": "one",
+                        "base_color": [205, 213, 220],
+                        "depth_write": false, "effect_lighting": true, "lighting_influence": 1.0,
+                    })
+                    .to_string(),
+                ),
+            ),
+            (
                 "data",
                 text(
                     &json!({
@@ -237,10 +249,74 @@ fn the_library_loads_every_climate_weather_from_the_database() {
         rain.precipitation
             .as_ref()
             .and_then(|rain| rain.texture.as_deref()),
-        Some("textures\\rain.dds")
+        Some("rain.dds")
     );
     assert!(rain.clouds.is_some());
     assert_eq!(rain.sounds[0].kind, SoundKind::Precipitation);
+}
+
+fn rain_weather(library: &WeatherLibrary) -> &WeatherDef {
+    library
+        .weathers()
+        .iter()
+        .find(|weather| weather.form_key == RAIN)
+        .unwrap()
+}
+
+#[test]
+fn the_rain_carries_the_material_data_of_its_particle_geometry() {
+    let library = load(seeded(&two_weathers())).unwrap();
+
+    let material = rain_weather(&library)
+        .precipitation
+        .as_ref()
+        .and_then(|rain| rain.material_data)
+        .unwrap();
+
+    assert_eq!(
+        material.blend_factors(),
+        Some((BlendFactor::SrcAlpha, BlendFactor::One))
+    );
+    assert_eq!(material.base_color, [205, 213, 220]);
+}
+
+#[test]
+fn a_database_without_the_material_data_column_loads_the_rain_without_it() {
+    let conn = seeded(&two_weathers());
+    conn.execute_batch(
+        "ALTER TABLE shader_particle_geometries DROP COLUMN particle_material_data;",
+    )
+    .unwrap();
+
+    let library = load(conn).unwrap();
+
+    let rain = rain_weather(&library).precipitation.as_ref().unwrap();
+    assert_eq!(rain.material_data, None);
+    assert!(rain.texture.is_some());
+}
+
+#[test]
+fn malformed_material_data_fails_the_library_naming_the_weather() {
+    let conn = seeded(&two_weathers());
+    conn.execute(
+        "UPDATE shader_particle_geometries SET particle_material_data = '{ not json'",
+        [],
+    )
+    .unwrap();
+
+    let error = load(conn).unwrap_err();
+
+    assert!(
+        matches!(
+            &error,
+            WeatherLibraryError::Lighting(ExteriorWeatherError::Malformed {
+                weather,
+                field: "particle material data",
+                ..
+            }) if weather == RAIN
+        ),
+        "{error:?}"
+    );
 }
 
 #[test]

@@ -4,6 +4,8 @@ use glam::{UVec2, Vec2};
 use serde::Deserialize;
 
 use super::error::WeatherLibraryError;
+use super::particle_material::ParticleMaterialData;
+use crate::assets::db::schema::WEATHER_LIBRARY_TABLES_FIX;
 use crate::assets::db::weather_library::ParticleGeometryRow;
 use crate::rendering::effects::material_bindings::path_below_textures;
 use crate::rendering::lighting::exterior_weather::parse_json;
@@ -21,6 +23,9 @@ pub struct PrecipitationParams {
     pub texture: Option<Arc<str>>,
     /// The authored BGEM path.
     pub material: Option<String>,
+    /// What the BGEM says of the blend and colour; `None` when the database has none, in which
+    /// case the renderer falls back to the material the game's rain uses.
+    pub material_data: Option<ParticleMaterialData>,
     pub gravity_velocity: f32,
     pub rotation_velocity: f32,
     pub particle_size: Vec2,
@@ -81,6 +86,21 @@ impl PrecipitationParams {
                 });
             }
         }
+        let material_data = row
+            .particle_material_data
+            .as_deref()
+            .map(|json| parse_json(weather, "particle material data", json))
+            .transpose()?;
+        if material_data.is_none() {
+            crate::utils::warn_once(
+                &format!("particle-material-data:{particle_geometry}"),
+                || {
+                    format!(
+                        "weather {weather} particle geometry {particle_geometry} has no particle material data (the material could not be read, or the database predates it); its rain streaks draw with the fallback raindrop material. Fix: run the installer with `{WEATHER_LIBRARY_TABLES_FIX}`"
+                    )
+                },
+            );
+        }
         Ok(Some(Self {
             texture: row
                 .particle_texture
@@ -88,6 +108,7 @@ impl PrecipitationParams {
                 .map(path_below_textures)
                 .map(Arc::from),
             material: row.particle_material,
+            material_data,
             gravity_velocity: raw.gravity_velocity,
             rotation_velocity: raw.rotation_velocity,
             particle_size: Vec2::new(raw.particle_size_x, raw.particle_size_y),
@@ -131,7 +152,9 @@ pub(super) mod fixtures {
 mod tests {
     use super::fixtures::geometry;
     use super::*;
+    use crate::assets::types::effect_material::BlendFactor;
     use crate::rendering::lighting::exterior_weather::ExteriorWeatherError;
+    use crate::rendering::weather::particle_material::fixtures::raindrop_material;
 
     const WEATHER: &str = "0012AB:Fallout4.esm";
     const GEOMETRY: &str = "00AA01:Fallout4.esm";
@@ -141,6 +164,7 @@ mod tests {
             data: Some(data.to_string()),
             particle_texture: texture.map(str::to_owned),
             particle_material: None,
+            particle_material_data: None,
         }
     }
 
@@ -200,6 +224,7 @@ mod tests {
             data: None,
             particle_texture: Some("t.dds".to_owned()),
             particle_material: None,
+            particle_material_data: None,
         };
         assert!(matches!(
             parse(no_data),
@@ -225,6 +250,7 @@ mod tests {
                 data: Some(data),
                 particle_texture: Some("t.dds".to_owned()),
                 particle_material: None,
+                particle_material_data: None,
             };
             assert!(matches!(
                 parse(row),
@@ -234,6 +260,61 @@ mod tests {
                     ..
                 })) if weather == WEATHER
             ));
+        }
+    }
+
+    #[test]
+    fn the_material_data_of_the_geometry_is_typed() {
+        let mut geometry_row = row(&geometry(0), Some("t.dds"));
+        geometry_row.particle_material_data = Some(raindrop_material().to_string());
+
+        let material = parse(geometry_row).unwrap().unwrap().material_data.unwrap();
+
+        assert_eq!(
+            material.blend_factors(),
+            Some((BlendFactor::SrcAlpha, BlendFactor::One))
+        );
+        assert_eq!(material.base_color, [205, 213, 220]);
+        assert!(!material.depth_write);
+        assert!(material.effect_lighting);
+        assert_eq!(material.lighting_influence, 1.0);
+    }
+
+    #[test]
+    fn a_geometry_without_material_data_has_none() {
+        let params = parse(row(&geometry(0), Some("t.dds"))).unwrap().unwrap();
+
+        assert_eq!(params.material_data, None);
+    }
+
+    #[test]
+    fn malformed_material_data_is_an_error_not_a_fallback() {
+        let mut unknown_factor = raindrop_material();
+        unknown_factor["blend_dst"] = "one_minus_everything".into();
+        let mut out_of_range = raindrop_material();
+        out_of_range["base_color"] = serde_json::json!([256, 0, 0]);
+        let mut incomplete = raindrop_material();
+        incomplete.as_object_mut().unwrap().remove("blend_src");
+        for json in [
+            "{ not json".to_owned(),
+            unknown_factor.to_string(),
+            out_of_range.to_string(),
+            incomplete.to_string(),
+        ] {
+            let mut geometry_row = row(&geometry(0), Some("t.dds"));
+            geometry_row.particle_material_data = Some(json.clone());
+            let error = parse(geometry_row).unwrap_err();
+            assert!(
+                matches!(
+                    &error,
+                    WeatherLibraryError::Lighting(ExteriorWeatherError::Malformed {
+                        weather,
+                        field: "particle material data",
+                        ..
+                    }) if weather == WEATHER
+                ),
+                "{json}: {error:?}"
+            );
         }
     }
 }

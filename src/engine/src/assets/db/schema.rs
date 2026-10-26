@@ -38,6 +38,7 @@ const WEATHER_FOG_COLUMNS: &[&str] = &["fog"];
 const WEATHER_LIBRARY_COLUMNS: &[&str] = &["clouds", "data"];
 const CLIMATE_VOLATILITY_COLUMNS: &[&str] = &["volatility"];
 const PARTICLE_GEOMETRY_COLUMNS: &[&str] = &["data", "particle_texture", "particle_material"];
+const PARTICLE_MATERIAL_DATA_COLUMNS: &[&str] = &["particle_material_data"];
 const CELL_WATER_COLUMNS: &[&str] = &[
     "has_water",
     "no_lod_water",
@@ -113,6 +114,7 @@ pub enum ColumnGroup {
     WeatherLibrary,
     ClimateVolatility,
     ParticleGeometry,
+    ParticleMaterialData,
     CellWater,
     WorldspaceWater,
     ActivatorWater,
@@ -142,6 +144,7 @@ impl std::fmt::Display for ColumnGroup {
             Self::WeatherLibrary => "weather library",
             Self::ClimateVolatility => "climate volatility",
             Self::ParticleGeometry => "particle geometry",
+            Self::ParticleMaterialData => "particle material data",
             Self::CellWater => "cell water",
             Self::WorldspaceWater => "worldspace water",
             Self::ActivatorWater => "activator water",
@@ -361,6 +364,8 @@ pub struct DbSchema {
     /// The weather clouds and data, the climate volatility and the particle geometry
     /// columns the weather library needs, all or none.
     pub weather_library_columns_present: bool,
+    /// The material data of the particle geometries, which the weather library reads when present.
+    pub particle_material_data_column_present: bool,
     pub cell_water_columns_present: bool,
     pub worldspace_water_columns_present: bool,
     pub activator_water_column_present: bool,
@@ -436,6 +441,12 @@ impl DbSchema {
                 ColumnGroup::ParticleGeometry,
                 "shader_particle_geometries",
                 PARTICLE_GEOMETRY_COLUMNS,
+            )?,
+            particle_material_data_column_present: column_group_present(
+                conn,
+                ColumnGroup::ParticleMaterialData,
+                "shader_particle_geometries",
+                PARTICLE_MATERIAL_DATA_COLUMNS,
             )?,
             cell_water_columns_present: column_group_present(
                 conn,

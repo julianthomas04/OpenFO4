@@ -145,6 +145,7 @@ pub(super) mod fixtures {
     use crate::rendering::lighting::exterior_weather::fixtures::slots_for;
     use crate::rendering::weather::clouds::fixtures::clouds;
     use crate::rendering::weather::data::fixtures::data;
+    use crate::rendering::weather::particle_material::fixtures::raindrop_material;
     use crate::rendering::weather::precipitation::fixtures::geometry;
 
     pub(in crate::rendering::weather) const GEOMETRY_KEY: &str = "00AA01:Fallout4.esm";
@@ -165,6 +166,7 @@ pub(super) mod fixtures {
             data: Some(geometry(0).to_string()),
             particle_texture: Some("textures\\rain.dds".to_owned()),
             particle_material: Some("materials\\rain.bgem".to_owned()),
+            particle_material_data: Some(raindrop_material().to_string()),
         }
     }
 
@@ -236,6 +238,7 @@ mod tests {
             data: Some(crate::rendering::weather::precipitation::fixtures::geometry(1).to_string()),
             particle_texture: None,
             particle_material: None,
+            particle_material_data: None,
         };
         let def = from_rows(&library_row(), Some(geometry)).unwrap();
         assert!(def.precipitation.is_none());

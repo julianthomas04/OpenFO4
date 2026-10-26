@@ -18,6 +18,9 @@ pub struct ParticleGeometryRow {
     pub particle_texture: Option<String>,
     /// The authored BGEM path.
     pub particle_material: Option<String>,
+    /// JSON of the blend, base colour and lighting the BGEM gives; NULL when the material could
+    /// not be read or the database predates the column.
+    pub particle_material_data: Option<String>,
 }
 
 /// `QueryReturnedNoRows` when the weather is unknown.
@@ -42,16 +45,23 @@ pub fn get_weather_library_row(
 /// `QueryReturnedNoRows` when the particle geometry is unknown.
 pub fn get_particle_geometry(
     form_key: &str,
+    material_data_column_present: bool,
     conn: &rusqlite::Connection,
 ) -> rusqlite::Result<ParticleGeometryRow> {
+    let material_data_column = if material_data_column_present {
+        "particle_material_data"
+    } else {
+        "NULL"
+    };
     conn.query_row(
-        "SELECT data, particle_texture, particle_material FROM shader_particle_geometries WHERE form_key = ?",
+        &format!("SELECT data, particle_texture, particle_material, {material_data_column} FROM shader_particle_geometries WHERE form_key = ?"),
         rusqlite::params![form_key],
         |row| {
             Ok(ParticleGeometryRow {
                 data: row.get(0)?,
                 particle_texture: row.get(1)?,
                 particle_material: row.get(2)?,
+                particle_material_data: row.get(3)?,
             })
         },
     )

@@ -9,6 +9,7 @@
 mod common;
 
 use openfo4::assets::db::DbClient;
+use openfo4::assets::types::effect_material::BlendFactor;
 use openfo4::game_flow::spawn_locations::COMMONWEALTH;
 use openfo4::rendering::lighting::exterior_weather::ExteriorWeatherSlots;
 use openfo4::rendering::weather::{CLOUD_LAYER_COUNT, StartupWeather, WeatherDef, WeatherLibrary};
@@ -82,7 +83,7 @@ fn the_commonwealth_climate_loads_all_its_weathers() {
 
 #[test]
 #[ignore = "needs a converted installation"]
-fn only_the_two_rainy_weathers_have_precipitation_and_a_resolved_texture() {
+fn only_the_two_rainy_weathers_have_precipitation_a_resolved_texture_and_material() {
     let library = library();
 
     let mut rainy: Vec<&str> = library
@@ -98,6 +99,15 @@ fn only_the_two_rainy_weathers_have_precipitation_and_a_resolved_texture() {
         let rain = weather.precipitation.as_ref().unwrap();
         assert!(rain.texture.is_some(), "{key} has no rain texture");
         assert!(rain.material.is_some(), "{key} has no rain material");
+        let material = rain
+            .material_data
+            .unwrap_or_else(|| panic!("{key} has no rain material data"));
+        assert_eq!(
+            material.blend_factors(),
+            Some((BlendFactor::SrcAlpha, BlendFactor::One)),
+            "{key}"
+        );
+        assert_eq!(material.base_color, [205, 213, 220], "{key}");
         assert!(
             rain.box_size > 0 && rain.particle_density > 0.0,
             "{key}: {rain:?}"

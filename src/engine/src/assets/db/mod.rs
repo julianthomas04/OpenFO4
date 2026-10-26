@@ -553,7 +553,11 @@ impl DbClient {
         &self,
         form_key: &str,
     ) -> rusqlite::Result<weather_library::ParticleGeometryRow> {
-        weather_library::get_particle_geometry(form_key, &self.conn)
+        weather_library::get_particle_geometry(
+            form_key,
+            self.schema().particle_material_data_column_present,
+            &self.conn,
+        )
     }
 
     /// `QueryReturnedNoRows` when the climate is unknown.

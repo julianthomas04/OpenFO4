@@ -8,7 +8,7 @@ mod splash;
 
 use glam::{UVec2, Vec2, Vec3};
 
-use super::RainInput;
+use super::{RainInput, StreakMaterial};
 
 const EYE: Vec3 = Vec3::new(1234.5, 300.0, -987.25);
 const STREAK_TEXTURE: &str = "effects\\test_rain.dds";
@@ -28,5 +28,6 @@ fn downpour() -> RainInput {
         texture: Some(STREAK_TEXTURE.into()),
         wind: Vec2::ZERO,
         tint: Vec3::ONE,
+        streak_material: StreakMaterial::FALLBACK,
     }
 }

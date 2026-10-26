@@ -24,6 +24,7 @@ use glam::{UVec2, Vec2, Vec3};
 use wgpu::util::DeviceExt;
 
 pub use assets::{RainAssetStatus, RainTextureState};
+pub use material::StreakMaterial;
 use motion::DropDrift;
 pub use motion::wind_drift;
 use occlusion::OcclusionMap;
@@ -63,6 +64,8 @@ pub struct RainInput {
     pub wind: Vec2,
     /// Linear colour of the rain: the light it catches, with any lightning flash.
     pub tint: Vec3,
+    /// How the streaks blend with the scene and the colour their texture is multiplied by.
+    pub streak_material: StreakMaterial,
 }
 
 /// The camera and the clock of the frame.
@@ -103,6 +106,8 @@ pub struct RainRenderer {
     bind_group: wgpu::BindGroup,
     drift: DropDrift,
     draws: Draws,
+    /// The streak pipeline of the material the last [`Self::prepare`] worked out.
+    streaks: Option<wgpu::RenderPipeline>,
 }
 
 impl RainRenderer {
@@ -143,6 +148,7 @@ impl RainRenderer {
             bind_group,
             drift: DropDrift::default(),
             draws: Draws::NONE,
+            streaks: None,
         }
     }
 
@@ -156,6 +162,7 @@ impl RainRenderer {
         self.drift.advance(fall.velocity, view.time, fall.edge);
         let wanted = Draws::wanted(input, view);
         self.draws = Draws::NONE;
+        self.streaks = None;
         if wanted.is_none() {
             return;
         }
@@ -181,6 +188,13 @@ impl RainRenderer {
             drops: self.textures.streaks().map_or(0, |_| wanted.drops),
             splashes: self.textures.splashes().map_or(0, |_| wanted.splashes),
         };
+        if self.draws.drops > 0 {
+            self.streaks = Some(
+                self.pipelines
+                    .streaks(gpu.device, input.streak_material.blend)
+                    .clone(),
+            );
+        }
     }
 
     /// Draws the rain over `target` where the scene's `depth` does not hide it: the rain the
@@ -195,6 +209,7 @@ impl RainRenderer {
         profiler: &GpuProfiler,
     ) {
         let draws = std::mem::replace(&mut self.draws, Draws::NONE);
+        let streaks = self.streaks.take();
         if draws.is_none() {
             return;
         }
@@ -220,8 +235,8 @@ impl RainRenderer {
         });
         pass.set_bind_group(0, &self.bind_group, &[]);
         frame_binding.bind(&mut pass);
-        if draws.drops > 0 {
-            pass.set_pipeline(&self.pipelines.streaks);
+        if let Some(streaks) = streaks.filter(|_| draws.drops > 0) {
+            pass.set_pipeline(&streaks);
             pass.draw(0..QUAD_VERTICES, 0..draws.drops);
         }
         if draws.splashes > 0 {

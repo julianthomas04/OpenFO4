@@ -9,7 +9,7 @@ use super::scene::{
 use super::{EYE, downpour};
 use crate::rendering::rain::motion::{drop_count, splash_count};
 use crate::rendering::rain::uniform::{Draws, Fall};
-use crate::rendering::rain::{RainInput, RainTextureState};
+use crate::rendering::rain::{RainInput, RainTextureState, StreakMaterial};
 
 #[test]
 fn both_pipelines_are_created_against_the_real_frame_layout() {
@@ -220,23 +220,86 @@ fn brightest_rise(pixels: &[Vec4]) -> f32 {
         .fold(0.0, f32::max)
 }
 
-#[test]
-fn the_streaks_add_light_to_the_scene_and_never_darken_it() {
-    let Some(mut scene) = Scene::new("the_streaks_add_light_to_the_scene", &[]) else {
-        return;
-    };
+fn darkest(pixels: &[Vec4]) -> f32 {
+    pixels
+        .iter()
+        .map(|pixel| pixel.truncate().min_element())
+        .fold(f32::INFINITY, f32::min)
+}
+
+/// The raindrop material the game ships: source alpha onto one.
+const ADDITIVE_RAINDROPS: StreakMaterial = StreakMaterial {
+    blend: Some((wgpu::BlendFactor::SrcAlpha, wgpu::BlendFactor::One)),
+    base_color: Vec3::new(205.0 / 255.0, 213.0 / 255.0, 220.0 / 255.0),
+};
+
+const STRAIGHT_ALPHA_RAINDROPS: StreakMaterial = StreakMaterial {
+    blend: Some((
+        wgpu::BlendFactor::SrcAlpha,
+        wgpu::BlendFactor::OneMinusSrcAlpha,
+    )),
+    ..ADDITIVE_RAINDROPS
+};
+
+/// A scene whose streak texture is a mid grey, darker than the scene behind it.
+fn grey_streak_scene(test: &str) -> Option<Scene> {
+    let scene = Scene::new(test, &[])?;
     write_texture(scene.assets.path(), STREAK_FILE, UVec2::new(4, 4), |_| {
         [128, 128, 128, 255]
     });
+    Some(scene)
+}
 
-    let pixels = scene.draw(&downpour(), Look::AHEAD);
+#[test]
+fn the_streaks_add_light_to_the_scene_and_never_darken_it() {
+    let Some(mut scene) = grey_streak_scene("the_streaks_add_light_to_the_scene") else {
+        return;
+    };
+    let additive = RainInput {
+        streak_material: ADDITIVE_RAINDROPS,
+        ..downpour()
+    };
+
+    let pixels = scene.draw(&additive, Look::AHEAD);
 
     assert!(lit(&pixels).len() > 200, "{} pixels", lit(&pixels).len());
-    let darkest = pixels
-        .iter()
-        .map(|pixel| pixel.truncate().min_element())
-        .fold(f32::INFINITY, f32::min);
-    assert!(darkest >= BACKGROUND - 1e-3, "{darkest}");
+    assert!(
+        darkest(&pixels) >= BACKGROUND - 1e-3,
+        "{}",
+        darkest(&pixels)
+    );
+}
+
+#[test]
+fn each_weather_blends_its_streaks_as_its_material_says() {
+    let Some(mut scene) = grey_streak_scene("each_weather_blends_its_streaks") else {
+        return;
+    };
+    let with = |streak_material| RainInput {
+        streak_material,
+        ..downpour()
+    };
+
+    let straight = scene.draw(&with(STRAIGHT_ALPHA_RAINDROPS), Look::AHEAD);
+    let additive = scene.draw(&with(ADDITIVE_RAINDROPS), Look::AHEAD);
+    let straight_again = scene.draw(&with(STRAIGHT_ALPHA_RAINDROPS), Look::AHEAD);
+
+    assert!(
+        darkest(&straight) < BACKGROUND - 0.05,
+        "{}",
+        darkest(&straight)
+    );
+    assert!(
+        darkest(&additive) >= BACKGROUND - 1e-3,
+        "{}",
+        darkest(&additive)
+    );
+    assert_eq!(straight_again, straight);
+    assert_eq!(
+        scene.rain.pipelines.streak_pipeline_count(),
+        2,
+        "one streak pipeline per blend, reused"
+    );
 }
 
 #[test]

@@ -1,12 +1,16 @@
 //! The pipelines of the rain pass and the bind group they share. The pass lays out its own
-//! groups: the rain's at 0 and the frame's at 1. Both pipelines draw instanced quads of four
+//! groups: the rain's at 0 and the frame's at 1. The pipelines draw instanced quads of four
 //! vertices, blended with the scene as their materials say and tested against its depth without
-//! writing it.
+//! writing it. The streaks have one pipeline per blend their materials ask for, created the
+//! first time a weather asks for it.
 
-use super::material::{SPLASH_BLEND, STREAK_BLEND};
+use std::collections::HashMap;
+
+use super::material::{SPLASH_BLEND, StreakMaterial};
 use super::uniform::RainUniform;
+use crate::rendering::effects::pipeline::{BlendFactors, blend_state};
 use crate::rendering::post::hdr_target::HDR_FORMAT;
-use crate::rendering::shaders::{self, ShaderSource};
+use crate::rendering::shaders;
 use crate::rendering::texture::Texture;
 
 /// The corners of one drop or splash.
@@ -20,11 +24,15 @@ const OCCLUSION_BINDING: u32 = 4;
 
 pub(super) struct RainPipelines {
     pub layout: wgpu::BindGroupLayout,
-    pub streaks: wgpu::RenderPipeline,
+    pipeline_layout: wgpu::PipelineLayout,
+    module: wgpu::ShaderModule,
+    /// Keyed by the blend of the streak material; `None` draws unblended.
+    streaks: HashMap<Option<BlendFactors>, wgpu::RenderPipeline>,
     pub splashes: wgpu::RenderPipeline,
 }
 
 impl RainPipelines {
+    /// Creates the streak pipeline of [`StreakMaterial::FALLBACK`] up front.
     pub fn new(device: &wgpu::Device, frame_layout: &wgpu::BindGroupLayout) -> Self {
         let layout = bind_group_layout(device);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -32,26 +40,47 @@ impl RainPipelines {
             bind_group_layouts: &[Some(&layout), Some(frame_layout)],
             immediate_size: 0,
         });
-        let shader = &shaders::RAIN;
-        Self {
-            streaks: create_pipeline(
+        let module = shaders::RAIN.compile(device);
+        let splashes = create_pipeline(
+            device,
+            "Rain Splash Pipeline",
+            &module,
+            &pipeline_layout,
+            ("vs_splash", "fs_splash"),
+            Some(SPLASH_BLEND),
+        );
+        let mut pipelines = Self {
+            layout,
+            pipeline_layout,
+            module,
+            streaks: HashMap::new(),
+            splashes,
+        };
+        pipelines.streaks(device, StreakMaterial::FALLBACK.blend);
+        pipelines
+    }
+
+    /// The streak pipeline of `blend`, created on first use.
+    pub fn streaks(
+        &mut self,
+        device: &wgpu::Device,
+        blend: Option<BlendFactors>,
+    ) -> &wgpu::RenderPipeline {
+        self.streaks.entry(blend).or_insert_with(|| {
+            create_pipeline(
                 device,
                 "Rain Streak Pipeline",
-                shader,
-                &pipeline_layout,
+                &self.module,
+                &self.pipeline_layout,
                 ("vs_streak", "fs_streak"),
-                STREAK_BLEND,
-            ),
-            splashes: create_pipeline(
-                device,
-                "Rain Splash Pipeline",
-                shader,
-                &pipeline_layout,
-                ("vs_splash", "fs_splash"),
-                SPLASH_BLEND,
-            ),
-            layout,
-        }
+                blend,
+            )
+        })
+    }
+
+    #[cfg(test)]
+    pub fn streak_pipeline_count(&self) -> usize {
+        self.streaks.len()
     }
 }
 
@@ -160,31 +189,31 @@ pub(super) fn bind_group(
     })
 }
 
+/// The target's alpha stays as it is.
 fn create_pipeline(
     device: &wgpu::Device,
     label: &str,
-    shader: &ShaderSource,
+    module: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
     (vertex_entry, fragment_entry): (&str, &str),
-    blend: wgpu::BlendState,
+    blend: Option<BlendFactors>,
 ) -> wgpu::RenderPipeline {
-    let module = shader.compile(device);
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
         layout: Some(layout),
         vertex: wgpu::VertexState {
-            module: &module,
+            module,
             entry_point: Some(vertex_entry),
             buffers: &[],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
         fragment: Some(wgpu::FragmentState {
-            module: &module,
+            module,
             entry_point: Some(fragment_entry),
             targets: &[Some(wgpu::ColorTargetState {
                 format: HDR_FORMAT,
-                blend: Some(blend),
-                write_mask: wgpu::ColorWrites::ALL,
+                blend: blend.map(blend_state),
+                write_mask: wgpu::ColorWrites::COLOR,
             })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
