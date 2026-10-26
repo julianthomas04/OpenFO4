@@ -3,11 +3,14 @@
 use super::lightning::{LightningStrike, StrikeClock, StrikeSource, strike_at, strike_source};
 use super::roll::{pick_weighted, roll_interval_hours, transition_hours};
 use crate::random::{RandomSource, SplitMix64};
-use crate::weather::{TransitionSide, WeatherId, WeatherRollTable, WeatherRollTraits};
+use crate::weather::{TableWeather, TransitionSide, WeatherId, WeatherRollTable};
 
 mod edit;
 
 pub use edit::WeatherEditError;
+
+/// Mixed into the seed of the lightning stream, so that the two streams of a seed differ.
+const LIGHTNING_STREAM_SALT: u64 = 0xD6E8_FEB8_6659_FD93;
 
 /// What one frame tells the cycle.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -28,7 +31,8 @@ pub struct WeatherSnapshot<'a> {
     pub progress: f32,
     /// The strikes of the last step.
     pub strikes: &'a [LightningStrike],
-    /// Game hours until the next roll; 0 while one waits for a transition to end.
+    /// Game hours until the next roll, which counts from the moment the weather settles; 0 when a
+    /// roll is due.
     pub hours_to_next_roll: f32,
 }
 
@@ -39,147 +43,200 @@ impl WeatherSnapshot<'_> {
     }
 }
 
-/// The weather of a climate over time. It rolls for a new weather now and then, moves to it in a
-/// transition and lets storms strike. `R` supplies the chance.
+/// The way from the weather that was current to the one that is, in game hours on the clock.
+#[derive(Debug, Clone, Copy)]
+struct Transition {
+    from: TableWeather,
+    start: f64,
+    /// Above 0.
+    duration: f64,
+}
+
+impl Transition {
+    fn end(&self) -> f64 {
+        self.start + self.duration
+    }
+
+    /// How far the transition has come at `clock_hours`, `0..=1`.
+    fn progress(&self, clock_hours: f64) -> f32 {
+        ((clock_hours - self.start) / self.duration).clamp(0.0, 1.0) as f32
+    }
+}
+
+/// The weather of a climate over time. A weather stays settled for an interval that the climate
+/// and the weather set. Then the cycle rolls for a weather by the chances of the climate, and a
+/// roll that picks another weather starts the transition to it. Storms strike while their thunder
+/// shows.
+///
+/// Every time is in game hours on the world clock and absolute: the end of the transition and the
+/// next roll are deadlines, so the state at a clock reading does not depend on the steps that led
+/// there. `R` supplies the chance. The rolls and the lightning draw from streams of their own, so
+/// the lightning cannot change which weathers come.
 #[derive(Debug)]
 pub struct WeatherCycle<R = SplitMix64> {
     table: WeatherRollTable,
-    rng: R,
-    current: WeatherId,
-    previous: Option<WeatherId>,
-    progress: f32,
-    hours_until_roll: f32,
+    roll_rng: R,
+    strike_rng: R,
+    current: TableWeather,
+    transition: Option<Transition>,
+    /// Counts from the end of the transition, so it is never due while one runs.
+    next_roll_at: f64,
     clock_hours: f64,
     strike_clock: StrikeClock,
     requested_strikes: u32,
     strikes: Vec<LightningStrike>,
+    strike_sources: Vec<StrikeSource>,
+}
+
+impl WeatherCycle {
+    /// A cycle whose two streams of chance are derived from `seed`: the same seed brings the same
+    /// weathers in the same order, however the clock is stepped and whether or not it storms.
+    pub fn seeded(table: WeatherRollTable, seed: u64, clock_hours: f64) -> Self {
+        let roll_rng = SplitMix64::new(seed);
+        let strike_rng = SplitMix64::new(seed ^ LIGHTNING_STREAM_SALT);
+        Self::new(table, roll_rng, strike_rng, clock_hours)
+    }
 }
 
 impl<R: RandomSource> WeatherCycle<R> {
     /// Starts on the initial weather of the climate, settled, with the first roll one interval
-    /// away. `clock_hours` is the `total_hours` of the world clock now.
-    pub fn new(table: WeatherRollTable, rng: R, clock_hours: f64) -> Self {
-        let current = table.initial();
+    /// away. `clock_hours` is the `total_hours` of the world clock now, a finite number. The rolls
+    /// draw from `roll_rng` and the lightning from `strike_rng`.
+    pub fn new(table: WeatherRollTable, roll_rng: R, strike_rng: R, clock_hours: f64) -> Self {
+        let current = table.initial_weather();
         let mut cycle = Self {
             table,
-            rng,
+            roll_rng,
+            strike_rng,
             current,
-            previous: None,
-            progress: 1.0,
-            hours_until_roll: 0.0,
+            transition: None,
+            next_roll_at: clock_hours,
             clock_hours,
             strike_clock: StrikeClock::default(),
             requested_strikes: 0,
             strikes: Vec::new(),
+            strike_sources: Vec::new(),
         };
-        cycle.restart_roll_clock();
+        cycle.schedule_roll_after(clock_hours);
         cycle
     }
 
-    /// Moves the cycle on to the clock hours and the world seconds of one frame. The hours that
-    /// have passed drive the transition and the rolls, so the cycle follows the time scale, the
-    /// pause and the Pip-Boy as the clock does; a clock that went back moves nothing and the cycle
-    /// carries on from there. The world seconds drive the lightning.
+    /// Moves the cycle on to the clock hours and the world seconds of one frame. The clock hours
+    /// drive the transition and the rolls, so the cycle follows the time scale, the pause and the
+    /// Pip-Boy as the clock does; a clock that went back moves nothing and the cycle carries on
+    /// from there. The world seconds drive the lightning.
+    ///
+    /// A roll takes place at its deadline, however far the step overshoots it. A step rolls at most
+    /// once: when it passes several deadlines, the next step rolls again.
     pub fn advance(&mut self, step: WeatherStep) {
         self.strikes.clear();
-        let hours = self.elapsed_hours(step.clock_hours);
-        self.progress_transition(hours);
-        self.hours_until_roll -= hours;
-        if self.previous.is_none() && self.hours_until_roll <= 0.0 {
+        self.follow_clock(step.clock_hours);
+        if self.next_roll_at <= self.clock_hours {
             self.roll();
         }
+        self.settle_arrived_transition();
         self.strike(step.world_seconds);
     }
 
     pub fn snapshot(&self) -> WeatherSnapshot<'_> {
         WeatherSnapshot {
-            current: self.current,
-            previous: self.previous,
-            progress: self.progress,
+            current: self.current.id(),
+            previous: self.transition.map(|transition| transition.from.id()),
+            progress: self.progress(),
             strikes: &self.strikes,
-            hours_to_next_roll: self.hours_until_roll.max(0.0),
+            hours_to_next_roll: (self.next_roll_at - self.clock_hours).max(0.0) as f32,
         }
     }
 
-    fn traits(&self, weather: WeatherId) -> &WeatherRollTraits {
-        self.table
-            .traits(weather)
-            .expect("the cycle only holds weathers of its table")
+    fn progress(&self) -> f32 {
+        self.transition
+            .map_or(1.0, |transition| transition.progress(self.clock_hours))
     }
 
-    /// The game hours since the last step; none when the clock went back or is not a number.
-    fn elapsed_hours(&mut self, clock_hours: f64) -> f32 {
+    /// Takes the clock reading of a step. A reading that is not a number is ignored. A clock that
+    /// went back takes the deadlines back with it, so the cycle keeps its place instead of
+    /// rewinding.
+    fn follow_clock(&mut self, clock_hours: f64) {
         if !clock_hours.is_finite() {
-            return 0.0;
-        }
-        let elapsed = clock_hours - self.clock_hours;
-        self.clock_hours = clock_hours;
-        if elapsed > 0.0 { elapsed as f32 } else { 0.0 }
-    }
-
-    fn progress_transition(&mut self, hours: f32) {
-        if self.previous.is_none() {
             return;
         }
-        let duration = transition_hours(self.traits(self.current).trans_delta_raw);
-        self.progress += hours / duration;
-        if self.progress >= 1.0 {
-            self.settle();
+        let shift = clock_hours - self.clock_hours;
+        if shift < 0.0 {
+            self.next_roll_at += shift;
+            if let Some(transition) = &mut self.transition {
+                transition.start += shift;
+            }
+        }
+        self.clock_hours = clock_hours;
+    }
+
+    fn settle_arrived_transition(&mut self) {
+        if self
+            .transition
+            .is_some_and(|transition| self.clock_hours >= transition.end())
+        {
+            self.transition = None;
         }
     }
 
-    fn settle(&mut self) {
-        self.previous = None;
-        self.progress = 1.0;
-    }
-
-    /// Leaves the current weather for `to` and schedules the next roll by the new weather.
-    fn begin_transition(&mut self, to: WeatherId) {
-        self.previous = Some(self.current);
-        self.current = to;
-        self.progress = 0.0;
-        self.restart_roll_clock();
-    }
-
-    /// A roll that picks another weather starts the transition to it. Either way the next roll
-    /// is a whole interval away, whatever time the clock overshot this one by.
+    /// Rolls at the deadline. A roll that picks another weather starts the transition to it, one
+    /// that keeps the weather only schedules the next roll.
     fn roll(&mut self) {
-        let picked = pick_weighted(&self.table, &mut self.rng);
-        if picked == self.current {
-            self.restart_roll_clock();
+        let deadline = self.next_roll_at;
+        let picked = pick_weighted(&self.table, &mut self.roll_rng);
+        if picked.id() == self.current.id() {
+            self.schedule_roll_after(deadline);
         } else {
-            self.begin_transition(picked);
+            self.begin_transition(picked, deadline);
         }
     }
 
-    fn restart_roll_clock(&mut self) {
-        let volatility_mult = self.traits(self.current).volatility_mult;
-        self.hours_until_roll =
-            roll_interval_hours(self.table.climate_volatility(), volatility_mult);
+    /// Leaves the current weather for `to` at `start` hours on the clock.
+    fn begin_transition(&mut self, to: TableWeather, start: f64) {
+        let transition = Transition {
+            from: self.current,
+            start,
+            duration: transition_hours(to.traits().trans_delta_raw),
+        };
+        self.current = to;
+        self.transition = Some(transition);
+        self.schedule_roll_after(transition.end());
+    }
+
+    /// Schedules the next roll one interval of the current weather after `settled_at`, the hours on
+    /// the clock at which it has settled.
+    fn schedule_roll_after(&mut self, settled_at: f64) {
+        let interval = roll_interval_hours(
+            self.table.climate_volatility(),
+            self.current.traits().volatility_mult,
+        );
+        self.next_roll_at = settled_at + interval;
     }
 
     fn strike(&mut self, world_seconds: f32) {
+        let current = self.current.id();
         for _ in 0..std::mem::take(&mut self.requested_strikes) {
-            let strike = strike_at(self.current, 1.0, &mut self.rng);
+            let strike = strike_at(current, 1.0, &mut self.strike_rng);
             self.strikes.push(strike);
         }
-        let sources: Vec<StrikeSource> = sides(self.current, self.previous, self.progress)
-            .filter_map(|(weather, side)| strike_source(weather, self.traits(weather), side))
-            .collect();
-        if let Some(strike) = self
-            .strike_clock
-            .advance(&sources, world_seconds, &mut self.rng)
-        {
-            self.strikes.push(strike);
-        }
+        let previous = self.transition.map(|transition| transition.from);
+        let sides = sides(self.current, previous, self.progress());
+        self.strike_sources.clear();
+        self.strike_sources.extend(
+            sides.filter_map(|(weather, side)| strike_source(weather.id(), weather.traits(), side)),
+        );
+        let strike =
+            self.strike_clock
+                .advance(&self.strike_sources, world_seconds, &mut self.strike_rng);
+        self.strikes.extend(strike);
     }
 }
 
-fn sides(
-    current: WeatherId,
-    previous: Option<WeatherId>,
+fn sides<W: Copy>(
+    current: W,
+    previous: Option<W>,
     progress: f32,
-) -> impl Iterator<Item = (WeatherId, TransitionSide)> + use<> {
+) -> impl Iterator<Item = (W, TransitionSide)> + use<W> {
     let sides = match previous {
         Some(previous) => [
             Some((current, TransitionSide::Incoming { progress })),
@@ -192,85 +249,13 @@ fn sides(
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::{A, B, C, ScriptedRandom, calm, stormy, table};
+    use super::super::test_support::{
+        A, B, C, Place, Run, assert_same_place, busy_climate, calm, calm_run, storm_run, stormy,
+        table,
+    };
     use super::*;
     use crate::sim::commands::WeatherEdit;
     use crate::weather::FadeRange;
-
-    /// A cycle with a clock of its own, advanced by game hours and world seconds.
-    pub(super) struct Run {
-        pub cycle: WeatherCycle<ScriptedRandom>,
-        hours: f64,
-    }
-
-    /// Where a cycle stands, without the strikes: the current and the previous weather, the
-    /// progress and the hours to the next roll.
-    pub(super) type Place = (WeatherId, Option<WeatherId>, f32, f32);
-
-    impl Run {
-        pub fn new(table: WeatherRollTable, rng: ScriptedRandom) -> Self {
-            Self {
-                cycle: WeatherCycle::new(table, rng, 0.0),
-                hours: 0.0,
-            }
-        }
-
-        pub fn hours(&mut self, hours: f64) {
-            self.jump_to(self.hours + hours);
-        }
-
-        pub fn jump_to(&mut self, clock_hours: f64) {
-            self.hours = clock_hours;
-            self.cycle.advance(WeatherStep {
-                clock_hours,
-                world_seconds: 0.0,
-            });
-        }
-
-        pub fn seconds(&mut self, world_seconds: f32) {
-            self.cycle.advance(WeatherStep {
-                clock_hours: self.hours,
-                world_seconds,
-            });
-        }
-
-        pub fn snapshot(&self) -> WeatherSnapshot<'_> {
-            self.cycle.snapshot()
-        }
-
-        pub fn place(&self) -> Place {
-            let snapshot = self.snapshot();
-            (
-                snapshot.current,
-                snapshot.previous,
-                snapshot.progress,
-                snapshot.hours_to_next_roll,
-            )
-        }
-
-        pub fn edit(&mut self, edit: WeatherEdit) {
-            self.cycle.apply(edit).unwrap();
-        }
-    }
-
-    /// Three calm weathers of the chances 50, 30 and 20 in a climate without volatility: a roll
-    /// every 8 h, and the tickets 0..50, 50..80 and 80..100 pick A, B and C. Each takes 1.5625 h
-    /// to arrive.
-    pub(super) fn calm_run(below: &[usize]) -> Run {
-        Run::new(
-            table(0, vec![calm(); 3], &[50, 30, 20]),
-            ScriptedRandom::new(below, &[]),
-        )
-    }
-
-    /// A stormy and a calm weather in a climate without volatility; the cycle starts on the storm,
-    /// which strikes every 5 s on average.
-    pub(super) fn storm_run(units: &[f32]) -> Run {
-        Run::new(
-            table(0, vec![stormy(), calm()], &[1, 1]),
-            ScriptedRandom::new(&[], units),
-        )
-    }
 
     #[test]
     fn a_new_cycle_starts_settled_on_the_initial_weather() {
@@ -292,14 +277,14 @@ mod tests {
     fn a_roll_that_picks_another_weather_starts_the_transition_to_it_at_zero_progress() {
         let mut run = calm_run(&[50]);
         run.hours(8.0);
-        assert_eq!(run.place(), (B, Some(A), 0.0, 8.0));
+        assert_eq!(run.place(), (B, Some(A), 0.0, 9.5625));
     }
 
     #[test]
-    fn a_roll_drops_the_time_the_clock_overshot_it_by() {
+    fn a_step_that_overshoots_a_roll_counts_the_overshoot_into_the_transition() {
         let mut run = calm_run(&[50]);
-        run.hours(10.0);
-        assert_eq!(run.place(), (B, Some(A), 0.0, 8.0));
+        run.hours(8.5);
+        assert_same_place(run.place(), (B, Some(A), 0.32, 9.0625));
     }
 
     #[test]
@@ -314,12 +299,19 @@ mod tests {
     }
 
     #[test]
+    fn a_roll_that_keeps_the_weather_counts_its_interval_from_the_deadline_not_from_the_step() {
+        let mut run = calm_run(&[10]);
+        run.hours(8.5);
+        assert_eq!(run.place(), (A, None, 1.0, 7.5));
+    }
+
+    #[test]
     fn the_next_roll_is_scheduled_by_the_weather_that_was_rolled() {
         let mut weathers = vec![calm(); 2];
         weathers[1].volatility_mult = 2.0;
-        let mut run = Run::new(table(0, weathers, &[1, 1]), ScriptedRandom::new(&[1], &[]));
+        let mut run = Run::new(table(0, weathers, &[1, 1]), &[1], &[]);
         run.hours(8.0);
-        assert_eq!(run.place(), (B, Some(A), 0.0, 4.0));
+        assert_eq!(run.place(), (B, Some(A), 0.0, 5.5625));
     }
 
     #[test]
@@ -330,7 +322,7 @@ mod tests {
         assert_eq!(run.snapshot().progress, 0.5);
         assert_eq!(run.snapshot().previous, Some(A));
         run.hours(0.78125);
-        assert_eq!(run.place(), (B, None, 1.0, 6.4375));
+        assert_eq!(run.place(), (B, None, 1.0, 8.0));
     }
 
     #[test]
@@ -338,7 +330,7 @@ mod tests {
         let mut run = calm_run(&[50]);
         run.hours(8.0);
         run.hours(5.0);
-        assert_eq!(run.place(), (B, None, 1.0, 3.0));
+        assert_eq!(run.place(), (B, None, 1.0, 4.5625));
     }
 
     #[test]
@@ -346,44 +338,52 @@ mod tests {
         let mut weathers = vec![calm(); 3];
         weathers[1].trans_delta_raw = 125;
         weathers[2].trans_delta_raw = 0;
-        let mut run = Run::new(
-            table(0, weathers, &[1, 1, 1]),
-            ScriptedRandom::new(&[1, 2], &[]),
-        );
-        run.hours(8.0);
-        run.hours(1.5);
+        let mut run = Run::new(table(0, weathers, &[1, 1, 1]), &[1, 2], &[]);
+        run.jump_to(8.0);
+        run.jump_to(9.5);
         assert_eq!((run.snapshot().current, run.snapshot().progress), (B, 0.5));
-        run.hours(1.5);
+        run.jump_to(11.0);
         assert_eq!(run.snapshot().previous, None);
-        run.hours(8.0);
-        assert_eq!(run.snapshot().current, C);
-        assert_eq!(run.snapshot().previous, Some(B));
-        run.hours(0.25);
+        run.jump_to(19.0);
+        assert_eq!(
+            (run.snapshot().current, run.snapshot().previous),
+            (C, Some(B))
+        );
+        run.jump_to(19.25);
         assert_eq!(run.snapshot().previous, None);
     }
 
     #[test]
-    fn a_roll_that_comes_due_during_a_transition_waits_until_it_ends() {
-        // A roll every 0.5 h and a transition of 3 h, the longest there is.
+    fn the_roll_interval_counts_from_the_moment_the_weather_settles() {
+        // A roll interval of 0.5 h, shorter than the 3 h that a transition takes.
         let mut weathers = vec![calm(); 3];
         for traits in &mut weathers {
             traits.volatility_mult = 4.0;
             traits.trans_delta_raw = 125;
         }
-        let mut run = Run::new(
-            table(255, weathers, &[1, 1, 1]),
-            ScriptedRandom::new(&[1, 2], &[]),
+        let mut run = Run::new(table(255, weathers, &[1, 1, 1]), &[1, 2], &[]);
+        run.jump_to(0.5);
+        assert_eq!(run.place(), (B, Some(A), 0.0, 3.5));
+        run.jump_to(3.5);
+        assert_eq!(run.place(), (B, None, 1.0, 0.5));
+        run.jump_to(3.9);
+        assert_eq!(run.snapshot().previous, None);
+        assert_eq!(run.snapshot().current, B);
+        run.jump_to(4.0);
+        assert_eq!(
+            (run.snapshot().current, run.snapshot().previous),
+            (C, Some(B))
         );
-        run.hours(0.5);
-        assert_eq!(run.place(), (B, Some(A), 0.0, 0.5));
-        run.hours(1.0);
-        run.hours(1.9);
-        let waiting = run.place();
-        assert_eq!((waiting.0, waiting.1), (B, Some(A)));
-        assert!(waiting.2 < 1.0);
-        assert_eq!(waiting.3, 0.0);
-        run.hours(0.2);
-        assert_eq!(run.place(), (C, Some(B), 0.0, 0.5));
+    }
+
+    #[test]
+    fn a_step_rolls_at_most_once() {
+        let mut run = calm_run(&[50, 80]);
+        run.hours(100.0);
+        assert_eq!(run.snapshot().current, B);
+        assert_eq!(run.snapshot().hours_to_next_roll, 0.0);
+        run.seconds(0.0);
+        assert_eq!(run.snapshot().current, C);
     }
 
     #[test]
@@ -392,9 +392,21 @@ mod tests {
         run.jump_to(5.0);
         let before = run.place();
         run.jump_to(2.0);
-        assert_eq!(run.place(), before);
+        assert_same_place(run.place(), before);
         run.hours(1.0);
         assert_eq!(run.snapshot().hours_to_next_roll, 2.0);
+    }
+
+    #[test]
+    fn a_clock_that_went_back_during_a_transition_keeps_its_progress() {
+        let mut run = calm_run(&[50]);
+        run.hours(8.0);
+        run.hours(0.78125);
+        let before = run.place();
+        run.jump_to(3.0);
+        assert_same_place(run.place(), before);
+        run.hours(0.78125);
+        assert_eq!(run.snapshot().previous, None);
     }
 
     #[test]
@@ -428,29 +440,58 @@ mod tests {
     }
 
     #[test]
+    fn the_state_at_a_clock_reading_does_not_depend_on_the_steps_that_led_there() {
+        let place_after = |steps: u32, step_hours: f64| -> Place {
+            let mut run = calm_run(&[50, 80]);
+            for step in 1..=steps {
+                run.jump_to(f64::from(step) * step_hours);
+            }
+            run.place()
+        };
+        let in_one_step = place_after(1, 17.0);
+        assert_eq!(in_one_step.0, B);
+        assert_same_place(place_after(17, 1.0), in_one_step);
+        assert_same_place(place_after(1700, 0.01), in_one_step);
+    }
+
+    #[test]
+    fn fine_steps_do_not_make_the_countdown_drift() {
+        // A clock at a low time scale moves by a hundred thousandth of an hour per frame.
+        let mut run = calm_run(&[50]);
+        for step in 1..=850_000_u32 {
+            run.jump_to(f64::from(step) * 1e-5);
+        }
+        let (current, previous, progress, hours_to_next_roll) = run.place();
+        assert_eq!((current, previous), (B, Some(A)));
+        assert!((progress - 0.32).abs() < 1e-5, "{progress}");
+        assert!(
+            (hours_to_next_roll - 9.0625).abs() < 1e-5,
+            "{hours_to_next_roll}"
+        );
+    }
+
+    #[test]
     fn a_weather_without_a_thunder_sound_never_strikes() {
         let mut run = calm_run(&[]);
         run.seconds(1000.0);
         assert_eq!(run.snapshot().strikes, []);
-        assert!(run.cycle.rng.is_spent());
     }
 
     #[test]
     fn a_storm_strikes_when_its_wait_is_over_and_the_strike_lasts_one_step() {
         // A wait of ln 2 expected strikes at 0.2 strikes per second is 3.47 s.
-        let mut run = storm_run(&[0.5, 0.0]);
+        let mut run = storm_run(&[0.5, 0.5]);
         run.seconds(3.0);
         assert_eq!(run.snapshot().strikes, []);
         run.seconds(0.5);
-        assert_eq!(
-            run.snapshot().strikes,
-            [LightningStrike {
-                weather: A,
-                distance_m: 300.0,
-                thunder_delay_s: 300.0 / 343.0,
-                flash_intensity: 1.0,
-            }]
-        );
+        let strikes = run.snapshot().strikes;
+        assert_eq!(strikes.len(), 1);
+        let strike = strikes[0];
+        assert_eq!(strike.weather, A);
+        assert_eq!(strike.distance_m, 1650.0);
+        assert_eq!(strike.thunder_delay_s, 1650.0 / 343.0);
+        let flash = strike.flash_intensity;
+        assert!((flash - 0.675).abs() < 1e-6, "{flash}");
         run.seconds(0.0);
         assert_eq!(run.snapshot().strikes, []);
     }
@@ -460,12 +501,11 @@ mod tests {
         let mut run = storm_run(&[]);
         run.hours(5.0);
         assert_eq!(run.snapshot().strikes, []);
-        assert!(run.cycle.rng.is_spent());
     }
 
     #[test]
     fn a_fading_storm_strikes_less_often() {
-        let mut run = storm_run(&[0.5, 0.0]);
+        let mut run = storm_run(&[0.5, 0.5]);
         run.edit(WeatherEdit::Transition(B));
         run.edit(WeatherEdit::SetProgress(0.5));
         // Half the thunder is left, so the wait of 3.47 s at full strength is twice as long.
@@ -475,16 +515,14 @@ mod tests {
         let strikes = run.snapshot().strikes;
         assert_eq!(strikes.len(), 1);
         assert_eq!(strikes[0].weather, A);
-        assert_eq!(strikes[0].flash_intensity, 0.5);
+        let flash = strikes[0].flash_intensity;
+        assert!((flash - 0.3375).abs() < 1e-6, "{flash}");
     }
 
     #[test]
     fn during_a_transition_between_storms_a_strike_comes_from_either_side() {
         let strike_weather = |units: &[f32]| {
-            let mut run = Run::new(
-                table(0, vec![stormy(), stormy()], &[1, 1]),
-                ScriptedRandom::new(&[], units),
-            );
+            let mut run = Run::new(table(0, vec![stormy(), stormy()], &[1, 1]), &[], units);
             run.edit(WeatherEdit::Transition(B));
             run.edit(WeatherEdit::SetProgress(0.5));
             run.seconds(100.0);
@@ -502,10 +540,7 @@ mod tests {
             begin_fade_in: 0.5,
             end_fade_out: 1.0,
         };
-        let mut run = Run::new(
-            table(0, vec![calm(), late], &[1, 1]),
-            ScriptedRandom::silent(),
-        );
+        let mut run = Run::new(table(0, vec![calm(), late], &[1, 1]), &[], &[]);
         run.edit(WeatherEdit::Transition(B));
         run.edit(WeatherEdit::SetProgress(0.25));
         run.seconds(100.0);
@@ -532,5 +567,57 @@ mod tests {
         let run = calm_run(&[]);
         let sides: Vec<_> = run.snapshot().sides().collect();
         assert_eq!(sides, [(A, TransitionSide::Settled)]);
+    }
+
+    /// The weathers that a cycle of the busy climate goes through in 100 game hours, each counted
+    /// as it comes in. The clock is stepped by `step_hours` and every step carries `world_seconds`
+    /// of lightning time.
+    fn weathers_of(seed: u64, step_hours: f64, world_seconds: f32) -> Vec<WeatherId> {
+        let mut cycle = WeatherCycle::seeded(busy_climate(), seed, 0.0);
+        let mut weathers = vec![cycle.snapshot().current];
+        for step in 1..=(100.0 / step_hours).round() as u32 {
+            cycle.advance(WeatherStep {
+                clock_hours: f64::from(step) * step_hours,
+                world_seconds,
+            });
+            let current = cycle.snapshot().current;
+            if weathers.last() != Some(&current) {
+                weathers.push(current);
+            }
+        }
+        weathers
+    }
+
+    #[test]
+    fn a_seed_brings_the_same_weathers_in_the_same_order_every_time() {
+        let weathers = weathers_of(7, 0.01, 0.0);
+        assert!(weathers.len() > 10, "{weathers:?}");
+        assert_eq!(weathers_of(7, 0.01, 0.0), weathers);
+    }
+
+    #[test]
+    fn another_seed_brings_other_weathers() {
+        assert_ne!(weathers_of(7, 0.01, 0.0), weathers_of(8, 0.01, 0.0));
+    }
+
+    #[test]
+    fn the_lightning_does_not_change_which_weathers_come() {
+        assert_eq!(weathers_of(7, 0.01, 5.0), weathers_of(7, 0.01, 0.0));
+    }
+
+    #[test]
+    fn the_steps_of_the_clock_do_not_change_which_weathers_come() {
+        let weathers = weathers_of(7, 0.01, 1.0);
+        assert_eq!(weathers_of(7, 0.025, 1.0), weathers);
+        assert_eq!(weathers_of(7, 0.5, 1.0), weathers);
+    }
+
+    #[test]
+    fn the_two_streams_of_a_seed_differ() {
+        let mut cycle = WeatherCycle::seeded(busy_climate(), 7, 0.0);
+        assert_ne!(
+            cycle.roll_rng.below(usize::MAX),
+            cycle.strike_rng.below(usize::MAX)
+        );
     }
 }

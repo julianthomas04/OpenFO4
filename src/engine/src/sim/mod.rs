@@ -36,7 +36,6 @@ use std::time::{Duration, Instant};
 use glam::{Quat, Vec3};
 
 use crate::footsteps::{FootstepEvent, GaitTimings, SurfaceMaterial};
-use crate::random::SplitMix64;
 use crate::weather::WeatherRollTable;
 
 use command_budget::{Deferred, DeferredQueue};
@@ -249,11 +248,13 @@ impl SimWorld {
     }
 
     /// Starts the weather of a climate on the world clock, replacing any weather before. The
-    /// same `seed` rolls the same weather and strikes the same lightning.
+    /// seed fixes the weathers that the climate brings and their order, however the frames are
+    /// paced and whether or not it storms: the rolls and the lightning draw from streams of their
+    /// own.
     pub fn install_weather(&mut self, table: WeatherRollTable, seed: u64) {
-        self.weather = Some(WeatherCycle::new(
+        self.weather = Some(WeatherCycle::seeded(
             table,
-            SplitMix64::new(seed),
+            seed,
             self.world_clock.total_hours(),
         ));
     }
@@ -1430,7 +1431,7 @@ mod tests {
 
     mod weather_cycle {
         use super::*;
-        use crate::sim::weather::test_support::{A, B, calm, stormy, table};
+        use crate::sim::weather::test_support::{A, B, busy_climate, calm, stormy, table};
         use crate::weather::WeatherId;
         use commands::{ClockEdit, WeatherEdit};
 
@@ -1546,7 +1547,9 @@ mod tests {
             run_seconds(&mut sim, true, 1500.0);
             sim.install_weather(calm_climate(), 7);
             frame(&mut sim, true, 0.0);
-            assert_eq!(hours_to_next_roll(&sim), 8.0);
+            let weather = sim.weather_snapshot().unwrap();
+            assert_eq!((weather.current, weather.previous), (A, None));
+            assert_eq!(weather.hours_to_next_roll, 8.0);
         }
 
         #[test]
@@ -1636,6 +1639,30 @@ mod tests {
             frame(&mut sim, true, 0.25);
             frame(&mut sim, false, 0.25);
             assert_eq!(sim.weather_snapshot().unwrap().strikes, []);
+        }
+
+        /// The weathers that the busy climate brings in 1000 s of world time at the time scale
+        /// 360, in frames of `dt` seconds, each counted as it comes in.
+        fn weathers_in_frames_of(dt: f32) -> Vec<WeatherId> {
+            let mut sim = sim_with(busy_climate());
+            sim.apply(SimCommand::SetWorldClock(ClockEdit::SetTimeScale(360.0)));
+            let mut weathers = vec![sim.weather_snapshot().unwrap().current];
+            for _ in 0..(1000.0 / dt) as u32 {
+                frame(&mut sim, true, dt);
+                let current = sim.weather_snapshot().unwrap().current;
+                if weathers.last() != Some(&current) {
+                    weathers.push(current);
+                }
+            }
+            weathers
+        }
+
+        #[test]
+        fn the_weathers_of_a_seed_do_not_depend_on_the_pacing_of_the_frames() {
+            let weathers = weathers_in_frames_of(0.25);
+            assert!(weathers.len() > 10, "{weathers:?}");
+            assert_eq!(weathers_in_frames_of(0.125), weathers);
+            assert_eq!(weathers_in_frames_of(0.0625), weathers);
         }
 
         #[test]

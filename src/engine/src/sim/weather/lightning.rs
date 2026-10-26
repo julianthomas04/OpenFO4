@@ -70,19 +70,14 @@ pub(super) fn mean_strike_interval_seconds(frequency_byte: u8) -> f32 {
 }
 
 /// A strike of `weather` at a random distance. It flashes at `intensity` times the strength its
-/// distance allows.
+/// distance allows: full for the nearest strike, the weakest for the farthest.
 pub(super) fn strike_at(
     weather: WeatherId,
     intensity: f32,
     rng: &mut dyn RandomSource,
 ) -> LightningStrike {
-    let distance_m = NEAREST_STRIKE_DISTANCE_M.lerp(FARTHEST_STRIKE_DISTANCE_M, rng.unit());
-    let farness = f32::inverse_lerp(
-        NEAREST_STRIKE_DISTANCE_M,
-        FARTHEST_STRIKE_DISTANCE_M,
-        distance_m,
-    )
-    .clamp(0.0, 1.0);
+    let farness = rng.unit();
+    let distance_m = NEAREST_STRIKE_DISTANCE_M.lerp(FARTHEST_STRIKE_DISTANCE_M, farness);
     LightningStrike {
         weather,
         distance_m,

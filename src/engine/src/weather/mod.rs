@@ -15,6 +15,6 @@ pub use fade::{FadeRange, TransitionSide};
 pub use flags::{WeatherFlag, WeatherFlags};
 pub use id::{ClimateEntry, WeatherId};
 pub use lightning::LightningParams;
-pub use roll_table::{WeatherRollTable, WeatherRollTraits, WeatherTableError};
+pub use roll_table::{TableWeather, WeatherRollTable, WeatherRollTraits, WeatherTableError};
 pub use sound::{SoundKind, WeatherSound};
 pub use wind::WindParams;
