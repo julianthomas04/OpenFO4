@@ -37,6 +37,20 @@ impl FogUniformFields {
 }
 
 impl Fog {
+    /// The fog with `light` added to both of its colours; where it begins and ends and how it
+    /// builds up stay. Disabled fog has no colour to lift.
+    #[must_use]
+    pub fn brightened(self, light: Vec3) -> Self {
+        match self {
+            Fog::Enabled(fog) => Fog::Enabled(FogParams {
+                near_color: fog.near_color + light,
+                far_color: fog.far_color + light,
+                ..fog
+            }),
+            Fog::Disabled => Fog::Disabled,
+        }
+    }
+
     /// A fog range that does not increase has no meaningful gradient and is
     /// treated as disabled.
     pub fn uniform_fields(&self) -> FogUniformFields {
@@ -86,6 +100,32 @@ mod tests {
             let fields = Fog::Enabled(params(near, far)).uniform_fields();
             assert_eq!(fields, Fog::Disabled.uniform_fields(), "{near}..{far}");
         }
+    }
+
+    #[test]
+    fn brightening_adds_the_light_to_both_colours_and_nothing_else() {
+        let light = Vec3::new(0.5, 0.25, 0.125);
+        let Fog::Enabled(brightened) = Fog::Enabled(params(10.0, 100.0)).brightened(light) else {
+            panic!("brightened fog stays enabled");
+        };
+        let original = params(10.0, 100.0);
+        assert_eq!(brightened.near_color, original.near_color + light);
+        assert_eq!(brightened.far_color, original.far_color + light);
+        assert_eq!(
+            FogParams {
+                near_color: original.near_color,
+                far_color: original.far_color,
+                ..brightened
+            },
+            original
+        );
+    }
+
+    #[test]
+    fn brightening_by_no_light_changes_nothing_and_disabled_fog_stays_disabled() {
+        let fog = Fog::Enabled(params(10.0, 100.0));
+        assert_eq!(fog.brightened(Vec3::ZERO), fog);
+        assert_eq!(Fog::Disabled.brightened(Vec3::ONE), Fog::Disabled);
     }
 
     #[test]

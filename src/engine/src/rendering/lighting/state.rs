@@ -9,6 +9,7 @@ use super::exterior_weather::{ExteriorWeather, ExteriorWeatherSlots, ImageSpaceH
 use super::fog::{Fog, FogParams};
 use super::frame_uniform::{FrameUniform, wrapped_time};
 use super::interior_catalog::InteriorLightingCatalog;
+use super::lightning::tuning::{FLASH_AMBIENT_GAIN, FLASH_SKY_GAIN};
 use super::sky_clock::{ClockedSky, SkyClock};
 use super::time_of_day::{
     DayTime, MoonKind, SkyGameConfig, SkyMoment, SkyObjects, sun_light_weight,
@@ -228,14 +229,15 @@ fn shading_for(environment: &Environment, use_cell_lighting: bool) -> Shading<'_
 
 /// The ambient cube a frame uploads. Exterior shading (which includes interiors
 /// that fall back to the exterior terms) takes the weather's cube while one is
-/// loaded and in use, the sky cube otherwise, and applies the fill calibration
-/// to whichever it picked. Resolved cell lighting and the neutral interior
-/// upload their cubes as they are.
+/// loaded and in use, the sky cube otherwise, applies the fill calibration to
+/// whichever it picked and adds the light of the lightning flash. Resolved cell
+/// lighting and the neutral interior upload their cubes as they are.
 fn uploaded_ambient(
     shading: Shading<'_>,
     weather_cube: Option<AmbientCube>,
     use_weather_ambient: bool,
     sky: &SkySettings,
+    lightning: Vec3,
 ) -> AmbientCube {
     match shading {
         Shading::Exterior => {
@@ -243,7 +245,9 @@ fn uploaded_ambient(
                 Some(cube) if use_weather_ambient => cube,
                 Some(_) | None => sky.ambient_cube(),
             };
-            source.scaled(EXTERIOR_AMBIENT_FILL)
+            source
+                .scaled(EXTERIOR_AMBIENT_FILL)
+                .added(lightning * FLASH_AMBIENT_GAIN)
         }
         Shading::Cell(cell) => cell.ambient_cube,
         Shading::Neutral => sky.ambient_cube(),
@@ -320,6 +324,8 @@ pub struct LightingState {
     /// While on, the clock no longer drives the sun, sky, fog, exposure and ambient: they keep the
     /// values the panels hold. The slot, moon and star readouts keep following the clock.
     pub sun_override: bool,
+    /// The light of the lightning flash: not a weather value, so setting the weather leaves it.
+    lightning: Vec3,
     exterior_weather: Option<ExteriorWeather>,
     sky_clock: Option<SkyClock>,
     sky_moment: Option<SkyMoment>,
@@ -346,6 +352,7 @@ impl LightingState {
             local_lights,
             use_weather_ambient: true,
             sun_override: false,
+            lightning: Vec3::ZERO,
             exterior_weather: None,
             sky_clock: None,
             sky_moment: None,
@@ -423,6 +430,24 @@ impl LightingState {
             self.sun.daylight = sun_alpha;
         }
         self.sky_objects = Some(objects);
+    }
+
+    /// Sets the light of the lightning flash, once per frame: what
+    /// [`super::lightning::LightningFlashes::update`] returns. The exterior sky terms, the fog and
+    /// the exterior ambient add it to the weather's values; the sun and the exposure ignore it.
+    /// It is no weather value, so setting the weather or the time of day leaves it as it is.
+    /// Cell lighting and the neutral interior ignore it.
+    pub fn set_lightning(&mut self, flash: Vec3) {
+        self.lightning = flash;
+    }
+
+    /// The flash lighting this frame, for the layers that draw weather: none where the frame is
+    /// not shaded with the exterior terms.
+    pub fn lightning(&self) -> Vec3 {
+        match self.shading() {
+            Shading::Exterior => self.lightning,
+            Shading::Cell(_) | Shading::Neutral => Vec3::ZERO,
+        }
     }
 
     /// The kind of the moon and the sky model the night sky loads first.
@@ -653,19 +678,24 @@ impl LightingState {
                 .map(|weather| weather.ambient_cube),
             self.use_weather_ambient,
             &self.sky,
+            self.lightning,
         )
     }
 
     fn exterior_terms(&self) -> SceneTerms {
+        let sky_flash = self.lightning * FLASH_SKY_GAIN;
         SceneTerms {
             to_sun: self.sun.direction_to_sun(),
             daylight: self.sun.daylight,
             sun_illuminance: self.sun.illuminance(),
             sunlight_scale: self.sun.intensity,
-            sky_zenith: self.sky.zenith * self.sky.radiance_scale,
-            sky_horizon: self.sky.horizon * self.sky.radiance_scale,
-            sky_ground: self.sky.ground * self.sky.radiance_scale,
-            fog: self.fog.fog(self.sky.horizon * self.sky.radiance_scale),
+            sky_zenith: self.sky.zenith * self.sky.radiance_scale + sky_flash,
+            sky_horizon: self.sky.horizon * self.sky.radiance_scale + sky_flash,
+            sky_ground: self.sky.ground * self.sky.radiance_scale + sky_flash,
+            fog: self
+                .fog
+                .fog(self.sky.horizon * self.sky.radiance_scale)
+                .brightened(sky_flash),
         }
     }
 }
@@ -1135,6 +1165,7 @@ mod tests {
         use super::super::super::exterior_weather::fixtures::{
             per_slot, rgb, weather_slots, without_moon,
         };
+        use super::super::super::lightning::tuning::FLASH_SKY_GAIN;
         use super::super::super::time_of_day::{MoonKind, MoonPhase, SkyGameSettings, TimeSlot};
         use super::*;
 
@@ -1413,6 +1444,26 @@ mod tests {
         }
 
         #[test]
+        fn a_lightning_flash_survives_the_clock_rewriting_the_weather_every_frame() {
+            let flash = Vec3::new(0.5, 0.25, 1.0);
+            let (mut plain, mut flashing) = (state(), state());
+            flashing.set_lightning(flash);
+            for hour in [13.0, 0.0, 6.5, 19.0] {
+                at_hour(&mut plain, 0, hour);
+                at_hour(&mut flashing, 0, hour);
+                let (plain, flashing) = (frame_of(&plain), frame_of(&flashing));
+                for (lit, unlit) in [
+                    (flashing.sky_zenith, plain.sky_zenith),
+                    (flashing.sky_horizon, plain.sky_horizon),
+                    (flashing.sky_ground, plain.sky_ground),
+                ] {
+                    let lifted = unlit.truncate() + flash * FLASH_SKY_GAIN;
+                    assert!(lit.truncate().abs_diff_eq(lifted, 1e-6), "{hour}: {lit}");
+                }
+            }
+        }
+
+        #[test]
         fn shadows_follow_the_moon_at_night() {
             let mut state = state();
             state.shadows.settings.enabled = true;
@@ -1614,6 +1665,263 @@ mod tests {
             assert_eq!(state.sun.illuminance(), Vec3::ZERO);
             state.shadows.settings.enabled = true;
             assert_eq!(state.shadow_status(), ShadowStatus::NoDirectLight);
+        }
+    }
+
+    mod lightning {
+        use super::*;
+        use crate::rendering::lighting::lightning::tuning::{
+            ATTACK_S, FLASH_AMBIENT_GAIN, FLASH_LENGTH_S, FLASH_SKY_GAIN,
+        };
+        use crate::rendering::lighting::lightning::{LightningFlashes, Strike};
+
+        /// Distinct channels, so a swapped or dropped channel shows.
+        const FLASH: Vec3 = Vec3::new(0.5, 0.25, 1.0);
+
+        fn exterior() -> LightingState {
+            state_with(Environment::Exterior, true, true, true)
+        }
+
+        fn with_flash(mut state: LightingState) -> LightingState {
+            state.set_lightning(FLASH);
+            state
+        }
+
+        fn bytes(frame: &FrameUniform) -> &[u8] {
+            bytemuck::bytes_of(frame)
+        }
+
+        /// `lit` is `unlit` plus `lift` in its colour, with the fourth component as it was.
+        fn assert_lifted(lit: Vec4, unlit: Vec4, lift: Vec3) {
+            assert!(
+                lit.truncate().abs_diff_eq(unlit.truncate() + lift, 1e-6),
+                "{lit} is not {unlit} plus {lift}"
+            );
+            assert_eq!(lit.w, unlit.w);
+        }
+
+        fn weather_with_fog(fog: Fog) -> ExteriorWeather {
+            ExteriorWeather {
+                fog: Some(fog),
+                ..weather()
+            }
+        }
+
+        fn own_fog() -> FogParams {
+            FogParams {
+                near_color: Vec3::new(0.1, 0.2, 0.3),
+                far_color: Vec3::new(0.4, 0.5, 0.6),
+                near: 100.0,
+                far: 5000.0,
+                power: 1.5,
+                max: 0.7,
+            }
+        }
+
+        #[test]
+        fn a_flash_lifts_the_sky_terms_whatever_the_weathers_sky_scale() {
+            let mut state = exterior();
+            state.sky.radiance_scale = 3.0;
+            let unlit = frame_of(&state);
+            let lit = frame_of(&with_flash(state));
+            let lift = FLASH * FLASH_SKY_GAIN;
+            assert_lifted(lit.sky_zenith, unlit.sky_zenith, lift);
+            assert_lifted(lit.sky_horizon, unlit.sky_horizon, lift);
+            assert_lifted(lit.sky_ground, unlit.sky_ground, lift);
+        }
+
+        #[test]
+        fn a_flash_lifts_the_fog_that_follows_the_horizon_with_the_horizon() {
+            let state = exterior();
+            let unlit = frame_of(&state);
+            let lit = frame_of(&with_flash(state));
+            let lift = FLASH * FLASH_SKY_GAIN;
+            assert_lifted(lit.fog_near_color, unlit.fog_near_color, lift);
+            assert_lifted(lit.fog_far_color, unlit.fog_far_color, lift);
+            assert_eq!(lit.fog_params, unlit.fog_params);
+            assert!(
+                lit.fog_far_color
+                    .truncate()
+                    .abs_diff_eq(lit.sky_horizon.truncate(), 1e-6)
+            );
+        }
+
+        #[test]
+        fn a_flash_lifts_the_colours_of_a_fog_the_weather_brings_and_keeps_its_range() {
+            let mut state = lighting_state();
+            state.set_exterior_weather(weather_with_fog(Fog::Enabled(own_fog())));
+            let unlit = frame_of(&state);
+            let lit = frame_of(&with_flash(state));
+            let lift = FLASH * FLASH_SKY_GAIN;
+            assert_lifted(lit.fog_near_color, unlit.fog_near_color, lift);
+            assert_lifted(lit.fog_far_color, unlit.fog_far_color, lift);
+            assert_eq!(lit.fog_params, unlit.fog_params);
+            assert_eq!(lit.fog_near_color.w, own_fog().near);
+            assert_eq!(lit.fog_far_color.w, own_fog().far);
+        }
+
+        #[test]
+        fn a_flash_does_not_switch_on_a_fog_the_weather_disables() {
+            let mut state = lighting_state();
+            state.set_exterior_weather(weather_with_fog(Fog::Disabled));
+            let unlit = frame_of(&state);
+            let lit = frame_of(&with_flash(state));
+            assert_eq!(unlit.fog_params, Vec4::ZERO);
+            assert_eq!(lit.fog_params, unlit.fog_params);
+            assert_eq!(lit.fog_near_color, unlit.fog_near_color);
+            assert_eq!(lit.fog_far_color, unlit.fog_far_color);
+        }
+
+        #[test]
+        fn a_flash_adds_its_ambient_gain_to_every_face_after_the_fill() {
+            let lift = FLASH * FLASH_AMBIENT_GAIN;
+            let weather_ambient = with_flash(exterior());
+            assert_eq!(
+                uploaded_cube(&weather_ambient),
+                fill(weather_cube()).added(lift).uniform_faces()
+            );
+            for (has_weather, use_weather_ambient) in [(true, false), (false, true)] {
+                let state = with_flash(state_with(
+                    Environment::Exterior,
+                    has_weather,
+                    use_weather_ambient,
+                    true,
+                ));
+                assert_eq!(
+                    uploaded_cube(&state),
+                    fill(state.sky.ambient_cube()).added(lift).uniform_faces(),
+                    "{has_weather} {use_weather_ambient}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_flash_leaves_the_sun_and_the_exposure_alone() {
+            const FRAME_SECONDS: f32 = 1.0 / 30.0;
+            let state = exterior();
+            let unlit = frame_of(&state);
+            let unlit_exposure = state.exposure.gpu_params(FRAME_SECONDS);
+            let flashing = with_flash(state);
+            let lit = frame_of(&flashing);
+            assert_eq!(lit.to_sun, unlit.to_sun);
+            assert_eq!(lit.sun_illuminance, unlit.sun_illuminance);
+            assert_eq!(lit.daylight, unlit.daylight);
+            assert_eq!(
+                bytemuck::bytes_of(&flashing.exposure.gpu_params(FRAME_SECONDS)),
+                bytemuck::bytes_of(&unlit_exposure)
+            );
+        }
+
+        #[test]
+        fn a_flash_does_not_reach_cell_lighting_or_the_neutral_interior() {
+            for lighting in [resolved_cell(), neutral()] {
+                let state = state_with(interior(lighting), true, true, true);
+                let unlit = frame_of(&state);
+                let lit = frame_of(&with_flash(state));
+                assert_eq!(bytes(&lit), bytes(&unlit));
+            }
+        }
+
+        #[test]
+        fn an_interior_shaded_like_the_exterior_takes_the_flash_with_the_exterior_terms() {
+            let shaded_like_the_exterior = [
+                state_with(
+                    interior(InteriorLighting::CatalogUnavailable),
+                    true,
+                    true,
+                    true,
+                ),
+                state_with(interior(resolved_cell()), true, true, false),
+            ];
+            for state in shaded_like_the_exterior {
+                let unlit = frame_of(&state);
+                let lit = frame_of(&with_flash(state));
+                assert_lifted(lit.sky_zenith, unlit.sky_zenith, FLASH * FLASH_SKY_GAIN);
+                assert_ne!(lit.ambient_cube, unlit.ambient_cube);
+            }
+        }
+
+        #[test]
+        fn the_flash_is_readable_wherever_the_exterior_terms_apply_and_none_elsewhere() {
+            assert_eq!(with_flash(exterior()).lightning(), FLASH);
+            let fallback = state_with(
+                interior(InteriorLighting::CatalogUnavailable),
+                true,
+                true,
+                true,
+            );
+            assert_eq!(with_flash(fallback).lightning(), FLASH);
+            for lighting in [resolved_cell(), neutral()] {
+                let state = state_with(interior(lighting), true, true, true);
+                assert_eq!(with_flash(state).lightning(), Vec3::ZERO);
+            }
+        }
+
+        #[test]
+        fn no_flash_is_set_until_one_is_given() {
+            assert_eq!(exterior().lightning(), Vec3::ZERO);
+        }
+
+        #[test]
+        fn a_flash_survives_the_weather_being_set_again_with_other_values() {
+            let other = ExteriorWeather {
+                sky_upper: Vec3::new(0.7, 0.1, 0.2),
+                horizon: Vec3::new(0.3, 0.4, 0.5),
+                sky_lower: Vec3::new(0.05, 0.06, 0.07),
+                fog: Some(Fog::Enabled(own_fog())),
+                ..weather()
+            };
+            let mut plain = exterior();
+            plain.set_exterior_weather(other.clone());
+            let mut flashing = with_flash(exterior());
+            flashing.set_exterior_weather(other);
+            assert_eq!(flashing.lightning(), FLASH);
+            let (lit, unlit) = (frame_of(&flashing), frame_of(&plain));
+            let lift = FLASH * FLASH_SKY_GAIN;
+            assert_lifted(lit.sky_zenith, unlit.sky_zenith, lift);
+            assert_lifted(lit.sky_horizon, unlit.sky_horizon, lift);
+            assert_lifted(lit.sky_ground, unlit.sky_ground, lift);
+            assert_lifted(lit.fog_far_color, unlit.fog_far_color, lift);
+        }
+
+        #[test]
+        fn clearing_the_flash_brings_the_frame_back_bit_for_bit() {
+            let mut state = exterior();
+            let unlit = frame_of(&state);
+            state.set_lightning(FLASH);
+            assert_ne!(bytes(&frame_of(&state)), bytes(&unlit));
+            state.set_lightning(Vec3::ZERO);
+            assert_eq!(bytes(&frame_of(&state)), bytes(&unlit));
+        }
+
+        #[test]
+        fn without_a_flash_the_sky_and_linked_fog_are_the_settings_times_the_radiance_scale() {
+            let mut state = exterior();
+            state.sky.radiance_scale = 2.5;
+            let frame = frame_of(&state);
+            assert_eq!(frame.sky_zenith.truncate(), state.sky.zenith * 2.5);
+            assert_eq!(frame.sky_horizon.truncate(), state.sky.horizon * 2.5);
+            assert_eq!(frame.sky_ground.truncate(), state.sky.ground * 2.5);
+            assert_eq!(frame.fog_near_color.truncate(), state.sky.horizon * 2.5);
+            assert_eq!(frame.fog_far_color.truncate(), state.sky.horizon * 2.5);
+        }
+
+        #[test]
+        fn a_strike_lifts_the_frame_while_its_flash_lasts_and_then_leaves_it_as_it_was() {
+            let mut state = exterior();
+            let unlit = frame_of(&state);
+            let mut flashes = LightningFlashes::default();
+            let strike = Strike::from_srgb8(0.5, [219, 220, 238]);
+            let mut frame_after = |dt_s: f32, strikes: &[Strike]| {
+                state.set_lightning(flashes.update(dt_s, strikes));
+                frame_of(&state)
+            };
+            frame_after(0.0, &[strike]);
+            let peak = frame_after(ATTACK_S, &[]);
+            let lift = strike.colour * strike.intensity * FLASH_SKY_GAIN;
+            assert_lifted(peak.sky_zenith, unlit.sky_zenith, lift);
+            let over = frame_after(FLASH_LENGTH_S, &[]);
+            assert_eq!(bytes(&over), bytes(&unlit));
         }
     }
 }

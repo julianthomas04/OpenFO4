@@ -8,6 +8,7 @@ pub mod frame_binding;
 pub mod frame_uniform;
 pub mod interior_catalog;
 pub mod lerp;
+pub mod lightning;
 pub mod sky_clock;
 pub mod state;
 pub mod time_of_day;

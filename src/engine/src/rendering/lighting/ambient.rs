@@ -23,6 +23,12 @@ impl AmbientCube {
     pub fn scaled(&self, factor: f32) -> Self {
         Self(self.0.map(|face| face * factor))
     }
+
+    /// `colour` added to every face colour.
+    #[must_use]
+    pub fn added(&self, colour: Vec3) -> Self {
+        Self(self.0.map(|face| face + colour))
+    }
 }
 
 #[cfg(test)]
@@ -57,6 +63,27 @@ mod tests {
         for (face, original) in scaled.0.iter().zip(cube.0) {
             assert_eq!(*face, original * 0.5);
         }
+    }
+
+    #[test]
+    fn adding_a_colour_lifts_every_face_by_it_and_keeps_the_face_order() {
+        let cube = AmbientCube(std::array::from_fn(|face| Vec3::splat(face as f32)));
+        let lifted = cube.added(Vec3::new(0.5, 0.25, 0.125));
+        for (face, (lifted, original)) in lifted.0.iter().zip(cube.0).enumerate() {
+            assert_eq!(
+                *lifted,
+                original + Vec3::new(0.5, 0.25, 0.125),
+                "face {face}"
+            );
+        }
+    }
+
+    #[test]
+    fn adding_no_light_leaves_the_cube_as_it_is() {
+        let cube = AmbientCube(std::array::from_fn(|face| {
+            Vec3::new(0.1 + face as f32, 0.0, 0.3)
+        }));
+        assert_eq!(cube.added(Vec3::ZERO), cube);
     }
 
     #[test]
