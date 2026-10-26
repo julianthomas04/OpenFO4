@@ -2,7 +2,7 @@
 //! the rain stirs ripples in the surface around the camera.
 //!
 //! The points lie on the horizontal disc around the centre; the frame keeps the ones that fall
-//! on water (and not under a roof) and sets their height to the surface.
+//! on water and sets their height to the surface.
 
 use std::f32::consts::{PI, TAU};
 
