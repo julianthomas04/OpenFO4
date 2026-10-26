@@ -96,7 +96,8 @@ impl AssetState {
 }
 
 /// What the night sky has loaded, for the dev menu. `moon` is indexed by [`MoonPhase::index`]
-/// and describes the moon kind of the latest update.
+/// and describes the moon kind of the latest update. The cloud textures load on demand, a
+/// weather at a time; one that fails is only logged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkyAssetStatus {
     pub moon: [AssetState; MoonPhase::ALL.len()],
@@ -104,6 +105,7 @@ pub struct SkyAssetStatus {
     pub star_mesh: AssetState,
     pub sun_texture: AssetState,
     pub sun_glare_texture: AssetState,
+    pub cloud_mesh: AssetState,
 }
 
 impl Default for SkyAssetStatus {
@@ -114,6 +116,7 @@ impl Default for SkyAssetStatus {
             star_mesh: AssetState::NotRequested,
             sun_texture: AssetState::NotRequested,
             sun_glare_texture: AssetState::NotRequested,
+            cloud_mesh: AssetState::NotRequested,
         }
     }
 }
@@ -126,9 +129,9 @@ pub(super) fn star_texture_key() -> String {
     sky_texture_key(STAR_TEXTURE_STEM)
 }
 
-/// The key of a sun texture the climate names by its path below the textures folder
-/// (`Sky\Sun_d.dds`).
-pub(super) fn sun_texture_key(path: &str) -> String {
+/// The key of a texture the climate or weather names by its path below the textures folder
+/// (`Sky\Sun_d.dds`, `Sky\CloudsLower01_d.dds`).
+pub(super) fn named_texture_key(path: &str) -> String {
     texture_key(&path.to_ascii_lowercase().replace('/', "\\"))
 }
 
@@ -169,6 +172,43 @@ pub(super) fn load_texture(
     })
 }
 
+/// The indices of `mesh` when it is a triangle list, which must stay within its vertices; `None`
+/// for a mesh that is not drawn as triangles.
+pub(super) fn triangle_indices<'a>(
+    key: &str,
+    mesh: &'a CpuMesh,
+) -> Result<Option<&'a [u32]>, SkyAssetError> {
+    if mesh.topology != Topology::Triangles {
+        return Ok(None);
+    }
+    if mesh
+        .indices
+        .iter()
+        .any(|&index| index as usize >= mesh.vertices.len())
+    {
+        return Err(SkyAssetError::Mesh {
+            key: key.to_owned(),
+            reason: "an index points past the vertices".to_owned(),
+        });
+    }
+    Ok(Some(&mesh.indices))
+}
+
+/// The index of the first vertex of a mesh of `added` vertices that is appended to a list of
+/// `existing` ones, which all 32 bit indices must be able to address.
+pub(super) fn first_vertex(key: &str, existing: usize, added: usize) -> Result<u32, SkyAssetError> {
+    let addressable = existing
+        .checked_add(added)
+        .is_some_and(|total| u32::try_from(total).is_ok());
+    if !addressable {
+        return Err(SkyAssetError::Mesh {
+            key: key.to_owned(),
+            reason: "more vertices than a 32 bit index addresses".to_owned(),
+        });
+    }
+    Ok(existing as u32)
+}
+
 /// The star dome's triangles with every part of the model in one vertex and index list.
 #[derive(Debug, Clone)]
 pub(super) struct StarGeometry {
@@ -180,25 +220,12 @@ impl StarGeometry {
     pub(super) fn from_meshes(key: &str, meshes: Vec<CpuMesh>) -> Result<Self, SkyAssetError> {
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
-        for mesh in meshes
-            .into_iter()
-            .filter(|mesh| mesh.topology == Topology::Triangles)
-        {
-            if mesh
-                .indices
-                .iter()
-                .any(|&index| index as usize >= mesh.vertices.len())
-            {
-                return Err(SkyAssetError::Mesh {
-                    key: key.to_owned(),
-                    reason: "an index points past the vertices".to_owned(),
-                });
-            }
-            let first = u32::try_from(vertices.len()).map_err(|_| SkyAssetError::Mesh {
-                key: key.to_owned(),
-                reason: "more vertices than a 32 bit index addresses".to_owned(),
-            })?;
-            indices.extend(mesh.indices.iter().map(|index| index + first));
+        for mesh in meshes {
+            let Some(mesh_indices) = triangle_indices(key, &mesh)? else {
+                continue;
+            };
+            let first = first_vertex(key, vertices.len(), mesh.vertices.len())?;
+            indices.extend(mesh_indices.iter().map(|index| index + first));
             vertices.extend(mesh.vertices);
         }
         if indices.is_empty() {
@@ -210,11 +237,12 @@ impl StarGeometry {
     }
 }
 
-/// The star dome of the climate's sky model, a `.nif` path converted to its GLB.
-pub(super) fn load_star_geometry(
+/// The meshes of the sky model `model_path`, a `.nif` path converted to its GLB, in the
+/// order of the file, and the key of the file.
+pub(super) fn load_model_meshes(
     asset_root: &str,
     model_path: &str,
-) -> Result<StarGeometry, SkyAssetError> {
+) -> Result<(String, Vec<CpuMesh>), SkyAssetError> {
     let key = glb_key(model_path);
     let relative = resolve(asset_root, &key)?;
     let model = CpuMesh::load_model(&format!("{asset_root}/{relative}")).map_err(|error| {
@@ -223,7 +251,16 @@ pub(super) fn load_star_geometry(
             reason: format!("{error:#}"),
         }
     })?;
-    StarGeometry::from_meshes(&key, model.meshes)
+    Ok((key, model.meshes))
+}
+
+/// The star dome of the climate's sky model.
+pub(super) fn load_star_geometry(
+    asset_root: &str,
+    model_path: &str,
+) -> Result<StarGeometry, SkyAssetError> {
+    let (key, meshes) = load_model_meshes(asset_root, model_path)?;
+    StarGeometry::from_meshes(&key, meshes)
 }
 
 /// Logs a failed load once per file, so a missing texture does not repeat every climate change.

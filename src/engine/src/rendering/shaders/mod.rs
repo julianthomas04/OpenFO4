@@ -105,6 +105,15 @@ pub const SKY_STARS: ShaderSource = ShaderSource {
     ),
 };
 
+pub const SKY_CLOUDS: ShaderSource = ShaderSource {
+    label: "sky_clouds_shader",
+    wgsl: concat!(
+        include_str!("light_data.wgsl"),
+        include_str!("frame.wgsl"),
+        include_str!("sky_clouds.wgsl"),
+    ),
+};
+
 pub const TONEMAP: ShaderSource = ShaderSource {
     label: "tonemap_shader",
     wgsl: concat!(
@@ -292,6 +301,7 @@ const ALL: &[&ShaderSource] = &[
     &SKY_MOON,
     &SKY_SUN,
     &SKY_STARS,
+    &SKY_CLOUDS,
     &TONEMAP,
     &DEBUG_LINES,
     &SKELETON_OVERLAY,

@@ -30,6 +30,10 @@
 //!   [`SUN_GLARE_RADIANCE`] times the weather's Sun and `SunGlare` colours and the sky radiance
 //!   scale; both are cut at the horizon over [`SUN_HORIZON_FADE_SINE`]. `fSunMinimumGlareScale`
 //!   and the weather's own glare byte (not exported yet) are not applied.
+//! - Clouds: a layer scrolls [`CLOUD_SCROLL_SCALE`] texture widths per second for each unit of
+//!   its weather's layer speed, and blends into the sky's horizon colour over the first
+//!   [`CLOUD_HORIZON_HAZE_SINE`] of the sine of elevation. Colours and alphas are the weather's,
+//!   times the sky radiance scale.
 
 use std::f32::consts::PI;
 
@@ -297,6 +301,16 @@ pub const SUN_GLARE_RADIANCE: f32 = 2.0;
 pub fn sun_sprite_edge_deg(size: f32) -> f32 {
     size / SUN_SIZE_UNITS_PER_DEGREE
 }
+
+/// How many texture widths a cloud layer scrolls per second for each unit of its weather's
+/// layer speed, which is at most 0.1. Hypothesis: the speed is a texture coordinate velocity
+/// per second. Vanilla's fastest layer (0.035) would then cross its texture in 28 seconds,
+/// probably too fast: calibrate against the vanilla game.
+pub const CLOUD_SCROLL_SCALE: f32 = 1.0;
+
+/// The sine of the elevation at which the clouds are clear of the horizon haze. Below it they
+/// blend into the sky's horizon colour, entirely at the horizon.
+pub const CLOUD_HORIZON_HAZE_SINE: f32 = 0.15;
 
 #[cfg(test)]
 #[allow(

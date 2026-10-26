@@ -1,4 +1,5 @@
-//! The moon, the stars and the sun of the exterior sky, drawn right after the sky gradient.
+//! The moon, the stars, the sun and the clouds of the exterior sky, drawn right after the sky
+//! gradient.
 //!
 //! All layers sit at reverse-Z depth 0 like the gradient, so they show only where no geometry
 //! wrote depth. They bind their own group at [`layer::LAYER_GROUP`], which the world pass uses
@@ -8,6 +9,11 @@
 //! draw produces nothing on Vulkan, without any validation error.
 
 mod assets;
+mod cloud_geometry;
+mod cloud_scroll;
+mod clouds;
+#[cfg(test)]
+mod clouds_tests;
 mod layer;
 mod moon;
 mod quad;
@@ -23,11 +29,14 @@ use std::sync::Arc;
 use glam::Vec3;
 
 pub use assets::{AssetFailure, AssetFailureKind, AssetState, SkyAssetError, SkyAssetStatus};
+pub use clouds::{CloudLayerDraw, CloudsInput};
 use layer::WorldGroupLayouts;
 pub use moon::MoonSizes;
 pub use sun::{SunInput, SunSizes};
 
-use assets::{load_star_geometry, load_texture, star_texture_key, sun_texture_key};
+use assets::{load_star_geometry, load_texture, named_texture_key, star_texture_key};
+use cloud_geometry::{DEFAULT_MODEL, load_cloud_geometry};
+use clouds::CloudLayer;
 use moon::{MoonLayer, MoonUniform};
 use stars::{StarLayer, StarUniform};
 use sun::{SunLayer, SunUniforms};
@@ -119,9 +128,12 @@ pub struct NightSky {
     moon: MoonLayer,
     stars: StarLayer,
     sun: SunLayer,
+    clouds: CloudLayer,
     /// `None` is a climate without a sky model.
     installed_model: Installed<Option<Arc<str>>>,
     installed_sun_textures: Installed<ClimateSunTextures>,
+    /// The path of the cloud model that was last requested, `None` before any layer showed.
+    installed_cloud_model: Option<Arc<str>>,
     status: SkyAssetStatus,
 }
 
@@ -152,8 +164,10 @@ impl NightSky {
             moon: MoonLayer::new(device, world_groups),
             stars,
             sun: SunLayer::new(device, world_groups),
+            clouds: CloudLayer::new(device, world_groups),
             installed_model: Installed::NothingYet,
             installed_sun_textures: Installed::NothingYet,
+            installed_cloud_model: None,
             status,
         };
         sky.load_changed_assets(device, queue, initial_moon, initial_sky_model);
@@ -225,7 +239,7 @@ impl NightSky {
         }
         let load = |path: &Option<Arc<str>>| {
             path.as_deref()
-                .map(|path| load_texture(device, queue, &self.asset_root, &sun_texture_key(path)))
+                .map(|path| load_texture(device, queue, &self.asset_root, &named_texture_key(path)))
         };
         let (disc, glare) = (load(&textures.sun), load(&textures.glare));
         [self.status.sun_texture, self.status.sun_glare_texture] =
@@ -233,12 +247,46 @@ impl NightSky {
         self.installed_sun_textures = Installed::Requested(textures.clone());
     }
 
-    /// Draws the stars, then the moon over them, then the sun. The layers take the world pass feedback group
-    /// slot, so `feedback` is bound there again afterwards and the pass is as it was.
+    /// Readies the clouds of this frame, which cover the stars, the moon and the sun wherever
+    /// they are opaque. `radiance_scale` is the sky radiance scale the sky colours are multiplied
+    /// by and `dt` the real seconds since the last call, which the layers scroll by. The cloud model
+    /// loads when the first layer shows and again when the input names another model; the textures
+    /// load the first time a layer shows them, on the calling thread. Without a call, or with
+    /// no layers, no clouds are drawn.
+    pub fn update_clouds(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        input: &CloudsInput,
+        radiance_scale: f32,
+        dt: f32,
+    ) {
+        self.load_changed_cloud_model(device, input);
+        let asset_root = &self.asset_root;
+        self.clouds
+            .update(device, queue, input, radiance_scale, dt, |path| {
+                load_texture(device, queue, asset_root, &named_texture_key(path))
+            });
+    }
+
+    fn load_changed_cloud_model(&mut self, device: &wgpu::Device, input: &CloudsInput) {
+        let wanted = input.model.as_deref().unwrap_or(DEFAULT_MODEL);
+        if input.layers.is_empty() || self.installed_cloud_model.as_deref() == Some(wanted) {
+            return;
+        }
+        let geometry = load_cloud_geometry(&self.asset_root, wanted);
+        self.status.cloud_mesh = self.clouds.install_mesh(device, geometry);
+        self.installed_cloud_model = Some(Arc::from(wanted));
+    }
+
+    /// Draws the stars, then the moon over them, then the sun, then the clouds over all of them.
+    /// The layers take the world pass feedback group slot, so `feedback` is bound there again
+    /// afterwards and the pass is as it was.
     pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, feedback: &wgpu::BindGroup) {
         self.stars.draw(pass);
         self.moon.draw(pass);
         self.sun.draw(pass);
+        self.clouds.draw(pass);
         pass.set_bind_group(FEEDBACK_GROUP, feedback, &[]);
     }
 

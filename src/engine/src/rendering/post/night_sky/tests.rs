@@ -46,6 +46,36 @@ fn assert_close(actual: Vec3, expected: Vec3) {
     );
 }
 
+/// A GLB container of the glTF document `json` and the binary buffer `bin`.
+pub(super) fn glb(json: &Value, bin: &[u8]) -> Vec<u8> {
+    fn chunk(kind: [u8; 4], data: &[u8], pad: u8) -> Vec<u8> {
+        let mut data = data.to_vec();
+        while !data.len().is_multiple_of(4) {
+            data.push(pad);
+        }
+        let mut out = (data.len() as u32).to_le_bytes().to_vec();
+        out.extend(kind);
+        out.extend(data);
+        out
+    }
+    let mut body = chunk(*b"JSON", json.to_string().as_bytes(), b' ');
+    body.extend(chunk(*b"BIN\0", bin, 0));
+    let mut out = b"glTF".to_vec();
+    out.extend(2u32.to_le_bytes());
+    out.extend(((12 + body.len()) as u32).to_le_bytes());
+    out.extend(body);
+    out
+}
+
+/// An install whose only file is `Meshes\<file_dir>\<file_name>`.
+pub(super) fn install_with(file_dir: &str, file_name: &str, bytes: &[u8]) -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("Meshes").join(file_dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(file_name), bytes).unwrap();
+    root
+}
+
 mod keys {
     use super::*;
 
@@ -318,34 +348,6 @@ mod star_geometry {
         glb(&document, &floats)
     }
 
-    fn glb(json: &Value, bin: &[u8]) -> Vec<u8> {
-        fn chunk(kind: [u8; 4], data: &[u8], pad: u8) -> Vec<u8> {
-            let mut data = data.to_vec();
-            while !data.len().is_multiple_of(4) {
-                data.push(pad);
-            }
-            let mut out = (data.len() as u32).to_le_bytes().to_vec();
-            out.extend(kind);
-            out.extend(data);
-            out
-        }
-        let mut body = chunk(*b"JSON", json.to_string().as_bytes(), b' ');
-        body.extend(chunk(*b"BIN\0", bin, 0));
-        let mut out = b"glTF".to_vec();
-        out.extend(2u32.to_le_bytes());
-        out.extend(((12 + body.len()) as u32).to_le_bytes());
-        out.extend(body);
-        out
-    }
-
-    fn install_with(file_dir: &str, file_name: &str, bytes: &[u8]) -> tempfile::TempDir {
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("Meshes").join(file_dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(file_name), bytes).unwrap();
-        root
-    }
-
     #[test]
     fn the_dome_of_a_nif_path_loads_from_its_glb_whatever_the_stored_casing() {
         let root = install_with("SKY", "Stars.glb", &triangle_glb());
@@ -551,13 +553,19 @@ pub(super) mod gpu {
 
     /// A camera at the origin looking down -Z with a 90 degree view and the infinite reverse-Z
     /// projection of the game.
-    fn frame_uniform() -> FrameUniform {
+    pub(in super::super) fn frame_uniform() -> FrameUniform {
         let mut uniform: FrameUniform = bytemuck::Zeroable::zeroed();
         uniform.view_proj = Mat4::perspective_infinite_reverse_rh(FRAC_PI_2, 1.0, 0.1);
         uniform
     }
 
     pub(in super::super) fn rig(test: &str) -> Option<Rig> {
+        rig_with_frame(test, &frame_uniform())
+    }
+
+    /// A rig whose frame group holds `frame`, for layers that read more of it than the
+    /// projection.
+    pub(in super::super) fn rig_with_frame(test: &str, frame: &FrameUniform) -> Option<Rig> {
         let (device, queue) = test_device(test)?;
         let material_layout = uniform_layout(&device, "night_sky_test_material_bgl");
         let frame_layout = uniform_layout(&device, "night_sky_test_frame_bgl");
@@ -574,7 +582,7 @@ pub(super) mod gpu {
                 &device,
                 "night_sky_test_frame",
                 &frame_layout,
-                bytemuck::bytes_of(&frame_uniform()),
+                bytemuck::bytes_of(frame),
             ),
             uniform_group(
                 &device,
@@ -903,7 +911,7 @@ pub(super) mod gpu {
         }
     }
 
-    fn star_layer(rig: &Rig) -> (StarLayer, [AssetState; 2]) {
+    pub(in super::super) fn star_layer(rig: &Rig) -> (StarLayer, [AssetState; 2]) {
         let mut layer = StarLayer::new(&rig.device, rig.world_groups());
         let texture = layer.install_texture(&rig.device, Ok(white_texture(rig, TEXTURE_EDGE)));
         let mesh = layer.install_mesh(&rig.device, Some(Ok(covering_dome())));
@@ -918,7 +926,7 @@ pub(super) mod gpu {
         render(rig, SKY_CLEAR, |pass| layer.draw(pass))
     }
 
-    fn unturned(alpha: f32, scale: f32) -> StarUniform {
+    pub(in super::super) fn unturned(alpha: f32, scale: f32) -> StarUniform {
         StarUniform::new(
             StarRotation {
                 axis: Vec3::Y,

@@ -1,6 +1,6 @@
 use glam::{Vec3, Vec4};
 
-use super::assets::{AssetFailureKind, AssetState, SkyAssetError, sun_texture_key};
+use super::assets::{AssetFailureKind, AssetState, SkyAssetError, named_texture_key};
 use super::sun::{SunInput, SunLayer, SunSizes, SunUniform, SunUniforms};
 use super::tests::gpu::{
     Rig, SKY_CLEAR, WorldDraw, feedback_group, pattern_texture, render, rig, texel, white_texture,
@@ -126,13 +126,13 @@ mod keys {
     use super::*;
 
     #[test]
-    fn a_sun_texture_key_names_the_file_below_the_textures_in_lower_case() {
+    fn a_named_texture_key_names_the_file_below_the_textures_in_lower_case() {
         assert_eq!(
-            sun_texture_key("Sky\\Sun_d.dds"),
+            named_texture_key("Sky\\Sun_d.dds"),
             "textures\\sky\\sun_d.dds"
         );
         assert_eq!(
-            sun_texture_key("Sky/SunGlare.DDS"),
+            named_texture_key("Sky/SunGlare.DDS"),
             "textures\\sky\\sunglare.dds"
         );
     }
