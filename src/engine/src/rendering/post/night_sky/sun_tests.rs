@@ -1,9 +1,10 @@
 use glam::{Vec3, Vec4};
 
-use super::assets::{AssetFailureKind, AssetState, SkyAssetError, named_texture_key};
+use super::assets::{AssetFailureKind, AssetState, SkyAssetError};
 use super::sun::{SunInput, SunLayer, SunSizes, SunUniform, SunUniforms};
 use super::tests::gpu::{
-    Rig, SKY_CLEAR, WorldDraw, feedback_group, pattern_texture, render, rig, texel, white_texture,
+    Rig, SKY_CLEAR, WorldDraw, feedback_group, missing_texture, pattern_texture, render, rig,
+    texel, white_texture,
 };
 use super::{NightSky, NightSkyInput, SkySizes};
 use crate::assets::ini::{GameIni, IniError};
@@ -118,22 +119,6 @@ mod sizes {
         assert!(
             sun_sprite_edge_deg(SunSizes::VANILLA.glare)
                 > sun_sprite_edge_deg(SunSizes::VANILLA.base)
-        );
-    }
-}
-
-mod keys {
-    use super::*;
-
-    #[test]
-    fn a_named_texture_key_names_the_file_below_the_textures_in_lower_case() {
-        assert_eq!(
-            named_texture_key("Sky\\Sun_d.dds"),
-            "textures\\sky\\sun_d.dds"
-        );
-        assert_eq!(
-            named_texture_key("Sky/SunGlare.DDS"),
-            "textures\\sky\\sunglare.dds"
         );
     }
 }
@@ -296,10 +281,7 @@ mod gpu {
     type Texture = Option<Result<wgpu::TextureView, SkyAssetError>>;
 
     fn not_found(key: &str) -> Result<wgpu::TextureView, SkyAssetError> {
-        Err(SkyAssetError::NotFound {
-            key: key.to_owned(),
-            source: std::io::Error::from(std::io::ErrorKind::NotFound),
-        })
+        Err(missing_texture(key))
     }
 
     fn sun_layer(rig: &Rig, disc: Texture, glare: Texture) -> (SunLayer, [AssetState; 2]) {

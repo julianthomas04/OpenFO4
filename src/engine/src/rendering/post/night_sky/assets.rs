@@ -9,9 +9,8 @@ use crate::assets::layout::texture_key;
 use crate::assets::resolve::resolve_below;
 use crate::assets::types::glb_key::glb_key;
 use crate::assets::types::mesh::{CpuMesh, Topology};
-use crate::assets::types::texture::TextureError;
 use crate::rendering::lighting::time_of_day::{MoonKind, MoonPhase, texture_stem};
-use crate::rendering::texture::load_dds_view_srgb;
+use crate::rendering::texture::{TextureAssetError, load_texture_asset_srgb};
 use crate::rendering::vertex::Vertex;
 
 const SKY_TEXTURE_FOLDER: &str = "sky";
@@ -24,24 +23,20 @@ pub(super) const PLACEHOLDER_MAX_EDGE: u32 = 16;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SkyAssetError {
-    #[error("sky asset '{key}' is not in the install: {source}")]
+    #[error("sky mesh '{key}' is not in the install: {source}")]
     NotFound {
         key: String,
         #[source]
         source: io::Error,
     },
-    #[error("sky asset '{key}' cannot be read: {source}")]
+    #[error("sky mesh '{key}' cannot be read: {source}")]
     Unreadable {
         key: String,
         #[source]
         source: io::Error,
     },
-    #[error("sky texture '{key}' is unusable: {source}")]
-    Texture {
-        key: String,
-        #[source]
-        source: TextureError,
-    },
+    #[error(transparent)]
+    Texture(#[from] TextureAssetError),
     #[error("sky mesh '{key}' is unusable: {reason}")]
     Mesh { key: String, reason: String },
     #[error("sky mesh '{key}' has no triangles")]
@@ -67,9 +62,13 @@ pub struct AssetFailure {
 impl SkyAssetError {
     pub fn kind(&self) -> AssetFailureKind {
         match self {
-            Self::NotFound { .. } => AssetFailureKind::NotFound,
-            Self::Unreadable { .. } => AssetFailureKind::Unreadable,
-            Self::Texture { .. } => AssetFailureKind::Texture,
+            Self::NotFound { .. } | Self::Texture(TextureAssetError::NotFound { .. }) => {
+                AssetFailureKind::NotFound
+            }
+            Self::Unreadable { .. } | Self::Texture(TextureAssetError::Unreadable { .. }) => {
+                AssetFailureKind::Unreadable
+            }
+            Self::Texture(TextureAssetError::Unusable { .. }) => AssetFailureKind::Texture,
             Self::Mesh { .. } => AssetFailureKind::Mesh,
             Self::NoTriangles { .. } => AssetFailureKind::NoTriangles,
         }
@@ -129,12 +128,6 @@ pub(super) fn star_texture_key() -> String {
     sky_texture_key(STAR_TEXTURE_STEM)
 }
 
-/// The key of a texture the climate or weather names by its path below the textures folder
-/// (`Sky\Sun_d.dds`, `Sky\CloudsLower01_d.dds`).
-pub(super) fn named_texture_key(path: &str) -> String {
-    texture_key(&path.to_ascii_lowercase().replace('/', "\\"))
-}
-
 fn sky_texture_key(stem: &str) -> String {
     texture_key(&format!(
         "{SKY_TEXTURE_FOLDER}\\{}.{DDS_EXTENSION}",
@@ -142,8 +135,8 @@ fn sky_texture_key(stem: &str) -> String {
     ))
 }
 
-/// The path below `asset_root` that `key` names. A file that is not there is told apart from
-/// one that cannot be looked up (permissions, a broken disk).
+/// The path below `asset_root` that the mesh `key` names. A file that is not there is told apart
+/// from one that cannot be looked up (permissions, a broken disk).
 fn resolve(asset_root: &str, key: &str) -> Result<String, SkyAssetError> {
     resolve_below(Path::new(asset_root), key).map_err(|source| {
         let key = key.to_owned();
@@ -155,21 +148,14 @@ fn resolve(asset_root: &str, key: &str) -> Result<String, SkyAssetError> {
     })
 }
 
-/// The sRGB-decoding view of the texture `key` below `asset_root`, which may differ from the
-/// stored casing.
+/// The sRGB-decoding view of the texture `key` below `asset_root`.
 pub(super) fn load_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     asset_root: &str,
     key: &str,
 ) -> Result<wgpu::TextureView, SkyAssetError> {
-    let relative = resolve(asset_root, key)?;
-    load_dds_view_srgb(device, queue, asset_root, &relative).map_err(|source| {
-        SkyAssetError::Texture {
-            key: key.to_owned(),
-            source,
-        }
-    })
+    Ok(load_texture_asset_srgb(device, queue, asset_root, key)?)
 }
 
 /// The indices of `mesh` when it is a triangle list, which must stay within its vertices; `None`

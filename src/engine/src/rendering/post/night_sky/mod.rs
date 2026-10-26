@@ -34,13 +34,14 @@ use layer::WorldGroupLayouts;
 pub use moon::MoonSizes;
 pub use sun::{SunInput, SunSizes};
 
-use assets::{load_star_geometry, load_texture, named_texture_key, star_texture_key};
+use assets::{load_star_geometry, load_texture, star_texture_key};
 use cloud_geometry::{DEFAULT_MODEL, load_cloud_geometry};
 use clouds::CloudLayer;
 use moon::{MoonLayer, MoonUniform};
 use stars::{StarLayer, StarUniform};
 use sun::{SunLayer, SunUniforms};
 
+use crate::assets::layout::named_texture_key;
 use crate::rendering::lighting::time_of_day::unmeasured::moon_angular_diameter_deg;
 use crate::rendering::lighting::time_of_day::{
     ClimateSunTextures, MoonKind, MoonPhase, SkyObjects, StarRotation,

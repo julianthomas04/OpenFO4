@@ -4,22 +4,24 @@ use std::sync::Arc;
 use glam::{Vec2, Vec3, Vec4};
 use serde_json::{Value, json};
 
-use super::assets::{AssetFailureKind, AssetState, SkyAssetError, load_texture, named_texture_key};
+use super::assets::{AssetFailureKind, AssetState, SkyAssetError, load_texture};
 use super::cloud_geometry::{CloudGeometry, CloudVertex, DEFAULT_MODEL, load_cloud_geometry};
 use super::cloud_scroll::{ScrollOffsets, wrap_scroll};
 use super::clouds::{CloudLayer, CloudLayerDraw, CloudUniform, CloudsInput, MAX_DRAWS, plan_draws};
 use super::tests::gpu::{
-    Rig, SKY_CLEAR, WorldDraw, feedback_group, frame_uniform, pattern_texture, render, rig,
-    rig_with_frame, star_layer, texel, unturned, white_texture,
+    Rig, SKY_CLEAR, WorldDraw, feedback_group, frame_uniform, missing_texture, pattern_texture,
+    render, rig, rig_with_frame, star_layer, texel, unturned, white_texture,
 };
 use super::tests::{glb, install_with};
 use super::{NightSky, NightSkyInput, SkySizes, SunInput};
+use crate::assets::layout::named_texture_key;
 use crate::assets::types::mesh::{CpuMesh, Topology};
 use crate::rendering::lighting::time_of_day::unmeasured::{
     CLOUD_HORIZON_HAZE_SINE, CLOUD_SCROLL_SCALE,
 };
 use crate::rendering::lighting::time_of_day::{ClimateSunTextures, StarRotation};
 use crate::rendering::shaders;
+use crate::rendering::texture::TextureAssetError;
 use crate::rendering::vertex::Vertex;
 
 const TEXTURE: &str = "Sky\\Test_d.dds";
@@ -809,10 +811,7 @@ mod gpu {
     }
 
     fn not_found(key: &str) -> SkyAssetError {
-        SkyAssetError::NotFound {
-            key: key.to_owned(),
-            source: std::io::Error::from(std::io::ErrorKind::NotFound),
-        }
+        missing_texture(key)
     }
 
     type Mesh = (Vec<CloudVertex>, Vec<u32>);
@@ -1610,7 +1609,13 @@ mod real_install {
             assert!(loaded.is_ok(), "{file}: {:?}", loaded.err());
         }
         let error = load("SkySky\\GS01_d.dds").unwrap_err();
-        assert!(matches!(error, SkyAssetError::NotFound { .. }), "{error}");
+        assert!(
+            matches!(
+                error,
+                SkyAssetError::Texture(TextureAssetError::NotFound { .. })
+            ),
+            "{error}"
+        );
     }
 
     #[test]

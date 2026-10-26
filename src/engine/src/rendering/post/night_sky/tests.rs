@@ -16,6 +16,7 @@ use super::stars::{StarLayer, StarUniform};
 use super::sun::SunInput;
 use super::{MoonInput, NightSky, NightSkyInput, SkySizes, WorldGroupLayouts};
 use crate::assets::types::mesh::{CpuMesh, Topology};
+use crate::assets::types::texture::TextureError;
 use crate::rendering::gpu_test::test_device;
 use crate::rendering::lighting::frame_uniform::FrameUniform;
 use crate::rendering::lighting::time_of_day::unmeasured::{
@@ -27,7 +28,7 @@ use crate::rendering::lighting::time_of_day::{
 use crate::rendering::post::dof_test_support::{read_hdr, view_of};
 use crate::rendering::post::hdr_target::HDR_FORMAT;
 use crate::rendering::shaders;
-use crate::rendering::texture::Texture;
+use crate::rendering::texture::{Texture, TextureAssetError};
 use crate::rendering::vertex::Vertex;
 
 fn sun_input() -> SunInput {
@@ -421,6 +422,15 @@ pub(super) mod gpu {
     pub(in super::super) const SIZE: UVec2 = UVec2::new(16, 16);
     const TEXTURE_EDGE: u32 = 16;
     pub(in super::super) const SKY_CLEAR: f32 = 0.0;
+
+    /// What loading the texture `key` fails with in an install that lacks the file.
+    pub(in super::super) fn missing_texture(key: &str) -> SkyAssetError {
+        TextureAssetError::NotFound {
+            key: key.to_owned(),
+            source: std::io::Error::from(std::io::ErrorKind::NotFound),
+        }
+        .into()
+    }
 
     pub(in super::super) struct Rig {
         pub(in super::super) device: wgpu::Device,
@@ -853,10 +863,7 @@ pub(super) mod gpu {
         };
         let white = white_texture(&rig, TEXTURE_EDGE);
         let textures: PhaseTextures = std::array::from_fn(|index| match index {
-            i if i == MOON_PHASE.index() => Err(SkyAssetError::NotFound {
-                key: "textures\\sky\\masser_full.dds".to_owned(),
-                source: std::io::Error::from(std::io::ErrorKind::NotFound),
-            }),
+            i if i == MOON_PHASE.index() => Err(missing_texture("textures\\sky\\masser_full.dds")),
             i if i == MoonPhase::New.index() => Ok(white_texture(&rig, 8)),
             _ => Ok(white.clone()),
         });
@@ -1058,10 +1065,7 @@ pub(super) mod gpu {
         let mut no_texture = StarLayer::new(&rig.device, rig.world_groups());
         let state = no_texture.install_texture(
             &rig.device,
-            Err(SkyAssetError::NotFound {
-                key: "textures\\sky\\skystars.dds".to_owned(),
-                source: std::io::Error::from(std::io::ErrorKind::NotFound),
-            }),
+            Err(missing_texture("textures\\sky\\skystars.dds")),
         );
         no_texture.install_mesh(&rig.device, Some(Ok(covering_dome())));
 
@@ -1385,6 +1389,23 @@ mod error_typing {
             SkyAssetError::NoTriangles {
                 key: "a".to_owned(),
             },
+            TextureAssetError::NotFound {
+                key: "a".to_owned(),
+                source: io(),
+            }
+            .into(),
+            TextureAssetError::Unreadable {
+                key: "a".to_owned(),
+                source: io(),
+            }
+            .into(),
+            TextureAssetError::Unusable {
+                key: "a".to_owned(),
+                source: TextureError::BadMagic {
+                    path: "a".to_owned(),
+                },
+            }
+            .into(),
         ];
         let kinds = errors.map(|error| match AssetState::failed(&error) {
             AssetState::Failed(failure) => failure.kind,
@@ -1396,7 +1417,10 @@ mod error_typing {
                 AssetFailureKind::NotFound,
                 AssetFailureKind::Unreadable,
                 AssetFailureKind::Mesh,
-                AssetFailureKind::NoTriangles
+                AssetFailureKind::NoTriangles,
+                AssetFailureKind::NotFound,
+                AssetFailureKind::Unreadable,
+                AssetFailureKind::Texture,
             ]
         );
     }
