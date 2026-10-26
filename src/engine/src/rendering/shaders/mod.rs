@@ -40,6 +40,7 @@ pub const OBJECT: ShaderSource = ShaderSource {
         include_str!("lamp_shadow.wgsl"),
         include_str!("mip_debug.wgsl"),
         include_str!("texture_feedback.wgsl"),
+        include_str!("fog.wgsl"),
         include_str!("lighting.wgsl"),
         include_str!("surface.wgsl"),
         include_str!("env_reflection.wgsl"),
@@ -63,6 +64,7 @@ pub const TERRAIN: ShaderSource = ShaderSource {
         include_str!("lamp_shadow.wgsl"),
         include_str!("mip_debug.wgsl"),
         include_str!("texture_feedback.wgsl"),
+        include_str!("fog.wgsl"),
         include_str!("lighting.wgsl"),
         include_str!("terrain.wgsl"),
     ),
@@ -139,6 +141,16 @@ pub const SKELETON_OVERLAY: ShaderSource = ShaderSource {
         include_str!("light_data.wgsl"),
         include_str!("frame.wgsl"),
         include_str!("skeleton_overlay.wgsl"),
+    ),
+};
+
+pub const RAIN: ShaderSource = ShaderSource {
+    label: "rain_shader",
+    wgsl: concat!(
+        include_str!("light_data.wgsl"),
+        include_str!("frame.wgsl"),
+        include_str!("fog.wgsl"),
+        include_str!("rain.wgsl"),
     ),
 };
 
@@ -262,6 +274,7 @@ pub const SKINNED_OBJECT: ShaderSource = ShaderSource {
         include_str!("lamp_shadow.wgsl"),
         include_str!("mip_debug.wgsl"),
         include_str!("texture_feedback.wgsl"),
+        include_str!("fog.wgsl"),
         include_str!("lighting.wgsl"),
         include_str!("surface.wgsl"),
         include_str!("env_reflection.wgsl"),
@@ -305,6 +318,7 @@ const ALL: &[&ShaderSource] = &[
     &TONEMAP,
     &DEBUG_LINES,
     &SKELETON_OVERLAY,
+    &RAIN,
     &OBJECT_CULL,
     &TERRAIN_CULL,
     &SHADOW,

@@ -38,6 +38,7 @@ gpu_passes! {
     WaterDisplacement => "water displacement",
     WaterSsr => "water ssr",
     Water => "water",
+    Rain => "rain",
     HizBuild => "hiz build",
     AutoExposure => "auto exposure",
     Tonemap => "tonemap",
@@ -149,6 +150,13 @@ mod tests {
         );
         assert!(GpuPass::RainOcclusion.is_amortised());
         assert_eq!(GpuPass::RainOcclusion.label(), "rain occlusion");
+    }
+
+    #[test]
+    fn the_rain_is_timed_right_after_the_water_pass_and_on_every_frame() {
+        assert_eq!(GpuPass::Rain.index(), GpuPass::Water.index() + 1);
+        assert!(!GpuPass::Rain.is_amortised());
+        assert_eq!(GpuPass::Rain.label(), "rain");
     }
 
     #[test]
