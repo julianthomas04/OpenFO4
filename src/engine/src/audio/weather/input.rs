@@ -1,7 +1,7 @@
 //! What the weather sounds need to know each frame, as plain values: nothing here knows the
 //! database, the simulation or the renderer.
 
-use crate::weather::{FadeRange, TransitionSide, WeatherId, fraction};
+use crate::weather::{FadeRange, TransitionSide, WeatherId};
 
 /// One of the weathers that show, and how strongly its sounds do.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -27,18 +27,10 @@ impl WeatherSide {
     ) -> Self {
         Self {
             weather,
-            weight: weight(side),
+            weight: side.weight(),
             precipitation: precipitation_fade.intensity(side),
             wind: wind_speed,
         }
-    }
-}
-
-fn weight(side: TransitionSide) -> f32 {
-    match side {
-        TransitionSide::Settled => 1.0,
-        TransitionSide::Incoming { progress } => fraction(progress),
-        TransitionSide::Outgoing { progress } => 1.0 - fraction(progress),
     }
 }
 
@@ -97,22 +89,6 @@ mod tests {
 
             assert_eq!(incoming.weight, progress);
             assert_eq!(incoming.weight + outgoing.weight, 1.0, "{progress}");
-        }
-    }
-
-    #[test]
-    fn a_progress_outside_the_transition_or_not_a_number_still_gives_a_weight_from_zero_to_one() {
-        for progress in [-1.0, 2.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-            for transition in [
-                TransitionSide::Incoming { progress },
-                TransitionSide::Outgoing { progress },
-            ] {
-                let weight = side(transition).weight;
-                assert!(
-                    (0.0..=1.0).contains(&weight),
-                    "{transition:?} gave {weight}"
-                );
-            }
         }
     }
 

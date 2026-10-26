@@ -53,7 +53,7 @@ fn ids(library: &WeatherLibrary) -> impl Iterator<Item = WeatherId> {
 }
 
 fn side(library: &WeatherLibrary, weather: WeatherId, transition: TransitionSide) -> WeatherSide {
-    let def = library.weather(weather);
+    let def = library.get(weather).unwrap();
     WeatherSide::new(weather, transition, def.precipitation_fade, def.wind.speed)
 }
 
@@ -91,7 +91,7 @@ fn every_weather_of_the_commonwealth_opens_and_asks_for_loops_whose_files_exist(
         audio.missing_files()
     );
     for weather in ids(&library) {
-        let def = library.weather(weather);
+        let def = library.get(weather).unwrap();
         let input = outdoors(
             vec![side(&library, weather, TransitionSide::Settled)],
             vec![],
@@ -131,7 +131,7 @@ fn every_storm_of_the_commonwealth_plays_thunder_layers_whose_files_exist() {
     let mut audio = weather_audio(&library);
     let mut storms = 0;
     for weather in ids(&library) {
-        let def = library.weather(weather);
+        let def = library.get(weather).unwrap();
         if !def
             .sounds
             .iter()
@@ -195,8 +195,8 @@ fn every_transition_between_commonwealth_weathers_asks_for_audible_loops() {
                 assert!(
                     target.gain_db.is_finite(),
                     "{} to {}: {target:?}",
-                    library.weather(from).form_key,
-                    library.weather(to).form_key
+                    library.get(from).unwrap().form_key,
+                    library.get(to).unwrap().form_key
                 );
             }
         }
