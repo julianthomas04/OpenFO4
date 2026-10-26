@@ -198,6 +198,14 @@ namespace InstallerTests
             return record;
         }
 
+        public ShaderParticleGeometry AddShaderParticleGeometry(string editorId, Action<ShaderParticleGeometry> configure)
+        {
+            var record = _mod.ShaderParticleGeometries.AddNew(editorId);
+            configure(record);
+            Register(editorId, record.FormKey);
+            return record;
+        }
+
         public LandscapeTexture AddLandscapeTexture(string editorId, Action<LandscapeTexture>? configure = null)
         {
             var record = _mod.LandscapeTextures.AddNew(editorId);

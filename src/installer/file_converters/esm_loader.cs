@@ -544,6 +544,12 @@ namespace AssetConverter
             ("lights", "god_rays_near_clip", "REAL"),
             ("material_swap_entries", "material_name", "TEXT"),
             ("weather", "directional_ambient", "TEXT"),
+            ("weather", "clouds", "TEXT"),
+            ("weather", "data", "TEXT"),
+            ("climates", "volatility", "INTEGER"),
+            ("shader_particle_geometries", "data", "TEXT"),
+            ("shader_particle_geometries", "particle_material", "TEXT"),
+            ("shader_particle_geometries", "particle_texture", "TEXT"),
             ("worldspaces", "climate", "TEXT"),
             ("worldspaces", "water_type", "TEXT"),
             ("worldspaces", "lod_water_type", "TEXT"),
@@ -2472,16 +2478,13 @@ namespace AssetConverter
 
     public class TextureSetProcessor : BaseRecordProcessor<ITextureSetGetter>
     {
-        private readonly record struct MaterialTextures(string? Diffuse, string? Normal, string? Specular);
-
-        private readonly string? _materialsRoot; // null disables MNAM resolution
-        private readonly ConcurrentDictionary<string, MaterialTextures?> _matCache = new(); // null value = known miss
+        private readonly MaterialTextureResolver _materials; // no materials root disables MNAM resolution
         private int _resolvedFromMaterial;
         private int _materialMisses;
 
         public TextureSetProcessor(string? materialsRoot = null)
         {
-            _materialsRoot = materialsRoot;
+            _materials = new MaterialTextureResolver(materialsRoot);
         }
 
         protected override async Task ProcessSpecificRecordAsync(ITextureSetGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
@@ -2497,9 +2500,9 @@ namespace AssetConverter
 
             // MNAM-only texture sets (common for landscape debris/rubble) carry their
             // texture paths inside a BGSM/BGEM material instead of TX00-TX02.
-            if (string.IsNullOrWhiteSpace(diffuse) && !string.IsNullOrWhiteSpace(materialPath) && _materialsRoot != null)
+            if (string.IsNullOrWhiteSpace(diffuse) && !string.IsNullOrWhiteSpace(materialPath) && _materials.Enabled)
             {
-                var mat = ResolveMaterial(materialPath);
+                var mat = _materials.Resolve(materialPath);
                 if (mat is { } m)
                 {
                     if (string.IsNullOrWhiteSpace(diffuse)) diffuse = m.Diffuse;
@@ -2525,70 +2528,6 @@ namespace AssetConverter
                 Material = materialPath,
                 Flags = SafeSerialize(record.Flags)
             }, transaction);
-        }
-
-        private MaterialTextures? ResolveMaterial(string mnamPath)
-        {
-            string rel = mnamPath.Trim().Replace('/', '\\').TrimStart('\\');
-            if (rel.StartsWith("materials\\", StringComparison.OrdinalIgnoreCase))
-                rel = rel.Substring("materials\\".Length);
-
-            return _matCache.GetOrAdd(rel.ToLowerInvariant(), _ => ParseMaterialFile(rel));
-        }
-
-        private MaterialTextures? ParseMaterialFile(string rel)
-        {
-            if (_materialsRoot == null) return null;
-            string path = Path.Combine(_materialsRoot, "Materials", rel);
-            if (!File.Exists(path))
-            {
-                path = Path.Combine(_materialsRoot, rel);
-                if (!File.Exists(path)) return null;
-            }
-
-            try
-            {
-                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read);
-                using var reader = new BinaryReader(stream);
-                uint signature = reader.ReadUInt32();
-                stream.Position = 0;
-
-                if (signature == BGSM.Signature)
-                {
-                    var bgsm = new BGSM();
-                    bgsm.Open(stream);
-                    return new MaterialTextures(
-                        NormalizeTexturePath(bgsm.DiffuseTexture),
-                        NormalizeTexturePath(bgsm.NormalTexture),
-                        NormalizeTexturePath(bgsm.SmoothSpecTexture));
-                }
-                if (signature == BGEM.Signature)
-                {
-                    var bgem = new BGEM();
-                    bgem.Open(stream);
-                    return new MaterialTextures(
-                        NormalizeTexturePath(bgem.BaseTexture),
-                        NormalizeTexturePath(bgem.NormalTexture),
-                        NormalizeTexturePath(bgem.SpecularTexture));
-                }
-                return null;
-            }
-            catch (Exception e) when (BaseMaterialFile.IsReadFailure(e))
-            {
-                Console.WriteLine($"[WARN] Unreadable material '{path}': {e.Message}");
-                return null;
-            }
-        }
-
-        // Match the TX00-derived row convention: backslashes, relative to the textures folder
-        // (the engine prepends "textures/" when loading).
-        private static string? NormalizeTexturePath(string? p)
-        {
-            if (string.IsNullOrWhiteSpace(p)) return null;
-            var clean = p.Replace('/', '\\').TrimStart('\\');
-            if (clean.StartsWith("textures\\", StringComparison.OrdinalIgnoreCase))
-                clean = clean.Substring("textures\\".Length);
-            return clean;
         }
 
         protected override void PrintSummary()
@@ -3118,7 +3057,7 @@ namespace AssetConverter
 
     public class WeatherProcessor : BaseRecordProcessor<IWeatherGetter>
     {
-        private static readonly string[] TimesOfDay =
+        internal static readonly string[] TimesOfDay =
             { "Sunrise", "Day", "Sunset", "Night", "EarlySunrise", "LateSunrise", "EarlySunset", "LateSunset" };
 
         internal static object Rgb(System.Drawing.Color c) => new { c.R, c.G, c.B };
@@ -3126,7 +3065,7 @@ namespace AssetConverter
         private static Dictionary<string, T> ByTimeOfDay<T>(Func<string, T> select) =>
             TimesOfDay.ToDictionary(t => t, select);
 
-        private static System.Drawing.Color Slot(IWeatherColorGetter group, string time) => time switch
+        internal static System.Drawing.Color Slot(IWeatherColorGetter group, string time) => time switch
         {
             "Sunrise" => group.Sunrise,
             "Day" => group.Day,
@@ -3223,8 +3162,8 @@ namespace AssetConverter
 
         protected override async Task ProcessSpecificRecordAsync(IWeatherGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
         {
-            const string sql = @"INSERT OR REPLACE INTO weather (form_key, editor_id, precipitation, fog, colors, image_spaces, sounds, god_rays, directional_ambient)
-                VALUES (@FormKey, @EditorId, @Precipitation, @Fog, @Colors, @ImageSpaces, @Sounds, @GodRays, @DirectionalAmbient)";
+            const string sql = @"INSERT OR REPLACE INTO weather (form_key, editor_id, precipitation, fog, colors, image_spaces, sounds, god_rays, directional_ambient, clouds, data)
+                VALUES (@FormKey, @EditorId, @Precipitation, @Fog, @Colors, @ImageSpaces, @Sounds, @GodRays, @DirectionalAmbient, @Clouds, @Data)";
             await conn.ExecuteAsync(sql, new
             {
                 FormKey = formKey,
@@ -3233,12 +3172,63 @@ namespace AssetConverter
                 Fog = SafeSerialize(Fog(record)),
                 Colors = SafeSerialize(ColorGroups(record)),
                 ImageSpaces = SafeSerialize(ByTimeOfDay(t => Slot(record, t) is { IsNull: false } link ? link.FormKey.ToString() : null)),
-                Sounds = SafeSerialize(record.Sounds?.ToList()),
+                Sounds = SafeSerialize(WeatherJson.Sounds(record)),
                 GodRays = (string?)null,
                 DirectionalAmbient = record.DirectionalAmbientLightingColors is { } ambientColors
                     ? SafeSerialize(ByTimeOfDay(t => DirectionalAmbient(Slot(ambientColors, t))))
-                    : null
+                    : null,
+                Clouds = SafeSerialize(WeatherJson.Clouds(record)),
+                Data = SafeSerialize(WeatherJson.Data(record))
             }, transaction);
+        }
+    }
+
+    public class ShaderParticleGeometryProcessor : BaseRecordProcessor<IShaderParticleGeometryGetter>
+    {
+        private readonly MaterialTextureResolver _materials; // no materials root disables resolving the particle material
+        private int _resolvedFromMaterial;
+        private int _materialMisses;
+
+        public ShaderParticleGeometryProcessor(string? materialsRoot = null)
+        {
+            _materials = new MaterialTextureResolver(materialsRoot);
+        }
+
+        protected override async Task ProcessSpecificRecordAsync(IShaderParticleGeometryGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
+        {
+            string? material = string.IsNullOrEmpty(record.ParticleTexture) ? null : record.ParticleTexture;
+            string? texture = null;
+            if (material != null && _materials.Enabled)
+            {
+                texture = _materials.Resolve(material)?.Diffuse;
+                if (texture != null)
+                {
+                    _resolvedFromMaterial++;
+                }
+                else
+                {
+                    _materialMisses++;
+                    Console.Error.WriteLine(
+                        $"  CONVERSION ERROR SPGD {formKey} ({record.EditorID}): could not resolve particle material `{material}` to a texture");
+                }
+            }
+
+            await conn.ExecuteAsync(@"INSERT OR REPLACE INTO shader_particle_geometries (form_key, editor_id, data, particle_material, particle_texture) VALUES (@FormKey, @EditorId, @Data, @ParticleMaterial, @ParticleTexture)",
+                new
+                {
+                    FormKey = formKey,
+                    EditorId = record.EditorID,
+                    Data = SafeSerialize(ShaderParticleGeometryJson.Data(record)),
+                    ParticleMaterial = material,
+                    ParticleTexture = texture
+                }, transaction);
+        }
+
+        protected override void PrintSummary()
+        {
+            Console.WriteLine($"  Particle geometries resolved via BGEM material: {_resolvedFromMaterial}");
+            if (_materialMisses > 0)
+                Console.WriteLine($"  Particle geometries with unresolvable material: {_materialMisses}");
         }
     }
 
@@ -3767,8 +3757,8 @@ namespace AssetConverter
                 // Lowercased like model_path columns, which ModelPathNormalizer cannot reach inside JSON.
                 ModelPath = record.Model?.File?.ToLowerInvariant()
             };
-            await conn.ExecuteAsync(@"INSERT OR REPLACE INTO climates (form_key, editor_id, sun_texture, sun_glare_texture, data) VALUES (@FormKey, @EditorId, @SunTex, @SunGlareTex, @Data)",
-                new { FormKey = formKey, EditorId = record.EditorID, SunTex = record.SunTexture, SunGlareTex = record.SunGlareTexture, Data = SafeSerialize(data) }, transaction);
+            await conn.ExecuteAsync(@"INSERT OR REPLACE INTO climates (form_key, editor_id, sun_texture, sun_glare_texture, data, volatility) VALUES (@FormKey, @EditorId, @SunTex, @SunGlareTex, @Data, @Volatility)",
+                new { FormKey = formKey, EditorId = record.EditorID, SunTex = record.SunTexture, SunGlareTex = record.SunGlareTexture, Data = SafeSerialize(data), Volatility = (int)record.Volatility }, transaction);
         }
     }
 

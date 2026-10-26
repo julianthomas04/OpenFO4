@@ -33,6 +33,8 @@ namespace InstallerTests
             DescribeFixtureRecords();
             EsmPath = Plugin.Write(_directory.Path);
             RawEsmBuilder.AddRecordFlags(EsmPath, "REFR", Plugin.FormKeyOf("DeletedRef").ID, DeletedFlag);
+            ReplaceWeatherData("RawDataWeather", WeatherFixture.RawData);
+            ReplaceWeatherData("ShortDataWeather", WeatherFixture.RawData[..WeatherFixture.ShortDataLength]);
             ReplaceImageSpaceDof("FixtureImageSpace", [1f, -2500f, 3500f, FixtureImageSpaceMode, FixtureVignetteRadius, FixtureVignetteStrength]);
             ReplaceImageSpaceDof("FixtureImageSpaceWithoutVignette", [0.5f, 100f, 200f, FixtureShortImageSpaceMode]);
             AppendWaterCurrents("CELL", "FixtureExterior", CellCurrents);
@@ -44,6 +46,10 @@ namespace InstallerTests
         void ReplaceImageSpaceDof(string editorId, float[] dnamFloats) =>
             RawEsmBuilder.ReplaceSubrecord(EsmPath, "IMGS", Plugin.FormKeyOf(editorId).ID, "DNAM",
                 dnamFloats.SelectMany(BitConverter.GetBytes).ToArray());
+
+        /// <summary>Mutagen rewrites the WTHR DATA from its scaled model; the loader must recover the authored bytes.</summary>
+        void ReplaceWeatherData(string editorId, byte[] data) =>
+            RawEsmBuilder.ReplaceSubrecord(EsmPath, "WTHR", Plugin.FormKeyOf(editorId).ID, "DATA", data);
 
         void AppendWaterCurrents(string signature, string editorId, float[][] currents) =>
             RawEsmBuilder.AppendSubrecords(EsmPath, signature, Plugin.FormKeyOf(editorId).ID,
@@ -100,6 +106,7 @@ namespace InstallerTests
         {
             var plugin = Plugin;
             plugin.AddClimate("FixtureClimate");
+            plugin.AddClimate("VolatileClimate", climate => climate.Volatility = 60);
             plugin.AddClimate("MasserClimate", climate =>
             {
                 climate.PhaseLength = 4;
@@ -353,14 +360,53 @@ namespace InstallerTests
             plugin.PersistentCell.WaterHeight = 0f;
         }
 
-        static void DescribeWeather(TinyPlugin plugin) =>
+        static void DescribeWeather(TinyPlugin plugin)
+        {
+            plugin.AddSoundDescriptor("ThunderSound", descriptor => descriptor.Data = new SoundDescriptorStandardData());
             plugin.AddWeather("FixtureWeather", weather =>
             {
                 weather.SkyUpperColor.Day = TinyPlugin.Rgb(10, 20, 30);
                 weather.SkyUpperColor.Night = TinyPlugin.Rgb(1, 2, 3);
                 weather.FogDistanceDayNear = 100f;
                 weather.FogDistanceNightFar = 9000f;
+                weather.WindSpeed = new Percent(WeatherFixture.WindSpeed);
+                weather.WindTurbulance = new Percent(WeatherFixture.WindTurbulence);
+                weather.WindDirection = WeatherFixture.WindDirection;
+                weather.WindDirectionRange = WeatherFixture.WindDirectionRange;
+                weather.TransDelta = WeatherFixture.TransDelta;
+                weather.SunGlare = new Percent(WeatherFixture.SunGlare);
+                weather.ThunderLightningFrequency = new Percent(WeatherFixture.ThunderFrequency);
+                weather.LightningColor = TinyPlugin.Rgb(WeatherFixture.LightningRed, 200, 100);
+                weather.Flags = Weather.Flag.Cloudy | Weather.Flag.RainOcclusion;
+                weather.VolatilityMult = WeatherFixture.VolatilityMult;
+                foreach (var (raw, _) in WeatherFixture.SoundKinds)
+                    weather.Sounds.Add(new WeatherSound { Sound = new FormLink<ISoundDescriptorGetter>(plugin.FormKeyOf("ThunderSound")), Type = (WeatherSound.TypeEnum)raw });
+                weather.CloudTextures[WeatherFixture.TexturedCloudSlot] = WeatherFixture.CloudTexture;
+                var layer = weather.Clouds[WeatherFixture.ConfiguredCloudLayer];
+                layer.Enabled = true;
+                layer.Colors = new WeatherColor();
+                layer.Alphas = new WeatherAlpha();
+                layer.XSpeed = WeatherFixture.CloudXSpeed;
+                layer.YSpeed = WeatherFixture.CloudYSpeed;
+                layer.Colors.Day = TinyPlugin.Rgb(WeatherFixture.CloudDayRed, 20, 30);
+                layer.Colors.LateSunset = TinyPlugin.Rgb(4, 5, 6);
+                layer.Alphas.Day = WeatherFixture.CloudDayAlpha;
+                layer.Alphas.EarlySunrise = WeatherFixture.CloudEarlySunriseAlpha;
             });
+            plugin.AddWeather("RawDataWeather", _ => { });
+            plugin.AddWeather("ShortDataWeather", _ => { });
+            plugin.AddShaderParticleGeometry("SnowGeometry", geometry =>
+            {
+                geometry.Type = ShaderParticleGeometry.ShaderParticleType.Snow;
+                geometry.GravityVelocity = 1.5f;
+                geometry.ParticleSizeX = 0.25f;
+                geometry.NumSubtexturesX = 4f;
+                geometry.NumSubtexturesY = 2f;
+                geometry.BoxSize = 4096;
+                geometry.ParticleDensity = 0.5f;
+                geometry.ParticleTexture = WeatherFixture.ParticleMaterial;
+            });
+        }
 
         static void DescribeExteriorRefs(TinyPlugin plugin)
         {

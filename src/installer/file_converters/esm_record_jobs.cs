@@ -239,7 +239,7 @@ namespace AssetConverter
         Simple<IReverbParametersGetter>("REVB", "reverb_parameterses", f => f.EnumerateMajorRecords<IReverbParametersGetter>()),
         Simple<ISceneCollectionGetter>("STSC", "scene_collections", f => f.SceneCollections),
         Simple<ISceneGetter>("SCEN", "scenes", f => f.EnumerateMajorRecords<ISceneGetter>()),
-        Simple<IShaderParticleGeometryGetter>("SPGD", "shader_particle_geometries", f => f.ShaderParticleGeometries),
+        Job<IShaderParticleGeometryGetter>("SPGD", ["shader_particle_geometries"], f => f.ShaderParticleGeometries, l => new ShaderParticleGeometryProcessor(l._materialsRoot)),
         Simple<ISoundKeywordMappingGetter>("SKMA", "sound_keyword_mappings", f => f.SoundKeywordMappings),
         Simple<ISoundMarkerGetter>("SOUN", "sound_markers", f => f.SoundMarkers),
         Simple<ITransformGetter>("TRNS", "transforms", f => f.Transforms),

@@ -552,9 +552,11 @@ CREATE TABLE IF NOT EXISTS weather (
     fog TEXT,                           -- JSON
     colors TEXT,                        -- JSON
     image_spaces TEXT,                  -- JSON
-    sounds TEXT,                        -- JSON
+    sounds TEXT,                        -- JSON: [{kind, sound}]
     god_rays TEXT,
-    directional_ambient TEXT            -- JSON
+    directional_ambient TEXT,           -- JSON
+    clouds TEXT,                        -- JSON: model, textures, layers
+    data TEXT                           -- JSON: DATA block
 );
 
 -- ============================================
@@ -1004,7 +1006,8 @@ CREATE TABLE IF NOT EXISTS climates (
     editor_id TEXT,
     sun_texture TEXT,
     sun_glare_texture TEXT,
-    data TEXT                           -- JSON: Weathers, SunriseBegin/End, SunsetBegin/End, MoonPhaseLength, Moons, ModelPath
+    data TEXT,                          -- JSON: Weathers, SunriseBegin/End, SunsetBegin/End, MoonPhaseLength, Moons, ModelPath
+    volatility INTEGER                  -- CLMT TNAM volatility, raw byte
 );
 
 -- ============================================
@@ -1218,7 +1221,13 @@ CREATE TABLE IF NOT EXISTS reference_groups          (form_key TEXT PRIMARY KEY,
 CREATE TABLE IF NOT EXISTS reverb_parameterses       (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS scene_collections         (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS scenes                    (form_key TEXT PRIMARY KEY, editor_id TEXT);
-CREATE TABLE IF NOT EXISTS shader_particle_geometries (form_key TEXT PRIMARY KEY, editor_id TEXT);
+CREATE TABLE IF NOT EXISTS shader_particle_geometries (
+    form_key TEXT PRIMARY KEY,
+    editor_id TEXT,
+    data TEXT,                          -- JSON
+    particle_material TEXT,             -- authored BGEM path
+    particle_texture TEXT               -- the material's base texture
+);
 CREATE TABLE IF NOT EXISTS sound_keyword_mappings    (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS sound_markers             (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS transforms                (form_key TEXT PRIMARY KEY, editor_id TEXT);
