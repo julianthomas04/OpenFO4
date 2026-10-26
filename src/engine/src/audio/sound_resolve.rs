@@ -571,6 +571,27 @@ mod tests {
     }
 
     #[test]
+    fn a_compound_reached_through_two_parents_is_no_cycle_and_plays_for_each_of_them() {
+        let mut sounds = sounds();
+        for (parent, children) in [
+            ("left", &["dirt_sound"][..]),
+            ("right", &["dirt_sound"][..]),
+            ("outer", &["left", "right"][..]),
+        ] {
+            sounds
+                .descriptors
+                .insert(parent.to_string(), compound(parent, children));
+        }
+
+        let played = layers(&sounds, "outer", &HashSet::new()).unwrap();
+
+        let files = file_keys(&played);
+        assert_eq!(files.len(), 4, "{files:?}");
+        assert_eq!(files[1], DIRT_QUIET_FILE);
+        assert_eq!(files[3], DIRT_QUIET_FILE);
+    }
+
+    #[test]
     fn a_layer_with_every_file_missing_plays_nothing_while_its_siblings_still_play() {
         let missing = HashSet::from([DIRT_QUIET_FILE.to_string()]);
 
