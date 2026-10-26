@@ -4,6 +4,7 @@ use super::motion::{DropDrift, MAX_DROPS, MAX_SPLASHES, SPLASH_SECONDS};
 use super::occlusion::{EXTENT, HEIGHT_RANGE, OcclusionWindow};
 use super::uniform::{Fall, RainPlan, RainUniform};
 use super::*;
+use crate::bethesda_space::ENGINE_UNITS_PER_METER;
 use crate::rendering::shaders;
 
 const EYE: Vec3 = Vec3::new(1234.5, 300.0, -987.25);
@@ -128,11 +129,11 @@ mod plan {
 
         let uniform = plan_of(&input, &mapped_view()).uniform;
         assert!(
-            (uniform.across[3] - 1.5 * ENGINE_UNITS_PER_METRE).abs() < 1e-4,
+            (uniform.across[3] - 1.5 * ENGINE_UNITS_PER_METER).abs() < 1e-4,
             "the width"
         );
         assert!(
-            (uniform.along[3] - 0.35 * ENGINE_UNITS_PER_METRE).abs() < 1e-4,
+            (uniform.along[3] - 0.35 * ENGINE_UNITS_PER_METER).abs() < 1e-4,
             "the length"
         );
     }
@@ -143,7 +144,7 @@ mod plan {
             box_size: 0.0,
             ..downpour()
         });
-        assert!(fall.edge >= 4.0 * ENGINE_UNITS_PER_METRE);
+        assert!(fall.edge >= 4.0 * ENGINE_UNITS_PER_METER);
     }
 
     #[test]

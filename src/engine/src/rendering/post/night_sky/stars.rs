@@ -5,11 +5,12 @@ use glam::{Mat4, Quat};
 use wgpu::util::DeviceExt;
 
 use super::assets::{AssetState, SkyAssetError, StarGeometry, report};
-use super::layer::{self, LAYER_GROUP, LayerPipeline, WorldGroupLayouts, finite_or_zero};
+use super::layer::{self, LAYER_GROUP, LayerPipeline, WorldGroupLayouts};
 use crate::rendering::lighting::time_of_day::StarRotation;
 use crate::rendering::lighting::time_of_day::unmeasured::{STAR_HORIZON_FADE_SINE, STAR_RADIANCE};
 use crate::rendering::shaders;
 use crate::rendering::vertex::Vertex;
+use crate::utils::finite_or_zero;
 
 /// Mirrors `StarUniform` in `sky_stars.wgsl`.
 #[repr(C)]

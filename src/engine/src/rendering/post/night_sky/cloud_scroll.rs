@@ -5,8 +5,8 @@
 use glam::Vec2;
 
 use super::clouds::CloudLayerDraw;
-use super::layer::finite_or_zero;
 use crate::rendering::lighting::time_of_day::unmeasured::CLOUD_SCROLL_SCALE;
+use crate::utils::finite_or_zero;
 
 /// Every value of a layer index of the weather record.
 const LAYER_INDEX_COUNT: usize = u8::MAX as usize + 1;

@@ -5,13 +5,14 @@
 use glam::Vec3;
 
 use super::assets::{AssetState, SkyAssetError, report};
-use super::layer::{self, LAYER_GROUP, LayerPipeline, WorldGroupLayouts, finite_or_zero};
+use super::layer::{self, LAYER_GROUP, LayerPipeline, WorldGroupLayouts};
 use super::quad::quad_basis;
 use crate::assets::ini::{GameIni, IniError, IniKey};
 use crate::rendering::lighting::time_of_day::unmeasured::{
     SUN_DISC_RADIANCE, SUN_GLARE_RADIANCE, SUN_HORIZON_FADE_SINE, sun_sprite_edge_deg,
 };
 use crate::rendering::shaders;
+use crate::utils::finite_or_zero;
 
 const SUN_VERTEX_COUNT: u32 = 4;
 

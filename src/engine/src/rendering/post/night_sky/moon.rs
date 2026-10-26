@@ -7,11 +7,12 @@ use glam::Vec3;
 use super::assets::{
     AssetState, PLACEHOLDER_MAX_EDGE, SkyAssetError, load_texture, moon_texture_key, report,
 };
-use super::layer::{self, LAYER_GROUP, LayerPipeline, WorldGroupLayouts, finite_or_zero};
+use super::layer::{self, LAYER_GROUP, LayerPipeline, WorldGroupLayouts};
 use super::quad::quad_basis;
 use crate::rendering::lighting::time_of_day::unmeasured::MOON_RADIANCE;
 use crate::rendering::lighting::time_of_day::{MoonKind, MoonPhase};
 use crate::rendering::shaders;
+use crate::utils::finite_or_zero;
 
 const MOON_VERTEX_COUNT: u32 = 4;
 pub(super) type PhaseTextures = [Result<wgpu::TextureView, SkyAssetError>; MoonPhase::ALL.len()];

@@ -6,15 +6,15 @@
 
 use glam::{Mat4, Vec2, Vec3};
 
-use super::ENGINE_UNITS_PER_METRE;
+use crate::bethesda_space::ENGINE_UNITS_PER_METER;
 use crate::rendering::gpu_profiler::{GpuPass, GpuProfiler};
 use crate::rendering::shadows::ortho_map::{MAP_FORMAT, OrthoMapRender};
 use crate::rendering::shadows::views::{ShadowView, ViewCull};
 use crate::rendering::shadows::{ShadowRenderer, ShadowScene};
 
 pub const MAP_RESOLUTION: u32 = 512;
-const HALF_EXTENT: f32 = 48.0 * ENGINE_UNITS_PER_METRE;
-const HALF_HEIGHT: f32 = 80.0 * ENGINE_UNITS_PER_METRE;
+const HALF_EXTENT: f32 = 48.0 * ENGINE_UNITS_PER_METER;
+const HALF_HEIGHT: f32 = 80.0 * ENGINE_UNITS_PER_METER;
 /// Side of the square the map covers, in engine units.
 pub const EXTENT: f32 = 2.0 * HALF_EXTENT;
 /// The span of heights its depth covers, in engine units.

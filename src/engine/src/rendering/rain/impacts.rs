@@ -7,15 +7,12 @@
 use glam::Vec3;
 
 use crate::random::RandomSource;
+use crate::utils::finite_or_zero;
 
 /// The drops that strike a disc of water in a second at full intensity.
 pub const IMPACTS_PER_SECOND: f32 = 90.0;
 /// A longer frame counts as this long, so a stall does not release a burst of ripples.
 const LONGEST_STEP_SECONDS: f32 = 0.25;
-
-fn finite_or_zero(value: f32) -> f32 {
-    if value.is_finite() { value } else { 0.0 }
-}
 
 /// A whole number of impacts averaging `expected`: its integer part, and one more with the
 /// chance of its fraction.

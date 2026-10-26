@@ -15,9 +15,10 @@ use wgpu::util::DeviceExt;
 use super::assets::{AssetState, SkyAssetError, report};
 use super::cloud_geometry::{CloudGeometry, CloudVertex};
 use super::cloud_scroll::ScrollOffsets;
-use super::layer::{self, LAYER_GROUP, LayerPipeline, WorldGroupLayouts, finite_or_zero};
+use super::layer::{self, LAYER_GROUP, LayerPipeline, WorldGroupLayouts};
 use crate::rendering::lighting::time_of_day::unmeasured::CLOUD_HORIZON_HAZE_SINE;
 use crate::rendering::shaders;
+use crate::utils::finite_or_zero;
 
 /// A layer that is less opaque than this changes no 8 bit colour.
 const MIN_OPACITY: f32 = 1.0 / 255.0;

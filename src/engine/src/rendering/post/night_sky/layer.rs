@@ -14,10 +14,6 @@ const UNIFORM_BINDING: u32 = 0;
 const TEXTURE_BINDING: u32 = 1;
 const SAMPLER_BINDING: u32 = 2;
 
-pub(super) fn finite_or_zero(value: f32) -> f32 {
-    if value.is_finite() { value } else { 0.0 }
-}
-
 pub(super) fn bind_group_layout(device: &wgpu::Device, label: &str) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some(label),

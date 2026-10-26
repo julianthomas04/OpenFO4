@@ -28,8 +28,7 @@ use super::bake::{BakedRagdoll, CachedShape};
 use super::collider_user_data::{ColliderTag, unpack_ref};
 use super::collision::manifest_key;
 use super::dynamic_body::{
-    ENGINE_UNITS_PER_METER, body_builder, body_finite, density_for_mass, sanitize_body,
-    state_is_bounded, within_radius,
+    body_builder, body_finite, density_for_mass, sanitize_body, state_is_bounded, within_radius,
 };
 use super::ragdoll_spec::{JointKind, RagdollConstraint, RagdollSpec, RigidFrame};
 use super::ragdoll_tuning::{
@@ -38,6 +37,7 @@ use super::ragdoll_tuning::{
 };
 use super::water_physics::{WaterBodyState, WaterTarget};
 use super::{CellGrid, EntityId};
+use crate::bethesda_space::ENGINE_UNITS_PER_METER;
 
 /// Most ragdolls the sim keeps live (spawned as rapier bodies) at once, moved or
 /// not. Every ragdoll that can ever move is live, so this also bounds the skinned

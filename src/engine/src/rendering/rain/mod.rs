@@ -25,15 +25,8 @@ use occlusion::OcclusionWindow;
 use pipeline::{QUAD_VERTICES, RainPipelines, RainResources};
 use uniform::{Fall, RainPlan, RainUniform};
 
-use crate::bethesda_space::UNITS_TO_ENGINE;
 use crate::rendering::gpu_profiler::{GpuPass, GpuProfiler, SpanPart};
 use crate::rendering::lighting::frame_binding::FrameBinding;
-
-/// Bethesda game units to the metre.
-const GAME_UNITS_PER_METRE: f32 = 70.0;
-
-/// Engine units to the metre: the scale the rain constants are written in.
-pub const ENGINE_UNITS_PER_METRE: f32 = GAME_UNITS_PER_METRE * UNITS_TO_ENGINE;
 
 /// The rain of the weather, as its shader particle geometry (SPGD) record and the weather
 /// state give it.

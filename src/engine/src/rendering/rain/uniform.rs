@@ -8,29 +8,26 @@ use super::motion::{
     DropDrift, SplashPhase, StreakAxes, drop_count, fall_velocity, lattice_shift, splash_count,
 };
 use super::occlusion::{EXTENT, HEIGHT_RANGE};
-use super::{ENGINE_UNITS_PER_METRE, RainInput, RainView};
-use crate::bethesda_space::UNITS_TO_ENGINE;
+use super::{RainInput, RainView};
+use crate::bethesda_space::{ENGINE_UNITS_PER_METER, UNITS_TO_ENGINE};
+use crate::utils::finite_or_zero;
 
 /// The frames of the splash texture, side by side.
 pub(super) const SPLASH_FRAMES: u32 = 16;
 /// The edge of a splash's square.
-const SPLASH_SIZE: f32 = 0.5 * ENGINE_UNITS_PER_METRE;
+const SPLASH_SIZE: f32 = 0.5 * ENGINE_UNITS_PER_METER;
 /// How far from the camera splashes are placed.
-const SPLASH_RADIUS: f32 = 25.0 * ENGINE_UNITS_PER_METRE;
+const SPLASH_RADIUS: f32 = 25.0 * ENGINE_UNITS_PER_METER;
 /// The rain never falls through a box smaller than this, whatever the weather asks for.
-const MIN_BOX_EDGE: f32 = 4.0 * ENGINE_UNITS_PER_METRE;
+const MIN_BOX_EDGE: f32 = 4.0 * ENGINE_UNITS_PER_METER;
 /// A drop is invisible at the first of these distances from the camera and fully visible at
 /// the second.
-const NEAR_FADE: [f32; 2] = [0.6 * ENGINE_UNITS_PER_METRE, 3.0 * ENGINE_UNITS_PER_METRE];
+const NEAR_FADE: [f32; 2] = [0.6 * ENGINE_UNITS_PER_METER, 3.0 * ENGINE_UNITS_PER_METER];
 /// The share of half the box edge a drop is fully visible out to; beyond it the drop fades out
 /// before it leaves the box on one side and enters it on the other.
 const BOX_FADE_FROM: f32 = 0.6;
 /// The same for a splash and the circle of [`SPLASH_RADIUS`].
 const SPLASH_FADE_FROM: f32 = 0.7;
-
-fn finite_or_zero(value: f32) -> f32 {
-    if value.is_finite() { value } else { 0.0 }
-}
 
 fn clean(vector: Vec3) -> Vec3 {
     Vec3::new(
@@ -88,8 +85,8 @@ impl RainPlan {
     /// `drift` is where the drops have moved to by this frame.
     pub fn new(input: &RainInput, view: &RainView, fall: &Fall, drift: &DropDrift) -> Self {
         let intensity = finite_or_zero(input.intensity).clamp(0.0, 1.0);
-        let width = finite_or_zero(input.size.x).max(0.0) * ENGINE_UNITS_PER_METRE;
-        let length = finite_or_zero(input.size.y).max(0.0) * ENGINE_UNITS_PER_METRE;
+        let width = finite_or_zero(input.size.x).max(0.0) * ENGINE_UNITS_PER_METER;
+        let length = finite_or_zero(input.size.y).max(0.0) * ENGINE_UNITS_PER_METER;
         let has_streaks = width > 0.0 && length > 0.0;
         let axes = StreakAxes::new(fall.velocity, clean(view.forward));
         let eye = clean(view.eye);
