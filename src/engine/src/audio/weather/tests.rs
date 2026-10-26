@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use super::thunder::FAINTEST_THUNDER_DB;
 use super::*;
-use crate::assets::db::music::{Comparand, CompareOp};
+use crate::assets::db::music::{Comparand, CompareOp, Condition};
 use crate::assets::db::sound_catalog::{COMPOUND_DESCRIPTOR, SoundDescriptor};
 use crate::audio::conditions::{ConditionError, IS_IN_INTERIOR};
 use crate::audio::file_probe::ProbeError;
@@ -12,8 +12,8 @@ use crate::audio::sound_resolve::SoundError;
 use crate::audio::test_support::condition::{condition, day};
 use crate::audio::test_support::weather::{
     CLEAR, GUSTS, GUSTS_FILE, ONLY_THUNDER, RAIN, RAIN_BED, RAIN_FILES, STORM, STORM_BED,
-    STORM_FILE, THUNDER, THUNDER_HIGH_FILES, THUNDER_LOW, THUNDER_LOW_FILE, WIND_BED, WIND_FILE,
-    all_files, sound_catalog, steady_gain_db, table,
+    STORM_FILE, THUNDER, THUNDER_HIGH, THUNDER_HIGH_FILES, THUNDER_LOW, THUNDER_LOW_FILE, WIND_BED,
+    WIND_FILE, all_files, sound_catalog, steady_gain_db, table,
 };
 use crate::audio::test_support::{
     HALF_SECOND_SAMPLES, MockAudio, PeakReader, SAMPLE_RATE, SEED, SETTLED_BUFFERS, SharedBuffer,
@@ -456,6 +456,31 @@ mod strikes {
             high_files,
             THUNDER_HIGH_FILES.iter().map(ToString::to_string).collect()
         );
+    }
+
+    fn interior_is(expected: f32) -> Vec<Condition> {
+        vec![condition(
+            IS_IN_INTERIOR,
+            CompareOp::Equal,
+            Comparand::Value(expected),
+        )]
+    }
+
+    #[test]
+    fn thunder_is_only_evaluated_outdoors_so_a_layer_for_the_exterior_plays_and_one_for_the_interior_does_not()
+     {
+        let root = install();
+        let mut catalog = catalog_with(THUNDER_HIGH, |descriptor| {
+            descriptor.conditions = interior_is(0.0);
+        });
+        catalog.descriptors.get_mut(THUNDER_LOW).unwrap().conditions = interior_is(1.0);
+        let mut audio = weather_audio_with(root.path(), catalog, SEED).unwrap();
+
+        let due = update(&mut audio, &rain_strike(0.0, 1.0), 0.0).unwrap();
+
+        let files = thunder_files(&due);
+        assert_eq!(files.len(), 1, "{files:?}");
+        assert!(THUNDER_HIGH_FILES.contains(&files[0]), "{files:?}");
     }
 
     #[test]

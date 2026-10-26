@@ -457,7 +457,7 @@ fn single_file_keys<'a>(reachable: &[&'a MusicTrack]) -> Vec<&'a str> {
 mod tests {
     use super::*;
     use crate::assets::db::music::{CellPlace, Comparand, CompareOp};
-    use crate::audio::conditions::GET_STAGE;
+    use crate::audio::conditions::{GET_STAGE, IS_IN_INTERIOR};
     use crate::audio::scheduler::{FLAG_CYCLE_TRACKS, LayerStep};
     use crate::audio::test_support::catalog::{
         MASTER_CATEGORY_MULTIPLIER, MUSIC_CATEGORY_MULTIPLIER, exterior_place, palette, silent,
@@ -715,6 +715,30 @@ mod tests {
         assert!(
             message.contains("MUSTrackA") && message.contains("47"),
             "{message}"
+        );
+    }
+
+    #[test]
+    fn a_track_that_asks_for_the_interior_is_fatal_as_nothing_tells_the_music_where_the_player_is()
+    {
+        let mut catalog = two_types();
+        catalog.tracks[0].conditions = vec![condition(
+            IS_IN_INTERIOR,
+            CompareOp::Equal,
+            Comparand::Value(0.0),
+        )];
+
+        let error = build_error(catalog);
+
+        assert!(
+            matches!(
+                &error,
+                WorldMusicError::Condition {
+                    source: ConditionError::UnsupportedFunction(IS_IN_INTERIOR),
+                    ..
+                }
+            ),
+            "{error:?}"
         );
     }
 

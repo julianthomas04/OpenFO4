@@ -96,7 +96,9 @@ pub trait ConditionContext {
     fn vm_quest_variable(&self, quest: &str, variable: &str) -> f32;
     fn is_first_person(&self) -> bool;
     fn has_silent_running_perk(&self) -> bool;
-    fn is_in_interior(&self) -> bool;
+    /// Whether the player is in an interior cell; `None` where the context does not know, which
+    /// leaves the function unsupported rather than guessed.
+    fn is_in_interior(&self) -> Option<bool>;
 }
 
 #[derive(Debug, Clone)]
@@ -125,11 +127,12 @@ pub fn global_entries(catalog: &MusicCatalog) -> Vec<GlobalEntry> {
 }
 
 /// A new game before any quest started; quest state is empty and `GameHour` follows the clock.
-/// The player starts outdoors; [`set_interior`](Self::set_interior) follows the cell.
+/// Where the player is stays unknown until [`set_interior`](Self::set_interior) tells it, and the
+/// interior function is unsupported until then.
 #[derive(Debug, Clone)]
 pub struct FreshWorldContext {
     time: GameTime,
-    interior: bool,
+    interior: Option<bool>,
     globals: HashMap<String, f32>,
     live_globals: HashMap<String, LiveGlobal>,
 }
@@ -161,7 +164,7 @@ impl FreshWorldContext {
         }
         Self {
             time: GameTime::at_hour(hour),
-            interior: false,
+            interior: None,
             globals: map,
             live_globals,
         }
@@ -175,7 +178,7 @@ impl FreshWorldContext {
 
     /// Whether the player is in an interior cell, which `IS_IN_INTERIOR` reports.
     pub fn set_interior(&mut self, interior: bool) {
-        self.interior = interior;
+        self.interior = Some(interior);
     }
 }
 
@@ -217,7 +220,7 @@ impl ConditionContext for FreshWorldContext {
         false
     }
 
-    fn is_in_interior(&self) -> bool {
+    fn is_in_interior(&self) -> Option<bool> {
         self.interior
     }
 }
@@ -273,7 +276,10 @@ fn function_value(
         }
         IS_FIRST_PERSON => Ok(f32::from(u8::from(ctx.is_first_person()))),
         HAS_SILENT_RUNNING_PERK => Ok(f32::from(u8::from(ctx.has_silent_running_perk()))),
-        IS_IN_INTERIOR => Ok(f32::from(u8::from(ctx.is_in_interior()))),
+        IS_IN_INTERIOR => ctx
+            .is_in_interior()
+            .map(|interior| f32::from(u8::from(interior)))
+            .ok_or(ConditionError::UnsupportedFunction(IS_IN_INTERIOR)),
         other => Err(ConditionError::UnsupportedFunction(other)),
     }
 }
@@ -508,15 +514,24 @@ mod tests {
     }
 
     #[test]
+    fn the_interior_function_is_unsupported_until_the_context_is_told_where_the_player_is() {
+        for expected in [0.0, 1.0] {
+            assert_eq!(
+                evaluate(&[flag_condition(IS_IN_INTERIOR, expected)], &clock(0.0)),
+                Err(ConditionError::UnsupportedFunction(IS_IN_INTERIOR)),
+                "compared with {expected}"
+            );
+        }
+    }
+
+    #[test]
     fn the_interior_function_follows_the_cell_the_context_is_told_about() {
         let exterior_only = [flag_condition(IS_IN_INTERIOR, 0.0)];
         let interior_only = [flag_condition(IS_IN_INTERIOR, 1.0)];
         let mut ctx = clock(0.0);
 
-        assert!(
-            evaluate(&exterior_only, &ctx).unwrap(),
-            "a new world is outdoors"
-        );
+        ctx.set_interior(false);
+        assert!(evaluate(&exterior_only, &ctx).unwrap());
         assert!(!evaluate(&interior_only, &ctx).unwrap());
 
         ctx.set_interior(true);

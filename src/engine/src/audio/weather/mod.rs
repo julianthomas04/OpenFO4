@@ -83,7 +83,7 @@ impl WeatherAudio {
         let mut audio = Self {
             sounds,
             table,
-            context: FreshWorldContext::new(0.0, []),
+            context: outdoor_context(),
             rng: SplitMix64::new(seed),
             missing_files,
             loops: HashMap::new(),
@@ -114,7 +114,6 @@ impl WeatherAudio {
             return Ok(WeatherPlay::default());
         };
         self.context.set_time(time);
-        self.context.set_interior(!input.outdoor);
         for strike in &input.strikes {
             self.thunder.push(*strike, now);
         }
@@ -230,6 +229,14 @@ impl WeatherAudio {
         }
         Ok(())
     }
+}
+
+/// The conditions of a weather sound are only ever evaluated while the player is outdoors, as no
+/// loop is wanted and no thunder plays indoors, so the interior function is false.
+fn outdoor_context() -> FreshWorldContext {
+    let mut context = FreshWorldContext::new(0.0, []);
+    context.set_interior(false);
+    context
 }
 
 fn owned(descriptors: BTreeSet<&str>) -> Vec<String> {

@@ -4,10 +4,14 @@ use std::time::Duration;
 
 use super::*;
 use crate::assets::db::footsteps::FootstepCatalog;
+use crate::assets::db::music::{Comparand, CompareOp};
 use crate::assets::db::sound_catalog::{COMPOUND_DESCRIPTOR, STANDARD_DESCRIPTOR_TYPE};
-use crate::audio::conditions::{ConditionContext, FreshWorldContext};
+use crate::audio::conditions::{
+    ConditionContext, ConditionError, FreshWorldContext, IS_IN_INTERIOR,
+};
 use crate::audio::file_probe::ProbeError;
 use crate::audio::sound_resolve::SoundError;
+use crate::audio::test_support::condition::condition;
 use crate::audio::test_support::footsteps::{
     DIRT, DIRT_FIRST_PERSON_FILES, DIRT_QUIET_FILE, GRASS, ORPHAN, SILENT_RUNNING_FILE, SNEAK_FILE,
     SPRINT_FILE, STONE, STONE_FILE, THIRD_PERSON_FILE, UNKNOWN, all_files, catalog,
@@ -263,8 +267,8 @@ impl ConditionContext for Situation {
     fn has_silent_running_perk(&self) -> bool {
         self.silent_running
     }
-    fn is_in_interior(&self) -> bool {
-        false
+    fn is_in_interior(&self) -> Option<bool> {
+        None
     }
 }
 
@@ -533,6 +537,24 @@ mod data_errors {
                 descriptor: "stone_sound".to_string(),
                 descriptor_type: 0xED15_7AE3
             })
+        );
+    }
+
+    #[test]
+    fn a_condition_on_the_interior_is_an_error_as_nothing_tells_the_footsteps_where_the_player_is()
+    {
+        let error = stone_error(|catalog| {
+            modify_descriptor(catalog, "stone_sound", |d| {
+                d.conditions = vec![condition(
+                    IS_IN_INTERIOR,
+                    CompareOp::Equal,
+                    Comparand::Value(0.0),
+                )];
+            });
+        });
+        assert_eq!(
+            error,
+            ResolveError::Condition(ConditionError::UnsupportedFunction(IS_IN_INTERIOR))
         );
     }
 
