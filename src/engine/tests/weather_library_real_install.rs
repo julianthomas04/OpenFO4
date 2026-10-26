@@ -1,8 +1,8 @@
 //! The weather library of a converted installation: the Commonwealth climate loads every weather
-//! with its clouds, precipitation, wind, lightning and sounds.
+//! with its clouds, precipitation, wind, lightning, sounds and god rays.
 //!
 //! Ignored by default (needs an installation converted with
-//! `esm-only --tables weather,climates,shader_particle_geometries`). Run with
+//! `esm-only --tables weather,climates,shader_particle_geometries,god_rayses`). Run with
 //! `cargo test --test weather_library_real_install -- --ignored --nocapture`; the database is
 //! `OPENFO4_DB` when set, else the `data/data.db` of the installation in `OPENFO4_INSTALL_DIR`.
 
@@ -12,6 +12,7 @@ use openfo4::assets::db::DbClient;
 use openfo4::assets::types::effect_material::BlendFactor;
 use openfo4::game_flow::spawn_locations::COMMONWEALTH;
 use openfo4::rendering::lighting::exterior_weather::ExteriorWeatherSlots;
+use openfo4::rendering::lighting::god_rays::SunInScatter;
 use openfo4::rendering::weather::{CLOUD_LAYER_COUNT, StartupWeather, WeatherDef, WeatherLibrary};
 use openfo4::weather::{SoundKind, WeatherFlag};
 
@@ -170,4 +171,25 @@ fn the_boot_path_builds_the_weather_cycle_from_the_installation() {
         startup.table.climate_volatility(),
         DEFAULT_CLIMATE_VOLATILITY
     );
+}
+
+#[test]
+#[ignore = "needs a converted installation"]
+fn the_clear_day_scatters_the_sun_forward_and_the_rain_day_not_at_all() {
+    let library = library();
+
+    let clear = weather(&library, COMMONWEALTH_CLEAR).slots.initial();
+    let in_scatter = clear.sun_in_scatter;
+    assert!(
+        in_scatter.forward.max_element() > 0.0 && in_scatter.back.max_element() > 0.0,
+        "{in_scatter:?}"
+    );
+    assert!(
+        in_scatter.forward_asymmetry > 0.5 && in_scatter.back_asymmetry < 0.0,
+        "{in_scatter:?}"
+    );
+    // The rain's Day slot names a god rays record of zero intensity.
+    let rain = weather(&library, COMMONWEALTH_RAIN).slots.initial();
+    assert_eq!(rain.sun_in_scatter.forward, glam::Vec3::ZERO);
+    assert_ne!(rain.sun_in_scatter, SunInScatter::NONE);
 }

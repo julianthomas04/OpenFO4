@@ -8,6 +8,7 @@ use super::environment::{Environment, InteriorLighting};
 use super::exterior_weather::{ExteriorWeather, ExteriorWeatherSlots, ImageSpaceHdr};
 use super::fog::{Fog, FogParams, HeightFog};
 use super::frame_uniform::{FrameUniform, wrapped_time};
+use super::god_rays::InScatterUniformFields;
 use super::interior_catalog::InteriorLightingCatalog;
 use super::lightning::tuning::{FLASH_AMBIENT_GAIN, FLASH_SKY_GAIN};
 use super::sky_clock::{ClockedSky, SkyClock};
@@ -272,6 +273,8 @@ struct SceneTerms {
     sky_horizon: Vec3,
     sky_ground: Vec3,
     fog: Fog,
+    /// The sun's in-scatter into `fog`.
+    in_scatter: InScatterUniformFields,
 }
 
 /// What the frame uniform needs beyond the lighting state itself.
@@ -625,6 +628,7 @@ impl LightingState {
         let viewport = viewport.max(UVec2::ONE).as_vec2();
         let scene = self.scene_terms();
         let fog = scene.fog.uniform_fields();
+        let in_scatter = scene.in_scatter;
         let shadow = self.shadows.uniform_fields(cascades);
 
         FrameUniform {
@@ -646,6 +650,10 @@ impl LightingState {
             fog_near_high_color: fog.near_high_color,
             fog_far_high_color: fog.far_high_color,
             fog_heights: fog.heights,
+            fog_sun_forward: in_scatter.forward,
+            fog_sun_back: in_scatter.back,
+            fog_sun_air: in_scatter.air,
+            fog_to_sun: in_scatter.to_sun,
             cascade_view_proj: shadow.cascade_view_proj,
             cascade_spheres: shadow.cascade_spheres,
             shadow_params: shadow.shadow_params,
@@ -686,6 +694,7 @@ impl LightingState {
                 sky_horizon: Vec3::ZERO,
                 sky_ground: Vec3::ZERO,
                 fog: Fog::Disabled,
+                in_scatter: InScatterUniformFields::NONE,
                 ..self.exterior_terms()
             },
             Shading::Cell(cell) => {
@@ -701,6 +710,7 @@ impl LightingState {
                     sky_horizon: Vec3::ZERO,
                     sky_ground: Vec3::ZERO,
                     fog: cell.fog,
+                    in_scatter: InScatterUniformFields::NONE,
                 }
             }
         }
@@ -732,7 +742,21 @@ impl LightingState {
                 .fog
                 .fog(self.sky.horizon, self.sky.radiance_scale)
                 .brightened(sky_flash),
+            in_scatter: self.sun_in_scatter(),
         }
+    }
+
+    /// The weather's in-scatter under the sun disc: its colour and HDR scale, faded by its alpha
+    /// so it is gone at night. The moon scatters nothing.
+    fn sun_in_scatter(&self) -> InScatterUniformFields {
+        self.exterior_weather
+            .as_ref()
+            .map_or(InScatterUniformFields::NONE, |weather| {
+                let sun_radiance = self.sun.color * self.sun.intensity * self.sun.daylight;
+                weather
+                    .sun_in_scatter
+                    .uniform_fields(sun_radiance, self.sun_disc_direction())
+            })
     }
 }
 
@@ -783,6 +807,7 @@ mod tests {
     use super::super::ambient::AMBIENT_CUBE_FACES;
     use super::super::cell_lighting::{ResolvedLighting, TemplateStatus};
     use super::super::environment::NeutralReason;
+    use super::super::god_rays::SunInScatter;
     use super::fixtures::lighting_state;
     use super::*;
 
@@ -967,6 +992,7 @@ mod tests {
             hdr: ImageSpaceHdr::default(),
             depth_of_field: None,
             fog: None,
+            sun_in_scatter: SunInScatter::NONE,
         }
     }
 
@@ -2158,6 +2184,94 @@ mod tests {
             assert_lifted(peak.sky_zenith, unlit.sky_zenith, lift);
             let over = frame_after(FLASH_LENGTH_S, &[]);
             assert_eq!(bytes(&over), bytes(&unlit));
+        }
+    }
+
+    mod sun_in_scatter {
+        use super::*;
+
+        fn scattering() -> SunInScatter {
+            SunInScatter {
+                forward: Vec3::new(1.0, 2.0, 3.0),
+                back: Vec3::new(0.5, 0.25, 0.125),
+                air: Vec3::splat(0.1),
+                forward_asymmetry: 0.7,
+                back_asymmetry: -0.3,
+            }
+        }
+
+        fn exterior_with(in_scatter: SunInScatter) -> LightingState {
+            let mut state = lighting_state();
+            state.set_exterior_weather(ExteriorWeather {
+                sun_in_scatter: in_scatter,
+                ..weather()
+            });
+            state
+        }
+
+        fn in_scatter_of(frame: &FrameUniform) -> InScatterUniformFields {
+            InScatterUniformFields {
+                forward: frame.fog_sun_forward,
+                back: frame.fog_sun_back,
+                air: frame.fog_sun_air,
+                to_sun: frame.fog_to_sun,
+            }
+        }
+
+        fn assert_colourless(fields: InScatterUniformFields, row: &str) {
+            for colour in [fields.forward, fields.back, fields.air] {
+                assert_eq!(colour.truncate(), Vec3::ZERO, "{row}");
+            }
+        }
+
+        #[test]
+        fn the_weathers_in_scatter_takes_the_suns_colour_hdr_scale_alpha_and_direction() {
+            let mut state = exterior_with(scattering());
+            state.sun.color = Vec3::new(1.0, 0.5, 0.25);
+            state.sun.intensity = 4.0;
+            state.sun.daylight = 0.5;
+            let expected =
+                scattering().uniform_fields(Vec3::new(2.0, 1.0, 0.5), state.sun.direction_to_sun());
+            assert_eq!(in_scatter_of(&frame_of(&state)), expected);
+        }
+
+        #[test]
+        fn the_in_scatter_ignores_how_strongly_the_light_shines_which_may_be_the_moons() {
+            let mut state = exterior_with(scattering());
+            let full = in_scatter_of(&frame_of(&state));
+            state.sun.light_strength = 0.1;
+            assert_eq!(in_scatter_of(&frame_of(&state)), full);
+        }
+
+        #[test]
+        fn without_the_sun_the_fog_scatters_nothing() {
+            let mut state = exterior_with(scattering());
+            state.sun.daylight = 0.0;
+            assert_colourless(in_scatter_of(&frame_of(&state)), "night");
+        }
+
+        #[test]
+        fn a_weather_without_god_rays_or_no_weather_scatters_nothing() {
+            assert_colourless(
+                in_scatter_of(&frame_of(&exterior_with(SunInScatter::NONE))),
+                "weather without god rays",
+            );
+            assert_eq!(
+                in_scatter_of(&frame_of(&lighting_state())),
+                InScatterUniformFields::NONE
+            );
+        }
+
+        #[test]
+        fn interiors_shaded_without_the_exterior_terms_scatter_nothing() {
+            for lighting in [resolved_cell(), neutral()] {
+                let mut state = exterior_with(scattering());
+                state.environment = interior(lighting);
+                assert_eq!(
+                    in_scatter_of(&frame_of(&state)),
+                    InScatterUniformFields::NONE
+                );
+            }
         }
     }
 }

@@ -37,6 +37,15 @@ pub struct FrameUniform {
     pub fog_far_high_color: Vec4,
     /// Bottom and reciprocal span of the near (xy) and far (zw) height bands, engine units.
     pub fog_heights: Vec4,
+    /// rgb: the forward in-scatter lobe's colour under the sun, w: its asymmetry.
+    pub fog_sun_forward: Vec4,
+    /// rgb: the backward in-scatter lobe's colour under the sun, w: its asymmetry.
+    pub fog_sun_back: Vec4,
+    /// rgb: the isotropic in-scatter colour under the sun.
+    pub fog_sun_air: Vec4,
+    /// xyz: unit direction towards the sun disc, which the in-scatter lobes centre on; unlike
+    /// `to_sun` it never follows the moon.
+    pub fog_to_sun: Vec4,
     pub cascade_view_proj: [Mat4; MAX_CASCADES],
     /// xyz: world-space centre, w: radius.
     pub cascade_spheres: [Vec4; MAX_CASCADES],
@@ -77,7 +86,7 @@ pub fn wrapped_time(elapsed_seconds: f32) -> f32 {
     elapsed_seconds.rem_euclid(TIME_WRAP_SECONDS)
 }
 
-const _: () = assert!(std::mem::size_of::<FrameUniform>() == 928);
+const _: () = assert!(std::mem::size_of::<FrameUniform>() == 992);
 
 #[cfg(test)]
 #[allow(clippy::float_cmp, reason = "the wrap is exact in f32 by construction")]
@@ -86,7 +95,7 @@ mod tests {
 
     #[test]
     fn water_fields_close_the_uniform_at_the_wgsl_offset() {
-        assert_eq!(std::mem::offset_of!(FrameUniform, time_water), 912);
+        assert_eq!(std::mem::offset_of!(FrameUniform, time_water), 976);
         assert_eq!(std::mem::size_of::<FrameUniform>() % 16, 0);
     }
 

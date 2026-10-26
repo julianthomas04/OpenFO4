@@ -6,6 +6,7 @@ pub mod exterior_weather;
 pub mod fog;
 pub mod frame_binding;
 pub mod frame_uniform;
+pub mod god_rays;
 pub mod interior_catalog;
 pub mod lerp;
 pub mod lightning;

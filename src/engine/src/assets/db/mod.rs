@@ -533,11 +533,21 @@ impl DbClient {
     }
 
     pub fn get_weather(&self, form_key: &str) -> rusqlite::Result<weather::WeatherRow> {
+        let schema = self.schema();
         weather::get_weather(
             form_key,
-            self.schema().weather_fog_column_present,
+            weather::WeatherColumns {
+                fog: schema.weather_fog_column_present,
+                god_rays: schema.weather_god_rays_columns_present,
+            },
             &self.conn,
         )
+    }
+
+    /// The data of a god rays record; only call when
+    /// [`DbSchema::weather_god_rays_columns_present`] holds.
+    pub fn get_god_rays_data(&self, form_key: &str) -> rusqlite::Result<Option<String>> {
+        weather::get_god_rays_data(form_key, &self.conn)
     }
 
     /// The weather columns of the library; only call when

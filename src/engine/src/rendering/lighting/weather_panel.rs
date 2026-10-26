@@ -5,6 +5,7 @@ use super::cell_lighting::{CellLighting, DirectionalLight, ResolvedLighting, Tem
 use super::environment::{Environment, InteriorLighting, NeutralReason};
 use super::exterior_weather::ExteriorWeather;
 use super::fog::Fog;
+use super::god_rays::SunInScatter;
 use super::state::LightingState;
 
 const SWATCH_SIZE: egui::Vec2 = egui::vec2(28.0, 14.0);
@@ -53,6 +54,7 @@ fn weather_status(ui: &mut egui::Ui, weather: Option<ExteriorWeather>) {
                     );
                 }
             }
+            in_scatter_rows(ui, &weather.sun_in_scatter);
         }
         None => {
             ui.colored_label(ui.visuals().warn_fg_color, "no weather: default lighting");
@@ -155,6 +157,20 @@ fn fog_rows(ui: &mut egui::Ui, fog: &Fog) {
             linear_row(ui, "fog far high color", height.far_high_color);
         }
     }
+}
+
+fn in_scatter_rows(ui: &mut egui::Ui, in_scatter: &SunInScatter) {
+    if *in_scatter == SunInScatter::NONE {
+        ui.label("fog sun in-scatter: none (no god rays)");
+        return;
+    }
+    ui.label(format!(
+        "fog sun in-scatter asymmetry forward {:.3} back {:.3}",
+        in_scatter.forward_asymmetry, in_scatter.back_asymmetry
+    ));
+    linear_row(ui, "in-scatter forward", in_scatter.forward);
+    linear_row(ui, "in-scatter back", in_scatter.back);
+    linear_row(ui, "in-scatter air", in_scatter.air);
 }
 
 fn linear_row(ui: &mut egui::Ui, label: &str, color: Vec3) {

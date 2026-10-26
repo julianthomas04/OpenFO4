@@ -12,6 +12,7 @@ use crate::rendering::gpu_test::test_device;
 use crate::rendering::lighting::ambient::AMBIENT_CUBE_FACES;
 use crate::rendering::lighting::fog::{Fog, FogUniformFields};
 use crate::rendering::lighting::frame_uniform::FrameUniform;
+use crate::rendering::lighting::god_rays::InScatterUniformFields;
 use crate::rendering::shaders::OBJECT;
 use crate::rendering::shadows::lamps::table::SHADOW_SLOT_NONE;
 
@@ -416,6 +417,7 @@ pub struct Environment {
     pub ambient_cube: [Vec3; AMBIENT_CUBE_FACES],
     pub camera: Vec3,
     pub fog: FogUniformFields,
+    pub in_scatter: InScatterUniformFields,
 }
 
 impl Default for Environment {
@@ -425,6 +427,7 @@ impl Default for Environment {
             ambient_cube: [Vec3::ZERO; AMBIENT_CUBE_FACES],
             camera: Vec3::ZERO,
             fog: Fog::Disabled.uniform_fields(),
+            in_scatter: InScatterUniformFields::NONE,
         }
     }
 }
@@ -435,6 +438,17 @@ impl Environment {
             camera,
             fog: fog.uniform_fields(),
             ..Self::default()
+        }
+    }
+
+    pub fn with_fog_and_in_scatter(
+        camera: Vec3,
+        fog: &Fog,
+        in_scatter: InScatterUniformFields,
+    ) -> Self {
+        Self {
+            in_scatter,
+            ..Self::with_fog(camera, fog)
         }
     }
 
@@ -532,6 +546,11 @@ impl LightingHarness {
         frame.fog_near_high_color = fog.near_high_color;
         frame.fog_far_high_color = fog.far_high_color;
         frame.fog_heights = fog.heights;
+        let in_scatter = environment.in_scatter;
+        frame.fog_sun_forward = in_scatter.forward;
+        frame.fog_sun_back = in_scatter.back;
+        frame.fog_sun_air = in_scatter.air;
+        frame.fog_to_sun = in_scatter.to_sun;
         let buffer = self.buffer_with(
             "lighting_test_frame",
             wgpu::BufferUsages::UNIFORM,

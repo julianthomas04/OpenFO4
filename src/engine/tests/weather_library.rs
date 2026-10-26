@@ -4,6 +4,7 @@
 use openfo4::assets::db::DbClient;
 use openfo4::assets::types::effect_material::BlendFactor;
 use openfo4::rendering::lighting::exterior_weather::{ExteriorWeatherError, ExteriorWeatherSlots};
+use openfo4::rendering::lighting::god_rays::{GodRaysData, SunInScatter};
 use openfo4::rendering::weather::{
     StartupWeather, StartupWeatherError, WeatherDef, WeatherLibrary, WeatherLibraryError,
 };
@@ -29,6 +30,7 @@ const CLEAR: &str = "0000D1:Fallout4.esm";
 const RAIN: &str = "0000D2:Fallout4.esm";
 const RAIN_GEOMETRY: &str = "0000E1:Fallout4.esm";
 const IMAGE_SPACE: &str = "0000F1:Fallout4.esm";
+const DAY_RAYS: &str = "0000B5:Fallout4.esm";
 
 fn text(s: &str) -> Value {
     Value::Text(s.to_string())
@@ -143,7 +145,10 @@ fn seed_weather(conn: &Connection, form_key: &str, precipitation: Option<&str>, 
 }
 
 fn seeded(climate_weathers: &Json) -> Connection {
-    let conn = connection_without(&[]);
+    seeded_into(connection_without(&[]), climate_weathers)
+}
+
+fn seeded_into(conn: Connection, climate_weathers: &Json) -> Connection {
     insert(
         &conn,
         "worldspaces",
@@ -546,6 +551,110 @@ fn a_climate_where_no_weather_has_a_chance_starts_no_cycle() {
             error,
             StartupWeatherError::RollTable(WeatherTableError::NoChance)
         ),
+        "{error:?}"
+    );
+}
+
+fn day_rays() -> Json {
+    json!({
+        "back_color": [197, 204, 218], "forward_color": [255, 154, 17], "air_color": [164, 172, 191],
+        "back_color_scale": 5.0, "forward_color_scale": 1.0, "air_color_scale": 0.1,
+        "intensity": 2.0, "back_phase": 0.552, "forward_phase": 0.801,
+    })
+}
+
+/// The clear weather with `DAY_RAYS` in its Day slot and none in the others.
+fn name_day_rays(conn: &Connection) {
+    let slots: Json = SLOTS
+        .iter()
+        .map(|slot| {
+            let rays = if *slot == "Day" {
+                json!(DAY_RAYS)
+            } else {
+                Json::Null
+            };
+            ((*slot).to_owned(), rays)
+        })
+        .collect();
+    conn.execute(
+        "UPDATE weather SET god_rays = ? WHERE form_key = ?",
+        [slots.to_string(), CLEAR.to_owned()],
+    )
+    .unwrap();
+}
+
+/// [`name_day_rays`] with the god rays record holding `data`.
+fn with_day_rays(conn: &Connection, data: Option<&str>) {
+    name_day_rays(conn);
+    insert(
+        conn,
+        "god_rayses",
+        &[
+            ("form_key", text(DAY_RAYS)),
+            ("data", data.map_or(Value::Null, text)),
+        ],
+    );
+}
+
+fn initial_in_scatter(conn: Connection) -> Result<SunInScatter, ExteriorWeatherError> {
+    let db = DbClient::from_connection(conn).unwrap();
+    ExteriorWeatherSlots::load(&db, WORLDSPACE).map(|slots| slots.initial().sun_in_scatter)
+}
+
+#[test]
+fn the_day_slot_scatters_the_sun_by_the_god_rays_record_it_names() {
+    let conn = seeded(&two_weathers());
+    with_day_rays(&conn, Some(&day_rays().to_string()));
+    let data: GodRaysData = serde_json::from_value(day_rays()).unwrap();
+    assert_eq!(
+        initial_in_scatter(conn).unwrap(),
+        SunInScatter::from_god_rays(&data).unwrap()
+    );
+}
+
+#[test]
+fn a_weather_without_god_rays_scatters_nothing() {
+    assert_eq!(
+        initial_in_scatter(seeded(&two_weathers())).unwrap(),
+        SunInScatter::NONE
+    );
+}
+
+#[test]
+fn an_unknown_god_rays_record_scatters_nothing_and_the_weather_still_loads() {
+    let conn = seeded(&two_weathers());
+    with_day_rays(&conn, Some(&day_rays().to_string()));
+    conn.execute("DELETE FROM god_rayses", []).unwrap();
+    assert_eq!(initial_in_scatter(conn).unwrap(), SunInScatter::NONE);
+}
+
+#[test]
+fn a_god_rays_record_without_data_scatters_nothing() {
+    let conn = seeded(&two_weathers());
+    with_day_rays(&conn, None);
+    assert_eq!(initial_in_scatter(conn).unwrap(), SunInScatter::NONE);
+}
+
+#[test]
+fn a_database_from_before_the_god_rays_export_scatters_nothing() {
+    let conn = seeded_into(
+        connection_without(&[("god_rayses", "data")]),
+        &two_weathers(),
+    );
+    name_day_rays(&conn);
+    let db = DbClient::from_connection(conn).unwrap();
+    assert!(!db.schema().weather_god_rays_columns_present);
+    let slots = ExteriorWeatherSlots::load(&db, WORLDSPACE).unwrap();
+    assert_eq!(slots.initial().sun_in_scatter, SunInScatter::NONE);
+}
+
+#[test]
+fn malformed_god_rays_data_fails_the_weather_naming_the_record() {
+    let conn = seeded(&two_weathers());
+    with_day_rays(&conn, Some("{ not json"));
+    let error = initial_in_scatter(conn).unwrap_err();
+    assert!(
+        matches!(&error, ExteriorWeatherError::GodRaysMalformed { god_rays, .. } if god_rays == DAY_RAYS),
         "{error:?}"
     );
 }
