@@ -14,10 +14,10 @@ struct RainUniform {
     tint: vec4<f32>,
     // x, y: columns and rows of streak subtextures, z: frames of a splash, w: the splash's edge.
     atlas: vec4<f32>,
-    // xy: the corner of the occlusion map with the smallest x and z, z: its edge, w: 1 once it is drawn.
+    // xy: the corner of the occlusion map with the smallest x and z, z: its edge, w: the height
+    // depth 0 of the map stands for.
     window: vec4<f32>,
-    // x: the height depth 0 of the map stands for, y: the span of heights its depth covers,
-    // z: 1 where roofs shelter from the rain.
+    // x: the span of heights the depth of the map covers, y: 1 where roofs shelter from the rain.
     heights: vec4<f32>,
     // x, y: the distances over which a drop near the camera fades in, z: the share of the box
     // edge a drop fades out from, w: the same for a splash.
@@ -80,7 +80,7 @@ fn occlusion_uv(xz: vec2<f32>) -> vec2<f32> {
 
 // Mirrors `OcclusionWindow::height_from_depth`.
 fn occlusion_height(depth: f32) -> f32 {
-    return select(NO_HEIGHT, rain.heights.x + depth * rain.heights.y, depth > 0.0);
+    return select(NO_HEIGHT, rain.window.w + depth * rain.heights.x, depth > 0.0);
 }
 
 // The height of the highest caster over `xz`; NO_HEIGHT where there is none or the spot lies
@@ -125,7 +125,7 @@ fn vs_streak(@builtin(vertex_index) vertex: u32, @builtin(instance_index) drop: 
     // The streak's lower end stops at the roof over it, and a streak wholly under one is gone.
     // Positions along the streak are in lengths from its middle.
     var lowest = -0.5;
-    if rain.heights.z > 0.5 {
+    if rain.heights.y > 0.5 {
         let roof = highest_caster(centre.xz);
         let steep = max(rain.along.y, LEAST_UP) * rain.along.w;
         lowest = max(lowest, (roof - centre.y) / steep);
@@ -168,9 +168,6 @@ fn fs_streak(in: DropOut) -> @location(0) vec4<f32> {
 fn vs_splash(@builtin(vertex_index) vertex: u32, @builtin(instance_index) splash: u32) -> DropOut {
     var out: DropOut;
     out.clip = CULLED;
-    if rain.window.w < 0.5 {
-        return out;
-    }
 
     // Each splash starts its cycle at a time of its own, and lands somewhere new in every cycle.
     let phase = rain.splash.x + random(splash, 0u);

@@ -1,5 +1,7 @@
 //! Rain: the top-down occlusion map that tells which spots lie under a roof, and the passes that
-//! draw the rain from it. Everything here takes plain data; the frame decides when it runs.
+//! draw the rain from it. The frame calls [`RainRenderer::prepare`] once ahead of its passes,
+//! which draws the map when it is due and works the rain out from what the map then shows, and
+//! [`RainRenderer::encode`] to draw that rain.
 //!
 //! The drops and splashes are worked out on the GPU from their instance index: the CPU hands
 //! over one uniform per frame and the pass draws instanced quads, so the cost does not grow
@@ -22,12 +24,13 @@ use wgpu::util::DeviceExt;
 
 pub use assets::{RainAssetStatus, RainTextureState};
 use motion::DropDrift;
-use occlusion::OcclusionWindow;
+use occlusion::OcclusionMap;
 use pipeline::{QUAD_VERTICES, RainPipelines, RainResources};
-use uniform::{Fall, RainPlan, RainUniform};
+use uniform::{Draws, Fall, RainUniform};
 
 use crate::rendering::gpu_profiler::{GpuPass, GpuProfiler, SpanPart};
 use crate::rendering::lighting::frame_binding::FrameBinding;
+use crate::rendering::shadows::{ShadowRenderer, ShadowScene};
 
 /// The rain of the weather, as its shader particle geometry (SPGD) record and the weather
 /// state give it.
@@ -44,7 +47,8 @@ pub struct RainInput {
     pub size: Vec2,
     /// The columns and rows of streak variants the texture holds; 0 counts as 1.
     pub subtextures: UVec2,
-    /// The SPGD particle density: a thousand drops per unit at full intensity.
+    /// The SPGD particle density: how many drops fall at full intensity, by the tuning's drops
+    /// per unit of density.
     pub density: f32,
     /// The edge in game units of the box around the camera the rain falls through.
     pub box_size: f32,
@@ -64,26 +68,22 @@ pub struct RainView {
     pub forward: Vec3,
     /// Seconds on any clock that runs on with the game, in double precision.
     pub time: f64,
-    /// What the occlusion map shows, `None` until it was first drawn: without it the rain
-    /// falls through every roof and no splash is drawn.
-    pub window: Option<OcclusionWindow>,
+    /// The streamer's loaded generation: the static world the occlusion map shows. The map is
+    /// drawn again once it moves on.
+    pub world_generation: u64,
+    /// Whether the camera is under water, where no rain falls and no splash is seen.
+    pub underwater: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Draws {
-    drops: u32,
-    splashes: u32,
-}
-
-impl Draws {
-    const NONE: Self = Self {
-        drops: 0,
-        splashes: 0,
-    };
-
-    fn is_none(self) -> bool {
-        self == Self::NONE
-    }
+/// What the rain of a frame records its GPU work with: the encoder the frame goes into, and
+/// what the casters of the occlusion map are drawn from.
+pub struct RainGpu<'a> {
+    pub device: &'a wgpu::Device,
+    pub queue: &'a wgpu::Queue,
+    pub encoder: &'a mut wgpu::CommandEncoder,
+    pub shadows: &'a ShadowRenderer,
+    pub scene: &'a ShadowScene<'a>,
+    pub profiler: &'a GpuProfiler,
 }
 
 /// Draws the rain streaks and the splashes where they land, in a pass of its own after the
@@ -92,7 +92,7 @@ pub struct RainRenderer {
     pipelines: RainPipelines,
     sampler: wgpu::Sampler,
     uniform: wgpu::Buffer,
-    occlusion: wgpu::TextureView,
+    map: OcclusionMap,
     /// Stands in for a texture that is not loaded; nothing is drawn with it.
     blank: wgpu::TextureView,
     textures: assets::RainTextures,
@@ -102,14 +102,12 @@ pub struct RainRenderer {
 }
 
 impl RainRenderer {
-    /// `frame_layout` is the layout of the frame binding the pass binds at group 1, and
-    /// `occlusion` the depth view of the [`occlusion::OcclusionMap`].
+    /// `frame_layout` is the layout of the frame binding the pass binds at group 1.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         asset_root: &str,
         frame_layout: &wgpu::BindGroupLayout,
-        occlusion: &wgpu::TextureView,
     ) -> Self {
         let pipelines = RainPipelines::new(device, frame_layout);
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
@@ -121,14 +119,21 @@ impl RainRenderer {
         let sampler = pipeline::sampler(device);
         let blank = blank_texture(device, queue);
         let textures = assets::RainTextures::new(device, queue, asset_root);
+        let map = OcclusionMap::new(device);
         let bind_group = bind_group(
-            device, &pipelines, &uniform, &sampler, &textures, &blank, occlusion,
+            device,
+            &pipelines,
+            &uniform,
+            &sampler,
+            &textures,
+            &blank,
+            map.view(),
         );
         Self {
             pipelines,
             sampler,
             uniform,
-            occlusion: occlusion.clone(),
+            map,
             blank,
             textures,
             bind_group,
@@ -137,50 +142,55 @@ impl RainRenderer {
         }
     }
 
-    /// Works out this frame's rain. Nothing is loaded or uploaded while it does not rain.
-    pub fn update(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        input: &RainInput,
-        view: &RainView,
-    ) {
+    /// Works out this frame's rain ahead of the passes that draw it. The occlusion map is drawn
+    /// into the frame's encoder first when it is due, and the rain is worked out from the window
+    /// that map shows. Nothing is drawn, loaded or uploaded while it does not rain, the camera
+    /// is under water or the camera is no point in space.
+    pub fn prepare(&mut self, mut gpu: RainGpu<'_>, input: &RainInput, view: &RainView) {
         let fall = Fall::of(input);
         self.drift.advance(fall.velocity, view.time, fall.edge);
-        let plan = RainPlan::new(input, view, &fall, &self.drift);
+        let wanted = Draws::wanted(input, view);
         self.draws = Draws::NONE;
-        if plan.drops == 0 && plan.splashes == 0 {
+        if wanted.is_none() {
             return;
         }
-        if self.textures.request_streaks(device, queue, &input.texture) {
+        let window = self.map.refresh(&mut gpu, view.eye, view.world_generation);
+        if self
+            .textures
+            .request_streaks(gpu.device, gpu.queue, &input.texture)
+        {
             self.bind_group = bind_group(
-                device,
+                gpu.device,
                 &self.pipelines,
                 &self.uniform,
                 &self.sampler,
                 &self.textures,
                 &self.blank,
-                &self.occlusion,
+                self.map.view(),
             );
         }
-        queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&plan.uniform));
+        let uniform = RainUniform::new(input, view, window, &fall, &self.drift);
+        gpu.queue
+            .write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniform));
         self.draws = Draws {
-            drops: self.textures.streaks().map_or(0, |_| plan.drops),
-            splashes: self.textures.splashes().map_or(0, |_| plan.splashes),
+            drops: self.textures.streaks().map_or(0, |_| wanted.drops),
+            splashes: self.textures.splashes().map_or(0, |_| wanted.splashes),
         };
     }
 
-    /// Draws the rain over `target` where the scene's `depth` does not hide it. Encodes nothing
-    /// while there is nothing to draw. Timed as [`GpuPass::Rain`].
+    /// Draws the rain over `target` where the scene's `depth` does not hide it: the rain the
+    /// last [`Self::prepare`] worked out, once. A frame that does not prepare draws none.
+    /// Encodes nothing while there is nothing to draw. Timed as [`GpuPass::Rain`].
     pub fn encode(
-        &self,
+        &mut self,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         depth: &wgpu::TextureView,
         frame_binding: &FrameBinding,
         profiler: &GpuProfiler,
     ) {
-        if self.draws.is_none() {
+        let draws = std::mem::replace(&mut self.draws, Draws::NONE);
+        if draws.is_none() {
             return;
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -205,13 +215,13 @@ impl RainRenderer {
         });
         pass.set_bind_group(0, &self.bind_group, &[]);
         frame_binding.bind(&mut pass);
-        if self.draws.drops > 0 {
+        if draws.drops > 0 {
             pass.set_pipeline(&self.pipelines.streaks);
-            pass.draw(0..QUAD_VERTICES, 0..self.draws.drops);
+            pass.draw(0..QUAD_VERTICES, 0..draws.drops);
         }
-        if self.draws.splashes > 0 {
+        if draws.splashes > 0 {
             pass.set_pipeline(&self.pipelines.splashes);
-            pass.draw(0..QUAD_VERTICES, 0..self.draws.splashes);
+            pass.draw(0..QUAD_VERTICES, 0..draws.splashes);
         }
     }
 

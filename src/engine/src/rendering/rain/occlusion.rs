@@ -6,13 +6,13 @@
 
 use glam::{Mat4, Vec2, Vec3};
 
+use super::RainGpu;
 use super::tuning::{
     HALF_EXTENT, HALF_HEIGHT, MAP_RESOLUTION, MIN_CASTER_TEXELS, REFRESH_FRACTION,
 };
-use crate::rendering::gpu_profiler::{GpuPass, GpuProfiler};
+use crate::rendering::gpu_profiler::GpuPass;
 use crate::rendering::shadows::ortho_map::{MAP_FORMAT, OrthoMapRender};
 use crate::rendering::shadows::views::{ShadowView, ViewCull};
-use crate::rendering::shadows::{ShadowRenderer, ShadowScene};
 
 /// Side of the square the map covers, in engine units.
 pub const EXTENT: f32 = 2.0 * HALF_EXTENT;
@@ -115,9 +115,12 @@ struct RefreshTracker {
 }
 
 impl RefreshTracker {
-    fn is_due(&self, eye: Vec3, generation: u64) -> bool {
+    /// The window of the map, if it still serves `eye` in the world of `generation`: it was
+    /// drawn for that world and the eye is in the middle of the window.
+    fn current(&self, eye: Vec3, generation: u64) -> Option<OcclusionWindow> {
         self.drawn
-            .is_none_or(|drawn| drawn.generation != generation || !drawn.window.is_centred_on(eye))
+            .filter(|drawn| drawn.generation == generation && drawn.window.is_centred_on(eye))
+            .map(|drawn| drawn.window)
     }
 
     fn commit(&mut self, window: OcclusionWindow, generation: u64) {
@@ -162,7 +165,7 @@ impl OcclusionMap {
         }
     }
 
-    /// The depth the shaders read, valid once [`Self::window`] is `Some`.
+    /// The depth the shaders read, valid once [`Self::refresh`] has returned.
     pub fn view(&self) -> &wgpu::TextureView {
         &self.view
     }
@@ -172,37 +175,33 @@ impl OcclusionMap {
         self.tracker.window()
     }
 
-    /// Whether the frame has to call [`Self::render`] before anything reads the map: it was
-    /// never drawn, the camera left the middle of its window, or the streamer's loaded
-    /// `generation` moved on. The frame does not ask in interiors, where no weather is drawn.
-    pub fn is_due(&self, eye: Vec3, generation: u64) -> bool {
-        self.tracker.is_due(eye, generation)
-    }
-
-    /// Draws the static casters around `eye` into the map ahead of the passes that read it.
-    pub fn render(
+    /// The window the map shows once it serves `eye` in the world of `generation`, the
+    /// streamer's loaded generation: unless it already does, the static casters around `eye` are
+    /// drawn into the map by `gpu.encoder`, ahead of the passes that read it. The window is
+    /// only to be had from here, so nothing can read a map of another place than it says.
+    pub fn refresh(
         &mut self,
-        shadows: &ShadowRenderer,
-        encoder: &mut wgpu::CommandEncoder,
-        queue: &wgpu::Queue,
-        scene: &ShadowScene,
+        gpu: &mut RainGpu<'_>,
         eye: Vec3,
         generation: u64,
-        profiler: &GpuProfiler,
-    ) {
+    ) -> OcclusionWindow {
+        if let Some(window) = self.tracker.current(eye, generation) {
+            return window;
+        }
         let window = OcclusionWindow::around(eye);
-        shadows.encode_ortho_map(
-            encoder,
-            queue,
-            scene,
+        gpu.shadows.encode_ortho_map(
+            gpu.encoder,
+            gpu.queue,
+            gpu.scene,
             &OrthoMapRender {
                 view: window.shadow_view(),
                 target: &self.view,
                 profiled_as: GpuPass::RainOcclusion,
             },
-            profiler,
+            gpu.profiler,
         );
         self.tracker.commit(window, generation);
+        window
     }
 }
 
@@ -351,30 +350,34 @@ mod tests {
     }
 
     #[test]
-    fn a_map_is_due_until_it_has_been_drawn() {
-        assert!(RefreshTracker::default().is_due(EYE, 7));
+    fn a_map_that_was_never_drawn_serves_no_eye() {
+        assert_eq!(RefreshTracker::default().current(EYE, 7), None);
     }
 
     #[test]
-    fn a_drawn_map_is_not_due_while_the_eye_stays_centred_and_the_world_stands() {
+    fn a_drawn_map_serves_the_eye_while_it_stays_centred_and_the_world_stands() {
         let mut tracker = RefreshTracker::default();
-        tracker.commit(OcclusionWindow::around(EYE), 7);
-        assert!(!tracker.is_due(EYE, 7));
-        assert!(!tracker.is_due(EYE + Vec3::new(10.0, 3.0, -10.0), 7));
+        let window = OcclusionWindow::around(EYE);
+        tracker.commit(window, 7);
+        assert_eq!(tracker.current(EYE, 7), Some(window));
+        assert_eq!(
+            tracker.current(EYE + Vec3::new(10.0, 3.0, -10.0), 7),
+            Some(window)
+        );
     }
 
     #[test]
-    fn a_drawn_map_is_due_once_the_eye_leaves_the_middle_of_its_window() {
+    fn a_drawn_map_serves_no_eye_that_left_the_middle_of_its_window() {
         let mut tracker = RefreshTracker::default();
         tracker.commit(OcclusionWindow::around(EYE), 7);
-        assert!(tracker.is_due(EYE + Vec3::X * HALF_EXTENT, 7));
+        assert_eq!(tracker.current(EYE + Vec3::X * HALF_EXTENT, 7), None);
     }
 
     #[test]
-    fn a_drawn_map_is_due_once_the_streamer_loaded_or_dropped_something() {
+    fn a_drawn_map_serves_no_eye_once_the_streamer_loaded_or_dropped_something() {
         let mut tracker = RefreshTracker::default();
         tracker.commit(OcclusionWindow::around(EYE), 7);
-        assert!(tracker.is_due(EYE, 8));
+        assert_eq!(tracker.current(EYE, 8), None);
     }
 
     #[test]
@@ -382,9 +385,10 @@ mod tests {
         let mut tracker = RefreshTracker::default();
         tracker.commit(OcclusionWindow::around(EYE), 7);
         let moved = EYE + Vec3::X * HALF_EXTENT;
-        tracker.commit(OcclusionWindow::around(moved), 8);
-        assert!(!tracker.is_due(moved, 8));
-        assert_eq!(tracker.window(), Some(OcclusionWindow::around(moved)));
+        let window = OcclusionWindow::around(moved);
+        tracker.commit(window, 8);
+        assert_eq!(tracker.current(moved, 8), Some(window));
+        assert_eq!(tracker.window(), Some(window));
     }
 
     mod gpu {
@@ -407,20 +411,33 @@ mod tests {
             }
         }
 
-        fn render(rig: &ShadowRig, map: &mut OcclusionMap) -> Vec<f32> {
+        /// Refreshes the map the way a frame does, in an encoder of its own.
+        fn refresh(
+            rig: &ShadowRig,
+            map: &mut OcclusionMap,
+            eye: Vec3,
+            generation: u64,
+        ) -> OcclusionWindow {
             let mut encoder = rig
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-            map.render(
-                &rig.renderer,
-                &mut encoder,
-                &rig.queue,
-                &rig.world.scene(),
-                EYE,
-                GENERATION,
-                &rig.profiler,
+            let window = map.refresh(
+                &mut RainGpu {
+                    device: &rig.device,
+                    queue: &rig.queue,
+                    encoder: &mut encoder,
+                    shadows: &rig.renderer,
+                    scene: &rig.world.scene(),
+                    profiler: &rig.profiler,
+                },
+                eye,
+                generation,
             );
             rig.queue.submit(std::iter::once(encoder.finish()));
+            window
+        }
+
+        fn depths(rig: &ShadowRig, map: &OcclusionMap) -> Vec<f32> {
             read_f32_mip(
                 &rig.device,
                 &rig.queue,
@@ -428,6 +445,11 @@ mod tests {
                 0,
                 UVec2::splat(MAP_RESOLUTION),
             )
+        }
+
+        fn render(rig: &ShadowRig, map: &mut OcclusionMap) -> Vec<f32> {
+            refresh(rig, map, EYE, GENERATION);
+            depths(rig, map)
         }
 
         /// The height the drawn map reports over the spot `offset` from the eye.
@@ -507,19 +529,82 @@ mod tests {
         }
 
         #[test]
-        fn rendering_the_map_records_the_window_and_the_generation_it_drew() {
-            let Some(rig) = rig("rendering_the_map_records_the_window") else {
+        fn refreshing_the_map_returns_the_window_it_drew() {
+            let Some(rig) = rig("refreshing_the_map_returns_the_window") else {
                 return;
             };
             let mut map = OcclusionMap::new(&rig.device);
             assert_eq!(map.window(), None);
-            assert!(map.is_due(EYE, GENERATION));
 
-            render(&rig, &mut map);
+            let window = refresh(&rig, &mut map, EYE, GENERATION);
 
-            assert_eq!(map.window(), Some(OcclusionWindow::around(EYE)));
-            assert!(!map.is_due(EYE, GENERATION));
-            assert!(map.is_due(EYE, GENERATION + 1));
+            assert_eq!(window, OcclusionWindow::around(EYE));
+            assert_eq!(map.window(), Some(window));
+        }
+
+        /// A map drawn over an empty world, which a roof is placed in afterwards.
+        fn map_over_a_world_that_gets_a_roof(test: &str) -> Option<(ShadowRig, OcclusionMap)> {
+            let mut rig = rig(test)?;
+            rig.place(&[], &[]);
+            let mut map = OcclusionMap::new(&rig.device);
+            refresh(&rig, &mut map, EYE, GENERATION);
+            rig.place(&[slab(ROOF, ROOF_HALF_SIZE)], &[]);
+            Some((rig, map))
+        }
+
+        #[test]
+        fn a_map_that_serves_the_eye_in_its_world_is_not_drawn_again() {
+            let Some((rig, mut map)) =
+                map_over_a_world_that_gets_a_roof("a_map_that_serves_the_eye")
+            else {
+                return;
+            };
+
+            let window = refresh(&rig, &mut map, EYE + Vec3::X, GENERATION);
+
+            assert_eq!(window, OcclusionWindow::around(EYE));
+            assert_eq!(
+                height_over(&map, &depths(&rig, &map), ROOF),
+                None,
+                "the roof placed since is not in the map"
+            );
+        }
+
+        #[test]
+        fn a_map_is_drawn_again_once_the_eye_leaves_the_middle_of_its_window() {
+            let Some((rig, mut map)) =
+                map_over_a_world_that_gets_a_roof("a_map_is_drawn_again_once_the_eye_leaves")
+            else {
+                return;
+            };
+            let strayed = EYE + Vec3::X * HALF_EXTENT * 0.5;
+
+            let window = refresh(&rig, &mut map, strayed, GENERATION);
+
+            assert_eq!(window, OcclusionWindow::around(strayed));
+            assert_height(
+                height_over(&map, &depths(&rig, &map), ROOF),
+                ROOF.y,
+                "the roof placed since",
+            );
+        }
+
+        #[test]
+        fn a_map_is_drawn_again_once_the_streamer_has_changed_the_world() {
+            let Some((rig, mut map)) =
+                map_over_a_world_that_gets_a_roof("a_map_is_drawn_again_once_the_streamer")
+            else {
+                return;
+            };
+
+            let window = refresh(&rig, &mut map, EYE, GENERATION + 1);
+
+            assert_eq!(window, OcclusionWindow::around(EYE));
+            assert_height(
+                height_over(&map, &depths(&rig, &map), ROOF),
+                ROOF.y,
+                "the roof placed since",
+            );
         }
     }
 }

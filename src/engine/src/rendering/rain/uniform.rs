@@ -1,5 +1,6 @@
-//! What the rain shader reads each frame: one uniform worked out from the weather's rain and
-//! the camera, and the number of drops and splashes to draw. Everything is in engine units.
+//! What the rain shader reads each frame: one uniform worked out from the weather's rain, the
+//! camera and the window the occlusion map shows, and the number of drops and splashes to draw.
+//! Everything is in engine units.
 
 use bytemuck::{Pod, Zeroable};
 use glam::{DVec3, Vec2, Vec3};
@@ -8,7 +9,7 @@ use super::assets::SPLASH_FRAMES;
 use super::motion::{
     DropDrift, SplashPhase, StreakAxes, drop_count, fall_velocity, lattice_shift, splash_count,
 };
-use super::occlusion::{EXTENT, HEIGHT_RANGE};
+use super::occlusion::{EXTENT, HEIGHT_RANGE, OcclusionWindow};
 use super::tuning::{
     BOX_FADE_FROM, LEAST_VARIATION, MIN_BOX_EDGE, NEAR_FADE, SPLASH_FADE_FROM, SPLASH_OPACITY,
     SPLASH_RADIUS, SPLASH_SIZE, STREAK_LENGTH_SCALE, STREAK_OPACITY, STREAK_WIDTH_SCALE,
@@ -56,6 +57,43 @@ fn streak_size(input: &RainInput) -> Vec2 {
     size * ENGINE_UNITS_PER_METER
 }
 
+/// How many drops and splashes a frame draws.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Draws {
+    pub drops: u32,
+    pub splashes: u32,
+}
+
+impl Draws {
+    pub const NONE: Self = Self {
+        drops: 0,
+        splashes: 0,
+    };
+
+    pub fn is_none(self) -> bool {
+        self == Self::NONE
+    }
+
+    /// What the weather and the camera ask for: nothing while it does not rain, the camera is
+    /// under water or is no point in space; no drops for a weather that gives them no size.
+    pub fn wanted(input: &RainInput, view: &RainView) -> Self {
+        if view.underwater || !view.eye.is_finite() {
+            return Self::NONE;
+        }
+        let intensity = finite_or_zero(input.intensity).clamp(0.0, 1.0);
+        let size = streak_size(input);
+        let has_streaks = size.x > 0.0 && size.y > 0.0;
+        Self {
+            drops: if has_streaks {
+                drop_count(intensity, input.density)
+            } else {
+                0
+            },
+            splashes: splash_count(intensity),
+        }
+    }
+}
+
 /// Mirrors `RainUniform` in `rain.wgsl`, which says what each field holds.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Pod, Zeroable)]
@@ -73,20 +111,17 @@ pub(super) struct RainUniform {
     pub(super) splash_cycle: [u32; 4],
 }
 
-/// The uniform of a frame and how many drops and splashes it draws.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct RainPlan {
-    pub uniform: RainUniform,
-    pub drops: u32,
-    pub splashes: u32,
-}
-
-impl RainPlan {
-    /// `drift` is where the drops have moved to by this frame.
-    pub fn new(input: &RainInput, view: &RainView, fall: &Fall, drift: &DropDrift) -> Self {
-        let intensity = finite_or_zero(input.intensity).clamp(0.0, 1.0);
+impl RainUniform {
+    /// `window` is what the occlusion map shows and `drift` where the drops have moved to by
+    /// this frame.
+    pub fn new(
+        input: &RainInput,
+        view: &RainView,
+        window: OcclusionWindow,
+        fall: &Fall,
+        drift: &DropDrift,
+    ) -> Self {
         let size = streak_size(input);
-        let has_streaks = size.x > 0.0 && size.y > 0.0;
         let axes = StreakAxes::new(fall.velocity, clean(view.forward));
         let eye = clean(view.eye);
         let shift = lattice_shift(drift.offset(), eye, fall.edge);
@@ -100,53 +135,39 @@ impl RainPlan {
         });
         let tint = clean(input.tint).max(Vec3::ZERO);
 
-        let (window, heights) = match view.window {
-            Some(window) => (
-                [window.origin().x, window.origin().y, EXTENT, 1.0],
-                [
-                    window.bottom(),
-                    HEIGHT_RANGE,
-                    f32::from(u8::from(input.occludable)),
-                    0.0,
-                ],
-            ),
-            None => ([0.0, 0.0, EXTENT, 0.0], [0.0, HEIGHT_RANGE, 0.0, 0.0]),
-        };
         let with = |vector: Vec3, last: f32| [vector.x, vector.y, vector.z, last];
         Self {
-            uniform: RainUniform {
-                along: with(axes.along, size.x),
-                across: with(axes.across, size.y),
-                lattice: with(shift, fall.edge),
-                tint: with(tint, 0.0),
-                atlas: [
-                    input.subtextures.x.max(1) as f32,
-                    input.subtextures.y.max(1) as f32,
-                    SPLASH_FRAMES as f32,
-                    SPLASH_SIZE,
-                ],
-                window,
-                heights,
-                fades: [NEAR_FADE[0], NEAR_FADE[1], BOX_FADE_FROM, SPLASH_FADE_FROM],
-                looks: [STREAK_OPACITY, SPLASH_OPACITY, LEAST_VARIATION, 0.0],
-                splash: [
-                    splash_phase.fraction,
-                    splash_edge,
-                    splash_shift.x,
-                    splash_shift.z,
-                ],
-                splash_cycle: [splash_phase.cycle, 0, 0, 0],
-            },
-            drops: if has_streaks {
-                drop_count(intensity, input.density)
-            } else {
-                0
-            },
-            splashes: if view.window.is_some() {
-                splash_count(intensity)
-            } else {
-                0
-            },
+            along: with(axes.along, size.x),
+            across: with(axes.across, size.y),
+            lattice: with(shift, fall.edge),
+            tint: with(tint, 0.0),
+            atlas: [
+                input.subtextures.x.max(1) as f32,
+                input.subtextures.y.max(1) as f32,
+                SPLASH_FRAMES as f32,
+                SPLASH_SIZE,
+            ],
+            window: [
+                window.origin().x,
+                window.origin().y,
+                EXTENT,
+                window.bottom(),
+            ],
+            heights: [
+                HEIGHT_RANGE,
+                f32::from(u8::from(input.occludable)),
+                0.0,
+                0.0,
+            ],
+            fades: [NEAR_FADE[0], NEAR_FADE[1], BOX_FADE_FROM, SPLASH_FADE_FROM],
+            looks: [STREAK_OPACITY, SPLASH_OPACITY, LEAST_VARIATION, 0.0],
+            splash: [
+                splash_phase.fraction,
+                splash_edge,
+                splash_shift.x,
+                splash_shift.z,
+            ],
+            splash_cycle: [splash_phase.cycle, 0, 0, 0],
         }
     }
 }
