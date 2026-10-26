@@ -1,7 +1,7 @@
 //! What the weather sounds need to know each frame, as plain values: nothing here knows the
 //! database, the simulation or the renderer.
 
-use crate::weather::{FadeRange, TransitionSide, WeatherId};
+use crate::weather::{FadeRange, TransitionSide, WeatherId, fraction};
 
 /// One of the weathers that show, and how strongly its sounds do.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -37,17 +37,8 @@ impl WeatherSide {
 fn weight(side: TransitionSide) -> f32 {
     match side {
         TransitionSide::Settled => 1.0,
-        TransitionSide::Incoming { progress } => unit(progress),
-        TransitionSide::Outgoing { progress } => 1.0 - unit(progress),
-    }
-}
-
-/// `value` held to `0..=1`; NaN counts as 0.
-pub(super) fn unit(value: f32) -> f32 {
-    if value.is_nan() {
-        0.0
-    } else {
-        value.clamp(0.0, 1.0)
+        TransitionSide::Incoming { progress } => fraction(progress),
+        TransitionSide::Outgoing { progress } => 1.0 - fraction(progress),
     }
 }
 

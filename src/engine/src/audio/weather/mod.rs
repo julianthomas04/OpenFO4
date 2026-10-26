@@ -30,10 +30,11 @@ pub use input::{ThunderStrike, WeatherAudioInput, WeatherSide};
 pub use loader::{load_or_report, load_weather_audio};
 pub use table::WeatherSoundTable;
 
-use levels::{LoopLevel, level_db, loop_levels};
+use levels::{LoopLevel, loop_levels};
 use thunder::{DueThunder, ThunderQueue};
 
 use super::conditions::{FreshWorldContext, GameTime, evaluate};
+use super::decibels::amplitude_to_db;
 use super::file_probe::probe_files;
 use super::loop_plan::LoopTarget;
 use super::sound_resolve::{
@@ -156,7 +157,7 @@ impl WeatherAudio {
             if let Some(play) = self.loop_play(&descriptor)? {
                 targets.push(LoopTarget {
                     file_key: play.file_key,
-                    gain_db: play.gain_db + level_db(level),
+                    gain_db: play.gain_db + amplitude_to_db(level),
                 });
             }
         }

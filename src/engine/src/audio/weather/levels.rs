@@ -4,11 +4,9 @@
 use std::collections::BTreeMap;
 
 use super::error::WeatherAudioError;
-use super::input::{WeatherSide, unit};
+use super::input::WeatherSide;
 use super::table::WeatherSoundTable;
-use crate::weather::SoundKind;
-
-const DB_PER_DECADE_OF_AMPLITUDE: f32 = 20.0;
+use crate::weather::{SoundKind, fraction};
 
 /// A looping sound and the part of its steady level it should play at.
 #[derive(Debug, Clone, PartialEq)]
@@ -35,7 +33,7 @@ pub fn loop_levels(
     for side in sides {
         for sound in table.sounds(side.weather)? {
             if let Some(share) = share_of(sound.kind, side) {
-                *levels.entry(&sound.descriptor).or_default() += unit(side.weight) * share;
+                *levels.entry(&sound.descriptor).or_default() += fraction(side.weight) * share;
             }
         }
     }
@@ -49,17 +47,12 @@ pub fn loop_levels(
         .collect())
 }
 
-/// The gain of `level` against the steady level, `0` at 1 and minus infinity at 0.
-pub fn level_db(level: f32) -> f32 {
-    DB_PER_DECADE_OF_AMPLITUDE * level.log10()
-}
-
 /// How much of its weight a sound of `kind` has on `side`; `None` for the sounds that are no loops.
 fn share_of(kind: SoundKind, side: &WeatherSide) -> Option<f32> {
     match kind {
         SoundKind::Default => Some(1.0),
-        SoundKind::Precipitation => Some(unit(side.precipitation)),
-        SoundKind::Wind => Some(unit(side.wind)),
+        SoundKind::Precipitation => Some(fraction(side.precipitation)),
+        SoundKind::Wind => Some(fraction(side.wind)),
         SoundKind::Thunder => None,
     }
 }
@@ -238,14 +231,6 @@ mod tests {
             matches!(error, WeatherAudioError::UnknownWeather(9)),
             "{error:?}"
         );
-    }
-
-    #[test]
-    fn the_gain_of_a_level_is_zero_at_full_level_and_falls_by_six_db_per_halving() {
-        assert_eq!(level_db(1.0), 0.0);
-        assert!((level_db(0.5) + 6.0206).abs() < 1e-3);
-        assert!((level_db(0.1) + 20.0).abs() < 1e-3);
-        assert_eq!(level_db(0.0), f32::NEG_INFINITY);
     }
 
     fn any_fraction() -> impl Strategy<Value = f32> {

@@ -68,7 +68,8 @@ impl FadeRange {
     }
 }
 
-fn fraction(value: f32) -> f32 {
+/// `value` held to `0..=1`; NaN counts as 0.
+pub fn fraction(value: f32) -> f32 {
     if value.is_nan() {
         0.0
     } else {
@@ -202,6 +203,22 @@ mod tests {
         let range = range(0.2, 0.8);
         assert_eq!(incoming(range, f32::NAN), 0.0);
         assert_eq!(outgoing(range, f32::NAN), 1.0);
+    }
+
+    #[test]
+    fn a_fraction_keeps_a_value_in_range_and_holds_the_others_to_the_ends() {
+        assert_eq!(fraction(0.25), 0.25);
+        assert_eq!(fraction(0.0), 0.0);
+        assert_eq!(fraction(1.0), 1.0);
+        assert_eq!(fraction(-3.0), 0.0);
+        assert_eq!(fraction(7.0), 1.0);
+        assert_eq!(fraction(f32::NEG_INFINITY), 0.0);
+        assert_eq!(fraction(f32::INFINITY), 1.0);
+    }
+
+    #[test]
+    fn a_fraction_that_is_not_a_number_counts_as_zero() {
+        assert_eq!(fraction(f32::NAN), 0.0);
     }
 
     fn any_fraction() -> impl Strategy<Value = f32> {

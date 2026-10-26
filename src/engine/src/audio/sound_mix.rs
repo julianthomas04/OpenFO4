@@ -11,6 +11,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use super::decibels::amplitude_to_db;
 use crate::assets::db::music::SoundCategory;
 use crate::assets::db::sound_catalog::{SoundDescriptor, SoundOutputModel};
 use crate::random::RandomSource;
@@ -24,7 +25,6 @@ const LEFT_SPEAKER: &str = "L";
 const RIGHT_SPEAKER: &str = "R";
 const CENTIDB_PER_DB: f32 = 100.0;
 const PERCENT: f32 = 100.0;
-const DB_PER_DECADE_OF_AMPLITUDE: f32 = 20.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LayerMix {
@@ -122,13 +122,9 @@ fn gain_db(
     Ok(
         -(descriptor.static_attenuation_centidb as f32 / CENTIDB_PER_DB) + variance
             - model.static_attenuation_db
-            + to_db(channel_gain(model)?)
+            + amplitude_to_db(channel_gain(model)?)
             + category_chain_db(descriptor, categories)?,
     )
-}
-
-fn to_db(amplitude: f32) -> f32 {
-    DB_PER_DECADE_OF_AMPLITUDE * amplitude.log10()
 }
 
 /// The share of input channel 0 that reaches the left and right speaker. Unequal shares are not
@@ -190,7 +186,7 @@ fn category_chain_db(
                 multiplier,
             });
         }
-        total += to_db(multiplier);
+        total += amplitude_to_db(multiplier);
         match &category.parent {
             Some(parent) => key = parent,
             None => return Ok(total),

@@ -3,8 +3,8 @@
 
 use std::time::Duration;
 
-use super::input::{ThunderStrike, unit};
-use crate::weather::WeatherId;
+use super::input::ThunderStrike;
+use crate::weather::{WeatherId, fraction};
 
 /// How much quieter than its sound's own level the thunder of the faintest strike is, in dB. The
 /// loudest strike plays at the sound's own level, and the dB in between follow the strike's
@@ -67,7 +67,7 @@ impl ThunderQueue {
 /// The gain of the thunder of a strike of `intensity`: 0 dB at 1 and [`FAINTEST_THUNDER_DB`] at 0,
 /// linear in dB between. An intensity outside `0..=1` is held to it and NaN counts as 0.
 pub fn thunder_gain_db(intensity: f32) -> f32 {
-    FAINTEST_THUNDER_DB * (1.0 - unit(intensity))
+    FAINTEST_THUNDER_DB * (1.0 - fraction(intensity))
 }
 
 fn delay(seconds: f32) -> Duration {

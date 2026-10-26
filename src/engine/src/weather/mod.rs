@@ -10,7 +10,7 @@ pub mod roll_table;
 pub mod sound;
 pub mod wind;
 
-pub use fade::{FadeRange, TransitionSide};
+pub use fade::{FadeRange, TransitionSide, fraction};
 pub use flags::{WeatherFlag, WeatherFlags};
 pub use id::{ClimateEntry, WeatherId};
 pub use lightning::LightningParams;

@@ -13,6 +13,7 @@ use kira::Decibels;
 use kira::sound::FromFileError;
 
 use super::conditions::{self, ConditionError, FreshWorldContext, GameTime, global_entries};
+use super::decibels::amplitude_to_db;
 use super::file_probe::{ProbeError, probe_files};
 use super::music_output::open_music_stream;
 use super::music_stack::pick;
@@ -157,7 +158,7 @@ impl WorldMusic {
 
     /// The music volume from the sound category chain, as a level for every world music sound.
     pub fn volume(&self) -> Decibels {
-        Decibels(20.0 * self.gain.log10())
+        Decibels(amplitude_to_db(self.gain))
     }
 
     pub fn missing_files(&self) -> &HashSet<String> {
