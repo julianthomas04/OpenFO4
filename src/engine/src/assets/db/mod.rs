@@ -35,6 +35,7 @@ pub mod water_placement;
 pub mod waters;
 pub mod weapons;
 pub mod weather;
+pub mod weather_library;
 pub mod worldspace_lineage;
 pub mod worldspaces;
 
@@ -525,6 +526,27 @@ impl DbClient {
             self.schema().weather_fog_column_present,
             &self.conn,
         )
+    }
+
+    /// The weather columns of the library; only call when
+    /// [`DbSchema::weather_library_columns_present`] holds.
+    pub fn get_weather_library_row(
+        &self,
+        form_key: &str,
+    ) -> rusqlite::Result<weather_library::WeatherLibraryRow> {
+        weather_library::get_weather_library_row(form_key, &self.conn)
+    }
+
+    pub fn get_particle_geometry(
+        &self,
+        form_key: &str,
+    ) -> rusqlite::Result<weather_library::ParticleGeometryRow> {
+        weather_library::get_particle_geometry(form_key, &self.conn)
+    }
+
+    /// `QueryReturnedNoRows` when the climate is unknown.
+    pub fn get_climate_volatility(&self, climate: &str) -> rusqlite::Result<Option<i64>> {
+        weather_library::get_climate_volatility(climate, &self.conn)
     }
 
     #[instrument(skip(self))]

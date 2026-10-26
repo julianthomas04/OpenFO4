@@ -35,6 +35,9 @@ const MATERIAL_SWAP_COLUMNS: &[&str] = &["material_name"];
 const WORLDSPACE_WEATHER_COLUMNS: &[&str] = &["climate"];
 const WEATHER_COLUMNS: &[&str] = &["directional_ambient"];
 const WEATHER_FOG_COLUMNS: &[&str] = &["fog"];
+const WEATHER_LIBRARY_COLUMNS: &[&str] = &["clouds", "data"];
+const CLIMATE_VOLATILITY_COLUMNS: &[&str] = &["volatility"];
+const PARTICLE_GEOMETRY_COLUMNS: &[&str] = &["data", "particle_texture", "particle_material"];
 const CELL_WATER_COLUMNS: &[&str] = &[
     "has_water",
     "no_lod_water",
@@ -68,6 +71,10 @@ const MAP_MARKER_COLUMNS: &[&str] = &[
     "position_z",
 ];
 const WORLDSPACE_MAP_IMAGE_COLUMNS: &[&str] = &["map_image"];
+
+/// The installer command that fills the weather library columns.
+pub const WEATHER_LIBRARY_TABLES_FIX: &str =
+    "esm-only --tables weather,climates,shader_particle_geometries";
 
 /// The installer command that fills the Pip-Boy tables and columns.
 const PIPBOY_TABLES_FIX: &str =
@@ -103,6 +110,9 @@ pub enum ColumnGroup {
     WorldspaceWeather,
     Weather,
     WeatherFog,
+    WeatherLibrary,
+    ClimateVolatility,
+    ParticleGeometry,
     CellWater,
     WorldspaceWater,
     ActivatorWater,
@@ -129,6 +139,9 @@ impl std::fmt::Display for ColumnGroup {
             Self::WorldspaceWeather => "worldspace weather",
             Self::Weather => "weather",
             Self::WeatherFog => "weather fog",
+            Self::WeatherLibrary => "weather library",
+            Self::ClimateVolatility => "climate volatility",
+            Self::ParticleGeometry => "particle geometry",
             Self::CellWater => "cell water",
             Self::WorldspaceWater => "worldspace water",
             Self::ActivatorWater => "activator water",
@@ -334,6 +347,9 @@ pub struct DbSchema {
     pub material_swap_name_column_present: bool,
     pub weather_columns_present: bool,
     pub weather_fog_column_present: bool,
+    /// The weather clouds and data, the climate volatility and the particle geometry
+    /// columns the weather library needs, all or none.
+    pub weather_library_columns_present: bool,
     pub cell_water_columns_present: bool,
     pub worldspace_water_columns_present: bool,
     pub activator_water_column_present: bool,
@@ -393,6 +409,22 @@ impl DbSchema {
                 ColumnGroup::WeatherFog,
                 "weather",
                 WEATHER_FOG_COLUMNS,
+            )?,
+            weather_library_columns_present: column_group_present(
+                conn,
+                ColumnGroup::WeatherLibrary,
+                "weather",
+                WEATHER_LIBRARY_COLUMNS,
+            )? & column_group_present(
+                conn,
+                ColumnGroup::ClimateVolatility,
+                "climates",
+                CLIMATE_VOLATILITY_COLUMNS,
+            )? & column_group_present(
+                conn,
+                ColumnGroup::ParticleGeometry,
+                "shader_particle_geometries",
+                PARTICLE_GEOMETRY_COLUMNS,
             )?,
             cell_water_columns_present: column_group_present(
                 conn,

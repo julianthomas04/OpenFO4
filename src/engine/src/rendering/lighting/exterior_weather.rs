@@ -92,12 +92,15 @@ struct ClimateData {
     weathers: Vec<ClimateWeather>,
 }
 
-#[derive(Debug, Deserialize)]
-struct ClimateWeather {
+/// One weather a climate can pick, with the global that gates it when it has one.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub(crate) struct ClimateWeather {
     #[serde(rename = "Weather")]
-    weather: String,
+    pub(crate) weather: String,
     #[serde(rename = "Chance")]
-    chance: u32,
+    pub(crate) chance: u32,
+    #[serde(rename = "Global")]
+    pub(crate) global: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -137,8 +140,11 @@ type DirectionalAmbient = HashMap<String, RawAmbientColors>;
 
 /// The sunrise and sunset times and the moon of the climate a weather belongs to.
 #[derive(Debug, Clone, PartialEq)]
-struct ClimateInfo {
+pub(crate) struct ClimateInfo {
+    pub(crate) name: String,
+    /// The weather lighting starts from: the most likely entry.
     weather_key: String,
+    pub(crate) entries: Vec<ClimateWeather>,
     times: ClimateTimes,
     sky: ClimateSky,
     moon: Option<ClimateMoon>,
@@ -197,31 +203,22 @@ impl ExteriorWeatherSlots {
         if !db.schema().weather_columns_present {
             return Err(ExteriorWeatherError::ColumnsMissing);
         }
-        let climate_name = db
-            .get_worldspace_climate(worldspace)
-            .map_err(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => ExteriorWeatherError::WorldspaceNotFound {
-                    worldspace: worldspace.to_string(),
-                },
-                other => other.into(),
-            })?
-            .ok_or_else(|| ExteriorWeatherError::WorldspaceWithoutClimate {
-                worldspace: worldspace.to_string(),
-            })?;
-        let climate = load_climate(db, &climate_name)?;
-        if climate.sky.moons.is_none() {
-            tracing::warn!(
-                "climate {climate_name} stores no moon flags (database predates the moon export); the sky shows no moon"
-            );
-        }
-        let row = db
-            .get_weather(&climate.weather_key)
-            .map_err(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => ExteriorWeatherError::WeatherNotFound {
-                    weather: climate.weather_key.clone(),
-                },
-                other => other.into(),
-            })?;
+        let climate = load_worldspace_climate(db, worldspace)?;
+        Self::load_weather(db, &climate.weather_key, &climate)
+    }
+
+    /// One weather of `climate` with all its slots.
+    pub(crate) fn load_weather(
+        db: &DbClient,
+        weather_key: &str,
+        climate: &ClimateInfo,
+    ) -> Result<Self, ExteriorWeatherError> {
+        let row = db.get_weather(weather_key).map_err(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => ExteriorWeatherError::WeatherNotFound {
+                weather: weather_key.to_string(),
+            },
+            other => other.into(),
+        })?;
         let image_spaces = load_image_spaces(db, &row)?;
         Self::from_row(row, &image_spaces, climate)
     }
@@ -229,7 +226,7 @@ impl ExteriorWeatherSlots {
     fn from_row(
         row: WeatherRow,
         image_spaces: &[ImageSpaceData; SLOT_COUNT],
-        climate: ClimateInfo,
+        climate: &ClimateInfo,
     ) -> Result<Self, ExteriorWeatherError> {
         let WeatherRow {
             form_key,
@@ -265,10 +262,10 @@ impl ExteriorWeatherSlots {
             slots,
             fog,
             climate.times,
-            climate.sky,
+            climate.sky.clone(),
             climate.moon,
         )
-        .with_sun_textures(climate.sun_textures))
+        .with_sun_textures(climate.sun_textures.clone()))
     }
 }
 
@@ -427,6 +424,31 @@ fn load_image_space(
     })
 }
 
+/// The climate of `worldspace`, with a warning when it predates the moon export.
+pub(crate) fn load_worldspace_climate(
+    db: &DbClient,
+    worldspace: &str,
+) -> Result<ClimateInfo, ExteriorWeatherError> {
+    let climate_name = db
+        .get_worldspace_climate(worldspace)
+        .map_err(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => ExteriorWeatherError::WorldspaceNotFound {
+                worldspace: worldspace.to_string(),
+            },
+            other => other.into(),
+        })?
+        .ok_or_else(|| ExteriorWeatherError::WorldspaceWithoutClimate {
+            worldspace: worldspace.to_string(),
+        })?;
+    let climate = load_climate(db, &climate_name)?;
+    if climate.sky.moons.is_none() {
+        tracing::warn!(
+            "climate {climate_name} stores no moon flags (database predates the moon export); the sky shows no moon"
+        );
+    }
+    Ok(climate)
+}
+
 fn load_climate(db: &DbClient, climate: &str) -> Result<ClimateInfo, ExteriorWeatherError> {
     let data = db
         .get_climate_data(climate)
@@ -456,7 +478,9 @@ fn parse_climate(climate: &str, json: &str) -> Result<ClimateInfo, ExteriorWeath
         source,
     })?;
     Ok(ClimateInfo {
-        weather_key: most_likely_weather(climate, data)?,
+        name: climate.to_string(),
+        weather_key: most_likely_weather(climate, &data.weathers)?,
+        entries: data.weathers,
         times: ClimateTimes::parse(json).map_err(|source| ExteriorWeatherError::ClimateTimes {
             climate: climate.to_string(),
             source,
@@ -472,16 +496,25 @@ fn parse_climate(climate: &str, json: &str) -> Result<ClimateInfo, ExteriorWeath
     })
 }
 
-fn most_likely_weather(climate: &str, data: ClimateData) -> Result<String, ExteriorWeatherError> {
-    // Reversed so that among equal chances the first listed weather wins.
-    data.weathers
-        .into_iter()
-        .rev()
-        .max_by_key(|entry| entry.chance)
-        .map(|entry| entry.weather)
+fn most_likely_weather(
+    climate: &str,
+    entries: &[ClimateWeather],
+) -> Result<String, ExteriorWeatherError> {
+    most_likely_index(entries, |entry| entry.chance)
+        .map(|index| entries[index].weather.clone())
         .ok_or_else(|| ExteriorWeatherError::EmptyWeatherList {
             climate: climate.to_string(),
         })
+}
+
+/// The index of the entry with the highest chance; among equal chances the first listed wins.
+pub(crate) fn most_likely_index<T>(entries: &[T], chance: impl Fn(&T) -> u32) -> Option<usize> {
+    entries
+        .iter()
+        .enumerate()
+        .rev()
+        .max_by_key(|(_, entry)| chance(entry))
+        .map(|(index, _)| index)
 }
 
 fn parse_field<T: serde::de::DeserializeOwned>(
@@ -508,12 +541,12 @@ fn missing_slot(weather: &str, entry: &str, slot: TimeSlot) -> ExteriorWeatherEr
 }
 
 #[cfg(test)]
-pub(super) mod fixtures {
+pub(crate) mod fixtures {
     use serde_json::{Value, json};
 
     use super::*;
 
-    pub(super) const FORM_KEY: &str = "0012AB:Fallout4.esm";
+    pub(crate) const FORM_KEY: &str = "0012AB:Fallout4.esm";
     pub(super) const DEFAULT_CLIMATE_JSON: &str = r#"{"Weathers":[{"Weather":"0012AB:Fallout4.esm","Chance":51}],"SunriseBegin":"05:00:00","SunriseEnd":"09:00:00","SunsetBegin":"17:00:00","SunsetEnd":"21:00:00","MoonPhaseLength":4,"Moons":{"Masser":true,"Secunda":false},"ModelPath":"Sky\\Stars.nif"}"#;
 
     pub(in crate::rendering::lighting) fn rgb(r: u8, g: u8, b: u8) -> Value {
@@ -590,15 +623,31 @@ pub(super) mod fixtures {
         }
     }
 
-    pub(super) fn climate() -> ClimateInfo {
+    pub(crate) fn climate() -> ClimateInfo {
         parse_climate("DefaultClimate", DEFAULT_CLIMATE_JSON).unwrap()
+    }
+
+    /// The default climate with the weather list `entries_json` (a JSON array).
+    pub(crate) fn climate_with_entries(entries_json: &str) -> ClimateInfo {
+        let json = format!(
+            r#"{{"Weathers":{entries_json},"SunriseBegin":"05:00:00","SunriseEnd":"09:00:00","SunsetBegin":"17:00:00","SunsetEnd":"21:00:00"}}"#
+        );
+        parse_climate("DefaultClimate", &json).unwrap()
+    }
+
+    /// The default weather's slots under another form key.
+    pub(crate) fn slots_for(form_key: &str, editor_id: &str) -> ExteriorWeatherSlots {
+        let mut row = row();
+        form_key.clone_into(&mut row.form_key);
+        row.editor_id = Some(editor_id.to_owned());
+        load(row).unwrap()
     }
 
     pub(super) fn slots_with(
         row: WeatherRow,
         image_spaces: &[ImageSpaceData; SLOT_COUNT],
     ) -> Result<ExteriorWeatherSlots, ExteriorWeatherError> {
-        ExteriorWeatherSlots::from_row(row, image_spaces, climate())
+        ExteriorWeatherSlots::from_row(row, image_spaces, &climate())
     }
 
     pub(super) fn load(row: WeatherRow) -> Result<ExteriorWeatherSlots, ExteriorWeatherError> {
@@ -629,7 +678,7 @@ pub(super) mod fixtures {
             })
         })
         .unwrap();
-        ExteriorWeatherSlots::from_row(row, &image_spaces, climate()).unwrap()
+        ExteriorWeatherSlots::from_row(row, &image_spaces, &climate()).unwrap()
     }
 }
 

@@ -75,6 +75,7 @@ mod walk_in;
 mod walk_in_hook;
 mod walk_in_trace;
 pub mod water;
+pub mod weather;
 pub mod window_surface;
 pub mod world_streamer;
 
