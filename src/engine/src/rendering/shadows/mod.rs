@@ -37,10 +37,10 @@ use lamps::atlas_texture::LampAtlasTexture;
 use lamps::cache::LampView;
 pub use overflow::ShadowDrawStats;
 use overflow::{LampOverflow, ShadowCountsReadback};
-use shadow_cull::{CASTER_KINDS, CasterKind, ShadowCull, ShadowDraws};
+use shadow_cull::{CASTER_KINDS, CasterKind, CullSlots, ShadowCull, ShadowDraws};
 use shadow_maps::ShadowMaps;
 use shadow_pipelines::{INSTANCE_GROUP, MATERIAL_GROUP, ShadowPipelines};
-use views::ShadowViewSet;
+use views::{MAX_LAMP_VIEWS_PER_FRAME, ShadowViewSet};
 
 /// The world-pass resources the shadow passes draw from.
 pub struct ShadowScene<'a> {
@@ -84,18 +84,23 @@ impl ShadowRenderer {
         object_instances: &wgpu::Buffer,
         terrain_instances: &wgpu::Buffer,
     ) -> Self {
+        let cull = ShadowCull::new(
+            device,
+            CullSlots {
+                cascades: config.cascade_count as u32,
+                lamps: MAX_LAMP_VIEWS_PER_FRAME as u32,
+            },
+            object_instances,
+            terrain_instances,
+        );
+        let ortho_cull = ortho_map::new_cull(&cull, device, object_instances, terrain_instances);
         Self {
             maps,
             atlas_preview: LampAtlasPreview::new(device, lamp_atlas.view()),
             lamp_atlas,
             pipelines: ShadowPipelines::new(device, world_pass_layout, skinned_layout),
-            cull: ShadowCull::new(
-                device,
-                config.cascade_count as u32,
-                object_instances,
-                terrain_instances,
-            ),
-            ortho_cull: ortho_map::new_cull(device, object_instances, terrain_instances),
+            cull,
+            ortho_cull,
             cascade_slots: config.cascade_count,
             views: ShadowViewSet::default(),
             lamp_tiles: Vec::new(),

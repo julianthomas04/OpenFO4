@@ -1,6 +1,6 @@
 use glam::UVec4;
 
-use super::views::{GpuViewCull, MAX_LAMP_VIEWS_PER_FRAME, MAX_SHADOW_VIEWS, ShadowViewSet};
+use super::views::{GpuViewCull, MAX_SHADOW_VIEWS, ShadowViewSet};
 use crate::rendering::{
     device::STORAGE_BUFFERS_PER_STAGE,
     gpu_cull::{storage_entry, uniform_entry},
@@ -142,26 +142,33 @@ fn first_draw(cascade_slots: u32, cascade_capacity: u32, lamp_capacity: u32, slo
     }
 }
 
+/// How many views of each class a cull gives draw regions to.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct CullSlots {
+    pub cascades: u32,
+    pub lamps: u32,
+}
+
 /// One indirect buffer per caster kind, split into one region per view slot:
-/// `cascade_slots` regions of the cascade capacity, then
-/// `MAX_LAMP_VIEWS_PER_FRAME` regions of the lamp capacity. The counts are
-/// kind-major with a `MAX_SHADOW_VIEWS` stride.
+/// `slots.cascades` regions of the cascade capacity, then `slots.lamps`
+/// regions of the lamp capacity. The counts are kind-major with a
+/// `MAX_SHADOW_VIEWS` stride.
 pub struct ShadowDraws {
     buffers: [wgpu::Buffer; CASTER_KINDS],
     pub counts: wgpu::Buffer,
     cascade_capacities: Capacities,
     lamp_capacities: Capacities,
-    cascade_slots: u32,
+    slots: CullSlots,
 }
 
 impl ShadowDraws {
-    fn new(device: &wgpu::Device, cascade_slots: u32) -> Self {
+    fn new(device: &wgpu::Device, slots: CullSlots) -> Self {
         let lamp_capacities = CasterKind::ALL.map(CasterKind::lamp_capacity_floor);
         let cascade_capacities = CasterKind::ALL.map(|kind| {
             target_capacity(
                 0,
                 kind.cascade_capacity_floor(),
-                Self::max_per_cascade(device, cascade_slots, lamp_capacities[kind.index()]),
+                Self::max_per_cascade(device, slots, lamp_capacities[kind.index()]),
             )
         });
         let buffers = CasterKind::ALL.map(|kind| {
@@ -169,7 +176,7 @@ impl ShadowDraws {
             Self::create_buffer(
                 device,
                 kind,
-                cascade_slots,
+                slots,
                 cascade_capacities[i],
                 lamp_capacities[i],
             )
@@ -188,26 +195,26 @@ impl ShadowDraws {
             counts,
             cascade_capacities,
             lamp_capacities,
-            cascade_slots,
+            slots,
         }
     }
 
     /// What is left of the per-buffer draw limit after the lamp regions,
     /// shared evenly by the cascades.
-    fn max_per_cascade(device: &wgpu::Device, cascade_slots: u32, lamp_capacity: u32) -> u32 {
-        let lamp_draws = MAX_LAMP_VIEWS_PER_FRAME as u32 * lamp_capacity;
-        max_draws_per_buffer(device).saturating_sub(lamp_draws) / cascade_slots.max(1)
+    fn max_per_cascade(device: &wgpu::Device, slots: CullSlots, lamp_capacity: u32) -> u32 {
+        let lamp_draws = slots.lamps * lamp_capacity;
+        max_draws_per_buffer(device).saturating_sub(lamp_draws) / slots.cascades.max(1)
     }
 
     fn create_buffer(
         device: &wgpu::Device,
         kind: CasterKind,
-        cascade_slots: u32,
+        slots: CullSlots,
         cascade_capacity: u32,
         lamp_capacity: u32,
     ) -> wgpu::Buffer {
-        let draws = u64::from(cascade_slots) * u64::from(cascade_capacity)
-            + MAX_LAMP_VIEWS_PER_FRAME as u64 * u64::from(lamp_capacity);
+        let draws = u64::from(slots.cascades) * u64::from(cascade_capacity)
+            + u64::from(slots.lamps) * u64::from(lamp_capacity);
         device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(&format!("shadow_indirect_{kind:?}")),
             size: (draws * DRAW_STRIDE).max(DRAW_STRIDE),
@@ -225,7 +232,7 @@ impl ShadowDraws {
         for kind in CasterKind::ALL {
             let i = kind.index();
             let max_per_cascade =
-                Self::max_per_cascade(device, self.cascade_slots, self.lamp_capacities[i]);
+                Self::max_per_cascade(device, self.slots, self.lamp_capacities[i]);
             let target = target_capacity(
                 potentials[i],
                 kind.cascade_capacity_floor(),
@@ -241,16 +248,20 @@ impl ShadowDraws {
     }
 
     /// Grows the lamp regions of the kinds whose `needed` draw count outgrew
-    /// them; never shrinks. Returns true when any buffer was reallocated.
+    /// them; never shrinks. Returns true when any buffer was reallocated. A
+    /// cull without lamp regions has none to grow.
     fn grow_lamp_regions(&mut self, device: &wgpu::Device, needed: Capacities) -> bool {
+        if self.slots.lamps == 0 {
+            return false;
+        }
         let mut grew = false;
         for kind in CasterKind::ALL {
             let i = kind.index();
             let cascade_draws =
-                u64::from(self.cascade_slots) * u64::from(self.cascade_capacities[i]);
+                u64::from(self.slots.cascades) * u64::from(self.cascade_capacities[i]);
             let max_per_lamp = u64::from(max_draws_per_buffer(device))
                 .saturating_sub(cascade_draws)
-                / MAX_LAMP_VIEWS_PER_FRAME as u64;
+                / u64::from(self.slots.lamps);
             let target = target_capacity(needed[i], self.lamp_capacities[i], max_per_lamp as u32);
             if target > self.lamp_capacities[i] {
                 self.lamp_capacities[i] = target;
@@ -274,7 +285,7 @@ impl ShadowDraws {
         self.buffers[i] = Self::create_buffer(
             device,
             kind,
-            self.cascade_slots,
+            self.slots,
             self.cascade_capacities[i],
             self.lamp_capacities[i],
         );
@@ -285,7 +296,7 @@ impl ShadowDraws {
     }
 
     fn is_cascade_slot(&self, slot: usize) -> bool {
-        slot < self.cascade_slots as usize
+        slot < self.slots.cascades as usize
     }
 
     pub fn capacity(&self, kind: CasterKind, slot: usize) -> u32 {
@@ -300,7 +311,7 @@ impl ShadowDraws {
     pub fn draw_offset(&self, kind: CasterKind, slot: usize) -> u64 {
         let i = kind.index();
         first_draw(
-            self.cascade_slots,
+            self.slots.cascades,
             self.cascade_capacities[i],
             self.lamp_capacities[i],
             slot,
@@ -312,26 +323,19 @@ impl ShadowDraws {
     }
 }
 
-/// Per-view caster culling into `ShadowDraws`: one thread per object or
-/// terrain instance, tested against every view of the frame; no frustum or
-/// occlusion test against the camera.
-pub struct ShadowCull {
-    objects_pipeline: wgpu::ComputePipeline,
-    terrain_pipeline: wgpu::ComputePipeline,
+/// The compute pipelines of the cull, the layout of what they bind and the
+/// diagnostic switches they run with. Culls with draw regions of their own
+/// share one.
+#[derive(Clone)]
+struct CullPipelines {
+    objects: wgpu::ComputePipeline,
+    terrain: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
-    uniform_buffer: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
-    draws: ShadowDraws,
     debug_flags: u32,
 }
 
-impl ShadowCull {
-    pub fn new(
-        device: &wgpu::Device,
-        cascade_slots: u32,
-        object_instances: &wgpu::Buffer,
-        terrain_instances: &wgpu::Buffer,
-    ) -> Self {
+impl CullPipelines {
+    fn new(device: &wgpu::Device) -> Self {
         let shader = shaders::SHADOW_CULL.compile(device);
 
         let mut entries: Vec<_> = (0..2).map(|binding| storage_entry(binding, true)).collect();
@@ -358,30 +362,88 @@ impl ShadowCull {
             })
         };
 
+        Self {
+            objects: create_pipeline("shadow_cull_objects"),
+            terrain: create_pipeline("shadow_cull_terrain"),
+            bind_group_layout,
+            debug_flags: debug_flags(),
+        }
+    }
+}
+
+/// Per-view caster culling into `ShadowDraws`: one thread per object or
+/// terrain instance, tested against every view of the frame; no frustum or
+/// occlusion test against the camera.
+pub struct ShadowCull {
+    pipelines: CullPipelines,
+    uniform_buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    draws: ShadowDraws,
+}
+
+impl ShadowCull {
+    pub fn new(
+        device: &wgpu::Device,
+        slots: CullSlots,
+        object_instances: &wgpu::Buffer,
+        terrain_instances: &wgpu::Buffer,
+    ) -> Self {
+        Self::with_pipelines(
+            CullPipelines::new(device),
+            device,
+            slots,
+            object_instances,
+            terrain_instances,
+        )
+    }
+
+    /// A cull that runs this one's pipelines over draw regions of its own,
+    /// for views that must not take slots and regions from the ones this
+    /// cull serves.
+    #[must_use]
+    pub fn sibling(
+        &self,
+        device: &wgpu::Device,
+        slots: CullSlots,
+        object_instances: &wgpu::Buffer,
+        terrain_instances: &wgpu::Buffer,
+    ) -> Self {
+        Self::with_pipelines(
+            self.pipelines.clone(),
+            device,
+            slots,
+            object_instances,
+            terrain_instances,
+        )
+    }
+
+    fn with_pipelines(
+        pipelines: CullPipelines,
+        device: &wgpu::Device,
+        slots: CullSlots,
+        object_instances: &wgpu::Buffer,
+        terrain_instances: &wgpu::Buffer,
+    ) -> Self {
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("shadow_cull_uniforms"),
             size: std::mem::size_of::<ShadowCullUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let draws = ShadowDraws::new(device, cascade_slots);
+        let draws = ShadowDraws::new(device, slots);
         let bind_group = Self::create_bind_group(
             device,
-            &bind_group_layout,
+            &pipelines.bind_group_layout,
             object_instances,
             terrain_instances,
             &draws,
             &uniform_buffer,
         );
-
         Self {
-            objects_pipeline: create_pipeline("shadow_cull_objects"),
-            terrain_pipeline: create_pipeline("shadow_cull_terrain"),
-            bind_group_layout,
+            pipelines,
             uniform_buffer,
             bind_group,
             draws,
-            debug_flags: debug_flags(),
         }
     }
 
@@ -437,7 +499,7 @@ impl ShadowCull {
     ) {
         self.bind_group = Self::create_bind_group(
             device,
-            &self.bind_group_layout,
+            &self.pipelines.bind_group_layout,
             object_instances,
             terrain_instances,
             &self.draws,
@@ -467,11 +529,11 @@ impl ShadowCull {
         });
         pass.set_bind_group(0, &self.bind_group, &[]);
         if object_count > 0 {
-            pass.set_pipeline(&self.objects_pipeline);
+            pass.set_pipeline(&self.pipelines.objects);
             pass.dispatch_workgroups(object_count.div_ceil(OBJECT_WORKGROUP_SIZE), 1, 1);
         }
         if terrain_count > 0 {
-            pass.set_pipeline(&self.terrain_pipeline);
+            pass.set_pipeline(&self.pipelines.terrain);
             pass.dispatch_workgroups(terrain_count.div_ceil(TERRAIN_WORKGROUP_SIZE), 1, 1);
         }
     }
@@ -482,7 +544,15 @@ impl ShadowCull {
         object_count: u32,
         terrain_count: u32,
     ) -> ShadowCullUniforms {
-        let cascade_slots = self.draws.cascade_slots as usize;
+        let slots = self.draws.slots;
+        debug_assert!(
+            views.cascades.len() <= slots.cascades as usize
+                && views.lamps.len() <= slots.lamps as usize,
+            "{} cascade and {} lamp views for the draw regions {slots:?}",
+            views.cascades.len(),
+            views.lamps.len()
+        );
+        let cascade_slots = slots.cascades as usize;
         let mut culls = [GpuViewCull::UNUSED; MAX_SHADOW_VIEWS];
         let mut active = [0u32; MAX_SHADOW_VIEWS];
         let mut active_count = 0;
@@ -499,7 +569,7 @@ impl ShadowCull {
             cascade_slots: cascade_slots as u32,
             cascade_capacities: capacities_uniform(self.draws.cascade_capacities),
             lamp_capacities: capacities_uniform(self.draws.lamp_capacities),
-            debug: UVec4::new(self.debug_flags, 0, 0, 0),
+            debug: UVec4::new(self.pipelines.debug_flags, 0, 0, 0),
             active_slots: bytemuck::cast(active),
         }
     }
@@ -512,6 +582,8 @@ mod tests {
         INSTANCE_FLAGS_BLEND, INSTANCE_FLAGS_DECAL, INSTANCE_FLAGS_EFFECT,
         INSTANCE_FLAGS_HIDDEN_FX, INSTANCE_FLAGS_MARKER, INSTANCE_FLAGS_WATER,
     };
+    use crate::rendering::shadows::test_rig::rig;
+    use crate::rendering::shadows::views::MAX_LAMP_VIEWS_PER_FRAME;
 
     const SHADOW_CULL_WGSL: &str = include_str!("../shaders/shadow_cull.wgsl");
 
@@ -566,6 +638,62 @@ mod tests {
                 "slot {slot}, lamp capacity {lamp_capacity}"
             );
         }
+    }
+
+    #[test]
+    fn a_sibling_shares_the_pipelines_and_holds_only_the_regions_it_was_asked_for() {
+        let Some(rig) = rig("a_sibling_shares_the_pipelines") else {
+            return;
+        };
+        let cull = &rig.renderer.cull;
+        let sibling = &rig.renderer.ortho_cull;
+
+        assert_eq!(sibling.pipelines.objects, cull.pipelines.objects);
+        assert_eq!(sibling.pipelines.terrain, cull.pipelines.terrain);
+        assert_ne!(sibling.draws().counts, cull.draws().counts);
+        for kind in CasterKind::ALL {
+            let i = kind.index();
+            let cascade_draws = u64::from(cull.draws().cascade_capacities()[i]);
+            let lamp_draws =
+                MAX_LAMP_VIEWS_PER_FRAME as u64 * u64::from(cull.draws().lamp_capacities()[i]);
+            assert_eq!(
+                cull.draws().buffer(kind).size(),
+                (cascade_draws + lamp_draws) * DRAW_STRIDE,
+                "{kind:?}: the sun's cascade and the lamp views"
+            );
+            assert_eq!(
+                sibling.draws().buffer(kind).size(),
+                u64::from(sibling.draws().cascade_capacities()[i]) * DRAW_STRIDE,
+                "{kind:?}: the one view of the map"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cull_without_lamp_regions_has_none_to_grow() {
+        let Some(mut rig) = rig("a_cull_without_lamp_regions_has_none_to_grow") else {
+            return;
+        };
+        let before = rig
+            .renderer
+            .ortho_cull
+            .draws()
+            .buffer(CasterKind::Opaque)
+            .size();
+
+        let grew = rig
+            .renderer
+            .ortho_cull
+            .grow_lamp_regions(&rig.device, [1_000_000; CASTER_KINDS]);
+
+        assert!(!grew);
+        let after = rig
+            .renderer
+            .ortho_cull
+            .draws()
+            .buffer(CasterKind::Opaque)
+            .size();
+        assert_eq!(after, before);
     }
 
     #[test]

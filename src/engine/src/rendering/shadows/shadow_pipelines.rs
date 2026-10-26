@@ -19,6 +19,14 @@ const VIEW_UNIFORM_SIZE: u64 = std::mem::size_of::<Mat4>() as u64;
 /// through the queue, ahead of all passes of the submission.
 pub const ORTHO_MAP_VIEW_SLOT: usize = MAX_SHADOW_VIEWS;
 const VIEW_SLOTS: usize = ORTHO_MAP_VIEW_SLOT + 1;
+const _: () = assert!(
+    ORTHO_MAP_VIEW_SLOT >= MAX_SHADOW_VIEWS,
+    "the map's view slot would overwrite the view of a cascade or a lamp"
+);
+const _: () = assert!(
+    ORTHO_MAP_VIEW_SLOT < VIEW_SLOTS,
+    "the map's view slot lies beyond the view buffer"
+);
 
 /// The caster pipelines of every shadow pass. They share one layout,
 /// `[material, view, instance]`, so the pass binds each group once; the view

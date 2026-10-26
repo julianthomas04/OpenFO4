@@ -1,9 +1,10 @@
 //! Orthographic caster maps for callers that own their depth target, such as the rain occlusion
-//! map. The map is culled and drawn with the shadow cull and the caster pipelines, but by a
-//! cull of its own: the cascades and the lamp views keep every one of their view slots and draw
-//! regions, and no overflow readback has to tell the map from them.
+//! map. The map is culled and drawn with the shadow cull's pipelines and the caster pipelines,
+//! but by a cull of its own with the one draw region it needs: the cascades and the lamp views
+//! keep every one of their view slots and draw regions, and no overflow readback has to tell
+//! the map from them.
 
-use super::shadow_cull::ShadowCull;
+use super::shadow_cull::{CullSlots, ShadowCull};
 use super::shadow_maps::SHADOW_MAP_FORMAT;
 use super::shadow_pipelines::ORTHO_MAP_VIEW_SLOT;
 use super::views::{ShadowView, ShadowViewSet};
@@ -13,8 +14,15 @@ use crate::rendering::gpu_profiler::{GpuPass, GpuProfiler, SpanPart};
 /// The format of a map target: the one the caster pipelines draw depth in.
 pub const MAP_FORMAT: wgpu::TextureFormat = SHADOW_MAP_FORMAT;
 
+/// The views the map's cull gives draw regions to: the map, as a cascade, and no lamp.
+const MAP_SLOTS: CullSlots = CullSlots {
+    cascades: 1,
+    lamps: 0,
+};
+
 /// The draw region the map's cull gives its one view.
 const MAP_REGION: usize = 0;
+const _: () = assert!(MAP_REGION < MAP_SLOTS.cascades as usize);
 
 /// A map to render: the view that fills it and the reverse-Z depth target it goes to.
 pub struct OrthoMapRender<'a> {
@@ -25,12 +33,14 @@ pub struct OrthoMapRender<'a> {
     pub profiled_as: GpuPass,
 }
 
+/// The cull of the maps, running the pipelines of `cull`.
 pub(super) fn new_cull(
+    cull: &ShadowCull,
     device: &wgpu::Device,
     object_instances: &wgpu::Buffer,
     terrain_instances: &wgpu::Buffer,
 ) -> ShadowCull {
-    ShadowCull::new(device, 1, object_instances, terrain_instances)
+    cull.sibling(device, MAP_SLOTS, object_instances, terrain_instances)
 }
 
 impl ShadowRenderer {
