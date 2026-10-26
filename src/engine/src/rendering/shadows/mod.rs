@@ -86,10 +86,7 @@ impl ShadowRenderer {
     ) -> Self {
         let cull = ShadowCull::new(
             device,
-            CullSlots {
-                cascades: config.cascade_count as u32,
-                lamps: MAX_LAMP_VIEWS_PER_FRAME as u32,
-            },
+            CullSlots::new(config.cascade_count as u32, MAX_LAMP_VIEWS_PER_FRAME as u32),
             object_instances,
             terrain_instances,
         );

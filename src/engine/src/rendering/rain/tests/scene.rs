@@ -7,6 +7,7 @@ use bytemuck::Zeroable;
 use glam::{Mat4, UVec2, Vec3, Vec4};
 
 use super::{EYE, GENERATION};
+use crate::rendering::gpu_test::{f16_bits_to_f32, read_mip};
 use crate::rendering::lighting::frame_binding::FrameBinding;
 use crate::rendering::lighting::frame_uniform::{FrameUniform, MAX_CASCADES};
 use crate::rendering::local_lights::buffers::ClusterBuffers;
@@ -18,7 +19,6 @@ use crate::rendering::shadows::settings::{ShadowConfig, ShadowFilter};
 use crate::rendering::shadows::shadow_maps::ShadowMaps;
 use crate::rendering::shadows::test_rig::{ShadowRig, Slab, rig};
 use crate::rendering::texture::Texture;
-use crate::rendering::water::ssr::tests::harness::{f16_bits_to_f32, read_mip};
 
 pub(super) const TARGET: u32 = 128;
 pub(super) const BACKGROUND: f32 = 0.5;

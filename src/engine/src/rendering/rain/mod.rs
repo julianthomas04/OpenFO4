@@ -36,7 +36,9 @@ use crate::rendering::shadows::{ShadowRenderer, ShadowScene};
 /// state give it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RainInput {
-    /// 0 (dry) to 1 (downpour): how many drops and splashes there are.
+    /// 0 (dry) to 1 (downpour): how many drops and splashes there are. Interiors have no rain,
+    /// but nothing here tells them from the open air: the caller skips [`RainRenderer::prepare`]
+    /// there, or passes 0.
     pub intensity: f32,
     /// Whether roofs shelter from the rain (the weather's rain occlusion flag).
     pub occludable: bool,
@@ -145,7 +147,8 @@ impl RainRenderer {
     /// Works out this frame's rain ahead of the passes that draw it. The occlusion map is drawn
     /// into the frame's encoder first when it is due, and the rain is worked out from the window
     /// that map shows. Nothing is drawn, loaded or uploaded while it does not rain, the camera
-    /// is under water or the camera is no point in space.
+    /// is under water or the camera is no point in space. Interiors, where no rain falls, are the
+    /// caller's to tell: it skips this call there, or passes an intensity of 0.
     pub fn prepare(&mut self, mut gpu: RainGpu<'_>, input: &RainInput, view: &RainView) {
         let fall = Fall::of(input);
         self.drift.advance(fall.velocity, view.time, fall.edge);

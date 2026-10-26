@@ -15,14 +15,11 @@ use crate::rendering::gpu_profiler::{GpuPass, GpuProfiler, SpanPart};
 pub const MAP_FORMAT: wgpu::TextureFormat = SHADOW_MAP_FORMAT;
 
 /// The views the map's cull gives draw regions to: the map, as a cascade, and no lamp.
-const MAP_SLOTS: CullSlots = CullSlots {
-    cascades: 1,
-    lamps: 0,
-};
+const MAP_SLOTS: CullSlots = CullSlots::new(1, 0);
 
 /// The draw region the map's cull gives its one view.
 const MAP_REGION: usize = 0;
-const _: () = assert!(MAP_REGION < MAP_SLOTS.cascades as usize);
+const _: () = assert!(MAP_REGION < MAP_SLOTS.cascades() as usize);
 
 /// A map to render: the view that fills it and the reverse-Z depth target it goes to.
 pub struct OrthoMapRender<'a> {
@@ -101,11 +98,11 @@ mod tests {
     use glam::{Mat4, UVec2, Vec2, Vec3, Vec4};
 
     use super::*;
+    use crate::rendering::gpu_test::read_f32_mip;
     use crate::rendering::shadows::cascades::{Cascade, CascadeSet};
     use crate::rendering::shadows::shadow_cull::{CASTER_KINDS, CasterKind, ShadowDraws};
     use crate::rendering::shadows::test_rig::{ShadowRig, Slab, read_u32s, rig};
     use crate::rendering::shadows::views::{MAX_SHADOW_VIEWS, ViewCull};
-    use crate::rendering::water::ssr::tests::harness::read_f32_mip;
 
     const SIZE: u32 = 32;
     const HALF: f32 = 16.0;

@@ -351,6 +351,23 @@ fn a_frame_that_works_out_no_rain_draws_none() {
 }
 
 #[test]
+fn a_dry_frame_draws_none_of_the_rain_prepared_before_it() {
+    let Some(mut scene) = Scene::new("a_dry_frame_draws_none_of_the_rain_prepared", &[]) else {
+        return;
+    };
+    let dry = RainInput {
+        intensity: 0.0,
+        ..downpour()
+    };
+    let prepared = scene.prepared_draws(&downpour(), Look::AHEAD);
+    assert_ne!(prepared, Draws::NONE, "a downpour to leave undrawn");
+
+    let pixels = scene.draw(&dry, Look::AHEAD);
+
+    assert_eq!(lit(&pixels).len(), 0, "the rain of the frame before");
+}
+
+#[test]
 fn no_rain_falls_under_water() {
     let Some(mut scene) = Scene::new("no_rain_falls_under_water", &[]) else {
         return;

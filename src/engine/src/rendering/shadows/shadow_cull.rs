@@ -142,11 +142,28 @@ fn first_draw(cascade_slots: u32, cascade_capacity: u32, lamp_capacity: u32, slo
     }
 }
 
-/// How many views of each class a cull gives draw regions to.
+/// How many views of each class a cull gives draw regions to. The cascades take the first view
+/// slots and the lamp views the ones after them, so together they fit the `MAX_SHADOW_VIEWS` of
+/// the cull's uniforms and counts, and stop short of the view slot of the ortho map.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct CullSlots {
-    pub cascades: u32,
-    pub lamps: u32,
+    cascades: u32,
+    lamps: u32,
+}
+
+impl CullSlots {
+    /// Panics when the views would not fit the `MAX_SHADOW_VIEWS` slots.
+    pub const fn new(cascades: u32, lamps: u32) -> Self {
+        assert!(
+            cascades as usize + lamps as usize <= MAX_SHADOW_VIEWS,
+            "the cascade and lamp views need more view slots than a cull has"
+        );
+        Self { cascades, lamps }
+    }
+
+    pub const fn cascades(self) -> u32 {
+        self.cascades
+    }
 }
 
 /// One indirect buffer per caster kind, split into one region per view slot:
@@ -582,6 +599,7 @@ mod tests {
         INSTANCE_FLAGS_BLEND, INSTANCE_FLAGS_DECAL, INSTANCE_FLAGS_EFFECT,
         INSTANCE_FLAGS_HIDDEN_FX, INSTANCE_FLAGS_MARKER, INSTANCE_FLAGS_WATER,
     };
+    use crate::rendering::lighting::frame_uniform::MAX_CASCADES;
     use crate::rendering::shadows::test_rig::rig;
     use crate::rendering::shadows::views::MAX_LAMP_VIEWS_PER_FRAME;
 
@@ -638,6 +656,21 @@ mod tests {
                 "slot {slot}, lamp capacity {lamp_capacity}"
             );
         }
+    }
+
+    #[test]
+    fn a_cull_can_serve_every_cascade_and_lamp_view_there_is_a_slot_for() {
+        let slots = CullSlots::new(MAX_CASCADES as u32, MAX_LAMP_VIEWS_PER_FRAME as u32);
+
+        assert_eq!(slots.cascades as usize, MAX_CASCADES);
+        assert_eq!(slots.lamps as usize, MAX_LAMP_VIEWS_PER_FRAME);
+        assert_eq!(MAX_CASCADES + MAX_LAMP_VIEWS_PER_FRAME, MAX_SHADOW_VIEWS);
+    }
+
+    #[test]
+    #[should_panic(expected = "view slots")]
+    fn a_cull_cannot_serve_a_view_that_has_no_slot() {
+        let _ = CullSlots::new(MAX_CASCADES as u32, MAX_LAMP_VIEWS_PER_FRAME as u32 + 1);
     }
 
     #[test]

@@ -13,8 +13,12 @@ pub const UNITS_TO_ENGINE: f32 = 0.1;
 pub const UNITS_FROM_ENGINE: f32 = 10.0;
 
 /// Engine units per metre of the game world, the Havok metre: it is 1 / 0.0142875 = 69.99 game
-/// units, 6.999 engine units, and this is the 7 that collision geometry is baked with. Every
-/// constant stated in metres converts through it.
+/// units, 6.999 engine units (one engine unit is about 14.3 cm), and this is the 7 that collision
+/// geometry is baked with. Every constant stated in metres converts through it.
+///
+/// Rapier is tuned for metre-scale worlds and keeps its internal tolerances (contact margin,
+/// sleep thresholds, CCD) right at other scales through `IntegrationParameters.length_unit`, so
+/// it must be told the world is this many times metre-scale.
 pub const ENGINE_UNITS_PER_METER: f32 = 7.0;
 
 /// A Bethesda vector `(x, y, z)` with its axes mapped to engine axes, unscaled.

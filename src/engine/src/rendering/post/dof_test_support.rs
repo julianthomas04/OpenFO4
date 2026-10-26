@@ -10,11 +10,10 @@ use wgpu::util::DeviceExt;
 
 use super::depth_of_field::DofRegisters;
 use super::hdr_target::HDR_FORMAT;
+use crate::rendering::gpu_test::{extent, f16_bits_to_f32, f32_to_f16_bits, read_mip};
 /// Makes the pipelines of the passes compile without installed translated shaders.
 pub use crate::rendering::shaders::startup::install_test_stubs;
-use crate::rendering::water::ssr::tests::harness::{
-    depth_texture, extent, f16_bits_to_f32, f32_to_f16_bits, read_mip,
-};
+use crate::rendering::water::ssr::tests::harness::depth_texture;
 use crate::rendering::water::textures::SURFACE_DEPTH_FORMAT;
 
 /// Binary fractions, exact in the half-float scene targets.

@@ -6,6 +6,7 @@ use glam::{Mat4, UVec2, Vec3, Vec4};
 
 use super::scene::{Look, NO_FOG, SPLASH_ATLAS, Scene, TARGET, is_lit, lit, roof, write_texture};
 use super::{EYE, downpour};
+use crate::rendering::gpu_test::linear_to_srgb_byte;
 use crate::rendering::rain::RainInput;
 use crate::rendering::rain::assets::SPLASH_FRAMES;
 use crate::rendering::rain::tuning::SPLASH_SECONDS;
@@ -80,16 +81,6 @@ fn a_world_without_ground_has_no_splashes_to_see() {
 const FRAME_TEXELS: u32 = 16;
 const LAST_FRAME: u32 = SPLASH_FRAMES - 1;
 
-/// The sRGB byte that decodes to the linear value `linear`.
-fn srgb_byte(linear: f32) -> u8 {
-    let encoded = if linear <= 0.003_130_8 {
-        linear * 12.92
-    } else {
-        1.055 * linear.powf(1.0 / 2.4) - 0.055
-    };
-    (encoded * 255.0).round() as u8
-}
-
 /// The red, in linear light, that says a texel belongs to frame `frame` of the gradient atlas.
 fn frame_red(frame: u32) -> f32 {
     (frame as f32 + 0.5) / SPLASH_FRAMES as f32
@@ -99,7 +90,12 @@ fn frame_red(frame: u32) -> f32 {
 fn write_gradient_atlas(root: &Path) {
     let size = UVec2::new(SPLASH_FRAMES * FRAME_TEXELS, 4);
     write_texture(root, SPLASH_ATLAS, size, |texel| {
-        [srgb_byte(frame_red(texel.x / FRAME_TEXELS)), 255, 255, 255]
+        [
+            linear_to_srgb_byte(frame_red(texel.x / FRAME_TEXELS)),
+            255,
+            255,
+            255,
+        ]
     });
 }
 

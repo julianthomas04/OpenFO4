@@ -14,14 +14,13 @@ use crate::rendering::gpu_driven::{
     GpuInstance, GpuTerrainInstance, MaterialRegistry, TextureArray,
 };
 use crate::rendering::gpu_profiler::GpuProfiler;
-use crate::rendering::gpu_test::world_pass_device;
+use crate::rendering::gpu_test::{map_read, world_pass_device};
 use crate::rendering::lighting::frame_uniform::MAX_CASCADES;
 use crate::rendering::mega_buffer::{MegaBuffer, MeshSlot};
 use crate::rendering::render_pipelines::world_pass_layout::WorldPassLayout;
 use crate::rendering::skinning::bind_layout::SkinnedBindLayout;
 use crate::rendering::skinning::scene::SkinnedScene;
 use crate::rendering::vertex::Vertex;
-use crate::rendering::water::ssr::tests::harness::map_read;
 
 const MAX_CASTERS: u64 = 16;
 const SHADOW_MAP_SIZE: u32 = 64;

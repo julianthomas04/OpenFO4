@@ -395,8 +395,8 @@ mod tests {
         use glam::UVec2;
 
         use super::*;
+        use crate::rendering::gpu_test::read_f32_mip;
         use crate::rendering::shadows::test_rig::{ShadowRig, Slab, rig};
-        use crate::rendering::water::ssr::tests::harness::read_f32_mip;
 
         const GENERATION: u64 = 7;
         /// Wider than the cull's smallest caster, and the caster of every test.
