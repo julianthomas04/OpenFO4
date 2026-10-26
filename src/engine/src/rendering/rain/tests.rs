@@ -4,7 +4,7 @@ use super::motion::{DropDrift, drop_count, splash_count};
 use super::occlusion::{EXTENT, HEIGHT_RANGE, OcclusionWindow};
 use super::tuning::{
     LEAST_VARIATION, MAX_DROPS, MAX_SPLASHES, MIN_BOX_EDGE, SPLASH_OPACITY, SPLASH_SECONDS,
-    STREAK_OPACITY,
+    STREAK_LENGTH_SCALE, STREAK_OPACITY, STREAK_WIDTH_SCALE,
 };
 use super::uniform::{Fall, RainPlan, RainUniform};
 use super::*;
@@ -143,12 +143,12 @@ mod plan {
 
         let uniform = plan_of(&input, &mapped_view()).uniform;
         assert!(
-            (uniform.across[3] - 1.5 * ENGINE_UNITS_PER_METER).abs() < 1e-4,
-            "the width"
+            (uniform.along[3] - 1.5 * STREAK_LENGTH_SCALE * ENGINE_UNITS_PER_METER).abs() < 1e-4,
+            "a streak is as long as the particle size x says"
         );
         assert!(
-            (uniform.along[3] - 0.35 * ENGINE_UNITS_PER_METER).abs() < 1e-4,
-            "the length"
+            (uniform.across[3] - 0.35 * STREAK_WIDTH_SCALE * ENGINE_UNITS_PER_METER).abs() < 1e-4,
+            "and as wide as the particle size y says"
         );
     }
 

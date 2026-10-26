@@ -11,7 +11,7 @@ use super::motion::{
 use super::occlusion::{EXTENT, HEIGHT_RANGE};
 use super::tuning::{
     BOX_FADE_FROM, LEAST_VARIATION, MIN_BOX_EDGE, NEAR_FADE, SPLASH_FADE_FROM, SPLASH_OPACITY,
-    SPLASH_RADIUS, SPLASH_SIZE, STREAK_OPACITY,
+    SPLASH_RADIUS, SPLASH_SIZE, STREAK_LENGTH_SCALE, STREAK_OPACITY, STREAK_WIDTH_SCALE,
 };
 use super::{RainInput, RainView};
 use crate::bethesda_space::{ENGINE_UNITS_PER_METER, UNITS_TO_ENGINE};
@@ -45,6 +45,17 @@ impl Fall {
     }
 }
 
+/// The size of a streak in engine units: x its length along the fall and y its width across it.
+/// The particle size of the weather names them the same way round, in metres before the scales
+/// of the tuning; a size that is not a number or not positive gives zero.
+fn streak_size(input: &RainInput) -> Vec2 {
+    let size = Vec2::new(
+        finite_or_zero(input.size.x).max(0.0) * STREAK_LENGTH_SCALE,
+        finite_or_zero(input.size.y).max(0.0) * STREAK_WIDTH_SCALE,
+    );
+    size * ENGINE_UNITS_PER_METER
+}
+
 /// Mirrors `RainUniform` in `rain.wgsl`, which says what each field holds.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Pod, Zeroable)]
@@ -74,9 +85,8 @@ impl RainPlan {
     /// `drift` is where the drops have moved to by this frame.
     pub fn new(input: &RainInput, view: &RainView, fall: &Fall, drift: &DropDrift) -> Self {
         let intensity = finite_or_zero(input.intensity).clamp(0.0, 1.0);
-        let width = finite_or_zero(input.size.x).max(0.0) * ENGINE_UNITS_PER_METER;
-        let length = finite_or_zero(input.size.y).max(0.0) * ENGINE_UNITS_PER_METER;
-        let has_streaks = width > 0.0 && length > 0.0;
+        let size = streak_size(input);
+        let has_streaks = size.x > 0.0 && size.y > 0.0;
         let axes = StreakAxes::new(fall.velocity, clean(view.forward));
         let eye = clean(view.eye);
         let shift = lattice_shift(drift.offset(), eye, fall.edge);
@@ -105,8 +115,8 @@ impl RainPlan {
         let with = |vector: Vec3, last: f32| [vector.x, vector.y, vector.z, last];
         Self {
             uniform: RainUniform {
-                along: with(axes.along, length),
-                across: with(axes.across, width),
+                along: with(axes.along, size.x),
+                across: with(axes.across, size.y),
                 lattice: with(shift, fall.edge),
                 tint: with(tint, 0.0),
                 atlas: [

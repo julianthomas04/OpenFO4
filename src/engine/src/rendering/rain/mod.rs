@@ -39,8 +39,8 @@ pub struct RainInput {
     pub occludable: bool,
     /// Game units per second the drops fall at (the SPGD's gravity velocity).
     pub fall_speed: f32,
-    /// The SPGD particle size in metres: x the width of a drop's card, y its length along the
-    /// fall.
+    /// The SPGD particle size, in metres before the streak scales of the tuning: x along the
+    /// fall, y across it.
     pub size: Vec2,
     /// The columns and rows of streak variants the texture holds; 0 counts as 1.
     pub subtextures: UVec2,

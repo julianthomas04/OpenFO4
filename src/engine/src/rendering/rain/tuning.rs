@@ -13,6 +13,10 @@ const fn metres(length: f32) -> f32 {
 pub const DROPS_PER_DENSITY: f32 = 1000.0;
 /// The most drops a frame draws, however dense the weather asks the rain to be.
 pub const MAX_DROPS: u32 = 12_000;
+/// The length of a streak along its fall, in metres per unit of the weather's particle size x.
+pub const STREAK_LENGTH_SCALE: f32 = 1.0;
+/// The width of a streak across its fall, in metres per unit of the weather's particle size y.
+pub const STREAK_WIDTH_SCALE: f32 = 1.0;
 /// The rain never falls through a box smaller than this, whatever the weather asks for.
 pub const MIN_BOX_EDGE: f32 = metres(4.0);
 /// A drop is invisible at the first of these distances from the camera and fully visible at
