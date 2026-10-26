@@ -15,7 +15,6 @@ use super::time_of_day::{
 };
 use crate::rendering::post::depth_of_field::ImageSpaceDepthOfField;
 
-pub(super) const SLOT_COUNT: usize = TimeSlot::ALL.len();
 /// The slot the menu background and the first frames are lit with.
 const INITIAL_SLOT: TimeSlot = TimeSlot::Day;
 
@@ -129,7 +128,7 @@ lerp_fields!(FogColors { near, far });
 pub(super) struct WeatherFog {
     pub(super) day: Option<FogRange>,
     pub(super) night: Option<FogRange>,
-    pub(super) colors: [FogColors; SLOT_COUNT],
+    pub(super) colors: [FogColors; TimeSlot::COUNT],
 }
 
 impl WeatherFog {
@@ -185,7 +184,7 @@ pub struct ExteriorWeather {
 pub struct ExteriorWeatherSlots {
     form_key: Arc<str>,
     editor_id: Option<Arc<str>>,
-    slots: [SlotValues; SLOT_COUNT],
+    slots: [SlotValues; TimeSlot::COUNT],
     fog: Option<WeatherFog>,
     climate_times: ClimateTimes,
     climate_sky: ClimateSky,
@@ -198,7 +197,7 @@ impl ExteriorWeatherSlots {
     pub(super) fn new(
         form_key: &str,
         editor_id: Option<&str>,
-        slots: [SlotValues; SLOT_COUNT],
+        slots: [SlotValues; TimeSlot::COUNT],
         fog: Option<WeatherFog>,
         climate_times: ClimateTimes,
         climate_sky: ClimateSky,

@@ -4,7 +4,7 @@ use super::definition::WeatherDef;
 use super::error::WeatherLibraryError;
 use crate::assets::db::DbClient;
 use crate::rendering::lighting::exterior_weather::{
-    ClimateInfo, ClimateWeather, ExteriorWeatherError, load_worldspace_climate, most_likely_index,
+    ClimateInfo, ExteriorWeatherError, load_worldspace_climate,
 };
 use crate::weather::{ClimateEntry, WeatherId, WeatherRollTable, WeatherTableError};
 
@@ -66,17 +66,15 @@ impl WeatherLibrary {
         )
     }
 
-    /// Entries gated by a global are dropped: global values are not evaluated yet.
     fn build(
         climate: &ClimateInfo,
         volatility: u8,
         mut load_weather: impl FnMut(&str) -> Result<WeatherDef, WeatherLibraryError>,
     ) -> Result<Self, WeatherLibraryError> {
-        let ungated = ungated_entries(climate);
         let mut weathers: Vec<WeatherDef> = Vec::new();
         let mut ids: HashMap<&str, WeatherId> = HashMap::new();
-        let mut entries = Vec::with_capacity(ungated.len());
-        for entry in ungated {
+        let mut entries = Vec::with_capacity(climate.entries().len());
+        for entry in climate.entries() {
             let id = if let Some(id) = ids.get(entry.weather.as_str()) {
                 *id
             } else {
@@ -90,11 +88,7 @@ impl WeatherLibrary {
                 chance: entry.chance,
             });
         }
-        let initial = most_likely_index(&entries, |entry| entry.chance)
-            .map(|index| entries[index].weather)
-            .ok_or_else(|| WeatherLibraryError::NoUngatedWeather {
-                climate: climate.name.clone(),
-            })?;
+        let initial = entries[climate.initial_index()].weather;
         Ok(Self {
             climate_volatility: volatility,
             entries,
@@ -102,31 +96,6 @@ impl WeatherLibrary {
             initial,
         })
     }
-}
-
-fn ungated_entries(climate: &ClimateInfo) -> Vec<&ClimateWeather> {
-    let (ungated, gated): (Vec<_>, Vec<_>) = climate
-        .entries
-        .iter()
-        .partition(|entry| entry.global.is_none());
-    if !gated.is_empty() {
-        let gated: Vec<String> = gated
-            .iter()
-            .map(|entry| {
-                format!(
-                    "{} (global {})",
-                    entry.weather,
-                    entry.global.as_deref().unwrap_or_default()
-                )
-            })
-            .collect();
-        tracing::warn!(
-            "climate {} has weathers gated by a global, which is not supported and ignored: {}",
-            climate.name,
-            gated.join(", ")
-        );
-    }
-    ungated
 }
 
 fn load_volatility(db: &DbClient, climate: &str) -> Result<u8, WeatherLibraryError> {
@@ -239,30 +208,25 @@ mod tests {
     }
 
     #[test]
-    fn a_climate_with_only_gated_entries_is_an_error_naming_it() {
-        let error =
-            build(r#"[{"Weather":"A","Chance":50,"Global":"00FF:Fallout4.esm"}]"#).unwrap_err();
-        assert!(
-            matches!(&error, WeatherLibraryError::NoUngatedWeather { climate } if climate == "DefaultClimate"),
-            "{error:?}"
-        );
-    }
-
-    #[test]
     fn a_weather_that_fails_to_load_fails_the_library_with_its_error() {
         let error = WeatherLibrary::build(&climate_with_entries(TWO_WEATHERS), 0, |key| {
             if key == "B" {
-                Err(WeatherLibraryError::MissingField {
+                Err(ExteriorWeatherError::MissingField {
                     weather: key.to_owned(),
                     field: "data",
-                })
+                }
+                .into())
             } else {
                 load_fixture(key)
             }
         })
         .unwrap_err();
         assert!(
-            matches!(&error, WeatherLibraryError::MissingField { weather, .. } if weather == "B"),
+            matches!(
+                &error,
+                WeatherLibraryError::Lighting(ExteriorWeatherError::MissingField { weather, .. })
+                    if weather == "B"
+            ),
             "{error:?}"
         );
     }

@@ -10,7 +10,7 @@ use super::time_of_day::{
     ClimateTimesError, TimeSlot,
 };
 pub use super::weather_slots::{ExteriorWeather, ExteriorWeatherSlots, ImageSpaceHdr};
-use super::weather_slots::{FogColors, FogRange, SLOT_COUNT, SlotValues, WeatherFog};
+use super::weather_slots::{FogColors, FogRange, SlotValues, WeatherFog};
 use crate::assets::db::DbClient;
 use crate::assets::db::weather::WeatherRow;
 use crate::rendering::post::depth_of_field::ImageSpaceDepthOfField;
@@ -34,6 +34,8 @@ pub enum ExteriorWeatherError {
     ClimateWithoutData { climate: String },
     #[error("climate {climate} lists no weathers")]
     EmptyWeatherList { climate: String },
+    #[error("climate {climate} has no weather without a global gate")]
+    NoUngatedWeather { climate: String },
     #[error("climate {climate} has unusable sunrise and sunset times: {source}")]
     ClimateTimes {
         climate: String,
@@ -77,9 +79,20 @@ pub enum ExteriorWeatherError {
     ImageSpaceNotFound { image_space: String },
     #[error("image space {image_space} has no data")]
     ImageSpaceWithoutData { image_space: String },
-    #[error("malformed {what} JSON: {source}")]
+    #[error("weather {weather} has malformed {field} JSON: {source}")]
     Malformed {
-        what: &'static str,
+        weather: String,
+        field: &'static str,
+        source: serde_json::Error,
+    },
+    #[error("climate {climate} has malformed data JSON: {source}")]
+    ClimateMalformed {
+        climate: String,
+        source: serde_json::Error,
+    },
+    #[error("image space {image_space} has malformed data JSON: {source}")]
+    ImageSpaceMalformed {
+        image_space: String,
         source: serde_json::Error,
     },
     #[error("database query failed: {0}")]
@@ -100,7 +113,7 @@ pub(crate) struct ClimateWeather {
     #[serde(rename = "Chance")]
     pub(crate) chance: u32,
     #[serde(rename = "Global")]
-    pub(crate) global: Option<String>,
+    global: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -142,14 +155,32 @@ type DirectionalAmbient = HashMap<String, RawAmbientColors>;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ClimateInfo {
     pub(crate) name: String,
-    /// The weather lighting starts from: the most likely entry.
-    weather_key: String,
-    pub(crate) entries: Vec<ClimateWeather>,
+    /// The weathers the climate can pick, in its order. Entries gated by a global are left out:
+    /// global values are not evaluated yet.
+    entries: Vec<ClimateWeather>,
+    /// The index in `entries` of the most likely weather, the one lighting and the weather cycle
+    /// start from.
+    initial: usize,
     times: ClimateTimes,
     sky: ClimateSky,
     moon: Option<ClimateMoon>,
     /// Not in the climate JSON: [`load_climate`] reads the columns.
     sun_textures: ClimateSunTextures,
+}
+
+impl ClimateInfo {
+    pub(crate) fn entries(&self) -> &[ClimateWeather] {
+        &self.entries
+    }
+
+    /// The index in [`Self::entries`] of the weather lighting and the weather cycle start from.
+    pub(crate) fn initial_index(&self) -> usize {
+        self.initial
+    }
+
+    fn initial_weather(&self) -> &str {
+        &self.entries[self.initial].weather
+    }
 }
 
 impl ExteriorWeatherSlots {
@@ -169,9 +200,10 @@ impl ExteriorWeatherSlots {
             Ok(slots) => {
                 let initial = slots.initial();
                 tracing::info!(
-                    "exterior weather {} ({}) for {worldspace}, all {SLOT_COUNT} time slots, climate {:?}, moon {:?}; initial slot: sun light {:?}, sun disc {:?}, hdr {:?}, depth of field {:?}, sky upper {:?}, sky lower {:?}, horizon {:?}, stars {:?}, ambient cube {:?}, ambient specular {:?}, fog source {}",
+                    "exterior weather {} ({}) for {worldspace}, all {} time slots, climate {:?}, moon {:?}; initial slot: sun light {:?}, sun disc {:?}, hdr {:?}, depth of field {:?}, sky upper {:?}, sky lower {:?}, horizon {:?}, stars {:?}, ambient cube {:?}, ambient specular {:?}, fog source {}",
                     slots.editor_id().unwrap_or("<no editor id>"),
                     slots.form_key(),
+                    TimeSlot::COUNT,
                     slots.climate_times(),
                     slots.moon(),
                     initial.sun_light,
@@ -204,7 +236,7 @@ impl ExteriorWeatherSlots {
             return Err(ExteriorWeatherError::ColumnsMissing);
         }
         let climate = load_worldspace_climate(db, worldspace)?;
-        Self::load_weather(db, &climate.weather_key, &climate)
+        Self::load_weather(db, climate.initial_weather(), &climate)
     }
 
     /// One weather of `climate` with all its slots.
@@ -225,7 +257,7 @@ impl ExteriorWeatherSlots {
 
     fn from_row(
         row: WeatherRow,
-        image_spaces: &[ImageSpaceData; SLOT_COUNT],
+        image_spaces: &[ImageSpaceData; TimeSlot::COUNT],
         climate: &ClimateInfo,
     ) -> Result<Self, ExteriorWeatherError> {
         let WeatherRow {
@@ -236,10 +268,13 @@ impl ExteriorWeatherSlots {
             image_spaces: _,
             fog,
         } = row;
-        let colors: ColorGroups = parse_field(&form_key, "colors", colors)?;
-        let ambient: DirectionalAmbient =
-            parse_field(&form_key, "directional ambient", directional_ambient)?;
-        let slots = all_slots(|slot| {
+        let colors: ColorGroups = parse_field(&form_key, "colors", colors.as_deref())?;
+        let ambient: DirectionalAmbient = parse_field(
+            &form_key,
+            "directional ambient",
+            directional_ambient.as_deref(),
+        )?;
+        let slots = TimeSlot::try_map_all(|slot| {
             load_slot(
                 &form_key,
                 slot,
@@ -267,20 +302,6 @@ impl ExteriorWeatherSlots {
         )
         .with_sun_textures(climate.sun_textures.clone()))
     }
-}
-
-/// Runs `load` for every slot in the order of [`TimeSlot::index`], stopping at the first failure.
-fn all_slots<T, E>(mut load: impl FnMut(TimeSlot) -> Result<T, E>) -> Result<[T; SLOT_COUNT], E> {
-    Ok([
-        load(TimeSlot::Sunrise)?,
-        load(TimeSlot::Day)?,
-        load(TimeSlot::Sunset)?,
-        load(TimeSlot::Night)?,
-        load(TimeSlot::EarlySunrise)?,
-        load(TimeSlot::LateSunrise)?,
-        load(TimeSlot::EarlySunset)?,
-        load(TimeSlot::LateSunset)?,
-    ])
 }
 
 fn load_slot(
@@ -342,14 +363,14 @@ fn load_fog(
     let json = json.ok_or_else(|| ExteriorWeatherError::FogMissing {
         weather: weather.to_string(),
     })?;
-    let ranges: FogSlots = parse_field(weather, "fog", Some(json))?;
+    let ranges: FogSlots = parse_json(weather, "fog", &json)?;
     let range_of = |slot: TimeSlot| -> Result<Option<FogRange>, ExteriorWeatherError> {
         let raw = ranges
             .get(slot.json_key())
             .ok_or_else(|| missing_slot(weather, "fog", slot))?;
         fog_range(weather, slot, raw)
     };
-    let colors = all_slots(|slot| {
+    let colors = TimeSlot::try_map_all(|slot| {
         Ok::<_, ExteriorWeatherError>(FogColors {
             near: color_in_slot(weather, colors, "FogNear", slot)?,
             far: color_in_slot(weather, colors, "FogFar", slot)?,
@@ -390,10 +411,10 @@ fn fog_range(
 fn load_image_spaces(
     db: &DbClient,
     row: &WeatherRow,
-) -> Result<[ImageSpaceData; SLOT_COUNT], ExteriorWeatherError> {
+) -> Result<[ImageSpaceData; TimeSlot::COUNT], ExteriorWeatherError> {
     let names: HashMap<String, Option<String>> =
-        parse_field(&row.form_key, "image spaces", row.image_spaces.clone())?;
-    all_slots(|slot| {
+        parse_field(&row.form_key, "image spaces", row.image_spaces.as_deref())?;
+    TimeSlot::try_map_all(|slot| {
         let image_space = names
             .get(slot.json_key())
             .cloned()
@@ -418,8 +439,8 @@ fn load_image_space(
         .ok_or_else(|| ExteriorWeatherError::ImageSpaceWithoutData {
             image_space: image_space.to_string(),
         })?;
-    serde_json::from_str(&data).map_err(|source| ExteriorWeatherError::Malformed {
-        what: "image space",
+    serde_json::from_str(&data).map_err(|source| ExteriorWeatherError::ImageSpaceMalformed {
+        image_space: image_space.to_string(),
         source,
     })
 }
@@ -469,18 +490,19 @@ fn load_climate(db: &DbClient, climate: &str) -> Result<ClimateInfo, ExteriorWea
 
 fn parse_climate(climate: &str, json: &str) -> Result<ClimateInfo, ExteriorWeatherError> {
     let data: ClimateData =
-        serde_json::from_str(json).map_err(|source| ExteriorWeatherError::Malformed {
-            what: "climate",
+        serde_json::from_str(json).map_err(|source| ExteriorWeatherError::ClimateMalformed {
+            climate: climate.to_string(),
             source,
         })?;
     let sky = ClimateSky::parse(json).map_err(|source| ExteriorWeatherError::ClimateSky {
         climate: climate.to_string(),
         source,
     })?;
+    let (entries, initial) = pickable_entries(climate, data.weathers)?;
     Ok(ClimateInfo {
         name: climate.to_string(),
-        weather_key: most_likely_weather(climate, &data.weathers)?,
-        entries: data.weathers,
+        entries,
+        initial,
         times: ClimateTimes::parse(json).map_err(|source| ExteriorWeatherError::ClimateTimes {
             climate: climate.to_string(),
             source,
@@ -496,38 +518,71 @@ fn parse_climate(climate: &str, json: &str) -> Result<ClimateInfo, ExteriorWeath
     })
 }
 
-fn most_likely_weather(
+/// The entries a climate can pick, without the ones gated by a global (not evaluated yet, so
+/// they are ignored with a warning), and the index of the most likely of them: the highest
+/// chance, the first listed among equals.
+fn pickable_entries(
     climate: &str,
-    entries: &[ClimateWeather],
-) -> Result<String, ExteriorWeatherError> {
-    most_likely_index(entries, |entry| entry.chance)
-        .map(|index| entries[index].weather.clone())
-        .ok_or_else(|| ExteriorWeatherError::EmptyWeatherList {
+    weathers: Vec<ClimateWeather>,
+) -> Result<(Vec<ClimateWeather>, usize), ExteriorWeatherError> {
+    if weathers.is_empty() {
+        return Err(ExteriorWeatherError::EmptyWeatherList {
             climate: climate.to_string(),
-        })
-}
-
-/// The index of the entry with the highest chance; among equal chances the first listed wins.
-pub(crate) fn most_likely_index<T>(entries: &[T], chance: impl Fn(&T) -> u32) -> Option<usize> {
-    entries
+        });
+    }
+    let (entries, gated): (Vec<_>, Vec<_>) = weathers
+        .into_iter()
+        .partition(|entry| entry.global.is_none());
+    if !gated.is_empty() {
+        let gated: Vec<String> = gated
+            .iter()
+            .map(|entry| {
+                format!(
+                    "{} (global {})",
+                    entry.weather,
+                    entry.global.as_deref().unwrap_or_default()
+                )
+            })
+            .collect();
+        tracing::warn!(
+            "climate {climate} has weathers gated by a global, which is not supported and ignored: {}",
+            gated.join(", ")
+        );
+    }
+    let initial = entries
         .iter()
         .enumerate()
         .rev()
-        .max_by_key(|(_, entry)| chance(entry))
+        .max_by_key(|(_, entry)| entry.chance)
         .map(|(index, _)| index)
+        .ok_or_else(|| ExteriorWeatherError::NoUngatedWeather {
+            climate: climate.to_string(),
+        })?;
+    Ok((entries, initial))
 }
 
-fn parse_field<T: serde::de::DeserializeOwned>(
+/// A JSON column of a weather that must be there.
+pub(crate) fn parse_field<T: serde::de::DeserializeOwned>(
     weather: &str,
     field: &'static str,
-    json: Option<String>,
+    json: Option<&str>,
 ) -> Result<T, ExteriorWeatherError> {
     let json = json.ok_or_else(|| ExteriorWeatherError::MissingField {
         weather: weather.to_string(),
         field,
     })?;
-    serde_json::from_str(&json).map_err(|source| ExteriorWeatherError::Malformed {
-        what: field,
+    parse_json(weather, field, json)
+}
+
+/// A JSON column of a weather.
+pub(crate) fn parse_json<T: serde::de::DeserializeOwned>(
+    weather: &str,
+    field: &'static str,
+    json: &str,
+) -> Result<T, ExteriorWeatherError> {
+    serde_json::from_str(json).map_err(|source| ExteriorWeatherError::Malformed {
+        weather: weather.to_string(),
+        field,
         source,
     })
 }
@@ -645,13 +700,13 @@ pub(crate) mod fixtures {
 
     pub(super) fn slots_with(
         row: WeatherRow,
-        image_spaces: &[ImageSpaceData; SLOT_COUNT],
+        image_spaces: &[ImageSpaceData; TimeSlot::COUNT],
     ) -> Result<ExteriorWeatherSlots, ExteriorWeatherError> {
         ExteriorWeatherSlots::from_row(row, image_spaces, &climate())
     }
 
     pub(super) fn load(row: WeatherRow) -> Result<ExteriorWeatherSlots, ExteriorWeatherError> {
-        slots_with(row, &[neutral_image_space(); SLOT_COUNT])
+        slots_with(row, &[neutral_image_space(); TimeSlot::COUNT])
     }
 
     /// The same weather in a climate that shows no moon.
@@ -671,7 +726,7 @@ pub(crate) mod fixtures {
         edit_colors(&mut colors);
         let mut row = row();
         row.colors = Some(colors.to_string());
-        let image_spaces = all_slots(|slot| {
+        let image_spaces = TimeSlot::try_map_all(|slot| {
             Ok::<_, ExteriorWeatherError>(ImageSpaceData {
                 hdr: hdr(slot),
                 depth_of_field: None,
@@ -801,13 +856,13 @@ mod tests {
             }),
             ("fog", |row, text| row.fog = Some(text)),
         ];
-        for (what, corrupt) in cases {
+        for (field, corrupt) in cases {
             let mut row = row();
             corrupt(&mut row, "{ not json".to_owned());
             let result = load(row);
             assert!(
-                matches!(&result, Err(ExteriorWeatherError::Malformed { what: w, .. }) if *w == what),
-                "{what}: {result:?}"
+                matches!(&result, Err(ExteriorWeatherError::Malformed { weather, field: f, .. }) if weather == FORM_KEY && *f == field),
+                "{field}: {result:?}"
             );
         }
     }
@@ -818,19 +873,15 @@ mod tests {
         no_colors.colors = None;
         assert!(matches!(
             load(no_colors),
-            Err(ExteriorWeatherError::MissingField {
-                field: "colors",
-                ..
-            })
+            Err(ExteriorWeatherError::MissingField { weather, field: "colors" })
+                if weather == FORM_KEY
         ));
         let mut no_ambient = row();
         no_ambient.directional_ambient = None;
         assert!(matches!(
             load(no_ambient),
-            Err(ExteriorWeatherError::MissingField {
-                field: "directional ambient",
-                ..
-            })
+            Err(ExteriorWeatherError::MissingField { weather, field: "directional ambient" })
+                if weather == FORM_KEY
         ));
     }
 
@@ -1020,7 +1071,7 @@ mod tests {
 
     #[test]
     fn the_image_space_light_scales_and_exposure_limits_are_blended() {
-        let mut image_spaces = [neutral_image_space(); SLOT_COUNT];
+        let mut image_spaces = [neutral_image_space(); TimeSlot::COUNT];
         image_spaces[Night.index()].hdr = ImageSpaceHdr {
             eye_adapt_speed: 1.0,
             sunlight_scale: 0.0,
@@ -1053,7 +1104,7 @@ mod tests {
 
     #[test]
     fn depth_of_field_blends_its_numbers_and_snaps_its_mode() {
-        let mut image_spaces = [neutral_image_space(); SLOT_COUNT];
+        let mut image_spaces = [neutral_image_space(); TimeSlot::COUNT];
         image_spaces[Night.index()].depth_of_field = Some(depth_of_field(0.0, 1));
         image_spaces[Day.index()].depth_of_field = Some(depth_of_field(1.0, 2));
         let slots = slots_with(row(), &image_spaces).unwrap();
@@ -1073,7 +1124,7 @@ mod tests {
 
     #[test]
     fn depth_of_field_present_at_one_end_only_snaps_at_the_midpoint() {
-        let mut image_spaces = [neutral_image_space(); SLOT_COUNT];
+        let mut image_spaces = [neutral_image_space(); TimeSlot::COUNT];
         image_spaces[Day.index()].depth_of_field = Some(depth_of_field(1.0, 2));
         let slots = slots_with(row(), &image_spaces).unwrap();
         assert_eq!(slots.sample(between(Night, Day, 0.4)).depth_of_field, None);
@@ -1187,26 +1238,9 @@ mod tests {
     }
 
     #[test]
-    fn all_slots_are_visited_in_index_order_and_stop_at_the_first_failure() {
-        let visited = all_slots(Ok::<_, ()>).unwrap();
-        assert_eq!(visited, TimeSlot::ALL);
-        let mut seen = Vec::new();
-        let result = all_slots(|slot| {
-            seen.push(slot);
-            if slot == Night {
-                Err("night")
-            } else {
-                Ok(slot)
-            }
-        });
-        assert_eq!(result, Err("night"));
-        assert_eq!(seen, [TimeSlot::Sunrise, Day, TimeSlot::Sunset, Night]);
-    }
-
-    #[test]
     fn the_climate_gives_the_most_likely_weather_and_its_sky() {
         let climate = climate();
-        assert_eq!(climate.weather_key, FORM_KEY);
+        assert_eq!(climate.initial_weather(), FORM_KEY);
         assert_eq!(climate.times.sunrise_begin(), 5.0);
         assert_eq!(climate.times.sunset_end(), 21.0);
         assert_eq!(climate.sky.moon_phase_length, Some(4));
@@ -1217,7 +1251,41 @@ mod tests {
     #[test]
     fn among_equal_chances_the_first_listed_weather_wins() {
         let json = r#"{"Weathers":[{"Weather":"A","Chance":10},{"Weather":"B","Chance":10},{"Weather":"C","Chance":5}],"SunriseBegin":"05:00:00","SunriseEnd":"09:00:00","SunsetBegin":"17:00:00","SunsetEnd":"21:00:00"}"#;
-        assert_eq!(parse_climate("C", json).unwrap().weather_key, "A");
+        let climate = parse_climate("C", json).unwrap();
+        assert_eq!(climate.initial_weather(), "A");
+        assert_eq!(climate.initial_index(), 0);
+    }
+
+    fn climate_json(weathers: &str) -> String {
+        format!(
+            r#"{{"Weathers":{weathers},"SunriseBegin":"05:00:00","SunriseEnd":"09:00:00","SunsetBegin":"17:00:00","SunsetEnd":"21:00:00"}}"#
+        )
+    }
+
+    #[test]
+    fn weathers_gated_by_a_global_are_not_picked_and_never_start_the_climate() {
+        let json = climate_json(
+            r#"[{"Weather":"Gated","Chance":90,"Global":"00FF:Fallout4.esm"},{"Weather":"A","Chance":10,"Global":null},{"Weather":"B","Chance":20}]"#,
+        );
+        let climate = parse_climate("C", &json).unwrap();
+        let listed: Vec<&str> = climate
+            .entries()
+            .iter()
+            .map(|entry| entry.weather.as_str())
+            .collect();
+        assert_eq!(listed, ["A", "B"]);
+        assert_eq!(climate.initial_weather(), "B");
+        assert_eq!(climate.initial_index(), 1);
+    }
+
+    #[test]
+    fn a_climate_with_only_gated_weathers_is_an_error_naming_it() {
+        let json = climate_json(r#"[{"Weather":"A","Chance":50,"Global":"00FF:Fallout4.esm"}]"#);
+        let error = parse_climate("Clim", &json).unwrap_err();
+        assert!(
+            matches!(&error, ExteriorWeatherError::NoUngatedWeather { climate } if climate == "Clim"),
+            "{error:?}"
+        );
     }
 
     #[test]
@@ -1247,10 +1315,7 @@ mod tests {
         ));
         assert!(matches!(
             parse_climate("Clim", "{ not json"),
-            Err(ExteriorWeatherError::Malformed {
-                what: "climate",
-                ..
-            })
+            Err(ExteriorWeatherError::ClimateMalformed { climate, .. }) if climate == "Clim"
         ));
     }
 

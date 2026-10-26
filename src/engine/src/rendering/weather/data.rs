@@ -1,6 +1,7 @@
 use serde::Deserialize;
 
-use super::error::{WeatherLibraryError, parse_json};
+use super::error::WeatherLibraryError;
+use crate::rendering::lighting::exterior_weather::{parse_field, parse_json};
 use crate::weather::{
     FadeRange, LightningParams, SoundKind, WeatherFlags, WeatherSound, WindParams,
 };
@@ -46,8 +47,8 @@ struct RawData {
 }
 
 impl WeatherData {
-    pub(super) fn parse(weather: &str, json: &str) -> Result<Self, WeatherLibraryError> {
-        let raw: RawData = parse_json(weather, "data", json)?;
+    pub(super) fn parse(weather: &str, json: Option<&str>) -> Result<Self, WeatherLibraryError> {
+        let raw: RawData = parse_field(weather, "data", json)?;
         let flags = WeatherFlags::from_bits(raw.flags).ok_or_else(|| {
             WeatherLibraryError::UnknownFlagBits {
                 weather: weather.to_string(),
@@ -121,18 +122,18 @@ pub(super) mod fixtures {
             "wind_direction_range_raw": 32,
             "trans_delta_raw": 4,
             "sun_glare": 0.5,
-            "sun_damage": 0.0,
+            "sun_damage": 0.3,
             "precipitation_begin_fade_in": 0.1,
             "precipitation_end_fade_out": 0.9,
-            "thunder_begin_fade_in": 0.2,
+            "thunder_begin_fade_in": 0.15,
             "thunder_end_fade_out": 0.8,
             "thunder_frequency": 0.25,
             "lightning_color": [255, 0, 128],
             "flags": 6,
-            "visual_effect_begin": 0.0,
-            "visual_effect_end": 1.0,
+            "visual_effect_begin": 0.35,
+            "visual_effect_end": 0.65,
             "volatility_mult": 2.0,
-            "visibility_mult": 0.5,
+            "visibility_mult": 0.6,
         })
     }
 }
@@ -147,12 +148,13 @@ mod tests {
 
     use super::fixtures::data;
     use super::*;
+    use crate::rendering::lighting::exterior_weather::ExteriorWeatherError;
     use crate::weather::WeatherFlag;
 
     const WEATHER: &str = "0012AB:Fallout4.esm";
 
     fn parse(value: &serde_json::Value) -> Result<WeatherData, WeatherLibraryError> {
-        WeatherData::parse(WEATHER, &value.to_string())
+        WeatherData::parse(WEATHER, Some(&value.to_string()))
     }
 
     #[test]
@@ -174,12 +176,27 @@ mod tests {
                 end_fade_out: 0.9
             }
         );
-        assert_eq!(data.lightning.fade.end_fade_out, 0.8);
+        assert_eq!(
+            data.lightning.fade,
+            FadeRange {
+                begin_fade_in: 0.15,
+                end_fade_out: 0.8
+            }
+        );
         assert_eq!(data.lightning.frequency, 0.25);
         assert_eq!(data.lightning.color_srgb, [255, 0, 128]);
+    }
+
+    #[test]
+    fn every_scalar_of_the_data_block_lands_in_its_own_field() {
+        let data = parse(&data()).unwrap();
         assert_eq!(data.trans_delta_raw, 4);
-        assert_eq!(data.visibility_mult, Some(0.5));
+        assert_eq!(data.sun_glare, 0.5);
+        assert_eq!(data.sun_damage, 0.3);
+        assert_eq!(data.visual_effect_begin, 0.35);
+        assert_eq!(data.visual_effect_end, 0.65);
         assert_eq!(data.volatility_mult, 2.0);
+        assert_eq!(data.visibility_mult, Some(0.6));
     }
 
     #[test]
@@ -228,14 +245,25 @@ mod tests {
         for value in [missing, wrong_type, byte_overflow] {
             let error = parse(&value).unwrap_err();
             assert!(
-                matches!(&error, WeatherLibraryError::Malformed { weather, field: "data", .. } if weather == WEATHER),
+                matches!(&error, WeatherLibraryError::Lighting(ExteriorWeatherError::Malformed { weather, field: "data", .. }) if weather == WEATHER),
                 "{error:?}"
             );
         }
         assert!(matches!(
-            WeatherData::parse(WEATHER, "{ not json"),
-            Err(WeatherLibraryError::Malformed { field: "data", .. })
+            WeatherData::parse(WEATHER, Some("{ not json")),
+            Err(WeatherLibraryError::Lighting(
+                ExteriorWeatherError::Malformed { field: "data", .. }
+            ))
         ));
+    }
+
+    #[test]
+    fn a_weather_without_a_data_block_is_an_error_naming_it() {
+        let error = WeatherData::parse(WEATHER, None).unwrap_err();
+        assert!(
+            matches!(&error, WeatherLibraryError::Lighting(ExteriorWeatherError::MissingField { weather, field: "data" }) if weather == WEATHER),
+            "{error:?}"
+        );
     }
 
     #[test]
@@ -288,10 +316,12 @@ mod tests {
             assert!(
                 matches!(
                     parse_sounds(WEATHER, Some(json)),
-                    Err(WeatherLibraryError::Malformed {
-                        field: "sounds",
-                        ..
-                    })
+                    Err(WeatherLibraryError::Lighting(
+                        ExteriorWeatherError::Malformed {
+                            field: "sounds",
+                            ..
+                        }
+                    ))
                 ),
                 "{json}"
             );

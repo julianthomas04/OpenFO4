@@ -2,7 +2,7 @@ use glam::Vec3;
 
 use super::clouds::Clouds;
 use super::data::{WeatherData, parse_sounds};
-use super::error::{WeatherLibraryError, require_field};
+use super::error::WeatherLibraryError;
 use super::precipitation::PrecipitationParams;
 use crate::assets::db::DbClient;
 use crate::assets::db::weather_library::{ParticleGeometryRow, WeatherLibraryRow};
@@ -103,10 +103,7 @@ impl WeatherDef {
     ) -> Result<Self, WeatherLibraryError> {
         let form_key = slots.form_key().to_string();
         let editor_id = slots.editor_id().map(str::to_owned);
-        let data = WeatherData::parse(
-            &form_key,
-            require_field(&form_key, "data", row.data.as_deref())?,
-        )?;
+        let data = WeatherData::parse(&form_key, row.data.as_deref())?;
         let clouds = row
             .clouds
             .as_deref()
@@ -197,6 +194,7 @@ mod tests {
     use super::fixtures::{GEOMETRY_KEY, library_row, rain_geometry, weather_def};
     use super::*;
     use crate::rendering::lighting::exterior_weather::fixtures::slots_for;
+    use crate::weather::WeatherFlag;
 
     const FORM_KEY: &str = "0012AB:Fallout4.esm";
 
@@ -249,12 +247,29 @@ mod tests {
     }
 
     #[test]
+    fn every_scalar_of_the_data_block_lands_in_its_own_field() {
+        let def = weather_def(FORM_KEY);
+        assert_eq!(def.trans_delta_raw, 4);
+        assert_eq!(def.sun_glare, 0.5);
+        assert_eq!(def.sun_damage, 0.3);
+        assert_eq!(def.visual_effect_begin, 0.35);
+        assert_eq!(def.visual_effect_end, 0.65);
+        assert_eq!(def.volatility_mult, 2.0);
+        assert_eq!(def.visibility_mult, Some(0.6));
+        assert!(def.flags.contains(WeatherFlag::Cloudy));
+        assert!(def.flags.contains(WeatherFlag::Rainy));
+        assert!(!def.flags.contains(WeatherFlag::Pleasant));
+        assert_eq!(def.precipitation_fade.begin_fade_in, 0.1);
+        assert_eq!(def.lightning.fade.begin_fade_in, 0.15);
+    }
+
+    #[test]
     fn a_weather_without_data_is_an_error_naming_it() {
         let mut row = library_row();
         row.data = None;
         let error = from_rows(&row, Some(rain_geometry())).unwrap_err();
         assert!(
-            matches!(&error, WeatherLibraryError::MissingField { weather, field: "data" } if weather == FORM_KEY),
+            matches!(&error, WeatherLibraryError::Lighting(ExteriorWeatherError::MissingField { weather, field: "data" }) if weather == FORM_KEY),
             "{error:?}"
         );
     }
@@ -283,7 +298,7 @@ mod tests {
         ] {
             let error = from_rows(&row, Some(rain_geometry())).unwrap_err();
             assert!(
-                matches!(&error, WeatherLibraryError::Malformed { weather, field: f, .. } if weather == FORM_KEY && *f == field),
+                matches!(&error, WeatherLibraryError::Lighting(ExteriorWeatherError::Malformed { weather, field: f, .. }) if weather == FORM_KEY && *f == field),
                 "{field}: {error:?}"
             );
         }

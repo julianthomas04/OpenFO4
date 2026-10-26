@@ -460,15 +460,14 @@ mod tests {
 
     #[test]
     fn the_weather_lightning_colour_is_converted_to_linear_like_the_sky_colours() {
-        let strike = Strike::from_srgb8(0.75, [255, 0, 128]);
+        let strike = Strike::from_srgb8(0.75, [128, 64, 200]);
         assert_eq!(strike.intensity, 0.75);
-        assert_eq!(strike.colour.x, 1.0);
-        assert_eq!(strike.colour.y, 0.0);
-        // Mid grey in sRGB is about 0.2159 in linear light.
-        assert!(
-            (strike.colour.z - 0.2159).abs() < 1e-4,
-            "{}",
-            strike.colour.z
-        );
+        for (channel, expected) in [
+            (strike.colour.x, 0.215_860_5),
+            (strike.colour.y, 0.051_269_46),
+            (strike.colour.z, 0.577_580_4),
+        ] {
+            assert!((channel - expected).abs() < 1e-6, "{channel} vs {expected}");
+        }
     }
 }

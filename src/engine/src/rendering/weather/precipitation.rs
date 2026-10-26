@@ -3,8 +3,9 @@ use std::sync::Once;
 use glam::{UVec2, Vec2};
 use serde::Deserialize;
 
-use super::error::{WeatherLibraryError, parse_json};
+use super::error::WeatherLibraryError;
 use crate::assets::db::weather_library::ParticleGeometryRow;
+use crate::rendering::lighting::exterior_weather::parse_json;
 
 static SNOW_UNSUPPORTED_LOGGED: Once = Once::new();
 
@@ -124,6 +125,7 @@ pub(super) mod fixtures {
 mod tests {
     use super::fixtures::geometry;
     use super::*;
+    use crate::rendering::lighting::exterior_weather::ExteriorWeatherError;
 
     const WEATHER: &str = "0012AB:Fallout4.esm";
     const GEOMETRY: &str = "00AA01:Fallout4.esm";
@@ -187,10 +189,10 @@ mod tests {
     #[test]
     fn a_geometry_without_a_resolved_texture_keeps_its_material() {
         let mut geometry_row = row(&geometry(0), None);
-        geometry_row.particle_material = Some("materials\rain.bgem".to_owned());
+        geometry_row.particle_material = Some("materials\\rain.bgem".to_owned());
         let params = parse(geometry_row).unwrap().unwrap();
         assert_eq!(params.texture, None);
-        assert_eq!(params.material.as_deref(), Some("materials\rain.bgem"));
+        assert_eq!(params.material.as_deref(), Some("materials\\rain.bgem"));
     }
 
     #[test]
@@ -205,10 +207,11 @@ mod tests {
             };
             assert!(matches!(
                 parse(row),
-                Err(WeatherLibraryError::Malformed {
+                Err(WeatherLibraryError::Lighting(ExteriorWeatherError::Malformed {
+                    weather,
                     field: "particle geometry",
                     ..
-                })
+                })) if weather == WEATHER
             ));
         }
     }

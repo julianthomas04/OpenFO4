@@ -165,6 +165,7 @@ fn detect_reports_every_optional_group_present_on_the_real_schema() {
     assert!(schema.material_swap_name_column_present);
     assert!(schema.weather_columns_present);
     assert!(schema.weather_fog_column_present);
+    assert!(schema.weather_library_columns_present);
     assert!(schema.cell_water_columns_present);
     assert!(schema.worldspace_water_columns_present);
     assert!(schema.activator_water_column_present);

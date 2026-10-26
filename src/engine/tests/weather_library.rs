@@ -1,9 +1,8 @@
 //! `WeatherLibrary::load` against the installer's real schema (`esm_schema.sql`) loaded into an
-//! in-memory `SQLite` database, seeded with plain SQL. Columns the schema does not carry yet are
-//! added first, so the test follows the contract in either state.
+//! in-memory `SQLite` database, seeded with plain SQL.
 
 use openfo4::assets::db::DbClient;
-use openfo4::rendering::lighting::exterior_weather::ExteriorWeatherError;
+use openfo4::rendering::lighting::exterior_weather::{ExteriorWeatherError, ExteriorWeatherSlots};
 use openfo4::rendering::weather::{WeatherLibrary, WeatherLibraryError};
 use openfo4::weather::{SoundKind, WeatherId};
 use rusqlite::Connection;
@@ -21,19 +20,12 @@ const SLOTS: [&str; 8] = [
     "EarlySunset",
     "LateSunset",
 ];
-const NEW_COLUMNS: [(&str, &str, &str); 6] = [
-    ("weather", "clouds", "TEXT"),
-    ("weather", "data", "TEXT"),
-    ("climates", "volatility", "INTEGER"),
-    ("shader_particle_geometries", "data", "TEXT"),
-    ("shader_particle_geometries", "particle_texture", "TEXT"),
-    ("shader_particle_geometries", "particle_material", "TEXT"),
-];
 const WORLDSPACE: &str = "0000A1:Fallout4.esm";
 const CLIMATE: &str = "0000C1:Fallout4.esm";
 const CLEAR: &str = "0000D1:Fallout4.esm";
 const RAIN: &str = "0000D2:Fallout4.esm";
 const RAIN_GEOMETRY: &str = "0000E1:Fallout4.esm";
+const IMAGE_SPACE: &str = "0000F1:Fallout4.esm";
 
 fn text(s: &str) -> Value {
     Value::Text(s.to_string())
@@ -56,26 +48,10 @@ fn insert(conn: &Connection, table: &str, row: &[(&str, Value)]) {
     .unwrap();
 }
 
-fn has_column(conn: &Connection, table: &str, column: &str) -> bool {
-    let mut statement = conn
-        .prepare("SELECT name FROM pragma_table_info(?)")
-        .unwrap();
-    statement
-        .query_map([table], |row| row.get::<_, String>(0))
-        .unwrap()
-        .any(|name| name.unwrap() == column)
-}
-
 fn connection_without(dropped: &[(&str, &str)]) -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(SCHEMA).unwrap();
     conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
-    for (table, column, kind) in NEW_COLUMNS {
-        if !has_column(&conn, table, column) {
-            conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind};"))
-                .unwrap();
-        }
-    }
     for (table, column) in dropped {
         conn.execute_batch(&format!("ALTER TABLE {table} DROP COLUMN {column};"))
             .unwrap();
@@ -148,7 +124,7 @@ fn seed_weather(conn: &Connection, form_key: &str, precipitation: Option<&str>, 
             ("directional_ambient", text(&ambient().to_string())),
             (
                 "image_spaces",
-                text(&per_slot(&json!("0000F1:Fallout4.esm")).to_string()),
+                text(&per_slot(&json!(IMAGE_SPACE)).to_string()),
             ),
             ("fog", text(&fog().to_string())),
             ("clouds", text(&clouds().to_string())),
@@ -189,7 +165,7 @@ fn seeded(climate_weathers: &Json) -> Connection {
         &conn,
         "image_spaces",
         &[
-            ("form_key", text("0000F1:Fallout4.esm")),
+            ("form_key", text(IMAGE_SPACE)),
             (
                 "data",
                 text(
@@ -263,15 +239,38 @@ fn the_library_loads_every_climate_weather_from_the_database() {
 }
 
 #[test]
-fn a_global_gated_entry_is_left_out() {
+fn a_global_gated_entry_is_left_out_of_the_library_and_of_the_static_start_alike() {
     let weathers = json!([
         {"Weather": CLEAR, "Chance": 10, "Global": null},
         {"Weather": RAIN, "Chance": 90, "Global": "0000A9:Fallout4.esm"},
     ]);
-    let library = load(seeded(&weathers)).unwrap();
+    let db = DbClient::from_connection(seeded(&weathers)).unwrap();
+    let library = WeatherLibrary::load(&db, WORLDSPACE).unwrap();
     assert_eq!(library.entries().len(), 1);
     assert_eq!(library.weathers().len(), 1);
     assert_eq!(library.weather(library.initial_weather()).form_key, CLEAR);
+    let slots = ExteriorWeatherSlots::load(&db, WORLDSPACE).unwrap();
+    assert_eq!(slots.form_key(), CLEAR);
+}
+
+#[test]
+fn a_climate_with_only_gated_entries_loads_neither_the_library_nor_the_static_start() {
+    let weathers = json!([{"Weather": RAIN, "Chance": 90, "Global": "0000A9:Fallout4.esm"}]);
+    let db = DbClient::from_connection(seeded(&weathers)).unwrap();
+    let library_error = WeatherLibrary::load(&db, WORLDSPACE).unwrap_err();
+    assert!(
+        matches!(
+            &library_error,
+            WeatherLibraryError::Lighting(ExteriorWeatherError::NoUngatedWeather { climate })
+                if climate == CLIMATE
+        ),
+        "{library_error:?}"
+    );
+    let static_error = ExteriorWeatherSlots::load(&db, WORLDSPACE).unwrap_err();
+    assert!(
+        matches!(&static_error, ExteriorWeatherError::NoUngatedWeather { climate } if climate == CLIMATE),
+        "{static_error:?}"
+    );
 }
 
 #[test]
@@ -290,9 +289,14 @@ fn a_database_without_the_library_columns_asks_for_the_installer_rerun() {
 }
 
 #[test]
-fn a_database_with_only_some_of_a_column_group_is_a_schema_error() {
+fn a_database_with_only_some_of_a_column_group_is_a_schema_error_naming_the_missing_column() {
     let conn = connection_without(&[("shader_particle_geometries", "particle_texture")]);
-    assert!(DbClient::from_connection(conn).is_err());
+    let Err(error) = DbClient::from_connection(conn) else {
+        panic!("a partly converted column group must not open");
+    };
+    let message = error.to_string();
+    assert!(message.contains("shader_particle_geometries"), "{message}");
+    assert!(message.contains("particle_texture"), "{message}");
 }
 
 #[test]
@@ -317,7 +321,46 @@ fn malformed_weather_data_fails_the_library_naming_weather_and_field() {
     .unwrap();
     let error = load(conn).unwrap_err();
     assert!(
-        matches!(&error, WeatherLibraryError::Malformed { weather, field: "data", .. } if weather == RAIN),
+        matches!(
+            &error,
+            WeatherLibraryError::Lighting(ExteriorWeatherError::Malformed { weather, field: "data", .. })
+                if weather == RAIN
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_malformed_image_space_list_fails_the_library_naming_the_weather() {
+    let conn = seeded(&two_weathers());
+    conn.execute(
+        "UPDATE weather SET image_spaces = '{ not json' WHERE form_key = ?",
+        [CLEAR],
+    )
+    .unwrap();
+    let error = load(conn).unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            WeatherLibraryError::Lighting(ExteriorWeatherError::Malformed { weather, field: "image spaces", .. })
+                if weather == CLEAR
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn malformed_image_space_data_fails_the_library_naming_the_image_space() {
+    let conn = seeded(&two_weathers());
+    conn.execute("UPDATE image_spaces SET data = '{ not json'", [])
+        .unwrap();
+    let error = load(conn).unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            WeatherLibraryError::Lighting(ExteriorWeatherError::ImageSpaceMalformed { image_space, .. })
+                if image_space == IMAGE_SPACE
+        ),
         "{error:?}"
     );
 }

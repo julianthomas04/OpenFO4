@@ -3,7 +3,6 @@
 //! the simulation.
 
 pub mod fade;
-mod flag_set;
 pub mod flags;
 pub mod id;
 pub mod lightning;

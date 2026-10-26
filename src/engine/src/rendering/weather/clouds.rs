@@ -3,14 +3,14 @@ use std::collections::HashMap;
 use glam::Vec3;
 use serde::Deserialize;
 
-use super::error::{WeatherLibraryError, parse_json};
+use super::error::WeatherLibraryError;
 use crate::rendering::lighting::cell_lighting::srgb_to_linear;
+use crate::rendering::lighting::exterior_weather::parse_json;
 use crate::rendering::lighting::lerp::{Lerp, lerp_fields};
 use crate::rendering::lighting::time_of_day::{SlotBlend, TimeSlot};
 
 pub const CLOUD_TEXTURE_COUNT: usize = 29;
 pub const CLOUD_LAYER_COUNT: usize = 32;
-const SLOT_COUNT: usize = TimeSlot::ALL.len();
 
 /// What one cloud layer looks like in one time slot.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -35,8 +35,8 @@ pub struct CloudLayer {
     pub texture: Option<String>,
     pub x_speed: f32,
     pub y_speed: f32,
-    /// In the order of [`TimeSlot::index`]; `None` for a layer without colours or alphas.
-    slots: Option<[CloudSlotValues; SLOT_COUNT]>,
+    /// In the order of [`TimeSlot::index`]; `None` for a layer without colours and alphas.
+    slots: Option<[CloudSlotValues; TimeSlot::COUNT]>,
 }
 
 impl CloudLayer {
@@ -128,32 +128,29 @@ fn parse_layer(
         entry,
         slot: slot.json_key(),
     };
+    let unpaired = |present, absent| WeatherLibraryError::UnpairedCloudValues {
+        weather: weather.to_string(),
+        layer: index,
+        present,
+        absent,
+    };
     let slots = match (&raw.colors, &raw.alphas) {
-        (Some(colors), Some(alphas)) => {
-            let slot_values = |slot: TimeSlot| {
-                let [r, g, b, a] = *colors
-                    .get(slot.json_key())
-                    .ok_or_else(|| missing("colors", slot))?;
-                let alpha = *alphas
-                    .get(slot.json_key())
-                    .ok_or_else(|| missing("alphas", slot))?;
-                Ok::<_, WeatherLibraryError>(CloudSlotValues {
-                    color: Vec3::new(srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b)),
-                    color_alpha: f32::from(a) / 255.0,
-                    alpha,
-                })
-            };
-            let values = TimeSlot::ALL
-                .map(slot_values)
-                .into_iter()
-                .collect::<Result<Vec<_>, _>>()?;
-            Some(
-                values
-                    .try_into()
-                    .expect("TimeSlot::ALL has SLOT_COUNT entries"),
-            )
-        }
-        _ => None,
+        (Some(colors), Some(alphas)) => Some(TimeSlot::try_map_all(|slot| {
+            let [r, g, b, a] = *colors
+                .get(slot.json_key())
+                .ok_or_else(|| missing("colors", slot))?;
+            let alpha = *alphas
+                .get(slot.json_key())
+                .ok_or_else(|| missing("alphas", slot))?;
+            Ok::<_, WeatherLibraryError>(CloudSlotValues {
+                color: Vec3::new(srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b)),
+                color_alpha: f32::from(a) / 255.0,
+                alpha,
+            })
+        })?),
+        (None, None) => None,
+        (Some(_), None) => return Err(unpaired("colors", "alphas")),
+        (None, Some(_)) => return Err(unpaired("alphas", "colors")),
     };
     Ok(CloudLayer {
         enabled: raw.enabled.unwrap_or(false),
@@ -211,6 +208,7 @@ mod tests {
 
     use super::fixtures::{clouds, layer};
     use super::*;
+    use crate::rendering::lighting::exterior_weather::ExteriorWeatherError;
 
     const WEATHER: &str = "0012AB:Fallout4.esm";
 
@@ -258,6 +256,25 @@ mod tests {
     }
 
     #[test]
+    fn slot_colours_are_decoded_from_srgb_channel_by_channel() {
+        let mut value = clouds();
+        value["layers"][0]["colors"]["Day"] = json!([128, 64, 200, 51]);
+        let clouds = parse(&value).unwrap();
+        let values = clouds.layers[0].at(TimeSlot::Day).unwrap();
+        for (channel, expected) in [
+            (values.color.x, 0.215_860_5),
+            (values.color.y, 0.051_269_46),
+            (values.color.z, 0.577_580_4),
+        ] {
+            assert!((channel - expected).abs() < 1e-6, "{channel} vs {expected}");
+        }
+        assert!(
+            (values.color_alpha - 0.2).abs() < 1e-6,
+            "the colour alpha is linear already"
+        );
+    }
+
+    #[test]
     fn sampling_blends_both_slots_of_the_layer() {
         let mut value = clouds();
         value["layers"][0]["alphas"]["Night"] = json!(1.0);
@@ -289,6 +306,23 @@ mod tests {
         };
         assert_eq!(layer.sample(blend), None);
         assert!(clouds.layers[5].at(TimeSlot::Day).is_some());
+    }
+
+    #[test]
+    fn a_layer_with_colours_but_no_alphas_or_the_other_way_round_is_an_error() {
+        for (present, absent) in [("colors", "alphas"), ("alphas", "colors")] {
+            let mut value = clouds();
+            value["layers"][6][absent] = json!(null);
+            let error = parse(&value).unwrap_err();
+            assert!(
+                matches!(
+                    &error,
+                    WeatherLibraryError::UnpairedCloudValues { weather, layer: 6, present: p, absent: a }
+                        if weather == WEATHER && *p == present && *a == absent
+                ),
+                "{present} without {absent}: {error:?}"
+            );
+        }
     }
 
     #[test]
@@ -356,7 +390,7 @@ mod tests {
         for text in ["{ not json", r#"{"model":null,"textures":[],"layers":"x"}"#] {
             let error = Clouds::parse(WEATHER, text).unwrap_err();
             assert!(
-                matches!(&error, WeatherLibraryError::Malformed { weather, field: "clouds", .. } if weather == WEATHER),
+                matches!(&error, WeatherLibraryError::Lighting(ExteriorWeatherError::Malformed { weather, field: "clouds", .. }) if weather == WEATHER),
                 "{error:?}"
             );
         }
@@ -369,7 +403,12 @@ mod tests {
         value["layers"][0]["colors"]["Day"] = json!([256, 0, 0, 0]);
         assert!(matches!(
             parse(&value),
-            Err(WeatherLibraryError::Malformed { .. })
+            Err(WeatherLibraryError::Lighting(
+                ExteriorWeatherError::Malformed {
+                    field: "clouds",
+                    ..
+                }
+            ))
         ));
     }
 }
