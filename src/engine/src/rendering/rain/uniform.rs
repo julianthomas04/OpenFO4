@@ -4,30 +4,18 @@
 use bytemuck::{Pod, Zeroable};
 use glam::{DVec3, Vec2, Vec3};
 
+use super::assets::SPLASH_FRAMES;
 use super::motion::{
     DropDrift, SplashPhase, StreakAxes, drop_count, fall_velocity, lattice_shift, splash_count,
 };
 use super::occlusion::{EXTENT, HEIGHT_RANGE};
+use super::tuning::{
+    BOX_FADE_FROM, LEAST_VARIATION, MIN_BOX_EDGE, NEAR_FADE, SPLASH_FADE_FROM, SPLASH_OPACITY,
+    SPLASH_RADIUS, SPLASH_SIZE, STREAK_OPACITY,
+};
 use super::{RainInput, RainView};
 use crate::bethesda_space::{ENGINE_UNITS_PER_METER, UNITS_TO_ENGINE};
 use crate::utils::finite_or_zero;
-
-/// The frames of the splash texture, side by side.
-pub(super) const SPLASH_FRAMES: u32 = 16;
-/// The edge of a splash's square.
-const SPLASH_SIZE: f32 = 0.5 * ENGINE_UNITS_PER_METER;
-/// How far from the camera splashes are placed.
-const SPLASH_RADIUS: f32 = 25.0 * ENGINE_UNITS_PER_METER;
-/// The rain never falls through a box smaller than this, whatever the weather asks for.
-const MIN_BOX_EDGE: f32 = 4.0 * ENGINE_UNITS_PER_METER;
-/// A drop is invisible at the first of these distances from the camera and fully visible at
-/// the second.
-const NEAR_FADE: [f32; 2] = [0.6 * ENGINE_UNITS_PER_METER, 3.0 * ENGINE_UNITS_PER_METER];
-/// The share of half the box edge a drop is fully visible out to; beyond it the drop fades out
-/// before it leaves the box on one side and enters it on the other.
-const BOX_FADE_FROM: f32 = 0.6;
-/// The same for a splash and the circle of [`SPLASH_RADIUS`].
-const SPLASH_FADE_FROM: f32 = 0.7;
 
 fn clean(vector: Vec3) -> Vec3 {
     Vec3::new(
@@ -69,6 +57,7 @@ pub(super) struct RainUniform {
     pub(super) window: [f32; 4],
     pub(super) heights: [f32; 4],
     pub(super) fades: [f32; 4],
+    pub(super) looks: [f32; 4],
     pub(super) splash: [f32; 4],
     pub(super) splash_cycle: [u32; 4],
 }
@@ -129,6 +118,7 @@ impl RainPlan {
                 window,
                 heights,
                 fades: [NEAR_FADE[0], NEAR_FADE[1], BOX_FADE_FROM, SPLASH_FADE_FROM],
+                looks: [STREAK_OPACITY, SPLASH_OPACITY, LEAST_VARIATION, 0.0],
                 splash: [
                     splash_phase.fraction,
                     splash_edge,

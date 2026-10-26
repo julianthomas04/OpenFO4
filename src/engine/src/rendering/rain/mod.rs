@@ -12,6 +12,7 @@ pub mod occlusion;
 mod pipeline;
 #[cfg(test)]
 mod tests;
+mod tuning;
 mod uniform;
 
 use std::sync::Arc;

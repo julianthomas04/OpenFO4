@@ -5,8 +5,10 @@
 use crate::assets::layout::{named_texture_key, texture_key};
 use crate::rendering::texture::{TextureAssetError, load_texture_asset_srgb};
 
-/// The splash atlas, below the textures folder: 16 frames side by side.
+/// The splash atlas, below the textures folder.
 const SPLASH_TEXTURE: &str = "effects\\rainscene\\rain_rainsplash_a_16x1_d.dds";
+/// The frames the splash atlas holds, side by side.
+pub(super) const SPLASH_FRAMES: u32 = 16;
 
 /// Whether one texture of the rain is in use.
 #[derive(Debug, Clone, PartialEq, Eq)]

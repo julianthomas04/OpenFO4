@@ -22,6 +22,9 @@ struct RainUniform {
     // x, y: the distances over which a drop near the camera fades in, z: the share of the box
     // edge a drop fades out from, w: the same for a splash.
     fades: vec4<f32>,
+    // x: how opaque the alpha of the streak texture is drawn, y: the same for the splash atlas,
+    // z: the least a drop's brightness varies to.
+    looks: vec4<f32>,
     // x: how far through its cycle the splash phase is, y: the splash lattice edge, zw: where
     // that lattice lies relative to the camera (x and z).
     splash: vec4<f32>,
@@ -35,11 +38,6 @@ struct RainUniform {
 @group(0) @binding(3) var splash_texture: texture_2d<f32>;
 @group(0) @binding(4) var occlusion_map: texture_depth_2d;
 
-// How opaque the textures' alpha is drawn.
-const STREAK_OPACITY = 1.0;
-const SPLASH_OPACITY = 2.0;
-// The least a drop's brightness varies to.
-const LEAST_VARIATION = 0.6;
 // Streaks leaning flatter than this to the horizon count as this steep when roofs cut them.
 const LEAST_UP = 0.001;
 const NO_HEIGHT = -1.0e30;
@@ -150,7 +148,7 @@ fn vs_streak(@builtin(vertex_index) vertex: u32, @builtin(instance_index) drop: 
     let across = select(corner.x, 1.0 - corner.x, random(drop, 4u) > 0.5);
 
     let near_fade = smoothstep(rain.fades.x, rain.fades.y, length(offset));
-    let variation = mix(LEAST_VARIATION, 1.0, random(drop, 5u));
+    let variation = mix(rain.looks.z, 1.0, random(drop, 5u));
 
     out.clip = frame.view_proj * vec4<f32>(world, 1.0);
     out.uv = (vec2<f32>(across, 0.5 - along) + vec2<f32>(column, row)) / vec2<f32>(columns, rows);
@@ -163,7 +161,7 @@ fn vs_streak(@builtin(vertex_index) vertex: u32, @builtin(instance_index) drop: 
 fn fs_streak(in: DropOut) -> @location(0) vec4<f32> {
     let texel = textureSample(streak_texture, rain_sampler, in.uv);
     let colour = apply_fog(texel.rgb * rain.tint.rgb, in.world);
-    return vec4<f32>(colour, texel.a * STREAK_OPACITY * in.fade);
+    return vec4<f32>(colour, texel.a * rain.looks.x * in.fade);
 }
 
 @vertex
@@ -212,5 +210,5 @@ fn vs_splash(@builtin(vertex_index) vertex: u32, @builtin(instance_index) splash
 fn fs_splash(in: DropOut) -> @location(0) vec4<f32> {
     let texel = textureSample(splash_texture, rain_sampler, in.uv);
     let colour = apply_fog(texel.rgb * rain.tint.rgb, in.world);
-    return vec4<f32>(colour, saturate(texel.a * SPLASH_OPACITY) * in.fade);
+    return vec4<f32>(colour, saturate(texel.a * rain.looks.y) * in.fade);
 }

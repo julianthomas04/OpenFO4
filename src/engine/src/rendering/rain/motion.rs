@@ -4,14 +4,7 @@
 
 use glam::{DVec3, Vec2, Vec3};
 
-/// Drops per unit of the weather's particle density at full intensity.
-const DROPS_PER_DENSITY: f32 = 1000.0;
-/// The most drops a frame draws, however dense the weather asks the rain to be.
-pub const MAX_DROPS: u32 = 12_000;
-/// The splashes at full intensity.
-pub const MAX_SPLASHES: u32 = 2_000;
-/// The seconds one splash plays its frames for, before it lands somewhere else.
-pub const SPLASH_SECONDS: f64 = 0.5;
+use super::tuning::{DROPS_PER_DENSITY, MAX_DROPS, MAX_SPLASHES, SPLASH_SECONDS};
 
 /// How many drops fall at `intensity` (0 to 1) in weather of the given particle `density`.
 pub fn drop_count(intensity: f32, density: f32) -> u32 {
@@ -136,21 +129,26 @@ mod tests {
 
     #[test]
     fn the_drops_grow_with_the_intensity_and_the_density_of_the_weather() {
-        assert_eq!(drop_count(1.0, 7.0), 7000);
-        assert_eq!(drop_count(0.5, 7.0), 3500);
-        assert_eq!(drop_count(1.0, 3.0), 3000);
+        let one = drop_count(1.0, 1.0);
+        assert_eq!(one, DROPS_PER_DENSITY.round() as u32);
+        assert!(drop_count(1.0, 2.0).abs_diff(2 * one) <= 1);
+        assert!(drop_count(0.5, 2.0).abs_diff(one) <= 1);
     }
 
     #[test]
     fn the_drops_stop_at_the_budget_of_the_pass() {
-        assert_eq!(drop_count(1.0, 50.0), MAX_DROPS);
-        assert_eq!(drop_count(5.0, 7.0), 7000, "intensity stops at one");
+        assert_eq!(drop_count(1.0, 1.0e6), MAX_DROPS);
+        assert_eq!(
+            drop_count(5.0, 2.0),
+            drop_count(1.0, 2.0),
+            "intensity stops at one"
+        );
     }
 
     #[test]
     fn the_splashes_grow_with_the_intensity_up_to_their_budget() {
         assert_eq!(splash_count(1.0), MAX_SPLASHES);
-        assert_eq!(splash_count(0.25), MAX_SPLASHES / 4);
+        assert!(splash_count(0.25).abs_diff(MAX_SPLASHES / 4) <= 1);
         assert_eq!(splash_count(3.0), MAX_SPLASHES);
     }
 

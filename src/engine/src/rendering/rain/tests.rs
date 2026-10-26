@@ -1,7 +1,11 @@
 use glam::{UVec2, Vec2, Vec3};
 
-use super::motion::{DropDrift, MAX_DROPS, MAX_SPLASHES, SPLASH_SECONDS};
+use super::motion::{DropDrift, drop_count, splash_count};
 use super::occlusion::{EXTENT, HEIGHT_RANGE, OcclusionWindow};
+use super::tuning::{
+    LEAST_VARIATION, MAX_DROPS, MAX_SPLASHES, MIN_BOX_EDGE, SPLASH_OPACITY, SPLASH_SECONDS,
+    STREAK_OPACITY,
+};
 use super::uniform::{Fall, RainPlan, RainUniform};
 use super::*;
 use crate::bethesda_space::ENGINE_UNITS_PER_METER;
@@ -61,7 +65,10 @@ mod plan {
     #[test]
     fn the_drops_follow_the_density_of_the_weather_and_both_follow_the_intensity() {
         let full = plan_of(&downpour(), &mapped_view());
-        assert_eq!((full.drops, full.splashes), (7000, MAX_SPLASHES));
+        assert_eq!(
+            (full.drops, full.splashes),
+            (drop_count(1.0, 7.0), splash_count(1.0))
+        );
         let half = plan_of(
             &RainInput {
                 intensity: 0.5,
@@ -69,7 +76,10 @@ mod plan {
             },
             &mapped_view(),
         );
-        assert_eq!((half.drops, half.splashes), (3500, MAX_SPLASHES / 2));
+        assert_eq!(
+            (half.drops, half.splashes),
+            (drop_count(0.5, 7.0), splash_count(0.5))
+        );
         let dense = plan_of(
             &RainInput {
                 density: 100.0,
@@ -84,7 +94,11 @@ mod plan {
     fn no_splash_is_drawn_until_the_map_shows_where_the_ground_is() {
         let plan = plan_of(&downpour(), &view_of(None));
         assert_eq!(plan.splashes, 0);
-        assert_eq!(plan.drops, 7000, "the drops fall through every roof");
+        assert_eq!(
+            plan.drops,
+            drop_count(1.0, 7.0),
+            "the drops fall through every roof"
+        );
         assert_eq!(plan.uniform.window[3], 0.0);
         assert_eq!(plan.uniform.heights[2], 0.0, "no roof to shelter under");
     }
@@ -144,7 +158,16 @@ mod plan {
             box_size: 0.0,
             ..downpour()
         });
-        assert!(fall.edge >= 4.0 * ENGINE_UNITS_PER_METER);
+        assert_eq!(fall.edge, MIN_BOX_EDGE);
+    }
+
+    #[test]
+    fn the_looks_of_the_rain_are_handed_over_as_tuned() {
+        let uniform = plan_of(&downpour(), &mapped_view()).uniform;
+        assert_eq!(
+            uniform.looks,
+            [STREAK_OPACITY, SPLASH_OPACITY, LEAST_VARIATION, 0.0]
+        );
     }
 
     #[test]
@@ -618,7 +641,7 @@ mod gpu {
         assert_eq!(
             scene.rain.draws,
             Draws {
-                drops: 7000,
+                drops: drop_count(1.0, 7.0),
                 splashes: 0
             }
         );
