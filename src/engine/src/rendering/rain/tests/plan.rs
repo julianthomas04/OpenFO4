@@ -257,19 +257,50 @@ fn the_splashes_follow_the_clock_of_the_game() {
     );
 }
 
+/// The name and byte offset of each of the listed fields of the uniform, as Rust lays them out.
+macro_rules! offsets_of {
+    ($($field:ident),+ $(,)?) => {
+        [$((stringify!($field), std::mem::offset_of!(RainUniform, $field))),+]
+    };
+}
+
 #[test]
 fn the_uniform_is_laid_out_as_the_shader_declares_it() {
     let module = naga::front::wgsl::parse_str(shaders::RAIN.wgsl()).expect("the shader parses");
-    let span = module
+    let (members, span) = module
         .types
         .iter()
         .find_map(|(_, ty)| match (&ty.name, &ty.inner) {
-            (Some(name), naga::TypeInner::Struct { span, .. }) if name == "RainUniform" => {
-                Some(*span)
+            (Some(name), naga::TypeInner::Struct { members, span }) if name == "RainUniform" => {
+                Some((members, *span))
             }
             _ => None,
         })
         .expect("the shader declares RainUniform");
+
+    let declared: Vec<_> = members
+        .iter()
+        .map(|member| {
+            (
+                member.name.as_deref().unwrap_or_default(),
+                member.offset as usize,
+            )
+        })
+        .collect();
+    let laid_out = offsets_of!(
+        along,
+        across,
+        lattice,
+        tint,
+        atlas,
+        window,
+        heights,
+        fades,
+        looks,
+        splash,
+        splash_cycle
+    );
+    assert_eq!(declared, laid_out);
     assert_eq!(span as usize, std::mem::size_of::<RainUniform>());
 }
 

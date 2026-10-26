@@ -328,7 +328,7 @@ pub(super) fn lit(pixels: &[Vec4]) -> Vec<UVec2> {
         .collect()
 }
 
-fn is_lit(pixel: Vec4) -> bool {
+pub(super) fn is_lit(pixel: Vec4) -> bool {
     (pixel.truncate() - Vec3::splat(BACKGROUND))
         .abs()
         .max_element()
