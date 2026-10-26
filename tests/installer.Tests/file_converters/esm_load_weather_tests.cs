@@ -234,6 +234,16 @@ namespace InstallerTests
             Assert.Equal(destination, (string)data["blend_dst"]!);
         }
 
+        [Fact]
+        public void ParticleMaterialData_BaseColorChannelsOutsideUnitRange_ClampToTheByteRange()
+        {
+            var material = EffectMaterialParams.FromBgem(new BGEM()) with { BaseColor = new System.Numerics.Vector4(-0.5f, 1.5f, 0.5f, 1f) };
+
+            var data = ShaderParticleGeometryJson.MaterialData(material);
+
+            Assert.Equal([0, 255, 128], data["base_color"]!.AsArray().Select(channel => (int)channel!));
+        }
+
         [Theory]
         [InlineData(0)]
         [InlineData(1)]

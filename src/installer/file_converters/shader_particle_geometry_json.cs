@@ -41,6 +41,6 @@ namespace AssetConverter
             };
         }
 
-        private static int Byte(float channel) => (int)MathF.Round(channel * 255f);
+        private static int Byte(float channel) => (int)MathF.Round(Math.Clamp(channel, 0f, 1f) * 255f);
     }
 }
