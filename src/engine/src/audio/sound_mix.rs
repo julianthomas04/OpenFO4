@@ -1,4 +1,4 @@
-//! Pitch and volume of one sound layer, from its descriptor, output model and category chain.
+//! Pitch and volume of one sound, from its descriptor, output model and category chain.
 //!
 //! Static attenuation values are positive attenuation, so they subtract from the level. The
 //! formula is INFERRED from the descriptor fields, not documented by the game:
@@ -11,9 +11,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::assets::db::footsteps::{SoundDescriptor, SoundOutputModel};
 use crate::assets::db::music::SoundCategory;
-use crate::audio::rng::AudioRng;
+use crate::assets::db::sound_catalog::{SoundDescriptor, SoundOutputModel};
+use crate::random::RandomSource;
 
 /// The looping type lives in the second byte of the descriptor's flags: loop `0x08`, envelope
 /// fast `0x10`, envelope slow `0x20` (the Skyrim descriptor layout, assumed to carry over). The
@@ -64,7 +64,7 @@ pub enum MixError {
     InvalidPlaybackRate { descriptor: String, rate: f64 },
 }
 
-/// Whether the descriptor's looping type is set; a looping sound has no end for a step to have.
+/// Whether the descriptor's looping type is set.
 pub fn is_looping(descriptor: &SoundDescriptor) -> bool {
     descriptor.looping_flags & LOOPING_TYPE_MASK != 0
 }
@@ -76,18 +76,31 @@ impl LayerMix {
         descriptor: &SoundDescriptor,
         model: &SoundOutputModel,
         categories: &HashMap<String, SoundCategory>,
-        rng: &mut dyn AudioRng,
+        rng: &mut dyn RandomSource,
     ) -> Result<Self, MixError> {
         let playback_rate = playback_rate(descriptor, rng)?;
-        let gain_db = gain_db(descriptor, model, categories, rng)?;
+        let volume_variance = rng.symmetric(descriptor.db_variance.unsigned_abs() as f32);
+        let gain_db = gain_db(descriptor, model, categories, volume_variance)?;
         Ok(Self {
             playback_rate,
             gain_db,
         })
     }
+
+    /// The gain of a sound that plays without variance, as a loop does.
+    pub fn steady_gain_db(
+        descriptor: &SoundDescriptor,
+        model: &SoundOutputModel,
+        categories: &HashMap<String, SoundCategory>,
+    ) -> Result<f32, MixError> {
+        gain_db(descriptor, model, categories, 0.0)
+    }
 }
 
-fn playback_rate(descriptor: &SoundDescriptor, rng: &mut dyn AudioRng) -> Result<f64, MixError> {
+fn playback_rate(
+    descriptor: &SoundDescriptor,
+    rng: &mut dyn RandomSource,
+) -> Result<f64, MixError> {
     let variance = rng.symmetric(descriptor.freq_variance_pct.unsigned_abs() as f32);
     let rate = 1.0 + (f64::from(descriptor.freq_shift_pct) + f64::from(variance)) / 100.0;
     if rate > 0.0 {
@@ -104,9 +117,8 @@ fn gain_db(
     descriptor: &SoundDescriptor,
     model: &SoundOutputModel,
     categories: &HashMap<String, SoundCategory>,
-    rng: &mut dyn AudioRng,
+    variance: f32,
 ) -> Result<f32, MixError> {
-    let variance = rng.symmetric(descriptor.db_variance.unsigned_abs() as f32);
     Ok(
         -(descriptor.static_attenuation_centidb as f32 / CENTIDB_PER_DB) + variance
             - model.static_attenuation_db
@@ -189,12 +201,12 @@ fn category_chain_db(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::db::footsteps::OutputChannel;
+    use crate::assets::db::sound_catalog::OutputChannel;
 
     /// Replays fixed unit draws, so a test can pin the variance to either end.
     struct ScriptedUnits(Vec<f32>);
 
-    impl AudioRng for ScriptedUnits {
+    impl RandomSource for ScriptedUnits {
         fn below(&mut self, _n: usize) -> usize {
             unreachable!("only unit draws are scripted")
         }

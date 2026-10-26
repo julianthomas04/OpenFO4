@@ -2,11 +2,11 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Duration;
 
-use super::resolve::COMPOUND_DESCRIPTOR;
 use super::*;
 use crate::assets::db::footsteps::FootstepCatalog;
-use crate::assets::db::footsteps::STANDARD_DESCRIPTOR_TYPE;
+use crate::assets::db::sound_catalog::{COMPOUND_DESCRIPTOR, STANDARD_DESCRIPTOR_TYPE};
 use crate::audio::conditions::{ConditionContext, FreshWorldContext};
+use crate::audio::sound_resolve::SoundError;
 use crate::audio::test_support::footsteps::{
     DIRT, DIRT_FIRST_PERSON_FILES, DIRT_QUIET_FILE, GRASS, ORPHAN, SILENT_RUNNING_FILE, SNEAK_FILE,
     SPRINT_FILE, STONE, STONE_FILE, THIRD_PERSON_FILE, UNKNOWN, all_files, catalog,
@@ -74,9 +74,9 @@ fn files(layers: &[LayerPlay]) -> BTreeSet<&str> {
 fn modify_descriptor(
     catalog: &mut FootstepCatalog,
     key: &str,
-    change: impl FnOnce(&mut crate::assets::db::footsteps::SoundDescriptor),
+    change: impl FnOnce(&mut crate::assets::db::sound_catalog::SoundDescriptor),
 ) {
-    change(catalog.sound_descriptors.get_mut(key).unwrap());
+    change(catalog.sounds.descriptors.get_mut(key).unwrap());
 }
 
 mod tag_selection {
@@ -346,7 +346,7 @@ mod compound_layers {
     #[test]
     fn a_compound_sound_nested_in_a_compound_plays_its_layers() {
         let mut catalog = catalog();
-        catalog.sound_descriptors.insert(
+        catalog.sounds.descriptors.insert(
             "outer".to_string(),
             crate::audio::test_support::footsteps::compound("outer", &["dirt_sound"]),
         );
@@ -490,7 +490,10 @@ mod data_errors {
         let error = stone_error(|catalog| {
             modify_descriptor(catalog, "stone_sound", |d| d.looping_flags = 0x0800);
         });
-        assert_eq!(error, ResolveError::Looping("stone_sound".to_string()));
+        assert_eq!(
+            error,
+            ResolveError::Sound(SoundError::Looping("stone_sound".to_string()))
+        );
     }
 
     #[test]
@@ -498,7 +501,10 @@ mod data_errors {
         let error = stone_error(|catalog| {
             modify_descriptor(catalog, "stone_sound", |d| d.sound_files.clear());
         });
-        assert_eq!(error, ResolveError::NoSoundFiles("stone_sound".to_string()));
+        assert_eq!(
+            error,
+            ResolveError::Sound(SoundError::NoSoundFiles("stone_sound".to_string()))
+        );
     }
 
     #[test]
@@ -508,7 +514,7 @@ mod data_errors {
         });
         assert_eq!(
             error,
-            ResolveError::NoOutputModel("stone_sound".to_string())
+            ResolveError::Sound(SoundError::NoOutputModel("stone_sound".to_string()))
         );
     }
 
@@ -519,10 +525,10 @@ mod data_errors {
         });
         assert_eq!(
             error,
-            ResolveError::UnsupportedDescriptor {
+            ResolveError::Sound(SoundError::UnsupportedDescriptor {
                 descriptor: "stone_sound".to_string(),
                 descriptor_type: 0xED15_7AE3
-            }
+            })
         );
     }
 
@@ -543,24 +549,24 @@ mod data_errors {
     #[test]
     fn a_missing_record_is_an_error_naming_it() {
         let error = stone_error(|catalog| {
-            catalog.sound_descriptors.remove("stone_sound");
+            catalog.sounds.descriptors.remove("stone_sound");
         });
         assert_eq!(
             error,
-            ResolveError::UnknownRecord {
+            ResolveError::Sound(SoundError::UnknownRecord {
                 kind: "sound descriptor",
                 key: "stone_sound".to_string()
-            }
+            })
         );
     }
 
     #[test]
     fn unusable_mix_data_is_an_error_naming_the_sound() {
         let error = stone_error(|catalog| {
-            catalog.sound_categories.clear();
+            catalog.sounds.categories.clear();
         });
         assert!(
-            matches!(&error, ResolveError::Mix { descriptor, source: MixError::UnknownCategory(_) } if descriptor == "stone_sound"),
+            matches!(&error, ResolveError::Sound(SoundError::Mix { descriptor, source: MixError::UnknownCategory(_) }) if descriptor == "stone_sound"),
             "{error:?}"
         );
     }
@@ -568,7 +574,7 @@ mod data_errors {
     #[test]
     fn a_standard_descriptor_keeps_its_own_type_constant() {
         assert_eq!(
-            catalog().sound_descriptors["stone_sound"].descriptor_type,
+            catalog().sounds.descriptors["stone_sound"].descriptor_type,
             STANDARD_DESCRIPTOR_TYPE
         );
     }

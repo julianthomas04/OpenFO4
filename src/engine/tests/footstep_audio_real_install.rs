@@ -14,8 +14,8 @@ use openfo4::assets::db::footsteps::FootstepCatalog;
 use openfo4::assets::layout::audio_dir;
 use openfo4::audio::conditions::FreshWorldContext;
 use openfo4::audio::footsteps::{Footsteps, Resolution, resolve};
-use openfo4::audio::rng::SplitMix64;
 use openfo4::footsteps::{FootTag, FootstepEvent, Gait, SurfaceMaterial};
+use openfo4::random::SplitMix64;
 
 const DIRT_MATERIAL: &str = "012F38:Fallout4.esm";
 const STONE_IMPACT_NAME: &str = "Stone";

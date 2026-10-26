@@ -71,6 +71,6 @@ fn dirt_on_the_walk_right_impact_data_set_plays_the_player_dirt_sound() {
         .expect("the data set lists dirt");
     let impact = &catalog.impacts[&entry.impact];
     assert_eq!(impact.editor_id.as_deref(), Some(DIRT_WALK_RIGHT_IMPACT));
-    let sound = &catalog.sound_descriptors[impact.player_sound.as_ref().unwrap()];
+    let sound = &catalog.sounds.descriptors[impact.player_sound.as_ref().unwrap()];
     assert_eq!(sound.editor_id.as_deref(), Some(DIRT_WALK_RIGHT_SOUND));
 }

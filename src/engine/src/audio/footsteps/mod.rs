@@ -9,7 +9,6 @@
 //! `SurfaceMaterial::Terrain` is first turned into its landscape texture's material hash, which
 //! is `None` when that texture names no material. The event's own `surface` is not read.
 
-pub mod mix;
 pub mod resolve;
 #[cfg(test)]
 mod tests;
@@ -20,14 +19,15 @@ use std::path::{Path, PathBuf};
 use kira::sound::FromFileError;
 use kira::sound::streaming::StreamingSoundData;
 
-pub use mix::{LayerMix, MixError};
-pub use resolve::{LayerPlay, Resolution, ResolveError, SilentReason, resolve};
+pub use resolve::{Resolution, ResolveError, SilentReason, resolve};
 
 use super::conditions::FreshWorldContext;
 use super::file_probe::{ProbeError, probe_files};
-use super::rng::SplitMix64;
+pub use super::sound_mix::{LayerMix, MixError};
+pub use super::sound_resolve::LayerPlay;
 use crate::assets::db::footsteps::FootstepCatalog;
 use crate::footsteps::FootstepEvent;
+use crate::random::SplitMix64;
 
 /// The tracing target of everything the footsteps decide.
 pub const LOG_TARGET: &str = "openfo4::audio::footsteps";

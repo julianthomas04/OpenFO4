@@ -6,14 +6,12 @@ use std::collections::{HashMap, HashSet};
 
 use rusqlite::Connection;
 
-use crate::assets::db::music::{Condition, SoundCategory};
-use crate::assets::db::music::{collect_rows, load_conditions, narrow, real32, required};
+use crate::assets::db::music::{collect_rows, narrow, required};
 use crate::assets::db::schema::require_footstep_tables;
+use crate::assets::db::sound_catalog::SoundCatalog;
 use crate::footsteps::events::{FootTag, Gait};
 
 const DEFAULT_FOOTSTEP_SET_SLOT: &str = "DFTS";
-/// `descriptor_type` of a standard descriptor, the only kind that carries the BNAM mix values and looping flags.
-pub const STANDARD_DESCRIPTOR_TYPE: u32 = 0x1EEF_540A;
 const PLAYER_GAITS: [Gait; 3] = [Gait::Run, Gait::Sprint, Gait::Sneak];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -55,45 +53,6 @@ pub struct Impact {
     pub player_sound: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct SoundDescriptor {
-    pub form_key: String,
-    pub editor_id: Option<String>,
-    pub descriptor_type: u32,
-    /// The five mix values and the looping flags exist for standard descriptors only; other types read 0.
-    pub base_descriptor: Option<String>,
-    pub freq_shift_pct: i32,
-    pub freq_variance_pct: i32,
-    pub priority: i32,
-    pub db_variance: i32,
-    pub static_attenuation_centidb: i32,
-    pub looping_flags: u32,
-    pub category: Option<String>,
-    pub output_model: Option<String>,
-    /// Archive-relative sound file paths in record order.
-    pub sound_files: Vec<String>,
-    /// Compound children in record order.
-    pub children: Vec<String>,
-    pub conditions: Vec<Condition>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct OutputChannel {
-    /// Input channel of the output matrix the share is taken from.
-    pub input_channel: u32,
-    pub speaker: String,
-    pub percent: i32,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct SoundOutputModel {
-    pub form_key: String,
-    pub editor_id: Option<String>,
-    pub output_type: u32,
-    pub static_attenuation_db: f32,
-    pub channels: Vec<OutputChannel>,
-}
-
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FootstepCatalog {
     pub default_footstep_set: String,
@@ -107,10 +66,8 @@ pub struct FootstepCatalog {
     /// Material hash to the material's editor id, for diagnostics.
     pub material_names: HashMap<u32, String>,
     pub impacts: HashMap<String, Impact>,
-    /// Only the descriptors an impact reaches through its player sound and compound children.
-    pub sound_descriptors: HashMap<String, SoundDescriptor>,
-    pub output_models: HashMap<String, SoundOutputModel>,
-    pub sound_categories: HashMap<String, SoundCategory>,
+    /// Only the sounds an impact reaches through its player sound.
+    pub sounds: SoundCatalog,
     /// Landscape texture form key to the hash of its material, `None` when it names none.
     pub landscape_materials: HashMap<String, Option<u32>>,
 }
@@ -141,15 +98,18 @@ impl FootstepCatalog {
             landscape_materials: load_landscape_materials(conn, &materials.hashes)?,
             material_hashes: materials.hashes,
             impacts,
-            sound_descriptors: HashMap::new(),
-            output_models: HashMap::new(),
-            sound_categories: HashMap::new(),
+            sounds: SoundCatalog::default(),
         };
         catalog.drop_foreign_tag_footsteps(&foreign_tags)?;
         catalog.check_references()?;
-        catalog.load_reachable_sounds(conn)?;
-        catalog.check_sound_references()?;
-        catalog.check_chains()?;
+        catalog.check_material_chains()?;
+        catalog.sounds = SoundCatalog::load_reachable(
+            conn,
+            catalog
+                .impacts
+                .values()
+                .filter_map(|impact| impact.player_sound.clone()),
+        )?;
         Ok(catalog)
     }
 
@@ -218,69 +178,7 @@ impl FootstepCatalog {
         Ok(())
     }
 
-    fn load_reachable_sounds(&mut self, conn: &Connection) -> anyhow::Result<()> {
-        let mut descriptors = load_descriptors(conn)?;
-        let mut pending: Vec<String> = self
-            .impacts
-            .values()
-            .filter_map(|impact| impact.player_sound.clone())
-            .collect();
-        while let Some(key) = pending.pop() {
-            if self.sound_descriptors.contains_key(&key) {
-                continue;
-            }
-            let descriptor = descriptors.remove(&key).ok_or_else(|| {
-                anyhow::anyhow!("a sound reference names unknown sound descriptor {key}")
-            })?;
-            pending.extend(descriptor.children.iter().cloned());
-            pending.extend(descriptor.base_descriptor.iter().cloned());
-            self.sound_descriptors.insert(key, descriptor);
-        }
-        let mut models = load_output_models(conn)?;
-        let mut categories = load_categories(conn)?;
-        let mut pending_categories: Vec<String> = Vec::new();
-        for descriptor in self.sound_descriptors.values() {
-            if let Some(model) = &descriptor.output_model
-                && !self.output_models.contains_key(model)
-            {
-                let record = models.remove(model).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "sound descriptor {} names unknown output model {model}",
-                        descriptor.form_key
-                    )
-                })?;
-                self.output_models.insert(model.clone(), record);
-            }
-            pending_categories.extend(descriptor.category.clone());
-        }
-        while let Some(key) = pending_categories.pop() {
-            if self.sound_categories.contains_key(&key) {
-                continue;
-            }
-            let category = categories.remove(&key).ok_or_else(|| {
-                anyhow::anyhow!("a sound reference names unknown sound category {key}")
-            })?;
-            pending_categories.extend(category.parent.clone());
-            self.sound_categories.insert(key, category);
-        }
-        Ok(())
-    }
-
-    fn check_sound_references(&self) -> anyhow::Result<()> {
-        for descriptor in self.sound_descriptors.values() {
-            if let Some(base) = &descriptor.base_descriptor {
-                ensure_known(
-                    self.sound_descriptors.contains_key(base),
-                    &format!("sound descriptor {}", descriptor.form_key),
-                    "base descriptor",
-                    base,
-                )?;
-            }
-        }
-        Ok(())
-    }
-
-    fn check_chains(&self) -> anyhow::Result<()> {
+    fn check_material_chains(&self) -> anyhow::Result<()> {
         for &material in self.material_parents.keys() {
             let mut seen = HashSet::new();
             let mut current = Some(material);
@@ -290,20 +188,6 @@ impl FootstepCatalog {
                     "material {material:08X} has a parent cycle"
                 );
                 current = self.material_parents.get(&hash).copied().flatten();
-            }
-        }
-        for key in self.sound_categories.keys() {
-            let mut seen = HashSet::new();
-            let mut current = Some(key);
-            while let Some(category) = current {
-                anyhow::ensure!(
-                    seen.insert(category),
-                    "sound category {key} has a parent cycle"
-                );
-                current = self
-                    .sound_categories
-                    .get(category)
-                    .and_then(|c| c.parent.as_ref());
             }
         }
         Ok(())
@@ -545,198 +429,6 @@ fn load_landscape_materials(
         Ok((form_key, hash))
     })
     .collect()
-}
-
-struct DescriptorRow {
-    form_key: String,
-    editor_id: Option<String>,
-    descriptor_type: Option<i64>,
-    base_descriptor: Option<String>,
-    freq_shift_pct: Option<i64>,
-    freq_variance_pct: Option<i64>,
-    priority: Option<i64>,
-    db_variance: Option<i64>,
-    static_attenuation_centidb: Option<i64>,
-    looping_flags: Option<i64>,
-    category: Option<String>,
-    output_model: Option<String>,
-    sound_files: Option<String>,
-}
-
-fn load_descriptors(conn: &Connection) -> anyhow::Result<HashMap<String, SoundDescriptor>> {
-    let mut children: HashMap<String, Vec<String>> = HashMap::new();
-    for (descriptor, child) in collect_rows(
-        conn,
-        "SELECT descriptor, child FROM sound_descriptor_children ORDER BY descriptor, ord",
-        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-    )? {
-        children.entry(descriptor).or_default().push(child);
-    }
-    let mut conditions = load_conditions(
-        conn,
-        "sound_descriptor_conditions",
-        "descriptor",
-        "sound descriptor",
-    )?;
-    let rows = collect_rows(
-        conn,
-        "SELECT form_key, editor_id, descriptor_type, base_descriptor, freq_shift_pct, \
-         freq_variance_pct, priority, db_variance, static_attenuation_centidb, looping_flags, \
-         category, output_model, sound_files FROM sound_descriptors ORDER BY form_key",
-        |row| {
-            Ok(DescriptorRow {
-                form_key: row.get(0)?,
-                editor_id: row.get(1)?,
-                descriptor_type: row.get(2)?,
-                base_descriptor: row.get(3)?,
-                freq_shift_pct: row.get(4)?,
-                freq_variance_pct: row.get(5)?,
-                priority: row.get(6)?,
-                db_variance: row.get(7)?,
-                static_attenuation_centidb: row.get(8)?,
-                looping_flags: row.get(9)?,
-                category: row.get(10)?,
-                output_model: row.get(11)?,
-                sound_files: row.get(12)?,
-            })
-        },
-    )?;
-    rows.into_iter()
-        .map(|row| {
-            let name = format!("sound descriptor {}", row.form_key);
-            let sound_files = match &row.sound_files {
-                Some(json) => serde_json::from_str::<Vec<String>>(json).map_err(|e| {
-                    anyhow::anyhow!("{name}: sound_files is not a JSON array of paths: {e}")
-                })?,
-                None => Vec::new(),
-            };
-            let descriptor_type: u32 = narrow(
-                required(row.descriptor_type, "descriptor_type", &name)?,
-                "descriptor_type",
-                &name,
-            )?;
-            let standard = descriptor_type == STANDARD_DESCRIPTOR_TYPE;
-            let descriptor = SoundDescriptor {
-                descriptor_type,
-                freq_shift_pct: standard_only(
-                    row.freq_shift_pct,
-                    "freq_shift_pct",
-                    &name,
-                    standard,
-                )?,
-                freq_variance_pct: standard_only(
-                    row.freq_variance_pct,
-                    "freq_variance_pct",
-                    &name,
-                    standard,
-                )?,
-                priority: standard_only(row.priority, "priority", &name, standard)?,
-                db_variance: standard_only(row.db_variance, "db_variance", &name, standard)?,
-                static_attenuation_centidb: standard_only(
-                    row.static_attenuation_centidb,
-                    "static_attenuation_centidb",
-                    &name,
-                    standard,
-                )?,
-                looping_flags: standard_only(row.looping_flags, "looping_flags", &name, standard)?,
-                children: children.remove(&row.form_key).unwrap_or_default(),
-                conditions: conditions.remove(&row.form_key).unwrap_or_default(),
-                form_key: row.form_key.clone(),
-                editor_id: row.editor_id,
-                base_descriptor: row.base_descriptor,
-                category: row.category,
-                output_model: row.output_model,
-                sound_files,
-            };
-            Ok((row.form_key, descriptor))
-        })
-        .collect()
-}
-
-/// A value only standard descriptors carry: required there, 0 for the other types.
-fn standard_only<T: TryFrom<i64> + Default>(
-    value: Option<i64>,
-    column: &str,
-    row: &str,
-    standard: bool,
-) -> anyhow::Result<T> {
-    match value {
-        Some(value) => narrow(value, column, row),
-        None if standard => anyhow::bail!("{row}: {column} is NULL"),
-        None => Ok(T::default()),
-    }
-}
-
-fn load_output_models(conn: &Connection) -> anyhow::Result<HashMap<String, SoundOutputModel>> {
-    let mut channels: HashMap<String, Vec<OutputChannel>> = HashMap::new();
-    for (model, input_channel, speaker, percent) in collect_rows(
-        conn,
-        "SELECT model, ord, speaker, percent FROM sound_output_channels ORDER BY model, ord, speaker",
-        |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, i64>(3)?,
-            ))
-        },
-    )? {
-        let name = format!("sound output model {model}");
-        channels.entry(model).or_default().push(OutputChannel {
-            input_channel: narrow(input_channel, "ord", &name)?,
-            speaker,
-            percent: narrow(percent, "percent", &name)?,
-        });
-    }
-    collect_rows(
-        conn,
-        "SELECT form_key, editor_id, output_type, static_attenuation_db FROM sound_output_models \
-         ORDER BY form_key",
-        |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, Option<i64>>(2)?,
-                row.get::<_, Option<f64>>(3)?,
-            ))
-        },
-    )?
-    .into_iter()
-    .map(|(form_key, editor_id, output_type, attenuation)| {
-        let name = format!("sound output model {form_key}");
-        let model = SoundOutputModel {
-            output_type: narrow(
-                required(output_type, "output_type", &name)?,
-                "output_type",
-                &name,
-            )?,
-            static_attenuation_db: real32(required(attenuation, "static_attenuation_db", &name)?),
-            channels: channels.remove(&form_key).unwrap_or_default(),
-            form_key: form_key.clone(),
-            editor_id,
-        };
-        Ok((form_key, model))
-    })
-    .collect()
-}
-
-fn load_categories(conn: &Connection) -> anyhow::Result<HashMap<String, SoundCategory>> {
-    Ok(collect_rows(
-        conn,
-        "SELECT form_key, editor_id, parent, static_attenuation FROM sound_categories \
-         ORDER BY form_key",
-        |row| {
-            Ok(SoundCategory {
-                form_key: row.get(0)?,
-                editor_id: row.get(1)?,
-                parent: row.get(2)?,
-                static_multiplier: row.get::<_, Option<f64>>(3)?.map(real32),
-            })
-        },
-    )?
-    .into_iter()
-    .map(|category| (category.form_key.clone(), category))
-    .collect())
 }
 
 #[cfg(test)]
@@ -1104,11 +796,11 @@ mod tests {
             catalog.impacts[IMPACT].player_sound.as_deref(),
             Some(COMPOUND)
         );
-        let compound = &catalog.sound_descriptors[COMPOUND];
+        let compound = &catalog.sounds.descriptors[COMPOUND];
         assert_eq!(compound.children, [LAYER_FIRST_PERSON, LAYER_THIRD_PERSON]);
         assert_eq!(compound.sound_files, [] as [String; 0]);
         assert_eq!(compound.static_attenuation_centidb, 0);
-        let layer = &catalog.sound_descriptors[LAYER_FIRST_PERSON];
+        let layer = &catalog.sounds.descriptors[LAYER_FIRST_PERSON];
         assert_eq!(layer.freq_shift_pct, -5);
         assert_eq!(layer.freq_variance_pct, 3);
         assert_eq!(layer.db_variance, 2);
@@ -1119,14 +811,17 @@ mod tests {
         );
         assert_eq!(layer.conditions.len(), 1);
         assert_eq!(layer.conditions[0].function, 391);
-        assert_eq!(catalog.sound_descriptors[LAYER_THIRD_PERSON].conditions, []);
+        assert_eq!(
+            catalog.sounds.descriptors[LAYER_THIRD_PERSON].conditions,
+            []
+        );
     }
 
     #[test]
     fn output_model_and_category_chain_are_loaded_for_reachable_sounds() {
         let catalog = loaded().unwrap();
 
-        let model = &catalog.output_models[MODEL];
+        let model = &catalog.sounds.output_models[MODEL];
         assert_eq!(model.output_type, 1);
         assert_eq!(model.static_attenuation_db.to_bits(), 1.75_f32.to_bits());
         let channels: Vec<(u32, &str, i32)> = model
@@ -1135,11 +830,11 @@ mod tests {
             .map(|c| (c.input_channel, c.speaker.as_str(), c.percent))
             .collect();
         assert_eq!(channels, [(0, "L", 75), (0, "R", 75)]);
-        let leaf = &catalog.sound_categories[CATEGORY_LEAF];
+        let leaf = &catalog.sounds.categories[CATEGORY_LEAF];
         assert_eq!(leaf.parent.as_deref(), Some(CATEGORY_ROOT));
         assert_eq!(leaf.static_multiplier, Some(0.5));
         assert_eq!(
-            catalog.sound_categories[CATEGORY_ROOT].static_multiplier,
+            catalog.sounds.categories[CATEGORY_ROOT].static_multiplier,
             Some(0.25)
         );
     }
@@ -1155,7 +850,7 @@ mod tests {
         })
         .unwrap();
 
-        assert!(!catalog.sound_descriptors.contains_key("000190:Test.esm"));
+        assert!(!catalog.sounds.descriptors.contains_key("000190:Test.esm"));
     }
 
     #[test]

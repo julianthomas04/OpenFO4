@@ -16,6 +16,7 @@ pub mod game_flow;
 pub(crate) mod installer_source;
 pub mod navmesh;
 pub mod platform;
+pub mod random;
 pub mod rendering;
 pub mod shared_cache;
 pub mod sim;

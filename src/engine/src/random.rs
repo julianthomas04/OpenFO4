@@ -1,10 +1,10 @@
-//! The random source of the audio decisions: a trait the tests can script and a seedable generator.
+//! Seedable random numbers: a trait the tests can script and a deterministic generator.
 
-/// Steps of `AudioRng::unit`; a power of two no larger than the `f32` mantissa, so every step is
+/// Steps of `RandomSource::unit`; a power of two no larger than the `f32` mantissa, so every step is
 /// exactly representable and 1.0 is never reached.
 const UNIT_STEPS: usize = 1 << 24;
 
-pub trait AudioRng {
+pub trait RandomSource {
     /// A uniform value in `0..n`; `n` is never zero.
     fn below(&mut self, n: usize) -> usize;
 
@@ -39,7 +39,7 @@ impl SplitMix64 {
     }
 }
 
-impl AudioRng for SplitMix64 {
+impl RandomSource for SplitMix64 {
     fn below(&mut self, n: usize) -> usize {
         ((u128::from(self.next_u64()) * n as u128) >> 64) as usize
     }

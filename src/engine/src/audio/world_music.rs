@@ -17,11 +17,11 @@ use super::file_probe::{ProbeError, probe_files};
 use super::music_output::open_music_stream;
 use super::music_stack::pick;
 use super::place::{Candidate, PlaceError, PlaceIndex, PlaceSnapshot};
-use super::rng::SplitMix64;
 use super::scheduler::{LOG_TARGET, PlayPlan, SchedulerError, TrackScheduler};
 use crate::assets::db::music::{
     MusicCatalog, MusicTrack, MusicTrackKind, MusicType, SoundCategory,
 };
+use crate::random::SplitMix64;
 
 pub const MUSIC_CATEGORY_EDITOR_ID: &str = "AudioCategoryMUS";
 
