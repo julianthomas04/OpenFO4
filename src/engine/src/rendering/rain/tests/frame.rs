@@ -247,7 +247,7 @@ fn a_missing_streak_texture_is_reported_and_draws_no_streaks() {
         return;
     };
     let missing = RainInput {
-        texture: "effects\\nothing_here.dds".into(),
+        texture: Some("effects\\nothing_here.dds".into()),
         ..downpour()
     };
 

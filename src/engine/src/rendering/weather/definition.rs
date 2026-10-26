@@ -211,7 +211,7 @@ mod tests {
             def.precipitation
                 .as_ref()
                 .and_then(|rain| rain.texture.as_deref()),
-            Some("textures\\rain.dds")
+            Some("rain.dds")
         );
         assert_eq!(def.wind.speed, 0.4);
         assert_eq!(def.precipitation_fade.end_fade_out, 0.9);

@@ -24,6 +24,7 @@ use wgpu::util::DeviceExt;
 
 pub use assets::{RainAssetStatus, RainTextureState};
 use motion::DropDrift;
+pub use motion::wind_drift;
 use occlusion::OcclusionMap;
 use pipeline::{QUAD_VERTICES, RainPipelines, RainResources};
 use uniform::{Draws, Fall, RainUniform};
@@ -55,8 +56,8 @@ pub struct RainInput {
     /// The edge in game units of the box around the camera the rain falls through.
     pub box_size: f32,
     /// The streak texture, a path below the textures folder (`Effects\FXRaindrops_D.DDS`);
-    /// empty for a weather without one.
-    pub texture: Arc<str>,
+    /// `None` for a weather without one.
+    pub texture: Option<Arc<str>>,
     /// The horizontal drift of a drop on the engine's x and z axes, in game units per second.
     pub wind: Vec2,
     /// Linear colour of the rain: the light it catches, with any lightning flash.
@@ -160,7 +161,7 @@ impl RainRenderer {
         let window = self.map.refresh(&mut gpu, view.eye, view.world_generation);
         if self
             .textures
-            .request_streaks(gpu.device, gpu.queue, &input.texture)
+            .request_streaks(gpu.device, gpu.queue, input.texture.as_deref())
         {
             self.bind_group = bind_group(
                 gpu.device,

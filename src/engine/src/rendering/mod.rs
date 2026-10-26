@@ -54,6 +54,7 @@ pub mod ragdoll_debug_panel;
 pub mod ragdoll_objects;
 mod ragdoll_sim_link;
 pub mod rain;
+mod rain_stage;
 pub mod readback_ring;
 pub mod refraction;
 pub mod render_pipelines;
@@ -95,6 +96,7 @@ use crate::assets::layout;
 use crate::assets::pipboy_art::ArtLibrary;
 use crate::assets::sky_game_settings::load_sky_game_config;
 use crate::audio::conditions::GameTime;
+use crate::audio::weather::load_or_report;
 use crate::audio::world_music_loader::{load_world_music, seed_from_clock};
 use crate::audio::{
     AudioError, AudioFrame, AudioSystem, Footsteps, PLACE_POLLS_PER_SECOND, PlacePoll,
@@ -145,6 +147,8 @@ use crate::rendering::{
         tonemap,
     },
     ragdoll_debug_panel::ragdoll_settings_section,
+    rain::RainGpu,
+    rain_stage::{RainFrame, RainStage},
     readback_ring::{ReadbackError, escalate_device_loss},
     render_pipelines::{
         debug_lines::{DebugLinePipeline, LineVertex},
@@ -173,6 +177,7 @@ use crate::rendering::{
     weather::{
         StartupWeather, WeatherSync,
         panel::{WeatherPanelState, weather_panel},
+        sounds::sound_table,
         startup::{WEATHER_SEED_VAR, cycle_seed},
     },
     window_surface::WindowSurface,
@@ -496,6 +501,7 @@ pub struct State {
     interior_lighting: Option<InteriorLightingCatalog>,
     weather: WeatherSync,
     weather_panel: WeatherPanelState,
+    rain: RainStage,
     frame_binding: FrameBinding,
     shadow_renderer: ShadowRenderer,
     lamp_shadow_cache: LampShadowCache,
@@ -1226,6 +1232,13 @@ impl State {
             lamp_atlas.view(),
             &cluster_buffers,
         );
+        let rain = RainStage::new(
+            &device,
+            &queue,
+            asset_server.asset_location(),
+            &frame_binding.layout,
+            seed_from_clock(),
+        );
         let scene_copy = SceneCopy::new(&device, config.width, config.height);
         let world_pass_layout = WorldPassLayout::new(&device, &frame_binding.layout);
         let post = PostChain::new(
@@ -1663,6 +1676,17 @@ impl State {
             )
             .map_err(AudioError::from)?;
             audio.set_footsteps(footsteps);
+            if let Some(weather_sounds) =
+                weather_library.as_ref().map(sound_table).and_then(|table| {
+                    load_or_report(
+                        &db_path,
+                        table,
+                        Path::new(&layout::audio_dir(asset_server.asset_location())),
+                    )
+                })
+            {
+                audio.set_weather(weather_sounds);
+            }
         }
         let menu_video = MenuVideo::new(
             settings.menu_video,
@@ -1706,6 +1730,7 @@ impl State {
             interior_lighting,
             weather: WeatherSync::new(weather_library),
             weather_panel: WeatherPanelState::default(),
+            rain,
             frame_binding,
             night_sky,
             shadow_renderer,
@@ -2100,24 +2125,25 @@ impl State {
 
         drop(encode_cull_span);
 
+        let shadow_scene = ShadowScene {
+            material_bind_group: self
+                .shadow_material_bind_group
+                .as_ref()
+                .unwrap_or(&self.material_bind_group),
+            instance_bind_group: &self.instance_bind_group,
+            object_mega: &self.object_mega,
+            terrain_mega: &self.terrain_mega,
+            object_count: self.object_instances.dispatch_count(),
+            terrain_count: self.terrain_instances.len(),
+            skinned: self.characters.scene(),
+        };
         {
             let _span = tracing::info_span!("shadows").entered();
             if !skip.skips(DebugPass::Shadows) {
                 self.shadow_renderer.encode(
                     &mut encoder,
                     &self.queue,
-                    &ShadowScene {
-                        material_bind_group: self
-                            .shadow_material_bind_group
-                            .as_ref()
-                            .unwrap_or(&self.material_bind_group),
-                        instance_bind_group: &self.instance_bind_group,
-                        object_mega: &self.object_mega,
-                        terrain_mega: &self.terrain_mega,
-                        object_count: self.object_instances.dispatch_count(),
-                        terrain_count: self.terrain_instances.len(),
-                        skinned: self.characters.scene(),
-                    },
+                    &shadow_scene,
                     &self.gpu_profiler,
                 );
                 if self.lighting.lamp_shadows.settings.show_atlas {
@@ -2126,8 +2152,24 @@ impl State {
             }
         }
 
-        let encode_world_span = tracing::info_span!("encode_world_pass").entered();
         let world_skipped = skip.skips(DebugPass::World);
+        if !world_skipped {
+            self.rain.prepare(
+                RainGpu {
+                    device: &self.device,
+                    queue: &self.queue,
+                    encoder: &mut encoder,
+                    shadows: &self.shadow_renderer,
+                    scene: &shadow_scene,
+                    profiler: &self.gpu_profiler,
+                },
+                &self.camera,
+                self.streamer.loaded_generation(),
+                self.water_stage.camera_water().underwater,
+            );
+        }
+
+        let encode_world_span = tracing::info_span!("encode_world_pass").entered();
         let pipelines = self.object_pipelines.pipelines_in_bucket_order();
         let skinned = self.characters.scene();
         let skinned_pipelines = &self.skinned_pipelines;
@@ -2410,6 +2452,15 @@ impl State {
                 self.local_lights
                     .draw_spheres(&mut render_pass, &self.lighting.local_lights);
             }
+        }
+        if !world_skipped {
+            self.rain.encode(
+                &mut encoder,
+                self.post.hdr_view(),
+                &self.depth_texture.view,
+                &self.frame_binding,
+                &self.gpu_profiler,
+            );
         }
         if !world_skipped && !skip.skips(DebugPass::DepthOfField) {
             let underwater = self
@@ -3023,6 +3074,7 @@ impl State {
                                             ui,
                                             &mut self.weather_panel,
                                             view.as_ref(),
+                                            self.rain.asset_status(),
                                             &mut weather_edits,
                                         );
                                         for edit in weather_edits {
@@ -3372,6 +3424,12 @@ impl State {
         let dt = Duration::from_secs_f32(dt.max(0.0));
         let place = (!phase.shows_menu() && self.music_poll.due(dt))
             .then(|| self.streamer.music_place(self.camera.eye));
+        let weather = (!phase.shows_menu())
+            .then(|| {
+                self.weather
+                    .audio_input(self.sim.weather_snapshot(), !self.streamer.in_interior())
+            })
+            .flatten();
         let frame = AudioFrame {
             phase,
             dt,
@@ -3380,7 +3438,7 @@ impl State {
                 GameTime::new(clock.hour(), clock.days_passed())
             },
             place,
-            weather: None,
+            weather,
         };
         match &mut self.audio {
             Some(audio) => audio.sync(frame),
@@ -3400,12 +3458,12 @@ impl State {
         self.fps_utils.tick();
         let dt = self.fps_utils.dt().unwrap_or(0.0);
         self.flow.tick(dt);
-        self.sync_audio(dt)?;
         self.sync_menu_video();
         // Nothing is loaded and nothing simulates until the player picks a spawn.
         if self.flow.phase().shows_menu() {
             self.drive_pipboy_capture(dt);
             self.streamer.suspend_frame_meter();
+            self.sync_audio(dt)?;
             return Ok(());
         }
 
@@ -3420,6 +3478,8 @@ impl State {
             in_game: self.flow.phase() == Phase::InGame,
             world_dt,
         });
+        // The audio reads the strikes of the step the clock has just taken.
+        self.sync_audio(dt)?;
 
         // Apply a debug-UI worldspace selection before anything reads the
         // camera this frame: the streamer tears the old content down and reports
@@ -3621,6 +3681,18 @@ impl State {
         let wading_player = matches!(self.input_mode, InputMode::Walk)
             .then(|| self.sim.player_body())
             .flatten();
+        self.rain.sync(
+            &RainFrame {
+                weather: &self.weather,
+                water: &self.water_stage,
+                controls: self.weather_panel.rain,
+                tint: self.lighting.horizon_radiance(),
+                indoors: self.streamer.in_interior(),
+                world_dt,
+                origin: wading_player.map_or(self.camera.eye, |body| body.feet),
+            },
+            &mut water_entries,
+        );
         self.water_stage.update_displacement(
             &self.queue,
             world_dt,

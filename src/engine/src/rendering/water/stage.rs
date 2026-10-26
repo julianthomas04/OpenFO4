@@ -461,6 +461,12 @@ impl WaterStage {
         !self.draws.is_empty()
     }
 
+    /// The height of the water surface at the engine-space `point`; `None` where there is no
+    /// water.
+    pub fn surface_height_at(&self, point: Vec3) -> Option<f32> {
+        self.world.read().surface_at(point).map(|hit| hit.height)
+    }
+
     /// The camera's relation to the water, for the frame uniform: Fallout 4's
     /// near-plane test against the water world's water height query.
     pub fn camera_water(&self) -> CameraWater {

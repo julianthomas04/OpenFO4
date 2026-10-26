@@ -1,10 +1,11 @@
-use std::sync::Once;
+use std::sync::{Arc, Once};
 
 use glam::{UVec2, Vec2};
 use serde::Deserialize;
 
 use super::error::WeatherLibraryError;
 use crate::assets::db::weather_library::ParticleGeometryRow;
+use crate::rendering::effects::material_bindings::path_below_textures;
 use crate::rendering::lighting::exterior_weather::parse_json;
 
 static SNOW_UNSUPPORTED_LOGGED: Once = Once::new();
@@ -15,8 +16,9 @@ const SNOW_TYPE: u8 = 1;
 /// How the rain of a weather is drawn, from its shader particle geometry record.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PrecipitationParams {
-    /// The resolved diffuse texture; the renderer decides what to do without one.
-    pub texture: Option<String>,
+    /// The resolved diffuse texture, named below the textures folder; the renderer decides what to
+    /// do without one.
+    pub texture: Option<Arc<str>>,
     /// The authored BGEM path.
     pub material: Option<String>,
     pub gravity_velocity: f32,
@@ -80,7 +82,11 @@ impl PrecipitationParams {
             }
         }
         Ok(Some(Self {
-            texture: row.particle_texture,
+            texture: row
+                .particle_texture
+                .as_deref()
+                .map(path_below_textures)
+                .map(Arc::from),
             material: row.particle_material,
             gravity_velocity: raw.gravity_velocity,
             rotation_velocity: raw.rotation_velocity,
@@ -147,7 +153,7 @@ mod tests {
         let params = parse(row(&geometry(0), Some("textures\\rain.dds")))
             .unwrap()
             .unwrap();
-        assert_eq!(params.texture.as_deref(), Some("textures\\rain.dds"));
+        assert_eq!(params.texture.as_deref(), Some("rain.dds"));
         assert_eq!(params.gravity_velocity, 9.5);
         assert_eq!(params.particle_size, Vec2::new(0.5, 4.0));
         assert_eq!(params.subtextures, UVec2::new(4, 2));
@@ -156,6 +162,21 @@ mod tests {
         assert_eq!(
             (params.center_offset_min, params.center_offset_max),
             (1.0, 2.0)
+        );
+    }
+
+    #[test]
+    fn a_texture_path_with_the_textures_folder_is_named_below_it() {
+        let params = parse(row(
+            &geometry(0),
+            Some(r"textures\Effects\FXRaindrops_D.DDS"),
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            params.texture.as_deref(),
+            Some(r"Effects\FXRaindrops_D.DDS")
         );
     }
 

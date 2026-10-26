@@ -1,7 +1,7 @@
 //! What the rain is tuned by: the numbers that set how it looks and what it costs. Distances are
 //! written in metres. None of them is worked out from another, so each can be changed on its own.
 
-use crate::bethesda_space::ENGINE_UNITS_PER_METER;
+use crate::bethesda_space::{ENGINE_UNITS_PER_METER, UNITS_FROM_ENGINE};
 
 /// `length` metres in engine units.
 const fn metres(length: f32) -> f32 {
@@ -63,3 +63,6 @@ pub const IMPACTS_PER_SQUARE_METER_PER_SECOND: f32 = 0.3;
 pub const MAX_IMPACTS_PER_FRAME: usize = 128;
 /// A longer frame counts as this long, so a stall does not release a burst of ripples.
 pub const LONGEST_STEP_SECONDS: f32 = 0.25;
+/// How fast a drop drifts sideways in the strongest wind, in game units per second. A heuristic:
+/// the weathers carry a wind speed but no drift for their rain, so retune it against the game.
+pub const DRIFT_AT_FULL_WIND: f32 = metres(4.3) * UNITS_FROM_ENGINE;

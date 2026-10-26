@@ -25,7 +25,7 @@ fn downpour() -> RainInput {
         subtextures: UVec2::ZERO,
         density: 7.0,
         box_size: 1200.0,
-        texture: STREAK_TEXTURE.into(),
+        texture: Some(STREAK_TEXTURE.into()),
         wind: Vec2::ZERO,
         tint: Vec3::ONE,
     }

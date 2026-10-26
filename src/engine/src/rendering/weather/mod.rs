@@ -11,6 +11,8 @@ pub mod frame;
 pub mod library;
 pub mod panel;
 pub mod precipitation;
+pub mod rain;
+pub mod sounds;
 pub mod startup;
 pub mod sync;
 

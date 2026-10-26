@@ -54,11 +54,34 @@ fn load(
     }
 }
 
+/// What the weather asked the streak texture to be.
+enum Requested {
+    /// No weather has asked yet.
+    Nothing,
+    /// A weather without a texture.
+    NoTexture,
+    Texture(String),
+}
+
+impl Requested {
+    fn of(path: Option<&str>) -> Self {
+        path.map_or(Self::NoTexture, |path| Self::Texture(path.to_owned()))
+    }
+
+    fn is(&self, path: Option<&str>) -> bool {
+        match (self, path) {
+            (Self::NoTexture, None) => true,
+            (Self::Texture(requested), Some(path)) => requested == path,
+            _ => false,
+        }
+    }
+}
+
 /// The textures the rain draws with and why one is missing.
 pub(super) struct RainTextures {
     asset_root: String,
     /// The texture the weather named last, loaded or not.
-    requested: Option<String>,
+    requested: Requested,
     streaks: Option<wgpu::TextureView>,
     splashes: Option<wgpu::TextureView>,
     status: RainAssetStatus,
@@ -70,7 +93,7 @@ impl RainTextures {
         let (splashes, splashes_state) = load(device, queue, asset_root, &splash_texture_key());
         Self {
             asset_root: asset_root.to_owned(),
-            requested: None,
+            requested: Requested::Nothing,
             streaks: None,
             splashes,
             status: RainAssetStatus {
@@ -80,22 +103,21 @@ impl RainTextures {
         }
     }
 
-    /// Makes `path` the streak texture, loading it unless it already is; an empty path is a
+    /// Makes `path` the streak texture, loading it unless it already is; `None` is a
     /// weather without one. Returns whether the texture in use changed.
     pub fn request_streaks(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        path: &str,
+        path: Option<&str>,
     ) -> bool {
-        if self.requested.as_deref() == Some(path) {
+        if self.requested.is(path) {
             return false;
         }
-        self.requested = Some(path.to_owned());
-        (self.streaks, self.status.streaks) = if path.is_empty() {
-            (None, RainTextureState::NotRequested)
-        } else {
-            load(device, queue, &self.asset_root, &named_texture_key(path))
+        self.requested = Requested::of(path);
+        (self.streaks, self.status.streaks) = match path {
+            None => (None, RainTextureState::NotRequested),
+            Some(path) => load(device, queue, &self.asset_root, &named_texture_key(path)),
         };
         true
     }

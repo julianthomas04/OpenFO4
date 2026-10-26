@@ -4,7 +4,10 @@
 
 use glam::{DVec3, Vec2, Vec3};
 
-use super::tuning::{DROPS_PER_DENSITY, MAX_DROPS, MAX_SPLASHES, SPLASH_SECONDS};
+use super::tuning::{
+    DRIFT_AT_FULL_WIND, DROPS_PER_DENSITY, MAX_DROPS, MAX_SPLASHES, SPLASH_SECONDS,
+};
+use crate::bethesda_space::axes_to_engine;
 
 /// How many drops fall at `intensity` (0 to 1) in weather of the given particle `density`.
 pub fn drop_count(intensity: f32, density: f32) -> u32 {
@@ -15,6 +18,13 @@ pub fn drop_count(intensity: f32, density: f32) -> u32 {
 /// How many splashes play at `intensity` (0 to 1).
 pub fn splash_count(intensity: f32) -> u32 {
     (intensity.clamp(0.0, 1.0) * MAX_SPLASHES as f32).round() as u32
+}
+
+/// The horizontal drift of a drop on the engine's x and z axes, in game units per second, in a
+/// wind of `speed` (0 to 1) that blows towards `heading`, radians from +X in the Bethesda XY plane.
+pub fn wind_drift(speed: f32, heading: f32) -> Vec2 {
+    let towards = axes_to_engine(heading.cos(), heading.sin(), 0.0);
+    Vec2::new(towards.x, towards.z) * (speed * DRIFT_AT_FULL_WIND)
 }
 
 /// The velocity of a drop in engine units per second: straight down, carried along by the wind.
@@ -102,6 +112,22 @@ impl SplashPhase {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::f32::consts::FRAC_PI_2;
+
+    #[test]
+    fn the_drops_drift_with_the_wind_on_the_engine_axes() {
+        let east = wind_drift(1.0, 0.0);
+        assert!((east - Vec2::new(DRIFT_AT_FULL_WIND, 0.0)).length() < 1e-3);
+
+        // Bethesda's +Y is the engine's -Z.
+        let north = wind_drift(0.5, FRAC_PI_2);
+        assert!((north - Vec2::new(0.0, -0.5 * DRIFT_AT_FULL_WIND)).length() < 1e-3);
+    }
+
+    #[test]
+    fn still_air_lets_the_drops_fall_straight() {
+        assert_eq!(wind_drift(0.0, 1.0), Vec2::ZERO);
+    }
 
     const EDGE: f32 = 120.0;
     const EYE: Vec3 = Vec3::new(1234.5, 300.0, -987.25);

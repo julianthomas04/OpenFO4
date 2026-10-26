@@ -463,6 +463,12 @@ impl LightingState {
         self.lightning = flash;
     }
 
+    /// The radiance of the sky at the horizon as the exterior is lit with it, lightning flash
+    /// included: the light the weather in the open air catches.
+    pub fn horizon_radiance(&self) -> Vec3 {
+        self.exterior_terms().sky_horizon
+    }
+
     /// The flash lighting this frame, for the layers that draw weather: none where the frame is
     /// not shaded with the exterior terms.
     pub fn lightning(&self) -> Vec3 {

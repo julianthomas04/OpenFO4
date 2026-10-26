@@ -4,6 +4,7 @@
 use super::CLOUD_LAYER_COUNT;
 use super::frame::WeatherFrame;
 use super::library::WeatherLibrary;
+use crate::rendering::rain::{RainAssetStatus, RainTextureState};
 use crate::sim::WeatherSnapshot;
 use crate::sim::commands::WeatherEdit;
 use crate::weather::WeatherId;
@@ -61,11 +62,29 @@ impl CloudControls {
     }
 }
 
+/// How the rain is drawn, for looking at it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RainControls {
+    pub draw: bool,
+    /// Whether the rain stirs ripples in the water around the camera.
+    pub ripples: bool,
+}
+
+impl Default for RainControls {
+    fn default() -> Self {
+        Self {
+            draw: true,
+            ripples: true,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct WeatherPanelState {
     /// The weather the user picked for the Force and Transition buttons; `None` until one is.
     picked: Option<WeatherId>,
     pub clouds: CloudControls,
+    pub rain: RainControls,
 }
 
 impl WeatherPanelState {
@@ -120,6 +139,7 @@ pub fn weather_panel(
     ui: &mut egui::Ui,
     state: &mut WeatherPanelState,
     view: Option<&WeatherView<'_>>,
+    rain: &RainAssetStatus,
     edits: &mut Vec<WeatherEdit>,
 ) {
     let Some(view) = view else {
@@ -145,6 +165,7 @@ pub fn weather_panel(
     actions.lightning = ui.button("Trigger lightning").clicked();
     edits.extend(weather_edits(target, &actions));
     cloud_controls(ui, &mut state.clouds);
+    rain_controls(ui, &mut state.rain, rain);
 }
 
 fn picker(ui: &mut egui::Ui, state: &mut WeatherPanelState, view: &WeatherView<'_>) -> WeatherId {
@@ -171,6 +192,29 @@ fn cloud_controls(ui: &mut egui::Ui, controls: &mut CloudControls) {
             egui::Slider::new(&mut controls.solo_layer, 0..=LAST_CLOUD_LAYER),
         );
     });
+}
+
+fn rain_controls(ui: &mut egui::Ui, controls: &mut RainControls, status: &RainAssetStatus) {
+    ui.checkbox(&mut controls.draw, "Draw rain");
+    ui.checkbox(&mut controls.ripples, "Rain ripples in water");
+    for line in rain_status_lines(status) {
+        ui.label(line);
+    }
+}
+
+fn rain_status_lines(status: &RainAssetStatus) -> [String; 2] {
+    [
+        texture_line("Rain streaks", &status.streaks),
+        texture_line("Rain splashes", &status.splashes),
+    ]
+}
+
+fn texture_line(name: &str, state: &RainTextureState) -> String {
+    match state {
+        RainTextureState::NotRequested => format!("{name}: not requested"),
+        RainTextureState::Loaded => format!("{name}: loaded"),
+        RainTextureState::Failed(message) => format!("{name}: failed, {message}"),
+    }
 }
 
 fn readouts(view: &WeatherView<'_>) -> Vec<String> {
@@ -322,14 +366,41 @@ mod tests {
         }
     }
 
+    fn loaded() -> RainAssetStatus {
+        RainAssetStatus {
+            streaks: RainTextureState::Loaded,
+            splashes: RainTextureState::Loaded,
+        }
+    }
+
     fn show(state: &mut WeatherPanelState, view: &WeatherView<'_>) -> Vec<WeatherEdit> {
         let ctx = egui::Context::default();
         let mut edits = Vec::new();
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            weather_panel(ui, state, Some(view), &mut edits);
+            weather_panel(ui, state, Some(view), &loaded(), &mut edits);
         });
         output.textures_delta.clear();
         edits
+    }
+
+    #[test]
+    fn each_texture_of_the_rain_says_what_became_of_it() {
+        let status = RainAssetStatus {
+            streaks: RainTextureState::Failed("file missing".to_owned()),
+            splashes: RainTextureState::NotRequested,
+        };
+
+        assert_eq!(
+            rain_status_lines(&status),
+            [
+                "Rain streaks: failed, file missing",
+                "Rain splashes: not requested"
+            ]
+        );
+        assert_eq!(
+            rain_status_lines(&loaded()),
+            ["Rain streaks: loaded", "Rain splashes: loaded"]
+        );
     }
 
     #[test]

@@ -2,14 +2,19 @@
 //! and what the lighting, the lightning flash, the clouds and the grass take from it. Nothing here
 //! touches the GPU: what only the renderer can apply comes back as a [`WeatherStep`].
 
+use glam::Vec3;
+
 use super::frame::{WeatherFrame, WeatherFrameError, WindFrame};
 use super::library::WeatherLibrary;
 use super::panel::{CloudControls, WeatherView};
+use super::{rain, sounds};
+use crate::audio::weather::WeatherAudioInput;
 use crate::rendering::lighting::LightingState;
 use crate::rendering::lighting::cell_lighting::luminance;
 use crate::rendering::lighting::lightning::{LightningFlashes, Strike};
 use crate::rendering::lighting::time_of_day::DayTime;
 use crate::rendering::post::night_sky::CloudsInput;
+use crate::rendering::rain::RainInput;
 use crate::sim::WeatherSnapshot;
 use crate::utils::error_once;
 
@@ -101,6 +106,34 @@ impl WeatherSync {
                 CloudsInput::default()
             },
         }
+    }
+
+    /// What the player hears of the weather at `snapshot`; `None` without a weather library or
+    /// cycle, and where the library lacks a weather of the cycle, which is reported once. Call it
+    /// once a frame, after the step of the weather, as the strikes of a snapshot last one step.
+    pub fn audio_input(
+        &self,
+        snapshot: Option<WeatherSnapshot<'_>>,
+        outdoor: bool,
+    ) -> Option<WeatherAudioInput> {
+        sounds::audio_input(self.library.as_ref()?, &snapshot?, outdoor)
+            .inspect_err(|error| {
+                error_once("weather-audio", || {
+                    format!("weather sounds not heard, the weather stays silent: {error}")
+                });
+            })
+            .ok()
+    }
+
+    /// The rain of the latest frame, in the light of `tint`; `None` while it does not rain or
+    /// without a frame. A frame the library cannot make rain of is reported once.
+    pub fn rain_input(&self, tint: Vec3) -> Option<RainInput> {
+        rain::rain_input(self.frame.as_ref()?, self.library.as_ref()?, tint)
+            .inspect_err(|error| {
+                error_once("weather-rain", || format!("no rain this frame: {error}"));
+            })
+            .ok()
+            .flatten()
     }
 
     /// `None` without a weather library, without a weather cycle, without a clocked sky to sample
