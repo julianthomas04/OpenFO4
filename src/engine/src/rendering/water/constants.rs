@@ -16,8 +16,8 @@ pub(super) use crate::rendering::game_frame::cb12::camera_relative_bethesda;
 use crate::rendering::game_frame::cb12::{CB12_LEN, frame_cb12};
 #[cfg(test)]
 use crate::rendering::game_frame::cb12::{
-    DEPTH_FAR_RANGE_REGISTER, DEPTH_NEAR_RANGE_REGISTER, DEPTH_RANGE_SPLIT,
-    FAR_FOG_HEIGHT_STRENGTH, FAR_RANGE_SCALE, NEAR_RANGE_SCALE, UNSET_FOG_RANGE,
+    DEPTH_FAR_RANGE_REGISTER, DEPTH_NEAR_RANGE_REGISTER, DEPTH_RANGE_SPLIT, FAR_RANGE_SCALE,
+    NEAR_RANGE_SCALE, UNSET_FOG_RANGE,
 };
 use crate::rendering::lighting::frame_uniform::{FrameUniform, TIME_WRAP_SECONDS};
 
@@ -496,7 +496,10 @@ mod tests {
         frame.sky_ground = Vec4::new(0.2, 0.25, 0.3, 0.0);
         frame.fog_near_color = Vec4::new(0.5, 0.5, 0.6, 10.0);
         frame.fog_far_color = Vec4::new(0.7, 0.7, 0.8, 110.0);
-        frame.fog_params = Vec4::new(2.0, 0.9, 0.0, 0.0);
+        frame.fog_params = Vec4::new(2.0, 0.9, 0.95, 0.0);
+        frame.fog_near_high_color = Vec4::new(0.3, 0.35, 0.4, 0.0);
+        frame.fog_far_high_color = Vec4::new(0.45, 0.5, 0.6, 0.0);
+        frame.fog_heights = Vec4::new(-64.0, 1.0 / 128.0, 0.0, 0.0);
         frame.flags = UVec4::new(0, 0, 13, 0);
         frame
     }
@@ -715,35 +718,44 @@ mod tests {
     // --- cb12: fog ------------------------------------------
 
     #[test]
-    fn fog_distance_registers_are_in_bethesda_units_with_unset_height_ranges() {
+    fn fog_range_registers_are_in_bethesda_units_and_an_unset_height_band_takes_the_unset_pair() {
         let cb12 = frame_constants(&frame_fixture()).cb12;
         // Near 10 / far 110 engine units = 100 / 1100 Bethesda units.
         let (near, far) = (100.0, 1100.0);
+        // The near band starts at -64 and spans 128 engine units: -640 to 640 Bethesda units.
+        let (near_bottom, near_top) = (-640.0, 640.0);
         let (unset_near, unset_far) = UNSET_FOG_RANGE;
         let unset_scale = 1.0 / (unset_far - unset_near);
         let unset_offset = unset_near / (unset_far - unset_near);
+        let near_height_scale = 1.0 / (near_top - near_bottom);
+        let near_height_offset = near_bottom / (near_top - near_bottom);
         assert_eq!(
             cb12[41],
             Vec4::new(
                 1.0 / (far - near),
-                unset_scale,
+                near_height_scale,
                 near / (far - near),
-                unset_offset
+                near_height_offset
             )
         );
         assert_eq!(
             cb12[46],
-            Vec4::new(unset_scale, unset_scale, unset_offset, unset_offset)
+            Vec4::new(
+                near_height_scale,
+                unset_scale,
+                near_height_offset,
+                unset_offset
+            )
         );
     }
 
     #[test]
-    fn fog_colour_registers_carry_power_max_and_the_unknown_height_strength() {
+    fn fog_colour_registers_carry_the_high_colours_power_max_and_high_density_scale() {
         let cb12 = frame_constants(&frame_fixture()).cb12;
         assert_eq!(cb12[42], Vec4::new(0.5, 0.5, 0.6, 2.0));
-        assert_eq!(cb12[43], Vec4::new(0.5, 0.5, 0.6, 0.9));
-        assert_eq!(cb12[44], Vec4::new(0.7, 0.7, 0.8, FAR_FOG_HEIGHT_STRENGTH));
-        assert_eq!(cb12[45], Vec4::new(0.7, 0.7, 0.8, 0.0));
+        assert_eq!(cb12[43], Vec4::new(0.3, 0.35, 0.4, 0.9));
+        assert_eq!(cb12[44], Vec4::new(0.7, 0.7, 0.8, 0.95));
+        assert_eq!(cb12[45], Vec4::new(0.45, 0.5, 0.6, 0.0));
     }
 
     #[test]

@@ -7,7 +7,7 @@ use glam::Vec3;
 use serde::Deserialize;
 
 use super::ambient::AmbientCube;
-use super::fog::{Fog, FogParams};
+use super::fog::{Fog, FogParams, HeightBand, HeightFog};
 use super::lerp::{Lerp, lerp_fields, snap_to_nearer};
 use super::time_of_day::{
     ClimateMoon, ClimateSky, ClimateSunTextures, ClimateTimes, SlotBlend, TimeSlot,
@@ -98,29 +98,43 @@ lerp_fields!(SlotValues {
     depth_of_field,
 });
 
-/// A fog distance set in engine units.
+/// A fog distance set in engine units, with the height bands and density scale of its height
+/// fog.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct FogRange {
     pub(super) near: f32,
     pub(super) far: f32,
     pub(super) power: f32,
     pub(super) max: f32,
+    pub(super) near_band: HeightBand,
+    pub(super) far_band: HeightBand,
+    pub(super) high_density_scale: f32,
 }
 
 lerp_fields!(FogRange {
     near,
     far,
     power,
-    max
+    max,
+    near_band,
+    far_band,
+    high_density_scale
 });
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct FogColors {
     pub(super) near: Vec3,
     pub(super) far: Vec3,
+    pub(super) near_high: Vec3,
+    pub(super) far_high: Vec3,
 }
 
-lerp_fields!(FogColors { near, far });
+lerp_fields!(FogColors {
+    near,
+    far,
+    near_high,
+    far_high
+});
 
 /// A weather's fog. The colours exist for every slot but the distances only for Day and
 /// Night, which the sample blends by how much daylight the moment has. `None` is a slot without fog.
@@ -145,6 +159,13 @@ impl WeatherFog {
                 far: range.far,
                 power: range.power,
                 max: range.max,
+                height: HeightFog {
+                    near_high_color: colors.near_high,
+                    far_high_color: colors.far_high,
+                    near_band: range.near_band,
+                    far_band: range.far_band,
+                    high_density_scale: range.high_density_scale,
+                },
             }),
             None => Fog::Disabled,
         }
@@ -365,6 +386,7 @@ mod tests {
                 far: 19.0 * level,
                 power: 20.0 * level,
                 max: 21.0 * level,
+                height: HeightFog::NONE,
             })),
         }
     }

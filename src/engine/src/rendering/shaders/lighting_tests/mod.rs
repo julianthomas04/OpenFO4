@@ -2,6 +2,7 @@
 //! harness. Every test needs a GPU adapter and is ignored by default.
 
 mod effects;
+mod fog;
 mod harness;
 mod properties;
 mod vectors;

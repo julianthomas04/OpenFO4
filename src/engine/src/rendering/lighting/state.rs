@@ -6,7 +6,7 @@ use super::ambient::{AmbientCube, EXTERIOR_AMBIENT_FILL};
 use super::cell_lighting::CellLighting;
 use super::environment::{Environment, InteriorLighting};
 use super::exterior_weather::{ExteriorWeather, ExteriorWeatherSlots, ImageSpaceHdr};
-use super::fog::{Fog, FogParams};
+use super::fog::{Fog, FogParams, HeightFog};
 use super::frame_uniform::{FrameUniform, wrapped_time};
 use super::interior_catalog::InteriorLightingCatalog;
 use super::lightning::tuning::{FLASH_AMBIENT_GAIN, FLASH_SKY_GAIN};
@@ -103,7 +103,7 @@ pub struct SkySettings {
     pub horizon: Vec3,
     pub ground: Vec3,
     pub ambient_intensity: f32,
-    /// Multiplies the sky radiance, not the ambient and not the fog.
+    /// Multiplies the sky and fog radiance, not the ambient.
     pub radiance_scale: f32,
 }
 
@@ -128,7 +128,7 @@ impl Default for SkySettings {
     }
 }
 
-/// Exterior fog. While linked, both fog colours follow the sky horizon, so
+/// Exterior fog. While linked, every fog colour follows the sky horizon, so
 /// distant geometry fades into the sky's horizon band.
 #[derive(Debug, Copy, Clone)]
 pub struct FogSettings {
@@ -137,13 +137,17 @@ pub struct FogSettings {
 }
 
 impl FogSettings {
-    pub fn fog(&self, horizon_radiance: Vec3) -> Fog {
+    /// The fog with its colours scaled like the sky's (`horizon` before that scale), so fogged
+    /// geometry reaches the horizon as bright as the sky there.
+    pub fn fog(&self, horizon: Vec3, radiance_scale: f32) -> Fog {
         let mut params = self.params;
         if self.link_to_horizon {
-            params.near_color = horizon_radiance;
-            params.far_color = horizon_radiance;
+            params.near_color = horizon;
+            params.far_color = horizon;
+            params.height.near_high_color = horizon;
+            params.height.far_high_color = horizon;
         }
-        Fog::Enabled(params)
+        Fog::Enabled(params).scaled(radiance_scale)
     }
 }
 
@@ -158,6 +162,7 @@ impl Default for FogSettings {
                 far: 12000.0,
                 power: 1.0,
                 max: 0.8,
+                height: HeightFog::NONE,
             },
             link_to_horizon: true,
         }
@@ -638,6 +643,9 @@ impl LightingState {
             fog_near_color: fog.near_color,
             fog_far_color: fog.far_color,
             fog_params: fog.params,
+            fog_near_high_color: fog.near_high_color,
+            fog_far_high_color: fog.far_high_color,
+            fog_heights: fog.heights,
             cascade_view_proj: shadow.cascade_view_proj,
             cascade_spheres: shadow.cascade_spheres,
             shadow_params: shadow.shadow_params,
@@ -722,7 +730,7 @@ impl LightingState {
             sky_ground: self.sky.ground * self.sky.radiance_scale + sky_flash,
             fog: self
                 .fog
-                .fog(self.sky.horizon * self.sky.radiance_scale)
+                .fog(self.sky.horizon, self.sky.radiance_scale)
                 .brightened(sky_flash),
         }
     }
@@ -963,7 +971,7 @@ mod tests {
     }
 
     fn resolved_cell() -> InteriorLighting {
-        InteriorLighting::Cell(ResolvedLighting {
+        InteriorLighting::Cell(Box::new(ResolvedLighting {
             lighting: CellLighting {
                 ambient_color: Vec3::splat(0.2),
                 ambient_cube: cell_cube(),
@@ -972,7 +980,7 @@ mod tests {
                 clip_distance: None,
             },
             template: TemplateStatus::NoInheritance,
-        })
+        }))
     }
 
     fn neutral() -> InteriorLighting {
@@ -1134,29 +1142,42 @@ mod tests {
     }
 
     #[test]
-    fn linked_fog_takes_the_horizon_radiance_for_both_colours() {
+    fn linked_fog_takes_the_horizon_radiance_for_every_colour() {
         let settings = FogSettings::default();
-        let Fog::Enabled(params) = settings.fog(Vec3::new(9.0, 8.0, 7.0)) else {
+        let Fog::Enabled(params) = settings.fog(Vec3::new(4.5, 4.0, 3.5), 2.0) else {
             panic!("exterior fog is always enabled");
         };
-        assert_eq!(params.near_color, Vec3::new(9.0, 8.0, 7.0));
-        assert_eq!(params.far_color, Vec3::new(9.0, 8.0, 7.0));
+        let radiance = Vec3::new(9.0, 8.0, 7.0);
+        assert_eq!(params.near_color, radiance);
+        assert_eq!(params.far_color, radiance);
+        assert_eq!(params.height.near_high_color, radiance);
+        assert_eq!(params.height.far_high_color, radiance);
         assert_eq!(params.near, settings.params.near);
     }
 
     #[test]
-    fn unlinked_fog_keeps_its_own_colours() {
+    fn unlinked_fog_keeps_its_own_colours_scaled_like_the_sky() {
         let settings = FogSettings {
             link_to_horizon: false,
             params: FogParams {
                 near_color: Vec3::new(0.3, 0.3, 0.3),
+                far_color: Vec3::new(0.5, 0.25, 0.125),
+                height: HeightFog {
+                    near_high_color: Vec3::splat(0.75),
+                    far_high_color: Vec3::splat(1.5),
+                    ..HeightFog::NONE
+                },
                 ..FogSettings::default().params
             },
         };
-        let Fog::Enabled(params) = settings.fog(Vec3::splat(9.0)) else {
+        let Fog::Enabled(params) = settings.fog(Vec3::splat(9.0), 2.0) else {
             panic!("exterior fog is always enabled");
         };
-        assert_eq!(params.near_color, Vec3::new(0.3, 0.3, 0.3));
+        assert_eq!(params.near_color, Vec3::new(0.6, 0.6, 0.6));
+        assert_eq!(params.far_color, Vec3::new(1.0, 0.5, 0.25));
+        assert_eq!(params.height.near_high_color, Vec3::splat(1.5));
+        assert_eq!(params.height.far_high_color, Vec3::splat(3.0));
+        assert_eq!(params.far, settings.params.far);
     }
 
     fn exposure(ev: f32, auto: bool, adapt_speed: f32) -> ExposureSettings {
@@ -1903,6 +1924,7 @@ mod tests {
                 far: 5000.0,
                 power: 1.5,
                 max: 0.7,
+                height: HeightFog::NONE,
             }
         }
 
@@ -2092,6 +2114,32 @@ mod tests {
             assert_eq!(frame.sky_ground.truncate(), state.sky.ground * 2.5);
             assert_eq!(frame.fog_near_color.truncate(), state.sky.horizon * 2.5);
             assert_eq!(frame.fog_far_color.truncate(), state.sky.horizon * 2.5);
+        }
+
+        #[test]
+        fn the_fog_of_a_weather_meets_the_sky_horizon_at_the_same_radiance_scale() {
+            let mut state = exterior();
+            let horizon = Vec3::new(0.4, 0.5, 0.6);
+            state.set_exterior_weather(ExteriorWeather {
+                horizon,
+                fog: Some(Fog::Enabled(FogParams {
+                    near_color: horizon,
+                    far_color: horizon,
+                    ..own_fog()
+                })),
+                ..weather()
+            });
+            state.sky.radiance_scale = 2.4;
+            let frame = frame_of(&state);
+            assert_eq!(frame.fog_far_color.truncate(), frame.sky_horizon.truncate());
+            assert_eq!(
+                frame.fog_near_color.truncate(),
+                frame.sky_horizon.truncate()
+            );
+            assert_eq!(
+                frame.fog_far_high_color.truncate(),
+                frame.sky_horizon.truncate()
+            );
         }
 
         #[test]

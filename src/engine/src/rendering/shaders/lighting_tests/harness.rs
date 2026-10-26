@@ -10,11 +10,13 @@ use crate::rendering::device::REQUIRED_FEATURES;
 use crate::rendering::gpu_cull::{storage_entry, uniform_entry};
 use crate::rendering::gpu_test::test_device;
 use crate::rendering::lighting::ambient::AMBIENT_CUBE_FACES;
+use crate::rendering::lighting::fog::{Fog, FogUniformFields};
 use crate::rendering::lighting::frame_uniform::FrameUniform;
 use crate::rendering::shaders::OBJECT;
 use crate::rendering::shadows::lamps::table::SHADOW_SLOT_NONE;
 
 const ENTRY_SOURCE: &str = include_str!("entry.wgsl");
+const SKY_FOG_SOURCE: &str = include_str!("../sky_fog.wgsl");
 const ENTRY_POINT: &str = "lighting_test_main";
 const MAX_SPECULAR_INTENSITY_OVERRIDE: &str = "MAX_SPECULAR_INTENSITY";
 const FRAME_GROUP: u32 = 1;
@@ -40,6 +42,8 @@ const KIND_APPLY_PALETTE: u32 = 14;
 const KIND_EFFECT_LAYER: u32 = 15;
 const KIND_EFFECT_FACING: u32 = 16;
 const KIND_LIT_ENV_F0: u32 = 17;
+const KIND_FOG: u32 = 18;
+const KIND_SKY_FOG: u32 = 19;
 
 /// Mirrors `TestCase` in `entry.wgsl`.
 #[repr(C)]
@@ -384,6 +388,22 @@ impl Case {
         case.to_light = direction.extend(0.0);
         case
     }
+
+    /// The fog colour (diffuse) and opacity (specular x) at `world_pos`.
+    pub fn fog(world_pos: Vec3) -> Self {
+        let mut case = Self::blank(KIND_FOG);
+        case.to_light = world_pos.extend(0.0);
+        case
+    }
+
+    /// The sky `radiance` in the unit `direction` under the fog (diffuse), and the sky's share of
+    /// the fog there (specular x).
+    pub fn sky_fog(radiance: Vec3, direction: Vec3) -> Self {
+        let mut case = Self::blank(KIND_SKY_FOG);
+        case.light_color = radiance.extend(0.0);
+        case.to_light = direction.extend(0.0);
+        case
+    }
 }
 
 /// Run-wide inputs shared by every case of one dispatch.
@@ -394,6 +414,8 @@ pub struct Environment {
     pub max_specular_intensity: Option<f32>,
     /// Linear ambient colour of each cube face in the frame uniform's order.
     pub ambient_cube: [Vec3; AMBIENT_CUBE_FACES],
+    pub camera: Vec3,
+    pub fog: FogUniformFields,
 }
 
 impl Default for Environment {
@@ -401,11 +423,21 @@ impl Default for Environment {
         Self {
             max_specular_intensity: None,
             ambient_cube: [Vec3::ZERO; AMBIENT_CUBE_FACES],
+            camera: Vec3::ZERO,
+            fog: Fog::Disabled.uniform_fields(),
         }
     }
 }
 
 impl Environment {
+    pub fn with_fog(camera: Vec3, fog: &Fog) -> Self {
+        Self {
+            camera,
+            fog: fog.uniform_fields(),
+            ..Self::default()
+        }
+    }
+
     pub fn with_specular_ceiling(ceiling: f32) -> Self {
         Self {
             max_specular_intensity: Some(ceiling),
@@ -442,7 +474,7 @@ impl LightingHarness {
                 "the object shader needs device features the adapter lacks: {missing:?}"
             ));
         }
-        let source = format!("{}{ENTRY_SOURCE}", OBJECT.wgsl());
+        let source = format!("{}{SKY_FOG_SOURCE}{ENTRY_SOURCE}", OBJECT.wgsl());
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("lighting_test_shader"),
             source: wgpu::ShaderSource::Wgsl(source.into()),
@@ -492,6 +524,14 @@ impl LightingHarness {
     fn frame_bind_group(&self, environment: &Environment) -> wgpu::BindGroup {
         let mut frame = FrameUniform::zeroed();
         frame.ambient_cube = environment.ambient_cube.map(|face| face.extend(0.0));
+        frame.camera_pos = environment.camera.extend(1.0);
+        let fog = environment.fog;
+        frame.fog_near_color = fog.near_color;
+        frame.fog_far_color = fog.far_color;
+        frame.fog_params = fog.params;
+        frame.fog_near_high_color = fog.near_high_color;
+        frame.fog_far_high_color = fog.far_high_color;
+        frame.fog_heights = fog.heights;
         let buffer = self.buffer_with(
             "lighting_test_frame",
             wgpu::BufferUsages::UNIFORM,

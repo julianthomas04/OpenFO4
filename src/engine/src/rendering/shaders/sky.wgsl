@@ -28,5 +28,6 @@ fn sky_gradient(sine_elevation: f32) -> vec3<f32> {
 
 @fragment
 fn fs_main(in: SkyVertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(sky_gradient(view_ray(in.ndc).y), 1.0);
+    let direction = view_ray(in.ndc);
+    return vec4<f32>(apply_sky_fog(sky_gradient(direction.y), direction), 1.0);
 }

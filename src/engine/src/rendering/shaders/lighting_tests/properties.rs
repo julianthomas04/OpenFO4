@@ -467,6 +467,7 @@ fn ambient_is_finite_and_non_negative_for_every_cube_and_view() {
         let environment = Environment {
             max_specular_intensity: Some(8.0),
             ambient_cube: cube,
+            ..Environment::default()
         };
         assert_finite_and_non_negative(&run_in(&environment, &cases), "ambient");
     }

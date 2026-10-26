@@ -33,6 +33,8 @@ const KIND_APPLY_PALETTE = 14u;
 const KIND_EFFECT_LAYER = 15u;
 const KIND_EFFECT_FACING = 16u;
 const KIND_LIT_ENV_F0 = 17u;
+const KIND_FOG = 18u;
+const KIND_SKY_FOG = 19u;
 
 @group(3) @binding(0) var<storage, read> test_cases: array<TestCase>;
 @group(3) @binding(1) var<storage, read_write> test_results: array<TestResult>;
@@ -140,6 +142,16 @@ fn evaluate(c: TestCase) -> TestResult {
                 0u, 0u, 1.0, 0u, 0u, 0u, 0u, 0u,
             );
             return scalar_result(lit_env_f0(mat, c.to_light.x));
+        }
+        case KIND_FOG: {
+            let fog = fog_at(c.to_light.xyz);
+            return TestResult(vec4<f32>(fog.color, 0.0), vec4<f32>(fog.opacity, 0.0, 0.0, 0.0));
+        }
+        case KIND_SKY_FOG: {
+            return TestResult(
+                vec4<f32>(apply_sky_fog(c.light_color.xyz, c.to_light.xyz), 0.0),
+                vec4<f32>(sky_fog_weight(c.to_light.y), 0.0, 0.0, 0.0),
+            );
         }
         case KIND_AMBIENT_TOWARD, default: {
             return TestResult(vec4<f32>(ambient_toward(ambient_gradient(), l), 0.0), vec4<f32>(0.0));

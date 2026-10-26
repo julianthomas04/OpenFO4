@@ -5,6 +5,7 @@ use serde::Deserialize;
 
 use super::ambient::AmbientCube;
 use super::cell_lighting::{RawColor, bethesda_faces_to_engine_order};
+use super::fog::HeightBand;
 use super::time_of_day::{
     ClimateMoon, ClimateMoonError, ClimateSky, ClimateSkyError, ClimateSunTextures, ClimateTimes,
     ClimateTimesError, TimeSlot,
@@ -69,6 +70,18 @@ pub enum ExteriorWeatherError {
         near: f32,
         far: f32,
     },
+    #[error("weather {weather} {slot} fog has a {band} height mid or range without the other")]
+    IncompleteHeightBand {
+        weather: String,
+        slot: &'static str,
+        band: &'static str,
+    },
+    #[error("weather {weather} {slot} fog has a negative high density scale ({scale})")]
+    NegativeHighDensityScale {
+        weather: String,
+        slot: &'static str,
+        scale: f32,
+    },
     #[error("weather {weather} has no {slot} slot for {entry}")]
     MissingTimeSlot {
         weather: String,
@@ -129,7 +142,8 @@ struct RawAmbientColors {
     scale: f32,
 }
 
-/// Optional height-fog fields in the JSON are ignored.
+/// One slot of the fog JSON. Databases from before the height-fog export have no height
+/// fields; their fog stays the same at every height.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct RawFog {
@@ -137,6 +151,11 @@ struct RawFog {
     far: f32,
     power: f32,
     max: f32,
+    near_height_mid: Option<f32>,
+    near_height_range: Option<f32>,
+    far_height_mid: Option<f32>,
+    far_height_range: Option<f32>,
+    high_density_scale: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -371,9 +390,13 @@ fn load_fog(
         fog_range(weather, slot, raw)
     };
     let colors = TimeSlot::try_map_all(|slot| {
+        let near = color_in_slot(weather, colors, "FogNear", slot)?;
+        let far = color_in_slot(weather, colors, "FogFar", slot)?;
         Ok::<_, ExteriorWeatherError>(FogColors {
-            near: color_in_slot(weather, colors, "FogNear", slot)?,
-            far: color_in_slot(weather, colors, "FogFar", slot)?,
+            near,
+            far,
+            near_high: high_color_in_slot(weather, colors, "FogNearHigh", slot, near)?,
+            far_high: high_color_in_slot(weather, colors, "FogFarHigh", slot, far)?,
         })
     })?;
     Ok(WeatherFog {
@@ -381,6 +404,22 @@ fn load_fog(
         night: range_of(FOG_NIGHT_SLOT)?,
         colors,
     })
+}
+
+/// A height-fog colour group is absent from databases that predate its export; the fog then
+/// keeps its `low` colour at every height.
+fn high_color_in_slot(
+    weather: &str,
+    colors: &ColorGroups,
+    group: &str,
+    slot: TimeSlot,
+    low: Vec3,
+) -> Result<Vec3, ExteriorWeatherError> {
+    if colors.contains_key(group) {
+        color_in_slot(weather, colors, group, slot)
+    } else {
+        Ok(low)
+    }
 }
 
 /// `None` for the zero range that marks a slot without fog.
@@ -400,11 +439,31 @@ fn fog_range(
             far: raw.far,
         });
     }
+    let band = |mid, range, band| {
+        HeightBand::from_bethesda_units(mid, range).ok_or_else(|| {
+            ExteriorWeatherError::IncompleteHeightBand {
+                weather: weather.to_string(),
+                slot: slot.json_key(),
+                band,
+            }
+        })
+    };
+    let high_density_scale = raw.high_density_scale.unwrap_or(1.0);
+    if high_density_scale < 0.0 {
+        return Err(ExteriorWeatherError::NegativeHighDensityScale {
+            weather: weather.to_string(),
+            slot: slot.json_key(),
+            scale: high_density_scale,
+        });
+    }
     Ok(Some(FogRange {
         near: raw.near * SCALE,
         far: raw.far * SCALE,
         power: raw.power,
         max: raw.max,
+        near_band: band(raw.near_height_mid, raw.near_height_range, "near")?,
+        far_band: band(raw.far_height_mid, raw.far_height_range, "far")?,
+        high_density_scale,
     }))
 }
 
@@ -769,7 +828,7 @@ mod tests {
 
     type Corrupt = fn(&mut WeatherRow, String);
 
-    use super::super::fog::{Fog, FogParams};
+    use super::super::fog::{Fog, FogParams, HeightBand, HeightFog};
     use super::super::time_of_day::SlotBlend;
     use super::fixtures::*;
 
@@ -1254,6 +1313,138 @@ mod tests {
             slots.sample(between(Night, Day, 0.6)).fog,
             Some(Fog::Enabled(_))
         ));
+    }
+
+    /// A fog slot with height fog: near band `near` and far band `far` as (mid, range).
+    fn height_fog_slot(near: (f32, f32), far: (f32, f32), high_density_scale: f32) -> Value {
+        let mut slot = fog_slot(100.0, 1000.0);
+        let fields = json!({
+            "NearHeightMid": near.0, "NearHeightRange": near.1,
+            "FarHeightMid": far.0, "FarHeightRange": far.1,
+            "HighDensityScale": high_density_scale,
+        });
+        slot.as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        slot
+    }
+
+    fn with_high_colors(mut row: WeatherRow) -> WeatherRow {
+        let mut colors = colors();
+        colors["FogNearHigh"] = same_in_every_slot(&rgb(255, 0, 0));
+        colors["FogFarHigh"] = same_in_every_slot(&rgb(0, 0, 255));
+        row.colors = Some(colors.to_string());
+        row
+    }
+
+    fn assert_band(band: HeightBand, mid: f32, range: f32) {
+        assert!(
+            (band.mid - mid).abs() < 1e-3 && (band.range - range).abs() < 1e-3,
+            "{band:?} is not {mid} +- {range}"
+        );
+        assert_eq!(band.weight, 1.0);
+    }
+
+    #[test]
+    fn a_weather_without_height_fog_data_has_the_same_fog_at_every_height() {
+        let fog = sampled_fog(&load(row()).unwrap(), at(Day));
+        assert_eq!(
+            fog.height,
+            HeightFog {
+                near_high_color: fog.near_color,
+                far_high_color: fog.far_color,
+                ..HeightFog::NONE
+            }
+        );
+        let flat = FogParams {
+            height: HeightFog::NONE,
+            ..fog
+        };
+        assert_eq!(
+            Fog::Enabled(fog).uniform_fields(),
+            Fog::Enabled(flat).uniform_fields()
+        );
+    }
+
+    #[test]
+    fn height_fog_is_scaled_into_engine_units_with_its_high_colours() {
+        let slot = height_fog_slot((500.0, 2000.0), (1800.0, 15_000.0), 0.95);
+        let fog = sampled_fog(
+            &load(with_high_colors(fog_with(&slot, &slot))).unwrap(),
+            at(Day),
+        );
+        assert_band(fog.height.near_band, 50.0, 200.0);
+        assert_band(fog.height.far_band, 180.0, 1500.0);
+        assert_eq!(fog.height.high_density_scale, 0.95);
+        assert_eq!(fog.height.near_high_color, Vec3::X);
+        assert_eq!(fog.height.far_high_color, Vec3::Z);
+    }
+
+    #[test]
+    fn height_bands_and_density_blend_by_daylight_like_the_distances() {
+        let day = height_fog_slot((500.0, 2000.0), (1000.0, 10_000.0), 1.0);
+        let night = height_fog_slot((1500.0, 4000.0), (3000.0, 30_000.0), 0.5);
+        let slots = load(fog_with(&day, &night)).unwrap();
+        let halfway = sampled_fog(&slots, between(Night, Day, 0.5)).height;
+        assert_band(halfway.near_band, 100.0, 300.0);
+        assert_band(halfway.far_band, 200.0, 2000.0);
+        assert_eq!(halfway.high_density_scale, 0.75);
+    }
+
+    #[test]
+    fn zero_height_ranges_leave_the_fog_the_same_at_every_height() {
+        // Records from before height fog store zeros, a zero density scale included.
+        let slot = height_fog_slot((0.0, 0.0), (0.0, 0.0), 0.0);
+        let slots = load(with_high_colors(fog_with(&slot, &slot))).unwrap();
+        let fog = sampled_fog(&slots, at(Day));
+        assert_eq!(fog.height.near_band, HeightBand::UNSET);
+        assert_eq!(fog.height.far_band, HeightBand::UNSET);
+        let flat = FogParams {
+            height: HeightFog::NONE,
+            ..fog
+        };
+        assert_eq!(
+            Fog::Enabled(fog).uniform_fields(),
+            Fog::Enabled(flat).uniform_fields()
+        );
+    }
+
+    #[test]
+    fn a_height_mid_without_its_range_fails_the_weather_naming_the_band() {
+        let mut slot = height_fog_slot((500.0, 2000.0), (1800.0, 15_000.0), 1.0);
+        slot.as_object_mut().unwrap().remove("FarHeightRange");
+        let result = load(fog_with(&fog_slot(100.0, 1000.0), &slot));
+        assert!(
+            matches!(&result, Err(ExteriorWeatherError::IncompleteHeightBand { slot, band, .. }) if *slot == "Night" && *band == "far"),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn a_negative_high_density_scale_fails_the_weather() {
+        let slot = height_fog_slot((500.0, 2000.0), (1800.0, 15_000.0), -0.5);
+        let result = load(fog_with(&slot, &fog_slot(100.0, 1000.0)));
+        assert!(
+            matches!(&result, Err(ExteriorWeatherError::NegativeHighDensityScale { slot, .. }) if *slot == "Day"),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn a_high_fog_colour_group_must_have_every_slot() {
+        let mut colors = colors();
+        colors["FogFarHigh"] = same_in_every_slot(&rgb(0, 0, 255));
+        colors["FogFarHigh"]
+            .as_object_mut()
+            .unwrap()
+            .remove("Sunset");
+        let mut row = row();
+        row.colors = Some(colors.to_string());
+        let error = load(row).unwrap_err();
+        assert!(
+            matches!(&error, ExteriorWeatherError::MissingTimeSlot { entry, slot, .. } if entry == "FogFarHigh" && *slot == "Sunset"),
+            "{error:?}"
+        );
     }
 
     #[test]

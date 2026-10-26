@@ -12,11 +12,8 @@ use crate::rendering::lighting::frame_uniform::FrameUniform;
 /// Register count of `cb12`.
 pub const CB12_LEN: usize = 47;
 
-/// `cb12[44].w`: strength of the far fog's height-fog contribution. With the engine's weather
-/// having no height-fog ranges the mix is 0 and the value is inert.
-pub const FAR_FOG_HEIGHT_STRENGTH: f32 = 1.0;
-
-/// Fog range pair used when both distances are 0: no fog at any reachable distance.
+/// Fog range pair used when both distances are 0 and for an unset height band: no fog and no
+/// height mix at any reachable distance or height.
 pub const UNSET_FOG_RANGE: (f32, f32) = (1.0e8, 1.0e9);
 
 /// Binding registers of the two depth un-projection matrices: [`DEPTH_NEAR_RANGE_REGISTER`]
@@ -90,25 +87,28 @@ pub fn frame_cb12(frame: &FrameUniform) -> [Vec4; CB12_LEN] {
     cb12
 }
 
-/// The three fog distance pairs: the weather's day near/far,
-/// and the two height-fog pairs `(a - b, a + b)` and `(c - d, c + d)`. The
-/// engine's weather has no height-fog data, so both are the unset pair.
+/// The three fog range pairs in Bethesda units: the distances, and the near and far height bands
+/// as `(mid - range, mid + range)`.
 struct FogRanges {
-    main: (f32, f32),
-    mid: (f32, f32),
-    high: (f32, f32),
+    distance: (f32, f32),
+    near_height: (f32, f32),
+    far_height: (f32, f32),
 }
 
 impl FogRanges {
-    fn of_main(near: f32, far: f32) -> Self {
+    fn of_frame(frame: &FrameUniform) -> Self {
+        let heights = frame.fog_heights;
         Self {
-            main: Self::substitute_unset(near, far),
-            mid: UNSET_FOG_RANGE,
-            high: UNSET_FOG_RANGE,
+            distance: Self::distance(
+                frame.fog_near_color.w * UNITS_FROM_ENGINE,
+                frame.fog_far_color.w * UNITS_FROM_ENGINE,
+            ),
+            near_height: Self::height_band(heights.x, heights.y),
+            far_height: Self::height_band(heights.z, heights.w),
         }
     }
 
-    fn substitute_unset(near: f32, far: f32) -> (f32, f32) {
+    fn distance(near: f32, far: f32) -> (f32, f32) {
         if near == 0.0 && far == 0.0 {
             UNSET_FOG_RANGE
         } else {
@@ -116,28 +116,43 @@ impl FogRanges {
         }
     }
 
+    /// A height band of the frame uniform (engine units); a band without a span is unset.
+    fn height_band(bottom: f32, inverse_span: f32) -> (f32, f32) {
+        if inverse_span > 0.0 {
+            let bottom = bottom * UNITS_FROM_ENGINE;
+            (bottom, bottom + UNITS_FROM_ENGINE / inverse_span)
+        } else {
+            UNSET_FOG_RANGE
+        }
+    }
+
     /// `cb12[41]` and `cb12[46]`.
     fn registers(&self) -> (Vec4, Vec4) {
         let scale = |(near, far): (f32, f32)| (1.0 / (far - near), near / (far - near));
-        let (main_scale, main_offset) = scale(self.main);
-        let (mid_scale, mid_offset) = scale(self.mid);
-        let (high_scale, high_offset) = scale(self.high);
+        let (distance_scale, distance_offset) = scale(self.distance);
+        let (near_height_scale, near_height_offset) = scale(self.near_height);
+        let (far_height_scale, far_height_offset) = scale(self.far_height);
         (
-            Vec4::new(main_scale, mid_scale, main_offset, mid_offset),
-            Vec4::new(mid_scale, high_scale, mid_offset, high_offset),
+            Vec4::new(
+                distance_scale,
+                near_height_scale,
+                distance_offset,
+                near_height_offset,
+            ),
+            Vec4::new(
+                near_height_scale,
+                far_height_scale,
+                near_height_offset,
+                far_height_offset,
+            ),
         )
     }
 }
 
-/// Fog registers `cb12[41..=46]` from the engine's
-/// parametric fog. The engine has one near and one far colour, no height-fog
-/// colours or ranges: the "high" colours repeat them and the height pairs are
-/// unset, so the height mix is 0 and they cannot show.
+/// Fog registers `cb12[41..=46]` from the engine's parametric fog: the near colour and its high
+/// colour, the far colour and its high colour, and the range pairs. Inferred from the layout,
+/// as no public source documents it: `cb12[44].w` takes the high density scale.
 fn write_fog(cb12: &mut [Vec4; CB12_LEN], frame: &FrameUniform) {
-    let near_color = frame.fog_near_color.truncate();
-    let far_color = frame.fog_far_color.truncate();
-    let near = frame.fog_near_color.w * UNITS_FROM_ENGINE;
-    let far = frame.fog_far_color.w * UNITS_FROM_ENGINE;
     // Disabled fog has power 0 and `pow(0, 0)` would be NaN; any positive
     // power keeps the zero factor of an unset range.
     let power = if frame.fog_params.x > 0.0 {
@@ -146,19 +161,21 @@ fn write_fog(cb12: &mut [Vec4; CB12_LEN], frame: &FrameUniform) {
         1.0
     };
     let max_opacity = frame.fog_params.y;
+    let high_density_scale = frame.fog_params.z;
 
-    let (distance_registers, height_registers) = FogRanges::of_main(near, far).registers();
+    let (distance_registers, height_registers) = FogRanges::of_frame(frame).registers();
     cb12[41] = distance_registers;
-    cb12[42] = near_color.extend(power);
-    cb12[43] = near_color.extend(max_opacity);
-    cb12[44] = far_color.extend(FAR_FOG_HEIGHT_STRENGTH);
-    cb12[45] = far_color.extend(0.0);
+    cb12[42] = frame.fog_near_color.truncate().extend(power);
+    cb12[43] = frame.fog_near_high_color.truncate().extend(max_opacity);
+    cb12[44] = frame.fog_far_color.truncate().extend(high_density_scale);
+    cb12[45] = frame.fog_far_high_color.truncate().extend(0.0);
     cb12[46] = height_registers;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rendering::lighting::fog::{Fog, FogParams, HeightBand, HeightFog};
 
     fn frame_fixture() -> FrameUniform {
         let mut frame: FrameUniform = bytemuck::Zeroable::zeroed();
@@ -195,6 +212,52 @@ mod tests {
                 "{point:?}: expected {expected:?}, got {relative:?}"
             );
         }
+    }
+
+    /// The `saturate(value * scale - offset)` a range register pair gives.
+    fn factor(scale: f32, offset: f32, value: f32) -> f32 {
+        (value * scale - offset).clamp(0.0, 1.0)
+    }
+
+    #[test]
+    fn height_bands_reach_the_registers_as_mid_minus_and_plus_range_in_bethesda_units() {
+        let height = HeightFog {
+            near_band: HeightBand::new(50.0, 200.0),
+            far_band: HeightBand::new(180.0, 1500.0),
+            ..HeightFog::NONE
+        };
+        let fields = Fog::Enabled(FogParams {
+            near_color: Vec3::ONE,
+            far_color: Vec3::ONE,
+            near: 150.0,
+            far: 25_000.0,
+            power: 0.25,
+            max: 0.85,
+            height,
+        })
+        .uniform_fields();
+        let mut frame = frame_fixture();
+        frame.fog_near_color = fields.near_color;
+        frame.fog_far_color = fields.far_color;
+        frame.fog_params = fields.params;
+        frame.fog_heights = fields.heights;
+        let cb12 = frame_cb12(&frame);
+
+        let near_band = |height: f32| factor(cb12[41].y, cb12[41].w, height);
+        let far_band = |height: f32| factor(cb12[46].y, cb12[46].w, height);
+        for (height, expected) in [(-1500.0, 0.0), (500.0, 0.5), (2500.0, 1.0)] {
+            assert!(
+                (near_band(height) - expected).abs() < 1e-4,
+                "near at {height}"
+            );
+        }
+        for (height, expected) in [(-13_200.0, 0.0), (1800.0, 0.5), (16_800.0, 1.0)] {
+            assert!(
+                (far_band(height) - expected).abs() < 1e-4,
+                "far at {height}"
+            );
+        }
+        assert_eq!((cb12[46].x, cb12[46].z), (cb12[41].y, cb12[41].w));
     }
 
     #[test]

@@ -38,11 +38,13 @@ fn vs_main(
 
 // The cloud textures hold the shading of the cloud in RGB and its opacity in alpha; the alpha of
 // the vertex colour fades a mesh out towards its edges. Towards the horizon the cloud takes the
-// colour of the sky there, and below it nothing but that colour is left.
+// colour of the sky there, and below it nothing but that colour is left. The fog then covers the
+// cloud as it covers the sky behind it.
 @fragment
 fn fs_main(in: CloudVertexOutput) -> @location(0) vec4<f32> {
     let texel = textureSample(cloud_texture, cloud_sampler, in.uv);
-    let haze = 1.0 - smoothstep(0.0, max(cloud.offset_haze.z, MIN_HAZE_SINE), normalize(in.direction).y);
+    let direction = normalize(in.direction);
+    let haze = 1.0 - smoothstep(0.0, max(cloud.offset_haze.z, MIN_HAZE_SINE), direction.y);
     let radiance = mix(texel.rgb * cloud.radiance_opacity.rgb, frame.sky_horizon.rgb, haze);
-    return vec4<f32>(radiance, texel.a * cloud.radiance_opacity.w * in.edge_opacity);
+    return vec4<f32>(apply_sky_fog(radiance, direction), texel.a * cloud.radiance_opacity.w * in.edge_opacity);
 }

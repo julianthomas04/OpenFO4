@@ -29,8 +29,14 @@ pub struct FrameUniform {
     pub fog_near_color: Vec4,
     /// rgb: colour, w: distance at which the fog is fully developed.
     pub fog_far_color: Vec4,
-    /// x: falloff power, y: maximum opacity.
+    /// x: falloff power, y: maximum opacity, z: opacity scale at the top of the far height band.
     pub fog_params: Vec4,
+    /// rgb: the near colour at the top of the near height band.
+    pub fog_near_high_color: Vec4,
+    /// rgb: the far colour at the top of the far height band.
+    pub fog_far_high_color: Vec4,
+    /// Bottom and reciprocal span of the near (xy) and far (zw) height bands, engine units.
+    pub fog_heights: Vec4,
     pub cascade_view_proj: [Mat4; MAX_CASCADES],
     /// xyz: world-space centre, w: radius.
     pub cascade_spheres: [Vec4; MAX_CASCADES],
@@ -71,7 +77,7 @@ pub fn wrapped_time(elapsed_seconds: f32) -> f32 {
     elapsed_seconds.rem_euclid(TIME_WRAP_SECONDS)
 }
 
-const _: () = assert!(std::mem::size_of::<FrameUniform>() == 880);
+const _: () = assert!(std::mem::size_of::<FrameUniform>() == 928);
 
 #[cfg(test)]
 #[allow(clippy::float_cmp, reason = "the wrap is exact in f32 by construction")]
@@ -80,7 +86,7 @@ mod tests {
 
     #[test]
     fn water_fields_close_the_uniform_at_the_wgsl_offset() {
-        assert_eq!(std::mem::offset_of!(FrameUniform, time_water), 864);
+        assert_eq!(std::mem::offset_of!(FrameUniform, time_water), 912);
         assert_eq!(std::mem::size_of::<FrameUniform>() % 16, 0);
     }
 
