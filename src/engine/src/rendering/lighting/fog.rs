@@ -1,5 +1,7 @@
 use glam::{Vec3, Vec4};
 
+use super::frame_uniform::FrameUniform;
+use super::god_rays::InScatterUniformFields;
 use super::lerp::{Lerp, lerp_fields, snap_to_nearer};
 use crate::rendering::world_streamer::SCALE;
 
@@ -26,10 +28,10 @@ lerp_fields!(FogParams {
     height
 });
 
-/// Heights, in engine units, over which a fog colour turns from its low to its high colour:
-/// all low below `mid - range`, all high above `mid + range`. `weight` is how far towards the
-/// high colour the band goes; it is 0 for a band the data leaves unset, so a blend towards such
-/// a band fades the height colour out instead of jumping.
+/// Heights, in engine units, over which a fog colour turns from its low to its high colour, as
+/// [`HeightBand::span`] places them from the record's `mid` and `range`. `weight` is how far
+/// towards the high colour the band goes; it is 0 for a band the data leaves unset, so a blend
+/// towards such a band fades the height colour out instead of jumping.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct HeightBand {
     pub mid: f32,
@@ -37,7 +39,22 @@ pub struct HeightBand {
     pub weight: f32,
 }
 
-lerp_fields!(HeightBand { mid, range, weight });
+/// A band that is unset at one end has no heights to blend towards, so the blend keeps the set
+/// end's heights and fades only the weight.
+impl Lerp for HeightBand {
+    fn lerp(&self, other: &Self, t: f32) -> Self {
+        let weight = self.weight.lerp(&other.weight, t);
+        match (self.is_set(), other.is_set()) {
+            (true, false) => Self { weight, ..*self },
+            (false, true) => Self { weight, ..*other },
+            (true, true) | (false, false) => Self {
+                mid: self.mid.lerp(&other.mid, t),
+                range: self.range.lerp(&other.range, t),
+                weight,
+            },
+        }
+    }
+}
 
 impl HeightBand {
     pub const UNSET: Self = Self {
@@ -45,6 +62,10 @@ impl HeightBand {
         range: 0.0,
         weight: 0.0,
     };
+
+    fn is_set(self) -> bool {
+        self.weight > 0.0
+    }
 
     /// A band without a positive, finite range (records that predate height fog store 0) is
     /// unset.
@@ -62,7 +83,7 @@ impl HeightBand {
 
     /// The band of a record's mid and range in Bethesda units: unset when both are absent, as in
     /// databases that predate height fog, and `None` when only one is.
-    pub fn from_bethesda_units(mid: Option<f32>, range: Option<f32>) -> Option<Self> {
+    fn from_bethesda_units(mid: Option<f32>, range: Option<f32>) -> Option<Self> {
         match (mid, range) {
             (Some(mid), Some(range)) => Some(Self::new(mid * SCALE, range * SCALE)),
             (None, None) => Some(Self::UNSET),
@@ -70,14 +91,79 @@ impl HeightBand {
         }
     }
 
+    /// The heights where the band starts turning towards its high colour and where it is all
+    /// high: from `mid` up to `mid + range`. Inferred, as no public source settles it; a band
+    /// centred on `mid` (`mid - range` to `mid + range`) would put the vanilla bands (mid 0 to 64,
+    /// range 10000) half way to their high colours at ground level, where the authored low colour
+    /// would then never show. This is the one place the convention is decided.
+    pub fn span(self) -> (f32, f32) {
+        (self.mid, self.mid + self.range)
+    }
+
     /// The lowest height of the band and the reciprocal of its span, for
     /// `saturate((height - bottom) * inverse_span)`; `(0, 0)` holds that factor at 0.
     pub fn bottom_and_inverse_span(self) -> (f32, f32) {
-        if self.weight > 0.0 && self.range > 0.0 {
-            (self.mid - self.range, 0.5 / self.range)
+        if self.is_set() && self.range > 0.0 {
+            let (bottom, top) = self.span();
+            (bottom, (top - bottom).recip())
         } else {
             (0.0, 0.0)
         }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, thiserror::Error)]
+pub enum HeightFogError {
+    #[error("the {band} fog height band has a mid or range without the other")]
+    IncompleteBand { band: &'static str },
+    #[error("the fog has a negative high density scale ({scale})")]
+    NegativeHighDensityScale { scale: f32 },
+}
+
+/// The height-fog fields of a record, in Bethesda units; data that predates height fog has none
+/// of them.
+#[derive(Debug, Copy, Clone, Default, PartialEq)]
+pub struct RawHeightFog {
+    pub near_mid: Option<f32>,
+    pub near_range: Option<f32>,
+    pub far_mid: Option<f32>,
+    pub far_range: Option<f32>,
+    pub high_density_scale: Option<f32>,
+}
+
+/// The colourless part of a [`HeightFog`]: its bands and how dense the fog is at the top.
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct HeightBands {
+    pub near: HeightBand,
+    pub far: HeightBand,
+    pub high_density_scale: f32,
+}
+
+lerp_fields!(HeightBands {
+    near,
+    far,
+    high_density_scale
+});
+
+impl RawHeightFog {
+    /// The bands in engine units. A missing high density scale is 1, the same fog at every
+    /// height.
+    pub fn bands(self) -> Result<HeightBands, HeightFogError> {
+        let band = |mid, range, band| {
+            HeightBand::from_bethesda_units(mid, range)
+                .ok_or(HeightFogError::IncompleteBand { band })
+        };
+        let high_density_scale = self.high_density_scale.unwrap_or(1.0);
+        if high_density_scale < 0.0 {
+            return Err(HeightFogError::NegativeHighDensityScale {
+                scale: high_density_scale,
+            });
+        }
+        Ok(HeightBands {
+            near: band(self.near_mid, self.near_range, "near")?,
+            far: band(self.far_mid, self.far_range, "far")?,
+            high_density_scale,
+        })
     }
 }
 
@@ -111,6 +197,16 @@ impl HeightFog {
         high_density_scale: 1.0,
     };
 
+    pub fn new(bands: HeightBands, near_high_color: Vec3, far_high_color: Vec3) -> Self {
+        Self {
+            near_high_color,
+            far_high_color,
+            near_band: bands.near,
+            far_band: bands.far,
+            high_density_scale: bands.high_density_scale,
+        }
+    }
+
     fn map_colors(self, color: impl Fn(Vec3) -> Vec3) -> Self {
         Self {
             near_high_color: color(self.near_high_color),
@@ -138,7 +234,8 @@ impl Lerp for Fog {
 }
 
 /// The `FrameUniform` fog fields, laid out as `fog_near_color`, `fog_far_color`, `fog_params`,
-/// `fog_near_high_color`, `fog_far_high_color` and `fog_heights` in `shaders/frame.wgsl`.
+/// `fog_near_high_color`, `fog_far_high_color`, `fog_heights` and the sun's in-scatter in
+/// `shaders/frame.wgsl`.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct FogUniformFields {
     /// rgb: colour, w: distance at which the fog starts.
@@ -153,6 +250,7 @@ pub struct FogUniformFields {
     pub far_high_color: Vec4,
     /// The bottom and inverse span of the near band (xy) and of the far band (zw).
     pub heights: Vec4,
+    pub in_scatter: InScatterUniformFields,
 }
 
 impl FogUniformFields {
@@ -164,7 +262,27 @@ impl FogUniformFields {
         near_high_color: Vec4::ZERO,
         far_high_color: Vec4::ZERO,
         heights: Vec4::ZERO,
+        in_scatter: InScatterUniformFields::NONE,
     };
+
+    /// These fields with the sun's in-scatter.
+    #[must_use]
+    pub fn with_in_scatter(self, in_scatter: InScatterUniformFields) -> Self {
+        Self { in_scatter, ..self }
+    }
+
+    pub fn write_to(&self, frame: &mut FrameUniform) {
+        frame.fog_near_color = self.near_color;
+        frame.fog_far_color = self.far_color;
+        frame.fog_params = self.params;
+        frame.fog_near_high_color = self.near_high_color;
+        frame.fog_far_high_color = self.far_high_color;
+        frame.fog_heights = self.heights;
+        frame.fog_sun_forward = self.in_scatter.forward;
+        frame.fog_sun_back = self.in_scatter.back;
+        frame.fog_sun_air = self.in_scatter.air;
+        frame.fog_to_sun = self.in_scatter.to_sun;
+    }
 }
 
 impl Fog {
@@ -225,10 +343,24 @@ impl Fog {
                         far_bottom,
                         far_inverse_span,
                     ),
+                    in_scatter: InScatterUniformFields::NONE,
                 }
             }
             Fog::Enabled(_) | Fog::Disabled => FogUniformFields::DISABLED,
         }
+    }
+}
+
+#[cfg(test)]
+pub(super) mod test_support {
+    use super::HeightBand;
+
+    pub(in crate::rendering::lighting) fn assert_band(band: HeightBand, mid: f32, range: f32) {
+        assert!(
+            (band.mid - mid).abs() < 1e-3 && (band.range - range).abs() < 1e-3,
+            "{band:?} is not mid {mid} range {range}"
+        );
+        assert!((band.weight - 1.0).abs() < f32::EPSILON, "{band:?}");
     }
 }
 
@@ -288,7 +420,8 @@ mod tests {
         let fields = with_height(height_fog()).uniform_fields();
         assert_eq!(fields.near_high_color, Vec4::new(0.7, 0.8, 0.9, 0.0));
         assert_eq!(fields.far_high_color, Vec4::new(1.0, 1.1, 1.2, 0.0));
-        assert_eq!(fields.heights, Vec4::new(10.0, 0.05, 25.0, 0.02));
+        // The near band runs from 20 to 30, the far band from 50 to 75.
+        assert_eq!(fields.heights, Vec4::new(20.0, 0.1, 50.0, 0.04));
         assert_eq!(fields.params.z, 0.5);
     }
 
@@ -356,11 +489,123 @@ mod tests {
     }
 
     #[test]
-    fn a_blend_towards_an_unset_band_fades_the_bands_weight() {
+    fn a_blend_towards_an_unset_band_keeps_the_set_bands_heights_and_fades_its_weight() {
         let band = HeightBand::new(40.0, 20.0);
-        let halfway = band.lerp(&HeightBand::UNSET, 0.5);
-        assert_eq!(halfway.weight, 0.5);
-        assert_eq!(halfway.bottom_and_inverse_span(), (10.0, 0.05));
+        for halfway in [
+            band.lerp(&HeightBand::UNSET, 0.5),
+            HeightBand::UNSET.lerp(&band, 0.5),
+        ] {
+            assert_eq!(
+                halfway,
+                HeightBand {
+                    weight: 0.5,
+                    ..band
+                }
+            );
+            assert_eq!(halfway.bottom_and_inverse_span(), (40.0, 0.05));
+        }
+        assert_eq!(band.lerp(&HeightBand::UNSET, 1.0).weight, 0.0);
+    }
+
+    #[test]
+    fn a_blend_of_two_set_bands_blends_their_heights() {
+        let halfway = HeightBand::new(40.0, 20.0).lerp(&HeightBand::new(80.0, 60.0), 0.5);
+        assert_eq!(halfway, HeightBand::new(60.0, 40.0));
+    }
+
+    #[test]
+    fn a_band_starts_at_its_mid_and_is_all_high_a_range_above_it() {
+        let band = HeightBand::new(64.0, 10_000.0);
+        assert_eq!(band.span(), (64.0, 10_064.0));
+        let (bottom, inverse_span) = band.bottom_and_inverse_span();
+        let factor = |height: f32| ((height - bottom) * inverse_span).clamp(0.0, 1.0);
+        assert_eq!(factor(0.0), 0.0, "the ground keeps the low colour");
+        assert!((factor(5064.0) - 0.5).abs() < 1e-6);
+        assert_eq!(factor(10_064.0), 1.0);
+    }
+
+    fn raw_height_fog() -> RawHeightFog {
+        RawHeightFog {
+            near_mid: Some(500.0),
+            near_range: Some(2000.0),
+            far_mid: Some(1800.0),
+            far_range: Some(15_000.0),
+            high_density_scale: Some(0.95),
+        }
+    }
+
+    #[test]
+    fn raw_height_fog_turns_into_bands_in_engine_units() {
+        let bands = raw_height_fog().bands().unwrap();
+        test_support::assert_band(bands.near, 50.0, 200.0);
+        test_support::assert_band(bands.far, 180.0, 1500.0);
+        assert_eq!(bands.high_density_scale, 0.95);
+    }
+
+    #[test]
+    fn height_fog_from_before_its_export_is_the_same_at_every_height() {
+        let bands = RawHeightFog::default().bands().unwrap();
+        assert_eq!(
+            HeightFog::new(bands, Vec3::ZERO, Vec3::ZERO),
+            HeightFog::NONE
+        );
+    }
+
+    #[test]
+    fn a_mid_without_its_range_or_a_range_without_its_mid_names_the_band() {
+        let near = RawHeightFog {
+            near_range: None,
+            ..raw_height_fog()
+        };
+        let far = RawHeightFog {
+            far_mid: None,
+            ..raw_height_fog()
+        };
+        assert_eq!(
+            near.bands(),
+            Err(HeightFogError::IncompleteBand { band: "near" })
+        );
+        assert_eq!(
+            far.bands(),
+            Err(HeightFogError::IncompleteBand { band: "far" })
+        );
+    }
+
+    #[test]
+    fn a_negative_high_density_scale_is_rejected() {
+        let raw = RawHeightFog {
+            high_density_scale: Some(-0.5),
+            ..raw_height_fog()
+        };
+        assert_eq!(
+            raw.bands(),
+            Err(HeightFogError::NegativeHighDensityScale { scale: -0.5 })
+        );
+    }
+
+    #[test]
+    fn write_to_fills_every_fog_field_of_the_frame_uniform_with_the_in_scatter() {
+        let in_scatter = InScatterUniformFields {
+            forward: Vec4::splat(1.0),
+            back: Vec4::splat(2.0),
+            air: Vec4::splat(3.0),
+            to_sun: Vec4::splat(4.0),
+        };
+        let fields = with_height(height_fog())
+            .uniform_fields()
+            .with_in_scatter(in_scatter);
+        let mut frame: FrameUniform = bytemuck::Zeroable::zeroed();
+        fields.write_to(&mut frame);
+        assert_eq!(frame.fog_near_color, fields.near_color);
+        assert_eq!(frame.fog_far_color, fields.far_color);
+        assert_eq!(frame.fog_params, fields.params);
+        assert_eq!(frame.fog_near_high_color, fields.near_high_color);
+        assert_eq!(frame.fog_far_high_color, fields.far_high_color);
+        assert_eq!(frame.fog_heights, fields.heights);
+        assert_eq!(frame.fog_sun_forward, in_scatter.forward);
+        assert_eq!(frame.fog_sun_back, in_scatter.back);
+        assert_eq!(frame.fog_sun_air, in_scatter.air);
+        assert_eq!(frame.fog_to_sun, in_scatter.to_sun);
     }
 
     #[test]

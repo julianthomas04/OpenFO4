@@ -7,7 +7,7 @@ use glam::Vec3;
 use serde::Deserialize;
 
 use super::ambient::AmbientCube;
-use super::fog::{Fog, FogParams, HeightBand, HeightFog};
+use super::fog::{Fog, FogParams, HeightBands, HeightFog};
 use super::god_rays::SunInScatter;
 use super::lerp::{Lerp, lerp_fields, snap_to_nearer};
 use super::time_of_day::{
@@ -101,17 +101,14 @@ lerp_fields!(SlotValues {
     sun_in_scatter,
 });
 
-/// A fog distance set in engine units, with the height bands and density scale of its height
-/// fog.
+/// A fog distance set in engine units, with the bands and density scale of its height fog.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct FogRange {
     pub(super) near: f32,
     pub(super) far: f32,
     pub(super) power: f32,
     pub(super) max: f32,
-    pub(super) near_band: HeightBand,
-    pub(super) far_band: HeightBand,
-    pub(super) high_density_scale: f32,
+    pub(super) height: HeightBands,
 }
 
 lerp_fields!(FogRange {
@@ -119,9 +116,7 @@ lerp_fields!(FogRange {
     far,
     power,
     max,
-    near_band,
-    far_band,
-    high_density_scale
+    height
 });
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -162,13 +157,7 @@ impl WeatherFog {
                 far: range.far,
                 power: range.power,
                 max: range.max,
-                height: HeightFog {
-                    near_high_color: colors.near_high,
-                    far_high_color: colors.far_high,
-                    near_band: range.near_band,
-                    far_band: range.far_band,
-                    high_density_scale: range.high_density_scale,
-                },
+                height: HeightFog::new(range.height, colors.near_high, colors.far_high),
             }),
             None => Fog::Disabled,
         }

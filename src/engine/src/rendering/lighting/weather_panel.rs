@@ -143,13 +143,11 @@ fn fog_rows(ui: &mut egui::Ui, fog: &Fog) {
             linear_row(ui, "fog near color", params.near_color);
             linear_row(ui, "fog far color", params.far_color);
             let height = &params.height;
+            let (near_bottom, near_top) = height.near_band.span();
+            let (far_bottom, far_top) = height.far_band.span();
             ui.label(format!(
-                "fog height near {:.1}±{:.1} (weight {:.2}) far {:.1}±{:.1} (weight {:.2}) high density {:.2}",
-                height.near_band.mid,
-                height.near_band.range,
+                "fog height near {near_bottom:.1} to {near_top:.1} (weight {:.2}) far {far_bottom:.1} to {far_top:.1} (weight {:.2}) high density {:.2}",
                 height.near_band.weight,
-                height.far_band.mid,
-                height.far_band.range,
                 height.far_band.weight,
                 height.high_density_scale
             ));

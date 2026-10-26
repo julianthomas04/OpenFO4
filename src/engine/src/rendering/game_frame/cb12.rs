@@ -87,8 +87,8 @@ pub fn frame_cb12(frame: &FrameUniform) -> [Vec4; CB12_LEN] {
     cb12
 }
 
-/// The three fog range pairs in Bethesda units: the distances, and the near and far height bands
-/// as `(mid - range, mid + range)`.
+/// The three fog range pairs in Bethesda units: the distances, and the bottom and top of the near
+/// and far height bands (`HeightBand::span`).
 struct FogRanges {
     distance: (f32, f32),
     near_height: (f32, f32),
@@ -149,6 +149,11 @@ impl FogRanges {
     }
 }
 
+/// The high density scale `cb12[44].w` carries while the fog is off: 1, the same density at every
+/// height. Inferred: the register's meaning is itself inferred, and what the game writes there
+/// without fog is unknown.
+const DISABLED_FOG_HIGH_DENSITY_SCALE: f32 = 1.0;
+
 /// Fog registers `cb12[41..=46]` from the engine's parametric fog: the near colour and its high
 /// colour, the far colour and its high colour, and the range pairs. Inferred from the layout,
 /// as no public source documents it: `cb12[44].w` takes the high density scale.
@@ -161,7 +166,11 @@ fn write_fog(cb12: &mut [Vec4; CB12_LEN], frame: &FrameUniform) {
         1.0
     };
     let max_opacity = frame.fog_params.y;
-    let high_density_scale = frame.fog_params.z;
+    let high_density_scale = if max_opacity > 0.0 {
+        frame.fog_params.z
+    } else {
+        DISABLED_FOG_HIGH_DENSITY_SCALE
+    };
 
     let (distance_registers, height_registers) = FogRanges::of_frame(frame).registers();
     cb12[41] = distance_registers;
@@ -220,7 +229,7 @@ mod tests {
     }
 
     #[test]
-    fn height_bands_reach_the_registers_as_mid_minus_and_plus_range_in_bethesda_units() {
+    fn height_bands_reach_the_registers_from_mid_to_mid_plus_range_in_bethesda_units() {
         let height = HeightFog {
             near_band: HeightBand::new(50.0, 200.0),
             far_band: HeightBand::new(180.0, 1500.0),
@@ -237,27 +246,52 @@ mod tests {
         })
         .uniform_fields();
         let mut frame = frame_fixture();
-        frame.fog_near_color = fields.near_color;
-        frame.fog_far_color = fields.far_color;
-        frame.fog_params = fields.params;
-        frame.fog_heights = fields.heights;
+        fields.write_to(&mut frame);
         let cb12 = frame_cb12(&frame);
 
         let near_band = |height: f32| factor(cb12[41].y, cb12[41].w, height);
         let far_band = |height: f32| factor(cb12[46].y, cb12[46].w, height);
-        for (height, expected) in [(-1500.0, 0.0), (500.0, 0.5), (2500.0, 1.0)] {
+        for (height, expected) in [(500.0, 0.0), (1500.0, 0.5), (2500.0, 1.0)] {
             assert!(
                 (near_band(height) - expected).abs() < 1e-4,
                 "near at {height}"
             );
         }
-        for (height, expected) in [(-13_200.0, 0.0), (1800.0, 0.5), (16_800.0, 1.0)] {
+        for (height, expected) in [(1800.0, 0.0), (9300.0, 0.5), (16_800.0, 1.0)] {
             assert!(
                 (far_band(height) - expected).abs() < 1e-4,
                 "far at {height}"
             );
         }
         assert_eq!((cb12[46].x, cb12[46].z), (cb12[41].y, cb12[41].w));
+    }
+
+    #[test]
+    fn disabled_fog_carries_the_neutral_high_density_scale() {
+        let mut frame = frame_fixture();
+        Fog::Disabled.uniform_fields().write_to(&mut frame);
+        assert!((frame_cb12(&frame)[44].w - DISABLED_FOG_HIGH_DENSITY_SCALE).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn enabled_fog_carries_its_own_high_density_scale() {
+        let mut frame = frame_fixture();
+        Fog::Enabled(FogParams {
+            near_color: Vec3::ONE,
+            far_color: Vec3::ONE,
+            near: 150.0,
+            far: 25_000.0,
+            power: 1.0,
+            max: 0.85,
+            height: HeightFog {
+                far_band: HeightBand::new(180.0, 1500.0),
+                high_density_scale: 0.25,
+                ..HeightFog::NONE
+            },
+        })
+        .uniform_fields()
+        .write_to(&mut frame);
+        assert!((frame_cb12(&frame)[44].w - 0.25).abs() < 1e-6);
     }
 
     #[test]

@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 use super::ambient::AmbientCube;
 use super::cell_lighting::{RawColor, bethesda_faces_to_engine_order};
-use super::fog::HeightBand;
+use super::fog::{HeightFogError, RawHeightFog};
 use super::god_rays::{GodRaysData, NegativeGodRaysValue, SunInScatter};
 use super::time_of_day::{
     ClimateMoon, ClimateMoonError, ClimateSky, ClimateSkyError, ClimateSunTextures, ClimateTimes,
@@ -71,17 +71,11 @@ pub enum ExteriorWeatherError {
         near: f32,
         far: f32,
     },
-    #[error("weather {weather} {slot} fog has a {band} height mid or range without the other")]
-    IncompleteHeightBand {
+    #[error("weather {weather} {slot} fog: {source}")]
+    HeightFog {
         weather: String,
         slot: &'static str,
-        band: &'static str,
-    },
-    #[error("weather {weather} {slot} fog has a negative high density scale ({scale})")]
-    NegativeHighDensityScale {
-        weather: String,
-        slot: &'static str,
-        scale: f32,
+        source: HeightFogError,
     },
     #[error("weather {weather} has no {slot} slot for {entry}")]
     MissingTimeSlot {
@@ -456,31 +450,25 @@ fn fog_range(
             far: raw.far,
         });
     }
-    let band = |mid, range, band| {
-        HeightBand::from_bethesda_units(mid, range).ok_or_else(|| {
-            ExteriorWeatherError::IncompleteHeightBand {
-                weather: weather.to_string(),
-                slot: slot.json_key(),
-                band,
-            }
-        })
-    };
-    let high_density_scale = raw.high_density_scale.unwrap_or(1.0);
-    if high_density_scale < 0.0 {
-        return Err(ExteriorWeatherError::NegativeHighDensityScale {
-            weather: weather.to_string(),
-            slot: slot.json_key(),
-            scale: high_density_scale,
-        });
+    let height = RawHeightFog {
+        near_mid: raw.near_height_mid,
+        near_range: raw.near_height_range,
+        far_mid: raw.far_height_mid,
+        far_range: raw.far_height_range,
+        high_density_scale: raw.high_density_scale,
     }
+    .bands()
+    .map_err(|source| ExteriorWeatherError::HeightFog {
+        weather: weather.to_string(),
+        slot: slot.json_key(),
+        source,
+    })?;
     Ok(Some(FogRange {
         near: raw.near * SCALE,
         far: raw.far * SCALE,
         power: raw.power,
         max: raw.max,
-        near_band: band(raw.near_height_mid, raw.near_height_range, "near")?,
-        far_band: band(raw.far_height_mid, raw.far_height_range, "far")?,
-        high_density_scale,
+        height,
     }))
 }
 
@@ -930,6 +918,7 @@ mod tests {
 
     type Corrupt = fn(&mut WeatherRow, String);
 
+    use super::super::fog::test_support::assert_band;
     use super::super::fog::{Fog, FogParams, HeightBand, HeightFog};
     use super::super::time_of_day::SlotBlend;
     use super::fixtures::*;
@@ -1439,14 +1428,6 @@ mod tests {
         row
     }
 
-    fn assert_band(band: HeightBand, mid: f32, range: f32) {
-        assert!(
-            (band.mid - mid).abs() < 1e-3 && (band.range - range).abs() < 1e-3,
-            "{band:?} is not {mid} +- {range}"
-        );
-        assert_eq!(band.weight, 1.0);
-    }
-
     #[test]
     fn a_weather_without_height_fog_data_has_the_same_fog_at_every_height() {
         let fog = sampled_fog(&load(row()).unwrap(), at(Day));
@@ -1517,7 +1498,7 @@ mod tests {
         slot.as_object_mut().unwrap().remove("FarHeightRange");
         let result = load(fog_with(&fog_slot(100.0, 1000.0), &slot));
         assert!(
-            matches!(&result, Err(ExteriorWeatherError::IncompleteHeightBand { slot, band, .. }) if *slot == "Night" && *band == "far"),
+            matches!(&result, Err(ExteriorWeatherError::HeightFog { slot, source: HeightFogError::IncompleteBand { band }, .. }) if *slot == "Night" && *band == "far"),
             "{result:?}"
         );
     }
@@ -1527,7 +1508,7 @@ mod tests {
         let slot = height_fog_slot((500.0, 2000.0), (1800.0, 15_000.0), -0.5);
         let result = load(fog_with(&slot, &fog_slot(100.0, 1000.0)));
         assert!(
-            matches!(&result, Err(ExteriorWeatherError::NegativeHighDensityScale { slot, .. }) if *slot == "Day"),
+            matches!(&result, Err(ExteriorWeatherError::HeightFog { slot, source: HeightFogError::NegativeHighDensityScale { .. }, .. }) if *slot == "Day"),
             "{result:?}"
         );
     }

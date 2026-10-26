@@ -2,6 +2,10 @@
 // roof or ground of the occlusion map. Every drop and splash is worked out here from its
 // instance index; the CPU hands over one uniform and no per drop data.
 
+// Whether the streak material's blend adds the streaks' light to the scene; set per streak
+// pipeline from the blend (`adds_light` in rain/material.rs).
+override STREAK_ADDS_LIGHT: bool = true;
+
 // Mirrors `RainUniform` in rain/uniform.rs.
 struct RainUniform {
     // xyz: unit axis up a streak, w: the streak's length.
@@ -161,10 +165,12 @@ fn vs_streak(@builtin(vertex_index) vertex: u32, @builtin(instance_index) drop: 
 
 @fragment
 fn fs_streak(in: DropOut) -> @location(0) vec4<f32> {
-    // The streaks add their light to the scene, so the fog takes its share of it rather than
-    // bringing its own colour.
+    // Streaks that add their light to the scene leave the fog's own colour to the scene behind
+    // them and only lose their share of the light to it; streaks drawn as a surface are fogged
+    // like one.
     let texel = textureSample(streak_texture, rain_sampler, in.uv);
-    let colour = texel.rgb * rain.streak_tint.rgb * fog_transmittance(in.world);
+    let lit = texel.rgb * rain.streak_tint.rgb;
+    let colour = select(apply_fog(lit, in.world), lit * fog_transmittance(in.world), STREAK_ADDS_LIGHT);
     return vec4<f32>(colour, texel.a * rain.looks.x * in.fade);
 }
 

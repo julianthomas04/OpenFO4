@@ -302,8 +302,9 @@ pub fn sun_sprite_edge_deg(size: f32) -> f32 {
 /// How many texture widths a cloud layer scrolls per second for each unit of its weather's
 /// layer speed, which is at most 0.1. No public source gives the speed a unit; the scale is a
 /// heuristic. Taken as one, the user saw the clouds move too fast. At one half, the main
-/// Commonwealth layer (speed 0.03, about three texture widths across the dome) crosses the sky in
-/// about four minutes, the pace of real clouds a kilometre up in a moderate wind.
+/// Commonwealth layer (speed 0.03, about three texture widths across the dome) scrolls 0.015
+/// widths a second and crosses the sky in 200 seconds (about 3.3 minutes), the pace of real
+/// clouds a kilometre up in a moderate wind.
 pub const CLOUD_SCROLL_SCALE: f32 = 0.5;
 
 /// The sine of the elevation at which the clouds are clear of the horizon haze. Below it they

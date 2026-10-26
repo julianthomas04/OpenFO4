@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use super::material::{SPLASH_BLEND, StreakMaterial};
+use super::material::{SPLASH_BLEND, StreakMaterial, adds_light};
 use super::uniform::RainUniform;
 use crate::rendering::effects::pipeline::{BlendFactors, blend_state};
 use crate::rendering::post::hdr_target::HDR_FORMAT;
@@ -21,6 +21,8 @@ const STREAK_TEXTURE_BINDING: u32 = 1;
 const SAMPLER_BINDING: u32 = 2;
 const SPLASH_TEXTURE_BINDING: u32 = 3;
 const OCCLUSION_BINDING: u32 = 4;
+/// The `rain.wgsl` override that tells the streaks whether their blend adds light.
+const STREAK_ADDS_LIGHT_OVERRIDE: &str = "STREAK_ADDS_LIGHT";
 
 pub(super) struct RainPipelines {
     pub layout: wgpu::BindGroupLayout,
@@ -48,6 +50,7 @@ impl RainPipelines {
             &pipeline_layout,
             ("vs_splash", "fs_splash"),
             Some(SPLASH_BLEND),
+            &[],
         );
         let mut pipelines = Self {
             layout,
@@ -60,7 +63,8 @@ impl RainPipelines {
         pipelines
     }
 
-    /// The streak pipeline of `blend`, created on first use.
+    /// The streak pipeline of `blend`, created on first use. The blend also decides how the fog
+    /// covers the streaks, so the one key serves both.
     pub fn streaks(
         &mut self,
         device: &wgpu::Device,
@@ -74,6 +78,10 @@ impl RainPipelines {
                 &self.pipeline_layout,
                 ("vs_streak", "fs_streak"),
                 blend,
+                &[(
+                    STREAK_ADDS_LIGHT_OVERRIDE,
+                    f64::from(u8::from(adds_light(blend))),
+                )],
             )
         })
     }
@@ -197,6 +205,7 @@ fn create_pipeline(
     layout: &wgpu::PipelineLayout,
     (vertex_entry, fragment_entry): (&str, &str),
     blend: Option<BlendFactors>,
+    constants: &[(&str, f64)],
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
@@ -215,7 +224,10 @@ fn create_pipeline(
                 blend: blend.map(blend_state),
                 write_mask: wgpu::ColorWrites::COLOR,
             })],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants,
+                ..Default::default()
+            },
         }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleStrip,

@@ -45,6 +45,7 @@ const KIND_EFFECT_FACING: u32 = 16;
 const KIND_LIT_ENV_F0: u32 = 17;
 const KIND_FOG: u32 = 18;
 const KIND_SKY_FOG: u32 = 19;
+const KIND_APPLY_FOG: u32 = 20;
 
 /// Mirrors `TestCase` in `entry.wgsl`.
 #[repr(C)]
@@ -405,6 +406,14 @@ impl Case {
         case.to_light = direction.extend(0.0);
         case
     }
+
+    /// A surface of `color` at `world_pos` under the fog (diffuse).
+    pub fn apply_fog(color: Vec3, world_pos: Vec3) -> Self {
+        let mut case = Self::blank(KIND_APPLY_FOG);
+        case.light_color = color.extend(0.0);
+        case.to_light = world_pos.extend(0.0);
+        case
+    }
 }
 
 /// Run-wide inputs shared by every case of one dispatch.
@@ -416,8 +425,8 @@ pub struct Environment {
     /// Linear ambient colour of each cube face in the frame uniform's order.
     pub ambient_cube: [Vec3; AMBIENT_CUBE_FACES],
     pub camera: Vec3,
+    /// The fog with the sun's in-scatter.
     pub fog: FogUniformFields,
-    pub in_scatter: InScatterUniformFields,
 }
 
 impl Default for Environment {
@@ -427,7 +436,6 @@ impl Default for Environment {
             ambient_cube: [Vec3::ZERO; AMBIENT_CUBE_FACES],
             camera: Vec3::ZERO,
             fog: Fog::Disabled.uniform_fields(),
-            in_scatter: InScatterUniformFields::NONE,
         }
     }
 }
@@ -447,8 +455,9 @@ impl Environment {
         in_scatter: InScatterUniformFields,
     ) -> Self {
         Self {
-            in_scatter,
-            ..Self::with_fog(camera, fog)
+            camera,
+            fog: fog.uniform_fields().with_in_scatter(in_scatter),
+            ..Self::default()
         }
     }
 
@@ -539,18 +548,7 @@ impl LightingHarness {
         let mut frame = FrameUniform::zeroed();
         frame.ambient_cube = environment.ambient_cube.map(|face| face.extend(0.0));
         frame.camera_pos = environment.camera.extend(1.0);
-        let fog = environment.fog;
-        frame.fog_near_color = fog.near_color;
-        frame.fog_far_color = fog.far_color;
-        frame.fog_params = fog.params;
-        frame.fog_near_high_color = fog.near_high_color;
-        frame.fog_far_high_color = fog.far_high_color;
-        frame.fog_heights = fog.heights;
-        let in_scatter = environment.in_scatter;
-        frame.fog_sun_forward = in_scatter.forward;
-        frame.fog_sun_back = in_scatter.back;
-        frame.fog_sun_air = in_scatter.air;
-        frame.fog_to_sun = in_scatter.to_sun;
+        environment.fog.write_to(&mut frame);
         let buffer = self.buffer_with(
             "lighting_test_frame",
             wgpu::BufferUsages::UNIFORM,

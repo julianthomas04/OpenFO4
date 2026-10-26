@@ -28,8 +28,35 @@ impl StreakMaterial {
     };
 }
 
+/// Whether streaks drawn with `blend` add their light to the scene (the destination is kept
+/// whole), so the fog takes its share of that light instead of bringing its own colour. Any
+/// other blend draws the streaks as a surface, which the fog covers like the rest of the scene.
+pub(super) fn adds_light(blend: Option<BlendFactors>) -> bool {
+    matches!(blend, Some((_, wgpu::BlendFactor::One)))
+}
+
 /// The splashes are drawn over the scene with straight alpha.
 pub(super) const SPLASH_BLEND: BlendFactors = (
     wgpu::BlendFactor::SrcAlpha,
     wgpu::BlendFactor::OneMinusSrcAlpha,
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_blend_that_keeps_the_destination_whole_adds_light() {
+        assert!(adds_light(StreakMaterial::FALLBACK.blend));
+        assert!(adds_light(Some((
+            wgpu::BlendFactor::One,
+            wgpu::BlendFactor::One
+        ))));
+        assert!(!adds_light(Some(SPLASH_BLEND)));
+        assert!(!adds_light(Some((
+            wgpu::BlendFactor::Dst,
+            wgpu::BlendFactor::Zero
+        ))));
+        assert!(!adds_light(None));
+    }
+}

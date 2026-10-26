@@ -14,6 +14,11 @@ use super::lerp::lerp_fields;
 /// The largest Henyey-Greenstein asymmetry a phase maps to, short of the singular lobe at 1.
 pub const MAX_ASYMMETRY: f32 = 0.95;
 
+/// Tuning: how strongly the sun's in-scatter shows in the fog, on top of the god rays' own
+/// intensity. A heuristic, to be retuned in game: the game confines its god rays to shafts
+/// behind occluders, while the analytic lobes light the whole fog.
+pub const SUN_IN_SCATTER_GAIN: f32 = 1.0;
+
 /// The `god_rayses.data` JSON: the `GDRY` `DATA` block, colours as stored bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 pub struct GodRaysData {
@@ -97,8 +102,10 @@ impl SunInScatter {
             + self.air / (4.0 * PI)
     }
 
-    /// The in-scatter under a sun of `sun_radiance` that lies towards the unit `to_sun`.
+    /// The in-scatter under a sun of `sun_radiance` that lies towards the unit `to_sun`, times
+    /// [`SUN_IN_SCATTER_GAIN`].
     pub fn uniform_fields(&self, sun_radiance: Vec3, to_sun: Vec3) -> InScatterUniformFields {
+        let sun_radiance = sun_radiance * SUN_IN_SCATTER_GAIN;
         InScatterUniformFields {
             forward: (self.forward * sun_radiance).extend(self.forward_asymmetry),
             back: (self.back * sun_radiance).extend(self.back_asymmetry),
@@ -126,11 +133,11 @@ pub fn henyey_greenstein(cos_theta: f32, asymmetry: f32) -> f32 {
 /// `fog_sun_air` and `fog_to_sun` in `shaders/frame.wgsl`.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct InScatterUniformFields {
-    /// rgb: the forward lobe's colour times the sun radiance, w: its asymmetry.
+    /// rgb: the forward lobe's colour times the sun radiance and the gain, w: its asymmetry.
     pub forward: Vec4,
-    /// rgb: the backward lobe's colour times the sun radiance, w: its asymmetry.
+    /// rgb: the backward lobe's colour times the sun radiance and the gain, w: its asymmetry.
     pub back: Vec4,
-    /// rgb: the isotropic air colour times the sun radiance.
+    /// rgb: the isotropic air colour times the sun radiance and the gain.
     pub air: Vec4,
     /// xyz: unit direction towards the sun.
     pub to_sun: Vec4,
@@ -319,9 +326,10 @@ mod tests {
     fn the_uniform_fields_carry_the_colours_under_the_sun_with_the_asymmetries_and_direction() {
         let in_scatter = SunInScatter::from_god_rays(&data()).unwrap();
         let fields = in_scatter.uniform_fields(Vec3::new(0.5, 1.0, 2.0), Vec3::Y);
-        assert_eq!(fields.forward, Vec4::new(0.0, 6.0, 0.0, 0.75));
-        assert_eq!(fields.back, Vec4::new(6.0, 0.0, 0.0, -0.25));
-        assert_eq!(fields.air, Vec4::new(0.0, 0.0, 3.0, 0.0));
+        let gain = SUN_IN_SCATTER_GAIN;
+        assert_eq!(fields.forward, Vec4::new(0.0, 6.0 * gain, 0.0, 0.75));
+        assert_eq!(fields.back, Vec4::new(6.0 * gain, 0.0, 0.0, -0.25));
+        assert_eq!(fields.air, Vec4::new(0.0, 0.0, 3.0 * gain, 0.0));
         assert_eq!(fields.to_sun, Vec4::new(0.0, 1.0, 0.0, 0.0));
     }
 

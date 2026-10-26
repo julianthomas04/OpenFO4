@@ -35,6 +35,7 @@ const KIND_EFFECT_FACING = 16u;
 const KIND_LIT_ENV_F0 = 17u;
 const KIND_FOG = 18u;
 const KIND_SKY_FOG = 19u;
+const KIND_APPLY_FOG = 20u;
 
 @group(3) @binding(0) var<storage, read> test_cases: array<TestCase>;
 @group(3) @binding(1) var<storage, read_write> test_results: array<TestResult>;
@@ -146,6 +147,9 @@ fn evaluate(c: TestCase) -> TestResult {
         case KIND_FOG: {
             let fog = fog_at(c.to_light.xyz);
             return TestResult(vec4<f32>(fog.color, 0.0), vec4<f32>(fog.opacity, 0.0, 0.0, 0.0));
+        }
+        case KIND_APPLY_FOG: {
+            return TestResult(vec4<f32>(apply_fog(c.light_color.xyz, c.to_light.xyz), 0.0), vec4<f32>(0.0));
         }
         case KIND_SKY_FOG: {
             return TestResult(

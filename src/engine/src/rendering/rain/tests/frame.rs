@@ -227,18 +227,12 @@ fn darkest(pixels: &[Vec4]) -> f32 {
         .fold(f32::INFINITY, f32::min)
 }
 
-/// The raindrop material the game ships: source alpha onto one.
-const ADDITIVE_RAINDROPS: StreakMaterial = StreakMaterial {
-    blend: Some((wgpu::BlendFactor::SrcAlpha, wgpu::BlendFactor::One)),
-    base_color: Vec3::new(205.0 / 255.0, 213.0 / 255.0, 220.0 / 255.0),
-};
-
 const STRAIGHT_ALPHA_RAINDROPS: StreakMaterial = StreakMaterial {
     blend: Some((
         wgpu::BlendFactor::SrcAlpha,
         wgpu::BlendFactor::OneMinusSrcAlpha,
     )),
-    ..ADDITIVE_RAINDROPS
+    ..StreakMaterial::FALLBACK
 };
 
 /// A scene whose streak texture is a mid grey, darker than the scene behind it.
@@ -256,7 +250,7 @@ fn the_streaks_add_light_to_the_scene_and_never_darken_it() {
         return;
     };
     let additive = RainInput {
-        streak_material: ADDITIVE_RAINDROPS,
+        streak_material: StreakMaterial::FALLBACK,
         ..downpour()
     };
 
@@ -281,7 +275,7 @@ fn each_weather_blends_its_streaks_as_its_material_says() {
     };
 
     let straight = scene.draw(&with(STRAIGHT_ALPHA_RAINDROPS), Look::AHEAD);
-    let additive = scene.draw(&with(ADDITIVE_RAINDROPS), Look::AHEAD);
+    let additive = scene.draw(&with(StreakMaterial::FALLBACK), Look::AHEAD);
     let straight_again = scene.draw(&with(STRAIGHT_ALPHA_RAINDROPS), Look::AHEAD);
 
     assert!(
@@ -327,6 +321,35 @@ fn the_fog_takes_its_share_of_the_light_of_the_streaks_without_tinting_them() {
     assert!(
         half.iter().all(|pixel| pixel.x <= pixel.y + 1e-3),
         "red rain"
+    );
+}
+
+#[test]
+fn the_fog_covers_streaks_drawn_as_a_surface_with_its_own_colour() {
+    let Some(mut scene) = grey_streak_scene("the_fog_covers_streaks_drawn_as_a_surface") else {
+        return;
+    };
+    let red_fog = Fog {
+        colour: Vec3::new(1.0, 0.0, 0.0),
+        opacity: 1.0,
+    };
+    let with = |streak_material| RainInput {
+        streak_material,
+        ..downpour()
+    };
+
+    let surface = scene.draw_at(&with(STRAIGHT_ALPHA_RAINDROPS), Look::AHEAD, red_fog, 0.0);
+    let additive = scene.draw_at(&with(StreakMaterial::FALLBACK), Look::AHEAD, red_fog, 0.0);
+
+    let red = surface
+        .iter()
+        .filter(|pixel| pixel.x > BACKGROUND + 0.05 && pixel.y < BACKGROUND - 0.05)
+        .count();
+    assert!(red > 200, "{red} streak pixels took the fog's colour");
+    assert_eq!(lit(&additive).len(), 0, "light added through thick fog");
+    assert!(
+        additive.iter().all(|pixel| pixel.x <= pixel.y + 1e-3),
+        "red additive rain"
     );
 }
 

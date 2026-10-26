@@ -10,7 +10,9 @@ use glam::Vec3;
 use super::harness::{Case, Environment, Output};
 use super::{assert_close, assert_close3, run_in};
 use crate::rendering::lighting::fog::{Fog, FogParams, HeightBand, HeightFog};
-use crate::rendering::lighting::god_rays::{GodRaysData, InScatterUniformFields, SunInScatter};
+use crate::rendering::lighting::god_rays::{
+    GodRaysData, InScatterUniformFields, SUN_IN_SCATTER_GAIN, SunInScatter,
+};
 
 const RED: Vec3 = Vec3::X;
 const BLUE: Vec3 = Vec3::Z;
@@ -31,7 +33,7 @@ fn distance_fog() -> Fog {
 }
 
 /// Linear fog over 0 to 100 units, the near band over heights 10 to 30 and the far band over
-/// 25 to 75, where the density halves.
+/// 25 to 75, where the density halves. A band starts at its mid and spans its range above it.
 fn height_fog() -> Fog {
     Fog::Enabled(FogParams {
         near_color: RED,
@@ -43,8 +45,8 @@ fn height_fog() -> Fog {
         height: HeightFog {
             near_high_color: Vec3::Y,
             far_high_color: Vec3::ONE,
-            near_band: HeightBand::new(20.0, 10.0),
-            far_band: HeightBand::new(50.0, 25.0),
+            near_band: HeightBand::new(10.0, 20.0),
+            far_band: HeightBand::new(25.0, 50.0),
             high_density_scale: 0.5,
         },
     })
@@ -57,6 +59,21 @@ fn fog_at(environment: &Environment, points: &[Vec3]) -> Vec<(Vec3, f32)> {
         .map(Output::color_alpha)
         .collect()
 }
+
+/// A surface of `color` at each of `points` under the fog.
+fn surface_at(environment: &Environment, color: Vec3, points: &[Vec3]) -> Vec<Vec3> {
+    let cases: Vec<Case> = points
+        .iter()
+        .map(|point| Case::apply_fog(color, *point))
+        .collect();
+    run_in(environment, &cases)
+        .iter()
+        .map(|output| output.color_alpha().0)
+        .collect()
+}
+
+/// Just past the fog's far distance of 100, where the fog no longer changes with distance.
+const PAST_FAR: f32 = 100.5;
 
 fn sky_at(environment: &Environment, radiance: Vec3, directions: &[Vec3]) -> Vec<(Vec3, f32)> {
     let cases: Vec<Case> = directions
@@ -188,15 +205,20 @@ fn the_sky_takes_the_fog_at_and_below_the_horizon_and_clears_with_elevation() {
     assert_eq!(sky[4], (SKY, 0.0), "high sky");
 }
 
+/// The sky at the horizon looks like a surface of the sky's colour just past the far distance
+/// that way.
+fn assert_horizon_meets_the_fogged_surface(environment: &Environment, camera: Vec3, horizon: Vec3) {
+    let surface = surface_at(environment, SKY, &[camera + horizon * PAST_FAR])[0];
+    let (sky, _) = sky_at(environment, SKY, &[horizon])[0];
+    assert_close3(sky, surface, &format!("horizon {horizon}"));
+}
+
 #[test]
 #[ignore = "needs a GPU adapter"]
-fn the_horizon_meets_a_fogged_surface_of_the_sky_colour_at_the_far_distance() {
+fn the_horizon_meets_a_fogged_surface_of_the_sky_colour_just_past_the_far_distance() {
     let camera = Vec3::new(0.0, 20.0, 0.0);
     let environment = Environment::with_fog(camera, &height_fog());
-    let horizon = Vec3::X;
-    let (fog_color, opacity) = fog_at(&environment, &[camera + horizon * 100.0])[0];
-    let (sky, _) = sky_at(&environment, SKY, &[horizon])[0];
-    assert_close3(sky, SKY.lerp(fog_color, opacity), "horizon");
+    assert_horizon_meets_the_fogged_surface(&environment, camera, Vec3::X);
 }
 
 #[test]
@@ -256,7 +278,8 @@ fn the_in_scatter_adds_the_phase_weighted_sun_light_to_the_fog_colour() {
     // Fully developed: half of the purple far end, before the sun's light.
     let base = Vec3::new(0.5, 0.0, 0.5);
     for (direction, sample) in directions.iter().zip(&fog) {
-        let scattered = in_scatter(2.0).radiance(direction.dot(to_sun())) * SUN_RADIANCE;
+        let scattered =
+            in_scatter(2.0).radiance(direction.dot(to_sun())) * SUN_RADIANCE * SUN_IN_SCATTER_GAIN;
         assert_fog(*sample, base + scattered, 0.5, &format!("{direction}"));
     }
     assert!(
@@ -296,9 +319,7 @@ fn with_in_scatter_the_horizon_still_meets_a_fogged_surface_at_the_far_distance(
         Environment::with_fog_and_in_scatter(camera, &height_fog(), in_scatter_fields(2.0));
     let toward_sun = Vec3::new(to_sun().x, 0.0, to_sun().z).normalize();
     for horizon in [toward_sun, Vec3::Z, -toward_sun] {
-        let (fog_color, opacity) = fog_at(&environment, &[camera + horizon * 100.0])[0];
-        let (sky, _) = sky_at(&environment, SKY, &[horizon])[0];
-        assert_close3(sky, SKY.lerp(fog_color, opacity), &format!("{horizon}"));
+        assert_horizon_meets_the_fogged_surface(&environment, camera, horizon);
     }
 }
 

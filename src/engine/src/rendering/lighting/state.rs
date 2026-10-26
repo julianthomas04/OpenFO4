@@ -627,11 +627,9 @@ impl LightingState {
         let view_proj = camera.build_view_projection_matrix();
         let viewport = viewport.max(UVec2::ONE).as_vec2();
         let scene = self.scene_terms();
-        let fog = scene.fog.uniform_fields();
-        let in_scatter = scene.in_scatter;
         let shadow = self.shadows.uniform_fields(cascades);
 
-        FrameUniform {
+        let mut frame = FrameUniform {
             view_proj,
             inv_view_proj: view_proj.inverse(),
             camera_pos: camera.eye.extend(1.0),
@@ -644,16 +642,6 @@ impl LightingState {
             sky_zenith: scene.sky_zenith.extend(0.0),
             sky_horizon: scene.sky_horizon.extend(0.0),
             sky_ground: scene.sky_ground.extend(0.0),
-            fog_near_color: fog.near_color,
-            fog_far_color: fog.far_color,
-            fog_params: fog.params,
-            fog_near_high_color: fog.near_high_color,
-            fog_far_high_color: fog.far_high_color,
-            fog_heights: fog.heights,
-            fog_sun_forward: in_scatter.forward,
-            fog_sun_back: in_scatter.back,
-            fog_sun_air: in_scatter.air,
-            fog_to_sun: in_scatter.to_sun,
             cascade_view_proj: shadow.cascade_view_proj,
             cascade_spheres: shadow.cascade_spheres,
             shadow_params: shadow.shadow_params,
@@ -682,7 +670,14 @@ impl LightingState {
                 f32::from(u8::from(camera_water.underwater)),
                 camera_water.fraction,
             ),
-        }
+            ..bytemuck::Zeroable::zeroed()
+        };
+        scene
+            .fog
+            .uniform_fields()
+            .with_in_scatter(scene.in_scatter)
+            .write_to(&mut frame);
+        frame
     }
 
     fn scene_terms(&self) -> SceneTerms {

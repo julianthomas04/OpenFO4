@@ -2,7 +2,7 @@ use glam::Vec3;
 use serde::Deserialize;
 
 use super::ambient::{AMBIENT_CUBE_FACES, AmbientCube};
-use super::fog::{Fog, FogParams, HeightBand, HeightFog};
+use super::fog::{Fog, FogParams, HeightFog, HeightFogError, RawHeightFog};
 use crate::rendering::world_streamer::SCALE;
 
 #[derive(Debug, thiserror::Error)]
@@ -17,8 +17,8 @@ pub enum CellLightingError {
     NonFinite { field: &'static str },
     #[error("fog range is not increasing (near {near}, far {far} Bethesda units)")]
     InvertedFogRange { near: f32, far: f32 },
-    #[error("the {band} fog height band has a mid or range without the other")]
-    IncompleteHeightBand { band: &'static str },
+    #[error("{0}")]
+    HeightFog(#[from] HeightFogError),
     #[error("lighting field `{field}` is negative")]
     NegativeFogScale { field: &'static str },
 }
@@ -31,7 +31,7 @@ impl CellLightingError {
             Self::MissingField { .. } => "missing field",
             Self::NonFinite { .. } => "non-finite field",
             Self::InvertedFogRange { .. } => "inverted fog range",
-            Self::IncompleteHeightBand { .. } => "incomplete fog height band",
+            Self::HeightFog(_) => "invalid height fog",
             Self::NegativeFogScale { .. } => "negative fog scale",
         }
     }
@@ -475,27 +475,21 @@ fn height_fog(
     far_color: Vec3,
     scales: FogColorScales,
 ) -> Result<HeightFog, CellLightingError> {
-    let band = |mid, range, band| {
-        HeightBand::from_bethesda_units(mid, range)
-            .ok_or(CellLightingError::IncompleteHeightBand { band })
-    };
-    let high_density_scale = raw.high_density_scale.unwrap_or(1.0);
-    if high_density_scale < 0.0 {
-        return Err(CellLightingError::NegativeFogScale {
-            field: "HighDensityScale",
-        });
+    let bands = RawHeightFog {
+        near_mid: raw.near_height_mid,
+        near_range: raw.near_height_range,
+        far_mid: raw.far_height_mid,
+        far_range: raw.far_height_range,
+        high_density_scale: raw.high_density_scale,
     }
-    Ok(HeightFog {
-        near_high_color: raw
-            .fog_high_near_color
+    .bands()?;
+    Ok(HeightFog::new(
+        bands,
+        raw.fog_high_near_color
             .map_or(near_color, |color| color.linear() * scales.near_high),
-        far_high_color: raw
-            .fog_high_far_color
+        raw.fog_high_far_color
             .map_or(far_color, |color| color.linear() * scales.far_high),
-        near_band: band(raw.near_height_mid, raw.near_height_range, "near")?,
-        far_band: band(raw.far_height_mid, raw.far_height_range, "far")?,
-        high_density_scale,
-    })
+    ))
 }
 
 /// The `Fog*Scale` multipliers of the four fog colours, which are bytes and so cannot be brighter
@@ -567,6 +561,8 @@ fn to_light_direction(rotation_xy_deg: f32, rotation_z_deg: f32) -> Vec3 {
 mod tests {
     use serde_json::{Value, json};
 
+    use super::super::fog::HeightBand;
+    use super::super::fog::test_support::assert_band;
     use super::*;
 
     fn color(r: u8, g: u8, b: u8) -> Value {
@@ -928,14 +924,6 @@ mod tests {
         })
     }
 
-    fn assert_band(band: HeightBand, mid: f32, range: f32) {
-        assert!(
-            (band.mid - mid).abs() < 1e-3 && (band.range - range).abs() < 1e-3,
-            "{band:?} is not {mid} +- {range}"
-        );
-        assert_eq!(band.weight, 1.0);
-    }
-
     #[test]
     fn a_cell_without_height_fog_data_has_the_same_fog_at_every_height() {
         let fog = fog_of(&resolved(json!({})).unwrap().lighting);
@@ -1008,7 +996,7 @@ mod tests {
 
     #[test]
     fn a_negative_fog_scale_is_rejected_naming_the_field() {
-        for field in ["FogNearScale", "FogHighFarScale", "HighDensityScale"] {
+        for field in ["FogNearScale", "FogHighFarScale"] {
             let mut fields = height_fog_fields();
             fields[field] = json!(-1.0);
             assert!(
@@ -1019,12 +1007,26 @@ mod tests {
     }
 
     #[test]
+    fn a_negative_high_density_scale_is_rejected() {
+        let mut fields = height_fog_fields();
+        fields["HighDensityScale"] = json!(-1.0);
+        assert!(matches!(
+            resolved(fields),
+            Err(CellLightingError::HeightFog(
+                HeightFogError::NegativeHighDensityScale { .. }
+            ))
+        ));
+    }
+
+    #[test]
     fn a_height_mid_without_its_range_is_rejected_naming_the_band() {
         let mut fields = height_fog_fields();
         fields.as_object_mut().unwrap().remove("NearHeightRange");
         assert!(matches!(
             resolved(fields),
-            Err(CellLightingError::IncompleteHeightBand { band: "near" })
+            Err(CellLightingError::HeightFog(
+                HeightFogError::IncompleteBand { band: "near" }
+            ))
         ));
     }
 
