@@ -55,7 +55,11 @@ pub const REFRESH_FRACTION: f32 = 0.25;
 /// Casters spanning fewer texels than this are no roof.
 pub const MIN_CASTER_TEXELS: f32 = 4.0;
 
-/// The drops that strike a disc of water in a second at full intensity.
-pub const IMPACTS_PER_SECOND: f32 = 90.0;
+/// The drops that strike a square metre of water in a second at full intensity.
+pub const IMPACTS_PER_SQUARE_METER_PER_SECOND: f32 = 0.3;
+/// The most impacts a frame hands over, however wide the disc or long the frame. The water
+/// displacement has room for only so many splats a frame and takes its wading actors after the
+/// impacts, so the rain must leave them room.
+pub const MAX_IMPACTS_PER_FRAME: usize = 128;
 /// A longer frame counts as this long, so a stall does not release a burst of ripples.
 pub const LONGEST_STEP_SECONDS: f32 = 0.25;

@@ -4,9 +4,14 @@
 //! The points lie on the horizontal disc around the centre; the frame keeps the ones that fall
 //! on water (and not under a roof) and sets their height to the surface.
 
+use std::f32::consts::{PI, TAU};
+
 use glam::Vec3;
 
-use super::tuning::{IMPACTS_PER_SECOND, LONGEST_STEP_SECONDS};
+use super::tuning::{
+    IMPACTS_PER_SQUARE_METER_PER_SECOND, LONGEST_STEP_SECONDS, MAX_IMPACTS_PER_FRAME,
+};
+use crate::bethesda_space::ENGINE_UNITS_PER_METER;
 use crate::random::RandomSource;
 use crate::utils::finite_or_zero;
 
@@ -17,9 +22,17 @@ fn impact_count(rng: &mut (impl RandomSource + ?Sized), expected: f32) -> usize 
     whole as usize + usize::from(rng.unit() < expected - whole)
 }
 
-/// The impacts of one frame of `dt` seconds on the disc of `radius` around `centre`: on average
-/// [`IMPACTS_PER_SECOND`] times `intensity` (0 to 1) times `dt`, each at a uniformly random spot
-/// of the disc and at the height of `centre`. Nothing is drawn from `rng` when there are none.
+/// The area in square metres of the disc of `radius` engine units; zero where that is no number.
+fn disc_area(radius: f32) -> f32 {
+    let metres = radius / ENGINE_UNITS_PER_METER;
+    finite_or_zero(PI * metres * metres)
+}
+
+/// The impacts of one frame of `dt` seconds on the disc of `radius` engine units around
+/// `centre`: on average [`IMPACTS_PER_SQUARE_METER_PER_SECOND`] times the area of the disc in
+/// square metres times `intensity` (0 to 1) times `dt`, and at most [`MAX_IMPACTS_PER_FRAME`].
+/// Each lies at a uniformly random spot of the disc and at the height of `centre`. Nothing is
+/// drawn from `rng` when there are none.
 pub fn rain_impacts<R: RandomSource + ?Sized>(
     rng: &mut R,
     dt: f32,
@@ -28,16 +41,20 @@ pub fn rain_impacts<R: RandomSource + ?Sized>(
     radius: f32,
 ) -> impl Iterator<Item = Vec3> {
     let seconds = finite_or_zero(dt).clamp(0.0, LONGEST_STEP_SECONDS);
-    let expected = IMPACTS_PER_SECOND * finite_or_zero(intensity).clamp(0.0, 1.0) * seconds;
     let radius = finite_or_zero(radius).max(0.0);
-    let count = if expected > 0.0 && radius > 0.0 && centre.is_finite() {
+    let expected = (IMPACTS_PER_SQUARE_METER_PER_SECOND
+        * disc_area(radius)
+        * finite_or_zero(intensity).clamp(0.0, 1.0)
+        * seconds)
+        .min(MAX_IMPACTS_PER_FRAME as f32);
+    let count = if expected > 0.0 && centre.is_finite() {
         impact_count(rng, expected)
     } else {
         0
     };
     (0..count).map(move |_| {
         let distance = radius * rng.unit().sqrt();
-        let (sin, cos) = (std::f32::consts::TAU * rng.unit()).sin_cos();
+        let (sin, cos) = (TAU * rng.unit()).sin_cos();
         centre + Vec3::new(cos * distance, 0.0, sin * distance)
     })
 }
@@ -48,8 +65,15 @@ mod tests {
     use crate::random::SplitMix64;
 
     const CENTRE: Vec3 = Vec3::new(1234.5, 42.0, -987.25);
-    const RADIUS: f32 = 70.0;
+    const RADIUS: f32 = 10.0 * ENGINE_UNITS_PER_METER;
     const FRAME: f32 = 1.0 / 60.0;
+    /// Frames enough for the count of impacts to settle within 3 per cent of its average.
+    const LONG_RUN: u32 = 60_000;
+
+    /// The impacts a second of full rain makes on the disc of `radius` engine units.
+    fn per_second(radius: f32) -> f32 {
+        IMPACTS_PER_SQUARE_METER_PER_SECOND * PI * (radius / ENGINE_UNITS_PER_METER).powi(2)
+    }
 
     /// Answers every request for a unit value with the same one.
     struct Constant(f32);
@@ -82,6 +106,8 @@ mod tests {
             (f32::NAN, 1.0, RADIUS),
             (FRAME, f32::NAN, RADIUS),
             (FRAME, 1.0, f32::NAN),
+            (FRAME, 1.0, f32::INFINITY),
+            (FRAME, 1.0, f32::MAX),
         ] {
             let found = rain_impacts(&mut rng, dt, intensity, CENTRE, radius).count();
             assert_eq!(found, 0, "dt {dt}, intensity {intensity}, radius {radius}");
@@ -108,7 +134,7 @@ mod tests {
 
     #[test]
     fn the_expected_count_is_split_into_whole_impacts_and_a_chance_of_one_more() {
-        let dt = 2.5 / IMPACTS_PER_SECOND;
+        let dt = 2.5 / per_second(RADIUS);
         assert_eq!(count_with(0.0, dt), 3);
         assert_eq!(count_with(0.4, dt), 3);
         assert_eq!(count_with(0.6, dt), 2);
@@ -118,14 +144,41 @@ mod tests {
     #[test]
     fn the_impacts_average_the_rate_times_the_intensity_and_the_time() {
         for intensity in [1.0, 0.5, 0.1] {
-            let frames = 20_000;
             let mut rng = SplitMix64::new(11);
-            let found = impacts(&mut rng, frames, intensity).len() as f32;
-            let expected = IMPACTS_PER_SECOND * intensity * FRAME * frames as f32;
+            let found = impacts(&mut rng, LONG_RUN, intensity).len() as f32;
+            let expected = per_second(RADIUS) * intensity * FRAME * LONG_RUN as f32;
             assert!(
                 (found - expected).abs() < 0.03 * expected,
                 "intensity {intensity}: {found} impacts against {expected}"
             );
+        }
+    }
+
+    #[test]
+    fn the_rate_is_per_square_metre_whatever_the_size_of_the_disc() {
+        for metres in [3.0, 6.0, 10.0] {
+            let radius = metres * ENGINE_UNITS_PER_METER;
+            let mut rng = SplitMix64::new(11);
+            let found: usize = (0..LONG_RUN)
+                .map(|_| rain_impacts(&mut rng, FRAME, 1.0, CENTRE, radius).count())
+                .sum();
+            let square_metres = PI * metres * metres;
+            let rate = found as f32 / (square_metres * FRAME * LONG_RUN as f32);
+            assert!(
+                (rate - IMPACTS_PER_SQUARE_METER_PER_SECOND).abs()
+                    < 0.03 * IMPACTS_PER_SQUARE_METER_PER_SECOND,
+                "a disc of {metres} m: {rate} impacts per square metre and second"
+            );
+        }
+    }
+
+    #[test]
+    fn a_frame_never_hands_over_more_than_its_cap() {
+        let wide = 100.0 * ENGINE_UNITS_PER_METER;
+        assert!(per_second(wide) * FRAME > MAX_IMPACTS_PER_FRAME as f32);
+        for dt in [FRAME, 60.0] {
+            let found = rain_impacts(&mut SplitMix64::new(3), dt, 1.0, CENTRE, wide).count();
+            assert_eq!(found, MAX_IMPACTS_PER_FRAME, "a frame of {dt} s");
         }
     }
 
@@ -140,7 +193,7 @@ mod tests {
     #[test]
     fn a_stalled_frame_counts_as_a_short_one() {
         let burst = rain_impacts(&mut SplitMix64::new(3), 60.0, 1.0, CENTRE, RADIUS).count();
-        let most = (IMPACTS_PER_SECOND * LONGEST_STEP_SECONDS).ceil() as usize;
+        let most = (per_second(RADIUS) * LONGEST_STEP_SECONDS).ceil() as usize;
         assert!(burst <= most, "{burst} impacts");
         assert!(burst >= most - 1, "{burst} impacts");
     }
