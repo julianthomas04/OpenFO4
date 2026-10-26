@@ -27,6 +27,7 @@ pub mod utils;
 pub mod version;
 pub mod video;
 pub mod water_world;
+pub mod weather;
 
 pub use assets::types::mesh;
 pub use platform::run;

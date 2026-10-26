@@ -1,61 +1,9 @@
-use glam::Vec3;
 use serde::Deserialize;
 
 use super::error::{WeatherLibraryError, parse_json};
-use super::flag_set::flag_set;
-use crate::rendering::lighting::cell_lighting::srgb_to_linear;
-
-flag_set! {
-    /// The weather's flag byte.
-    WeatherFlags of WeatherFlag {
-        Pleasant = 1,
-        Cloudy = 2,
-        Rainy = 4,
-        Snow = 8,
-        SkyStaticsAlwaysVisible = 16,
-        SkyStaticsFollowsSun = 32,
-        RainOcclusion = 64,
-        HudRainEffects = 128,
-    }
-}
-
-/// The situation a weather sound plays in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SoundKind {
-    Default,
-    Precipitation,
-    Wind,
-    Thunder,
-}
-
-/// How far in and out an effect fades, as the game stores it for precipitation and thunder.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct FadeRange {
-    pub begin_fade_in: f32,
-    pub end_fade_out: f32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct WindParams {
-    /// 0..1.
-    pub speed: f32,
-    /// 0..1; `None` when the weather's data predates the field.
-    pub turbulence: Option<f32>,
-    /// The record's unscaled byte.
-    pub direction_raw: u8,
-    /// The record's unscaled byte.
-    pub direction_range_raw: u8,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct LightningParams {
-    pub fade: FadeRange,
-    /// 0..1.
-    pub frequency: f32,
-    /// Linear.
-    pub color: Vec3,
-}
+use crate::weather::{
+    FadeRange, LightningParams, SoundKind, WeatherFlags, WeatherSound, WindParams,
+};
 
 /// The scalar values of a weather's `DATA` record.
 #[derive(Debug, Clone, PartialEq)]
@@ -107,7 +55,6 @@ impl WeatherData {
                 bits: raw.flags,
             }
         })?;
-        let [r, g, b] = raw.lightning_color;
         Ok(Self {
             wind: WindParams {
                 speed: raw.wind_speed,
@@ -125,7 +72,7 @@ impl WeatherData {
                     end_fade_out: raw.thunder_end_fade_out,
                 },
                 frequency: raw.thunder_frequency,
-                color: Vec3::new(srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b)),
+                color_srgb: raw.lightning_color,
             },
             trans_delta_raw: raw.trans_delta_raw,
             sun_glare: raw.sun_glare,
@@ -137,13 +84,6 @@ impl WeatherData {
             visibility_mult: raw.visibility_mult,
         })
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WeatherSound {
-    pub kind: SoundKind,
-    /// Form key of the sound descriptor.
-    pub descriptor: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -207,6 +147,7 @@ mod tests {
 
     use super::fixtures::data;
     use super::*;
+    use crate::weather::WeatherFlag;
 
     const WEATHER: &str = "0012AB:Fallout4.esm";
 
@@ -235,8 +176,7 @@ mod tests {
         );
         assert_eq!(data.lightning.fade.end_fade_out, 0.8);
         assert_eq!(data.lightning.frequency, 0.25);
-        assert_eq!(data.lightning.color.x, 1.0);
-        assert_eq!(data.lightning.color.y, 0.0);
+        assert_eq!(data.lightning.color_srgb, [255, 0, 128]);
         assert_eq!(data.trans_delta_raw, 4);
         assert_eq!(data.visibility_mult, Some(0.5));
         assert_eq!(data.volatility_mult, 2.0);
@@ -249,13 +189,6 @@ mod tests {
         assert!(flags.contains(WeatherFlag::Rainy));
         assert!(!flags.contains(WeatherFlag::Pleasant));
         assert!(!flags.contains(WeatherFlag::Snow));
-    }
-
-    #[test]
-    fn every_flag_has_its_own_bit_and_the_set_round_trips() {
-        let bits: Vec<u8> = WeatherFlag::ALL.iter().map(|flag| flag.bit()).collect();
-        assert_eq!(bits, [1, 2, 4, 8, 16, 32, 64, 128]);
-        assert_eq!(WeatherFlags::from_bits(255).unwrap().bits(), 255);
     }
 
     #[test]

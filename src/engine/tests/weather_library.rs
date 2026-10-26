@@ -4,7 +4,8 @@
 
 use openfo4::assets::db::DbClient;
 use openfo4::rendering::lighting::exterior_weather::ExteriorWeatherError;
-use openfo4::rendering::weather::{SoundKind, WeatherLibrary, WeatherLibraryError};
+use openfo4::rendering::weather::{WeatherLibrary, WeatherLibraryError};
+use openfo4::weather::{SoundKind, WeatherId};
 use rusqlite::Connection;
 use rusqlite::types::Value;
 use serde_json::{Value as Json, json};
@@ -345,4 +346,33 @@ fn a_climate_entry_naming_an_unknown_weather_is_reported_by_key() {
         ),
         "{error:?}"
     );
+}
+
+#[test]
+fn the_library_hands_the_weather_cycle_its_roll_table() {
+    let library = load(seeded(&two_weathers())).unwrap();
+    let table = library.roll_table().unwrap();
+    assert_eq!(table.climate_volatility(), 45);
+    assert_eq!(table.total_chance(), 100);
+    assert_eq!(table.entries().len(), 2);
+    assert_eq!(library.weather(table.initial()).form_key, CLEAR);
+    let rain = table.traits(WeatherId::new(1)).unwrap();
+    assert_eq!(rain.trans_delta_raw, 0);
+    assert!((rain.volatility_mult - 1.0).abs() < 1e-6);
+    assert!(!rain.has_thunder_sound);
+}
+
+#[test]
+fn a_weather_with_a_thunder_sound_is_marked_in_the_roll_table() {
+    let conn = seeded(&two_weathers());
+    let sounds = json!([{"kind": "thunder", "sound": "0000B2:Fallout4.esm"}]).to_string();
+    conn.execute(
+        "UPDATE weather SET sounds = ? WHERE form_key = ?",
+        rusqlite::params![sounds, RAIN],
+    )
+    .unwrap();
+    let library = load(conn).unwrap();
+    let table = library.roll_table().unwrap();
+    assert!(table.traits(WeatherId::new(1)).unwrap().has_thunder_sound);
+    assert!(!table.traits(WeatherId::new(0)).unwrap().has_thunder_sound);
 }

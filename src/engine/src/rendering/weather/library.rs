@@ -6,23 +6,7 @@ use crate::assets::db::DbClient;
 use crate::rendering::lighting::exterior_weather::{
     ClimateInfo, ClimateWeather, ExteriorWeatherError, load_worldspace_climate, most_likely_index,
 };
-
-/// Index of a weather in its [`WeatherLibrary`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct WeatherId(usize);
-
-impl WeatherId {
-    pub const fn index(self) -> usize {
-        self.0
-    }
-}
-
-/// One weather a climate can pick and its relative chance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ClimateEntry {
-    pub weather: WeatherId,
-    pub chance: u32,
-}
+use crate::weather::{ClimateEntry, WeatherId, WeatherRollTable, WeatherTableError};
 
 /// The climate of a worldspace with every weather it can pick.
 #[derive(Debug, Clone, PartialEq)]
@@ -71,6 +55,17 @@ impl WeatherLibrary {
         self.initial
     }
 
+    /// What the weather cycle needs to roll between the weathers of the climate, in the order of
+    /// [`weathers`](Self::weathers).
+    pub fn roll_table(&self) -> Result<WeatherRollTable, WeatherTableError> {
+        WeatherRollTable::new(
+            self.climate_volatility,
+            self.entries.clone(),
+            self.weathers.iter().map(WeatherDef::roll_traits).collect(),
+            self.initial,
+        )
+    }
+
     /// Entries gated by a global are dropped: global values are not evaluated yet.
     fn build(
         climate: &ClimateInfo,
@@ -85,7 +80,7 @@ impl WeatherLibrary {
             let id = if let Some(id) = ids.get(entry.weather.as_str()) {
                 *id
             } else {
-                let id = WeatherId(weathers.len());
+                let id = WeatherId::new(weathers.len());
                 weathers.push(load_weather(&entry.weather)?);
                 ids.insert(&entry.weather, id);
                 id
@@ -270,6 +265,27 @@ mod tests {
             matches!(&error, WeatherLibraryError::MissingField { weather, .. } if weather == "B"),
             "{error:?}"
         );
+    }
+
+    #[test]
+    fn the_roll_table_mirrors_the_climate_in_library_order() {
+        let library = build(TWO_WEATHERS).unwrap();
+        let table = library.roll_table().unwrap();
+        assert_eq!(table.climate_volatility(), 30);
+        assert_eq!(table.entries(), library.entries());
+        assert_eq!(table.initial(), library.initial_weather());
+        for (index, def) in library.weathers().iter().enumerate() {
+            assert_eq!(
+                table.traits(WeatherId::new(index)),
+                Some(&def.roll_traits())
+            );
+        }
+    }
+
+    #[test]
+    fn a_climate_where_no_weather_has_a_chance_has_no_roll_table() {
+        let library = build(r#"[{"Weather":"A","Chance":0},{"Weather":"B","Chance":0}]"#).unwrap();
+        assert_eq!(library.roll_table(), Err(WeatherTableError::NoChance));
     }
 
     #[test]
