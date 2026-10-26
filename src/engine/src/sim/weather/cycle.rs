@@ -214,12 +214,12 @@ impl<R: RandomSource> WeatherCycle<R> {
     }
 
     fn strike(&mut self, world_seconds: f32) {
-        let current = self.current.id();
+        let previous = self.transition.map(|transition| transition.from);
+        let requested_weather = requested_strike_weather(self.current, previous);
         for _ in 0..std::mem::take(&mut self.requested_strikes) {
-            let strike = strike_at(current, 1.0, &mut self.strike_rng);
+            let strike = strike_at(requested_weather, 1.0, &mut self.strike_rng);
             self.strikes.push(strike);
         }
-        let previous = self.transition.map(|transition| transition.from);
         let sides = sides(self.current, previous, self.progress());
         self.strike_sources.clear();
         self.strike_sources.extend(
@@ -230,6 +230,18 @@ impl<R: RandomSource> WeatherCycle<R> {
                 .advance(&self.strike_sources, world_seconds, &mut self.strike_rng);
         self.strikes.extend(strike);
     }
+}
+
+/// The weather a strike asked for by hand takes its colour and thunder from: the first weather
+/// that shows with a thunder sound, the current one before the one being left, as only a weather
+/// with a thunder sound has thunder to play. Without one, the current weather's strike only flashes.
+fn requested_strike_weather(current: TableWeather, previous: Option<TableWeather>) -> WeatherId {
+    [Some(current), previous]
+        .into_iter()
+        .flatten()
+        .find(|weather| weather.traits().has_thunder_sound)
+        .unwrap_or(current)
+        .id()
 }
 
 fn sides<W: Copy>(

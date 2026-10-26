@@ -85,7 +85,10 @@ impl<R: RandomSource> WeatherCycle<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sim::weather::test_support::{A, B, C, Run, calm, calm_run, storm_run, table};
+    use crate::sim::weather::test_support::{
+        A, B, C, Run, calm, calm_run, storm_run, stormy, table,
+    };
+    use crate::weather::WeatherRollTraits;
 
     fn rejected(run: &mut Run, edit: WeatherEdit) -> WeatherEditError {
         let before = run.place();
@@ -266,6 +269,31 @@ mod tests {
         assert!((flash - 0.675).abs() < 1e-6, "{flash}");
         run.seconds(0.0);
         assert_eq!(run.snapshot().strikes, []);
+    }
+
+    fn triggered_strike_weather(
+        weathers: Vec<WeatherRollTraits>,
+        transition_to: WeatherId,
+    ) -> WeatherId {
+        let mut run = Run::new(table(0, weathers, &[1, 1]), &[], &[0.5]);
+        run.edit(WeatherEdit::Transition(transition_to));
+        run.edit(WeatherEdit::SetProgress(0.5));
+        run.edit(WeatherEdit::TriggerLightning);
+        run.seconds(0.0);
+        let strikes = run.snapshot().strikes;
+        assert_eq!(strikes.len(), 1);
+        strikes[0].weather
+    }
+
+    #[test]
+    fn a_triggered_lightning_takes_the_thunder_of_the_storm_a_transition_leaves() {
+        assert_eq!(triggered_strike_weather(vec![stormy(), calm()], B), A);
+    }
+
+    #[test]
+    fn a_triggered_lightning_takes_the_current_weather_when_both_sides_thunder_or_neither_does() {
+        assert_eq!(triggered_strike_weather(vec![stormy(), stormy()], B), B);
+        assert_eq!(triggered_strike_weather(vec![calm(), calm()], B), B);
     }
 
     #[test]

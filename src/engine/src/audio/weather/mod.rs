@@ -187,17 +187,26 @@ impl WeatherAudio {
 
     /// The layers of every thunder sound of the strike's weather, at the strike's gain.
     fn thunder_layers(&mut self, due: DueThunder) -> Result<Vec<LayerPlay>, WeatherAudioError> {
-        let mut layers = Vec::new();
-        for sound in self
+        let thunder: Vec<&str> = self
             .table
             .sounds(due.weather)?
             .iter()
             .filter(|sound| sound.kind == SoundKind::Thunder)
-        {
+            .map(|sound| sound.descriptor.as_str())
+            .collect();
+        if thunder.is_empty() {
+            tracing::info!(
+                target: LOG_TARGET,
+                "weather {} has no thunder sound, its strike only flashes",
+                due.weather.index()
+            );
+        }
+        let mut layers = Vec::new();
+        for descriptor in thunder {
             layers.extend(resolve_layers(
                 &self.sounds,
                 &self.context,
-                &sound.descriptor,
+                descriptor,
                 &self.missing_files,
                 &mut self.rng,
             )?);
