@@ -16,8 +16,8 @@ pub use flac::{sine_flac, undecodable_flac};
 pub use log_capture::SharedBuffer;
 pub use meter::{PeakMeterBuilder, PeakReader, peak_meter};
 pub use mock_audio::{
-    MockAudio, mock_manager_settings, render, render_buffer, render_manager, render_manager_buffer,
-    wait_until,
+    MockAudio, mock_manager_settings, peak_when_heard, render, render_buffer, render_manager,
+    render_manager_buffer, render_manager_paced, render_paced, wait_until,
 };
 
 pub const SAMPLE_RATE: u32 = 8000;

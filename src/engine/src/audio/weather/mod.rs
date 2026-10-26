@@ -3,12 +3,13 @@
 //! `WeatherAudio` is the stateful shell around the pure level math in `levels` and the thunder
 //! queue: it holds the sound catalog, the condition context and the random source, checks the
 //! converted files at startup and says each frame which loops should play at what gain and which
-//! thunder is due. Playing them is up to `LoopOutput` and `SfxOutput`.
+//! thunder is due. Playing them is up to `WeatherOutput`.
 //!
 //! A source file the game never shipped is absent from the install; startup logs it once and
-//! leaves it out of every pick, and a sound left with no file is silent. A strike's thunder plays
-//! every layer of every thunder sound of its weather, each layer with its own file and variance,
-//! and only outdoors: thunder that comes due while the player is indoors is dropped.
+//! leaves it out of every pick, and a sound left with no file is silent. Startup only opens the
+//! files, so a file whose body is damaged shows when it plays. A strike's thunder plays every
+//! layer of every thunder sound of its weather, each layer with its own file and variance, and
+//! only outdoors: thunder that comes due while the player is indoors is dropped.
 
 mod error;
 mod input;
@@ -44,6 +45,11 @@ use crate::weather::SoundKind;
 
 /// The tracing target of everything the weather sounds decide.
 pub const LOG_TARGET: &str = "openfo4::audio::weather";
+
+/// Logs why the weather sounds are off for the rest of the game.
+pub fn report_disabled(error: &WeatherAudioError) {
+    tracing::error!(target: LOG_TARGET, "weather sounds are disabled: {error}");
+}
 
 /// What the weather sounds play right now.
 #[derive(Debug, Default, PartialEq)]

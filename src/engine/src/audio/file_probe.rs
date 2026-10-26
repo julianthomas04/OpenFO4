@@ -105,7 +105,8 @@ fn require_directory(audio_dir: &Path) -> Result<(), ProbeError> {
 mod tests {
     use super::*;
     use crate::audio::test_support::{
-        HALF_SECOND_SAMPLES, SAMPLE_RATE, SharedBuffer, sine_flac, write_audio_file,
+        HALF_SECOND_SAMPLES, SAMPLE_RATE, SharedBuffer, sine_flac, undecodable_flac,
+        write_audio_file,
     };
 
     const PRESENT: &str = "sound/present.flac";
@@ -183,6 +184,21 @@ mod tests {
             matches!(&error, ProbeError::DirectoryMissing(path) if *path == audio_dir(&root)),
             "{error:?}"
         );
+    }
+
+    #[test]
+    fn a_file_with_a_readable_header_passes_even_when_its_body_cannot_be_decoded() {
+        let root = install();
+        write_audio_file(
+            root.path(),
+            PRESENT,
+            &undecodable_flac(SAMPLE_RATE, HALF_SECOND_SAMPLES),
+        );
+
+        let missing =
+            probe_sounds("test sound", &[sound("a", &[PRESENT])], &audio_dir(&root)).unwrap();
+
+        assert_eq!(missing, HashSet::new());
     }
 
     #[test]

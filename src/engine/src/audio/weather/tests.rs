@@ -8,7 +8,6 @@ use crate::assets::db::music::{Comparand, CompareOp, Condition};
 use crate::assets::db::sound_catalog::{COMPOUND_DESCRIPTOR, SoundDescriptor};
 use crate::audio::conditions::{ConditionError, IS_IN_INTERIOR};
 use crate::audio::file_probe::ProbeError;
-use crate::audio::loop_output::LOOP_FADE;
 use crate::audio::sound_resolve::SoundError;
 use crate::audio::test_support::condition::{condition, day};
 use crate::audio::test_support::weather::{
@@ -17,10 +16,11 @@ use crate::audio::test_support::weather::{
     WIND_FILE, all_files, sound_catalog, steady_gain_db, table,
 };
 use crate::audio::test_support::{
-    HALF_SECOND_SAMPLES, MockAudio, PeakReader, SAMPLE_RATE, SEED, SETTLED_BUFFERS, SharedBuffer,
-    mock_manager_settings, render, render_buffer, sine_flac, undecodable_flac, write_audio_file,
+    HALF_SECOND_SAMPLES, MockAudio, PeakReader, SAMPLE_RATE, SEED, SharedBuffer,
+    mock_manager_settings, peak_when_heard, render, render_paced, sine_flac, write_audio_file,
 };
-use crate::audio::{AudioError, AudioFrame, AudioSystem, MenuMusicSettings};
+use crate::audio::weather_output::LOOP_FADE;
+use crate::audio::{AudioFrame, AudioSystem, MenuMusicSettings};
 use crate::game_flow::Phase;
 use crate::weather::{FadeRange, SoundKind, TransitionSide, WeatherId, WeatherSound};
 
@@ -745,9 +745,11 @@ mod startup {
 const FADE: Duration = Duration::from_millis(100);
 /// Enough rendering for the fade of a loop to be over and the loop to sit at its gain.
 const SETTLING: Duration = LOOP_FADE.saturating_add(Duration::from_millis(100));
+/// The stretch of rendering a level is read over.
+const READING: Duration = Duration::from_millis(100);
 
 struct Rig {
-    _root: tempfile::TempDir,
+    root: tempfile::TempDir,
     audio: MockAudio,
     peak: PeakReader,
 }
@@ -780,24 +782,15 @@ impl Rig {
         let (manager_settings, peak) = mock_manager_settings(SAMPLE_RATE);
         let mut audio = AudioSystem::new(manager_settings, root.path(), menu_settings()).unwrap();
         audio.set_weather(weather_audio(root.path()));
-        Self {
-            _root: root,
-            audio,
-            peak,
-        }
+        Self { root, audio, peak }
     }
 
-    fn try_sync(
-        &mut self,
-        phase: Phase,
-        dt: Duration,
-        weather: WeatherAudioInput,
-    ) -> Result<(), AudioError> {
-        self.audio.sync(frame(phase, dt, Some(weather)))
+    fn sync_after(&mut self, phase: Phase, dt: Duration, weather: WeatherAudioInput) {
+        self.audio.sync(frame(phase, dt, Some(weather))).unwrap();
     }
 
     fn sync(&mut self, phase: Phase, weather: WeatherAudioInput) {
-        self.try_sync(phase, Duration::ZERO, weather).unwrap();
+        self.sync_after(phase, Duration::ZERO, weather);
     }
 
     fn in_game(&mut self, weather: WeatherAudioInput) {
@@ -806,21 +799,37 @@ impl Rig {
 
     /// The loudest sample after the fades of the commands so far are over.
     fn peak_after_settling(&mut self) -> f32 {
-        render(&mut self.audio, SAMPLE_RATE, SETTLING);
+        render_paced(&mut self.audio, SAMPLE_RATE, SETTLING);
         self.peak.take();
-        for _ in 0..SETTLED_BUFFERS {
-            render_buffer(&mut self.audio);
-        }
+        render_paced(&mut self.audio, SAMPLE_RATE, READING);
         self.peak.take()
     }
 
-    /// The loudest sample of the next few buffers.
-    fn peak_now(&mut self) -> f32 {
-        self.peak.take();
-        for _ in 0..4 {
-            render_buffer(&mut self.audio);
+    /// The loudest sample of the first `READING` of rendering that has anything to hear. A sound
+    /// that has just started may not come through for a while, so use this where a sound is
+    /// expected; where silence is, `peak_after_settling` does not wait.
+    fn listen(&mut self) -> f32 {
+        peak_when_heard(self.audio.manager_mut(), &self.peak, SAMPLE_RATE, READING)
+    }
+
+    /// `peak_after_settling` for where a sound is expected.
+    fn heard_after_settling(&mut self) -> f32 {
+        render_paced(&mut self.audio, SAMPLE_RATE, SETTLING);
+        self.listen()
+    }
+}
+
+/// Fades the weather out and lets it end, so that the decode threads of its loops end with the
+/// test. A sound stops whether or not its stream has data, so the rendering is not paced.
+impl Drop for Rig {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            return;
         }
-        self.peak.take()
+        self.audio
+            .sync(frame(Phase::MainMenu, Duration::ZERO, None))
+            .unwrap();
+        render(&mut self.audio, SAMPLE_RATE, SETTLING);
     }
 }
 
@@ -840,7 +849,11 @@ mod loop_playback {
             let mut rig = Rig::new();
             rig.sync(phase, settled(CLEAR));
 
-            let peak = rig.peak_after_settling();
+            let peak = if plays {
+                rig.heard_after_settling()
+            } else {
+                rig.peak_after_settling()
+            };
 
             assert_eq!(peak > 0.0, plays, "{phase:?} peaked at {peak}");
             assert_eq!(
@@ -855,7 +868,7 @@ mod loop_playback {
     fn leaving_the_world_fades_the_weather_out() {
         let mut rig = Rig::new();
         rig.in_game(settled(CLEAR));
-        assert!(rig.peak_after_settling() > 0.0);
+        assert!(rig.heard_after_settling() > 0.0);
 
         rig.sync(Phase::MainMenu, settled(CLEAR));
 
@@ -867,7 +880,7 @@ mod loop_playback {
     fn a_frame_without_weather_fades_the_weather_out() {
         let mut rig = Rig::new();
         rig.in_game(settled(CLEAR));
-        assert!(rig.peak_after_settling() > 0.0);
+        assert!(rig.heard_after_settling() > 0.0);
 
         rig.audio
             .sync(frame(Phase::InGame, Duration::ZERO, None))
@@ -880,13 +893,13 @@ mod loop_playback {
     fn the_weather_fades_out_when_the_player_goes_indoors_and_back_in_when_they_come_out() {
         let mut rig = Rig::new();
         rig.in_game(settled(CLEAR));
-        let outdoors = rig.peak_after_settling();
+        let outdoors = rig.heard_after_settling();
         assert!(outdoors > 0.0);
 
         rig.in_game(indoors(settled(CLEAR)));
         let inside = rig.peak_after_settling();
         rig.in_game(settled(CLEAR));
-        let out_again = rig.peak_after_settling();
+        let out_again = rig.heard_after_settling();
 
         assert_eq!(inside, 0.0);
         assert!(
@@ -904,25 +917,8 @@ mod loop_playback {
 
         rig.in_game(settled(STORM));
 
-        assert!(rig.peak_after_settling() > 0.0);
+        assert!(rig.heard_after_settling() > 0.0);
         assert_eq!(rig.audio.playing_loop_files(), [STORM_FILE]);
-    }
-
-    #[test]
-    fn a_weather_the_table_does_not_know_is_an_error_of_the_weather_sounds() {
-        let mut rig = Rig::new();
-
-        let error = rig
-            .try_sync(Phase::InGame, Duration::ZERO, settled(UNKNOWN_WEATHER))
-            .unwrap_err();
-
-        assert!(
-            matches!(
-                error,
-                AudioError::Weather(WeatherAudioError::UnknownWeather(9))
-            ),
-            "{error:?}"
-        );
     }
 
     #[test]
@@ -936,23 +932,6 @@ mod loop_playback {
             .unwrap();
 
         assert_eq!(audio.playing_loop_files(), Vec::<&str>::new());
-    }
-
-    #[test]
-    fn a_damaged_loop_file_is_an_error_when_it_first_plays() {
-        let root = install();
-        write_audio_file(
-            root.path(),
-            WIND_FILE,
-            &undecodable_flac(SAMPLE_RATE, HALF_SECOND_SAMPLES),
-        );
-        let mut rig = Rig::with(root);
-
-        let error = rig
-            .try_sync(Phase::InGame, Duration::ZERO, settled(CLEAR))
-            .unwrap_err();
-
-        assert!(matches!(error, AudioError::SfxFile { .. }), "{error:?}");
     }
 }
 
@@ -969,7 +948,7 @@ mod thunder_playback {
     }
 
     fn pass(rig: &mut Rig, time: Duration, weather: WeatherAudioInput) {
-        rig.try_sync(Phase::InGame, time, weather).unwrap();
+        rig.sync_after(Phase::InGame, time, weather);
     }
 
     #[test]
@@ -977,15 +956,16 @@ mod thunder_playback {
         let mut rig = Rig::new();
 
         pass(&mut rig, Duration::ZERO, only_thunder_in(SECOND));
-        let at_the_flash = rig.peak_now();
+        let at_the_flash = rig.audio.weather_sound_count();
         pass(&mut rig, Duration::from_millis(900), settled(ONLY_THUNDER));
-        let before_the_thunder = rig.peak_now();
+        let before_the_thunder = rig.audio.weather_sound_count();
         pass(&mut rig, Duration::from_millis(100), settled(ONLY_THUNDER));
-        let at_the_thunder = rig.peak_now();
+        let at_the_thunder = rig.audio.weather_sound_count();
 
-        assert_eq!(at_the_flash, 0.0);
-        assert_eq!(before_the_thunder, 0.0);
-        assert!(at_the_thunder > 0.0);
+        assert_eq!(at_the_flash, 0);
+        assert_eq!(before_the_thunder, 0);
+        assert_eq!(at_the_thunder, 2, "both layers of the thunder sound");
+        assert!(rig.listen() > 0.0);
     }
 
     #[test]
@@ -995,7 +975,7 @@ mod thunder_playback {
         pass(&mut rig, Duration::ZERO, only_thunder_in(SECOND));
         pass(&mut rig, SECOND, indoors(settled(ONLY_THUNDER)));
 
-        assert_eq!(rig.peak_now(), 0.0);
+        assert_eq!(rig.audio.weather_sound_count(), 0);
     }
 
     #[test]
@@ -1006,6 +986,98 @@ mod thunder_playback {
         rig.sync(Phase::MainMenu, settled(ONLY_THUNDER));
         pass(&mut rig, SECOND, settled(ONLY_THUNDER));
 
-        assert_eq!(rig.peak_now(), 0.0);
+        assert_eq!(rig.audio.weather_sound_count(), 0);
+    }
+}
+
+mod failures {
+    use super::*;
+
+    const DISABLED: &str = "weather sounds are disabled";
+    const LEFT_OUT: &str = "left out from now on";
+
+    fn lines_with<'a>(logged: &'a str, what: &str) -> Vec<&'a str> {
+        logged.lines().filter(|line| line.contains(what)).collect()
+    }
+
+    #[test]
+    fn a_weather_the_table_does_not_know_turns_the_weather_sounds_off_for_good_and_the_game_goes_on()
+     {
+        let mut rig = Rig::new();
+        let log = SharedBuffer::default();
+        let _guard = log.capture("openfo4=warn");
+        rig.in_game(settled(CLEAR));
+        assert!(rig.heard_after_settling() > 0.0);
+
+        rig.in_game(settled(UNKNOWN_WEATHER));
+        rig.in_game(settled(CLEAR));
+        rig.in_game(settled(UNKNOWN_WEATHER));
+
+        assert_eq!(rig.peak_after_settling(), 0.0);
+        assert_eq!(rig.audio.playing_loop_files(), Vec::<&str>::new());
+        let logged = log.drain();
+        let reports = lines_with(&logged, DISABLED);
+        assert_eq!(reports.len(), 1, "{logged}");
+        assert!(reports[0].contains("weather 9"), "{logged}");
+    }
+
+    fn vanish(path: &Path) {
+        std::fs::remove_file(path).unwrap();
+    }
+
+    fn damage(path: &Path) {
+        std::fs::write(path, b"not audio").unwrap();
+    }
+
+    /// The rain weather plays the wind bed, the rain and the gusts; the wind bed file is broken
+    /// by `break_file` after startup.
+    fn rain_with_a_broken_wind_bed(break_file: impl FnOnce(&Path)) {
+        let mut rig = Rig::new();
+        break_file(&rig.root.path().join("audio").join(WIND_FILE));
+        let log = SharedBuffer::default();
+        let _guard = log.capture("openfo4=warn");
+
+        for _ in 0..3 {
+            rig.in_game(settled(RAIN));
+        }
+
+        let playing = rig.audio.playing_loop_files();
+        assert_eq!(playing.len(), 2, "{playing:?}");
+        assert!(!playing.contains(&WIND_FILE), "{playing:?}");
+        assert!(playing.contains(&GUSTS_FILE), "{playing:?}");
+        let logged = log.drain();
+        let reports = lines_with(&logged, LEFT_OUT);
+        assert_eq!(reports.len(), 1, "{logged}");
+        assert!(reports[0].contains("wind_bed.flac"), "{logged}");
+        assert!(rig.heard_after_settling() > 0.0);
+    }
+
+    #[test]
+    fn a_loop_file_that_vanished_after_startup_is_left_out_and_the_rest_plays() {
+        rain_with_a_broken_wind_bed(vanish);
+    }
+
+    #[test]
+    fn a_loop_file_that_was_damaged_after_startup_is_left_out_and_the_rest_plays() {
+        rain_with_a_broken_wind_bed(damage);
+    }
+
+    #[test]
+    fn a_thunder_file_that_vanished_after_startup_is_left_out_and_the_other_layer_still_sounds() {
+        let mut rig = Rig::new();
+        remove_file(rig.root.path(), THUNDER_LOW_FILE);
+        let log = SharedBuffer::default();
+        let _guard = log.capture("openfo4=warn");
+        let strike = || striking(settled(ONLY_THUNDER), ONLY_THUNDER, 0.0, 1.0);
+
+        rig.in_game(strike());
+        rig.in_game(strike());
+
+        assert_eq!(rig.audio.weather_sound_count(), 2, "the high layer of each");
+        let logged = log.drain();
+        let reports = lines_with(&logged, LEFT_OUT);
+        assert_eq!(reports.len(), 1, "{logged}");
+        assert!(reports[0].contains("thunder_low.flac"), "{logged}");
+        assert!(rig.listen() > 0.0);
     }
 }

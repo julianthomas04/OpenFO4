@@ -9,13 +9,13 @@ use super::backend_errors::BackendErrorReporter;
 use super::conditions::GameTime;
 use super::error::AudioError;
 use super::footsteps::Footsteps;
-use super::loop_output::LoopOutput;
 use super::music::{MusicCommand, MusicDirector};
 use super::music_output::{MusicOutput, Playing, SoundSettings, open_music_file};
 use super::place::PlaceSnapshot;
 use super::settings::MenuMusicSettings;
 use super::sfx_output::SfxOutput;
-use super::weather::{WeatherAudio, WeatherAudioInput};
+use super::weather::{WeatherAudio, WeatherAudioInput, WeatherPlay, report_disabled};
+use super::weather_output::WeatherOutput;
 use super::world_music::WorldMusic;
 use super::world_playback::WorldPlayback;
 use crate::assets::layout;
@@ -55,8 +55,9 @@ pub struct AudioSystem<B: AudioBackend = DefaultBackend> {
     manager: AudioManager<B>,
     output: MusicOutput,
     sfx: SfxOutput,
-    loops: LoopOutput,
+    weather_output: WeatherOutput,
     footsteps: Option<Footsteps>,
+    /// `None` while there are no weather sounds, and for good once their data failed.
     weather: Option<WeatherAudio>,
     /// The phase of the latest frame; footsteps and weather play only in a gameplay phase.
     phase: Phase,
@@ -104,12 +105,12 @@ impl<B: AudioBackend> AudioSystem<B> {
             .map_err(|error| AudioError::Device(B::describe_setup_error(&error)))?;
         let output = MusicOutput::new(&mut manager)?;
         let sfx = SfxOutput::new(&mut manager, audio_dir.clone())?;
-        let loops = LoopOutput::new(&mut manager, audio_dir.clone())?;
+        let weather_output = WeatherOutput::new(&mut manager, audio_dir.clone())?;
         Ok(Self {
             manager,
             output,
             sfx,
-            loops,
+            weather_output,
             footsteps: None,
             weather: None,
             phase: Phase::MainMenu,
@@ -163,8 +164,9 @@ impl<B: AudioBackend> AudioSystem<B> {
     /// Applies what the game flow's phase, the player's place and the weather ask of the audio;
     /// call once per frame. Weather sounds play in the gameplay phases only: in any other phase, or
     /// without a weather, the loops fade out and the thunder on its way is dropped. An error is
-    /// fatal: a music or weather sound file cannot be played or turned out damaged, or the music or
-    /// weather sound data is unusable.
+    /// fatal: a music file cannot be played or turned out damaged, or the music data is unusable.
+    /// The weather sounds never are: a weather sound file that fails is logged and left out, and
+    /// weather sound data that fails turns the weather sounds off (see `WeatherOutput`).
     pub fn sync(&mut self, frame: impl Into<AudioFrame>) -> Result<(), AudioError> {
         let frame = frame.into();
         self.clock += frame.dt;
@@ -182,7 +184,8 @@ impl<B: AudioBackend> AudioSystem<B> {
                 frame.place.as_ref(),
             )?;
         }
-        self.sync_weather(frame.weather.as_ref(), frame.time)
+        self.sync_weather(frame.weather.as_ref(), frame.time);
+        Ok(())
     }
 
     pub fn music_state(&self) -> Option<PlaybackState> {
@@ -221,7 +224,13 @@ impl<B: AudioBackend> AudioSystem<B> {
 
     #[cfg(test)]
     pub(super) fn playing_loop_files(&self) -> Vec<&str> {
-        self.loops.playing_files()
+        self.weather_output.playing_files()
+    }
+
+    /// The weather sounds that are playing or fading out.
+    #[cfg(test)]
+    pub(super) fn weather_sound_count(&self) -> usize {
+        self.weather_output.sound_count()
     }
 
     #[cfg(test)]
@@ -269,21 +278,28 @@ impl<B: AudioBackend> AudioSystem<B> {
         }
     }
 
-    fn sync_weather(
-        &mut self,
-        input: Option<&WeatherAudioInput>,
-        time: GameTime,
-    ) -> Result<(), AudioError> {
+    fn sync_weather(&mut self, input: Option<&WeatherAudioInput>, time: GameTime) {
+        self.weather_output.check();
+        let play = self.weather_play(input, time);
+        self.weather_output.follow(&play.loops);
+        self.weather_output.play_thunder(&play.thunder);
+    }
+
+    /// What the weather sounds play now. Weather sound data that cannot be played turns the
+    /// weather sounds off for the rest of the game, after one error in the log.
+    fn weather_play(&mut self, input: Option<&WeatherAudioInput>, time: GameTime) -> WeatherPlay {
         let Some(weather) = &mut self.weather else {
-            return Ok(());
+            return WeatherPlay::default();
         };
         let input = input.filter(|_| in_world(self.phase));
-        let play = weather.update(input, time, self.clock)?;
-        self.loops.follow(&play.loops)?;
-        for layer in &play.thunder {
-            self.sfx.play_layer(layer)?;
+        match weather.update(input, time, self.clock) {
+            Ok(play) => play,
+            Err(error) => {
+                report_disabled(&error);
+                self.weather = None;
+                WeatherPlay::default()
+            }
         }
-        Ok(())
     }
 
     fn check_music_streams(&mut self) -> Result<(), AudioError> {
