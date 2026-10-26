@@ -28,13 +28,6 @@ pub struct LayerPlay {
     pub mix: LayerMix,
 }
 
-/// A looping sound to start: the file below the audio folder and its constant gain.
-#[derive(Debug, Clone, PartialEq)]
-pub struct LoopPlay {
-    pub file_key: String,
-    pub gain_db: f32,
-}
-
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
 pub enum SoundError {
     #[error("the sound catalog has no {kind} {key}")]
@@ -105,23 +98,23 @@ pub fn resolve_one_shot(
     one_shot_layer(sounds, descriptor, missing_files, rng)
 }
 
-/// The sound the standard descriptor `key` plays in a loop, at its constant gain. `None` when every
-/// file of it is missing. Whether the descriptor's looping flags are set is not checked: the caller
-/// decides to loop it.
+/// The sound the standard descriptor `key` plays in a loop: its file, at the constant pitch and
+/// gain of a sound without variance. `None` when every file of it is missing. Whether the
+/// descriptor's looping flags are set is not checked: the caller decides to loop it.
 pub fn resolve_loop(
     sounds: &SoundCatalog,
     key: &str,
     missing_files: &HashSet<String>,
     rng: &mut dyn RandomSource,
-) -> Result<Option<LoopPlay>, SoundError> {
+) -> Result<Option<LayerPlay>, SoundError> {
     let descriptor = standard_descriptor(sounds, key)?;
     let model = output_model(sounds, descriptor)?;
     let Some(file_key) = pick_file(descriptor, missing_files, rng)? else {
         return Ok(None);
     };
-    let gain_db = LayerMix::steady_gain_db(descriptor, model, &sounds.categories)
+    let mix = LayerMix::steady(descriptor, model, &sounds.categories)
         .map_err(|source| mix_error(descriptor, source))?;
-    Ok(Some(LoopPlay { file_key, gain_db }))
+    Ok(Some(LayerPlay { file_key, mix }))
 }
 
 /// Draw order: the file, then the pitch variance, then the volume variance. `None` when every
@@ -331,7 +324,7 @@ mod tests {
         sounds: &SoundCatalog,
         key: &str,
         missing: &HashSet<String>,
-    ) -> Result<Option<LoopPlay>, SoundError> {
+    ) -> Result<Option<LayerPlay>, SoundError> {
         resolve_loop(sounds, key, missing, &mut SplitMix64::new(SEED))
     }
 
@@ -380,16 +373,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_loop_plays_a_file_at_the_constant_gain_whatever_the_variance() {
+    fn plays_of_a_varying_loop(freq_shift_pct: i32) -> Vec<LayerPlay> {
         let mut sounds = sounds();
         modify(&mut sounds, "stone_sound", |d| {
             d.looping_flags = 0x0800;
             d.db_variance = 6;
+            d.freq_shift_pct = freq_shift_pct;
             d.freq_variance_pct = 10;
         });
-
-        let plays: Vec<LoopPlay> = (0..20)
+        (0..20)
             .map(|seed| {
                 resolve_loop(
                     &sounds,
@@ -400,13 +392,52 @@ mod tests {
                 .unwrap()
                 .unwrap()
             })
-            .collect();
+            .collect()
+    }
+
+    #[test]
+    fn a_loop_plays_a_file_at_the_constant_gain_whatever_the_variance() {
+        let plays = plays_of_a_varying_loop(0);
 
         assert!(plays.iter().all(|play| play.file_key == STONE_FILE));
         assert!(
             plays
                 .iter()
-                .all(|play| (play.gain_db - expected_gain_db()).abs() < GAIN_TOLERANCE)
+                .all(|play| (play.mix.gain_db - expected_gain_db()).abs() < GAIN_TOLERANCE)
+        );
+    }
+
+    #[test]
+    fn a_loop_plays_at_the_frequency_shift_of_its_descriptor_whatever_the_variance() {
+        let plays = plays_of_a_varying_loop(-4);
+
+        assert!(
+            plays
+                .iter()
+                .all(|play| (play.mix.playback_rate - 0.96).abs() < 1e-9),
+            "{plays:?}"
+        );
+    }
+
+    #[test]
+    fn a_loop_without_a_frequency_shift_plays_at_the_pitch_of_its_file() {
+        let play = looped(&sounds(), "stone_sound", &HashSet::new())
+            .unwrap()
+            .unwrap();
+
+        assert!((play.mix.playback_rate - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_loop_whose_frequency_shift_stops_the_sound_is_an_error_naming_the_sound() {
+        let mut sounds = sounds();
+        modify(&mut sounds, "stone_sound", |d| d.freq_shift_pct = -100);
+
+        let error = looped(&sounds, "stone_sound", &HashSet::new()).unwrap_err();
+
+        assert!(
+            matches!(&error, SoundError::Mix { descriptor, source: MixError::InvalidPlaybackRate { .. } } if descriptor == "stone_sound"),
+            "{error:?}"
         );
     }
 

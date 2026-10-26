@@ -8,6 +8,7 @@ use crate::assets::db::music::{Comparand, CompareOp, Condition};
 use crate::assets::db::sound_catalog::{COMPOUND_DESCRIPTOR, SoundDescriptor};
 use crate::audio::conditions::{ConditionError, IS_IN_INTERIOR};
 use crate::audio::file_probe::ProbeError;
+use crate::audio::loop_output::LOOP_FADE;
 use crate::audio::sound_resolve::SoundError;
 use crate::audio::test_support::condition::{condition, day};
 use crate::audio::test_support::weather::{
@@ -177,6 +178,26 @@ mod loops {
         assert_eq!(loop_files(&play), BTreeSet::from([WIND_FILE]));
         assert_close(loop_gain(&play, WIND_FILE), steady_gain_db());
         assert_eq!(play.thunder, []);
+    }
+
+    #[test]
+    fn a_loop_asks_for_the_pitch_of_its_descriptor_and_none_when_it_has_no_frequency_shift() {
+        let root = install();
+        let catalog = catalog_with(RAIN_BED, |descriptor| descriptor.freq_shift_pct = 25);
+        let mut audio = weather_audio_with(root.path(), catalog, SEED).unwrap();
+
+        let play = now_playing(&mut audio, &settled(RAIN));
+
+        let rate_of = |files: &[&str]| {
+            play.loops
+                .iter()
+                .find(|target| files.contains(&target.file_key.as_str()))
+                .unwrap()
+                .playback_rate
+        };
+        assert!((rate_of(&RAIN_FILES) - 1.25).abs() < 1e-9);
+        assert!((rate_of(&[WIND_FILE]) - 1.0).abs() < 1e-9);
+        assert!((rate_of(&[GUSTS_FILE]) - 1.0).abs() < 1e-9);
     }
 
     #[test]
@@ -692,6 +713,19 @@ mod startup {
     }
 
     #[test]
+    fn a_loop_whose_frequency_shift_would_stop_it_is_an_error_at_startup() {
+        let root = install();
+        let catalog = catalog_with(GUSTS, |descriptor| descriptor.freq_shift_pct = -100);
+
+        let error = startup_error(root.path(), catalog);
+
+        assert!(
+            matches!(&error, WeatherAudioError::Sound(SoundError::Mix { descriptor, .. }) if descriptor == GUSTS),
+            "{error:?}"
+        );
+    }
+
+    #[test]
     fn a_sound_whose_mix_cannot_be_decided_is_an_error() {
         let root = install();
         let catalog = catalog_with(GUSTS, |descriptor| {
@@ -707,9 +741,10 @@ mod startup {
     }
 }
 
+/// The fade of the menu music, which the weather sounds do not follow.
 const FADE: Duration = Duration::from_millis(100);
-/// Enough rendering for a fade to be over and the loops to sit at their gain.
-const SETTLING: Duration = Duration::from_millis(400);
+/// Enough rendering for the fade of a loop to be over and the loop to sit at its gain.
+const SETTLING: Duration = LOOP_FADE.saturating_add(Duration::from_millis(100));
 
 struct Rig {
     _root: tempfile::TempDir,

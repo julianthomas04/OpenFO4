@@ -36,7 +36,7 @@ use super::decibels::amplitude_to_db;
 use super::file_probe::probe_sounds;
 use super::loop_plan::LoopTarget;
 use super::sound_resolve::{
-    LayerPlay, LoopPlay, lookup_descriptor, reachable_sounds, resolve_layers, resolve_loop,
+    LayerPlay, lookup_descriptor, reachable_sounds, resolve_layers, resolve_loop,
 };
 use crate::assets::db::sound_catalog::SoundCatalog;
 use crate::random::SplitMix64;
@@ -48,7 +48,7 @@ pub const LOG_TARGET: &str = "openfo4::audio::weather";
 /// What the weather sounds play right now.
 #[derive(Debug, Default, PartialEq)]
 pub struct WeatherPlay {
-    /// The loops that should play and the gain of each; a loop that is not listed fades out.
+    /// The loops that should play, each at its gain and pitch; a loop that is not listed fades out.
     pub loops: Vec<LoopTarget>,
     /// The layers of the thunder that came due, at their final gain.
     pub thunder: Vec<LayerPlay>,
@@ -62,7 +62,7 @@ pub struct WeatherAudio {
     missing_files: HashSet<String>,
     /// What each looping descriptor plays, decided on first use so that a loop keeps its file;
     /// `None` when every file of the descriptor is missing.
-    loops: HashMap<String, Option<LoopPlay>>,
+    loops: HashMap<String, Option<LayerPlay>>,
     thunder: ThunderQueue,
 }
 
@@ -134,16 +134,17 @@ impl WeatherAudio {
             if let Some(play) = self.loop_play(&descriptor)? {
                 targets.push(LoopTarget {
                     file_key: play.file_key,
-                    gain_db: play.gain_db + amplitude_to_db(level),
+                    gain_db: play.mix.gain_db + amplitude_to_db(level),
+                    playback_rate: play.mix.playback_rate,
                 });
             }
         }
         Ok(targets)
     }
 
-    /// The file and the steady gain `descriptor` loops with; `None` while its conditions fail or
-    /// when it has no file left.
-    fn loop_play(&mut self, descriptor: &str) -> Result<Option<LoopPlay>, WeatherAudioError> {
+    /// The file and the steady pitch and gain `descriptor` loops with; `None` while its
+    /// conditions fail or when it has no file left.
+    fn loop_play(&mut self, descriptor: &str) -> Result<Option<LayerPlay>, WeatherAudioError> {
         if !self.conditions_hold(descriptor)? {
             return Ok(None);
         }
@@ -156,7 +157,7 @@ impl WeatherAudio {
     }
 
     /// What `descriptor` loops with whatever its conditions; the first call decides the file.
-    fn resolved_loop(&mut self, descriptor: &str) -> Result<Option<LoopPlay>, WeatherAudioError> {
+    fn resolved_loop(&mut self, descriptor: &str) -> Result<Option<LayerPlay>, WeatherAudioError> {
         if !self.loops.contains_key(descriptor) {
             let play = resolve_loop(&self.sounds, descriptor, &self.missing_files, &mut self.rng)?;
             self.loops.insert(descriptor.to_string(), play);

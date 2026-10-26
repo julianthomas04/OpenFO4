@@ -104,7 +104,7 @@ impl<B: AudioBackend> AudioSystem<B> {
             .map_err(|error| AudioError::Device(B::describe_setup_error(&error)))?;
         let output = MusicOutput::new(&mut manager)?;
         let sfx = SfxOutput::new(&mut manager, audio_dir.clone())?;
-        let loops = LoopOutput::new(&mut manager, audio_dir.clone(), settings.fade)?;
+        let loops = LoopOutput::new(&mut manager, audio_dir.clone())?;
         Ok(Self {
             manager,
             output,

@@ -8,6 +8,9 @@
 //! - gain in dB = the sum of: minus the static attenuation in dB, U(-dB variance, +dB variance),
 //!   minus the output model static attenuation, 20 log10 of the channel gain, and 20 log10 of
 //!   the multiplier of every category of the chain up to the root.
+//!
+//! A sound that plays steadily, as a loop does, takes the same formulas with both variances left
+//! out.
 
 use std::collections::{HashMap, HashSet};
 
@@ -78,7 +81,8 @@ impl LayerMix {
         categories: &HashMap<String, SoundCategory>,
         rng: &mut dyn RandomSource,
     ) -> Result<Self, MixError> {
-        let playback_rate = playback_rate(descriptor, rng)?;
+        let frequency_variance = rng.symmetric(descriptor.freq_variance_pct.unsigned_abs() as f32);
+        let playback_rate = playback_rate(descriptor, frequency_variance)?;
         let volume_variance = rng.symmetric(descriptor.db_variance.unsigned_abs() as f32);
         let gain_db = gain_db(descriptor, model, categories, volume_variance)?;
         Ok(Self {
@@ -87,21 +91,21 @@ impl LayerMix {
         })
     }
 
-    /// The gain of a sound that plays without variance, as a loop does.
-    pub fn steady_gain_db(
+    /// The pitch and volume of a sound that plays without variance, as a loop does: the
+    /// frequency shift and the static gains, and no draw.
+    pub fn steady(
         descriptor: &SoundDescriptor,
         model: &SoundOutputModel,
         categories: &HashMap<String, SoundCategory>,
-    ) -> Result<f32, MixError> {
-        gain_db(descriptor, model, categories, 0.0)
+    ) -> Result<Self, MixError> {
+        Ok(Self {
+            playback_rate: playback_rate(descriptor, 0.0)?,
+            gain_db: gain_db(descriptor, model, categories, 0.0)?,
+        })
     }
 }
 
-fn playback_rate(
-    descriptor: &SoundDescriptor,
-    rng: &mut dyn RandomSource,
-) -> Result<f64, MixError> {
-    let variance = rng.symmetric(descriptor.freq_variance_pct.unsigned_abs() as f32);
+fn playback_rate(descriptor: &SoundDescriptor, variance: f32) -> Result<f64, MixError> {
     let rate = 1.0 + (f64::from(descriptor.freq_shift_pct) + f64::from(variance)) / 100.0;
     if rate > 0.0 {
         Ok(rate)
@@ -523,6 +527,55 @@ mod tests {
             ),
             Err(MixError::InvalidPlaybackRate { .. })
         ));
+    }
+
+    fn varied_descriptor() -> SoundDescriptor {
+        SoundDescriptor {
+            freq_shift_pct: 5,
+            freq_variance_pct: 10,
+            db_variance: 6,
+            static_attenuation_centidb: 200,
+            ..descriptor()
+        }
+    }
+
+    #[test]
+    fn a_steady_sound_takes_the_frequency_shift_and_the_gains_and_none_of_the_variance() {
+        let steady =
+            LayerMix::steady(&varied_descriptor(), &unity_model(), &unity_categories()).unwrap();
+
+        assert!((steady.playback_rate - 1.05).abs() < 1e-9);
+        assert_close(steady.gain_db, -2.0);
+    }
+
+    #[test]
+    fn a_steady_sound_is_the_middle_of_what_a_drawn_one_can_be() {
+        let draws = vec![MIDDLE, MIDDLE];
+        let drawn = draw(
+            &varied_descriptor(),
+            &unity_model(),
+            &unity_categories(),
+            draws,
+        )
+        .unwrap();
+
+        let steady =
+            LayerMix::steady(&varied_descriptor(), &unity_model(), &unity_categories()).unwrap();
+
+        assert!((steady.playback_rate - drawn.playback_rate).abs() < 1e-9);
+        assert_close(steady.gain_db, drawn.gain_db);
+    }
+
+    #[test]
+    fn a_steady_sound_whose_rate_is_not_positive_is_an_error() {
+        let silent = SoundDescriptor {
+            freq_shift_pct: -100,
+            ..descriptor()
+        };
+
+        let result = LayerMix::steady(&silent, &unity_model(), &unity_categories());
+
+        assert!(matches!(result, Err(MixError::InvalidPlaybackRate { .. })));
     }
 
     #[test]
