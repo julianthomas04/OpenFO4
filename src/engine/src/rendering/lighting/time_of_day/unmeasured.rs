@@ -300,10 +300,11 @@ pub fn sun_sprite_edge_deg(size: f32) -> f32 {
 }
 
 /// How many texture widths a cloud layer scrolls per second for each unit of its weather's
-/// layer speed, which is at most 0.1. Hypothesis: the speed is a texture coordinate velocity
-/// per second. Vanilla's fastest layer (0.035) would then cross its texture in 28 seconds,
-/// probably too fast: calibrate against the vanilla game.
-pub const CLOUD_SCROLL_SCALE: f32 = 1.0;
+/// layer speed, which is at most 0.1. No public source gives the speed a unit; the scale is a
+/// heuristic. Taken as one, the user saw the clouds move too fast. At one half, the main
+/// Commonwealth layer (speed 0.03, about three texture widths across the dome) crosses the sky in
+/// about four minutes, the pace of real clouds a kilometre up in a moderate wind.
+pub const CLOUD_SCROLL_SCALE: f32 = 0.5;
 
 /// The sine of the elevation at which the clouds are clear of the horizon haze. Below it they
 /// blend into the sky's horizon colour, entirely at the horizon.
