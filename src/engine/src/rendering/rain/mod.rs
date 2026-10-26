@@ -9,6 +9,7 @@
 
 mod assets;
 pub mod impacts;
+mod material;
 mod motion;
 pub mod occlusion;
 mod pipeline;

@@ -9,13 +9,16 @@ const fn metres(length: f32) -> f32 {
 }
 
 /// Drops per unit of the weather's particle density at full intensity. Every drop is a card
-/// the GPU fills, so this is the knob for the fill rate of a downpour.
+/// of the whole streak texture, eight streaks of the game's, and a card the GPU fills, so this is
+/// the knob for the fill rate of a downpour. A heuristic: retune it against the game.
 pub const DROPS_PER_DENSITY: f32 = 1000.0;
 /// The most drops a frame draws, however dense the weather asks the rain to be.
 pub const MAX_DROPS: u32 = 12_000;
 /// The length of a streak along its fall, in metres per unit of the weather's particle size x.
+/// The game names no unit for the size: retune it against the game.
 pub const STREAK_LENGTH_SCALE: f32 = 1.0;
 /// The width of a streak across its fall, in metres per unit of the weather's particle size y.
+/// The game names no unit for the size: retune it against the game.
 pub const STREAK_WIDTH_SCALE: f32 = 1.0;
 /// The rain never falls through a box smaller than this, whatever the weather asks for.
 pub const MIN_BOX_EDGE: f32 = metres(4.0);
@@ -25,7 +28,8 @@ pub const NEAR_FADE: [f32; 2] = [metres(0.6), metres(3.0)];
 /// The share of half the box edge a drop is fully visible out to; beyond it the drop fades out
 /// before it leaves the box on one side and enters it on the other.
 pub const BOX_FADE_FROM: f32 = 0.6;
-/// How opaque the alpha of the streak texture is drawn.
+/// How much the alpha of the streak texture weighs the light a streak adds to the scene. A
+/// heuristic: retune it against the game.
 pub const STREAK_OPACITY: f32 = 1.0;
 /// The least a drop's brightness varies to from one drop to the next.
 pub const LEAST_VARIATION: f32 = 0.6;

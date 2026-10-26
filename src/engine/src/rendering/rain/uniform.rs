@@ -6,6 +6,7 @@ use bytemuck::{Pod, Zeroable};
 use glam::{DVec3, Vec2, Vec3};
 
 use super::assets::SPLASH_FRAMES;
+use super::material::STREAK_BASE_COLOR;
 use super::motion::{
     DropDrift, SplashPhase, StreakAxes, drop_count, fall_velocity, lattice_shift, splash_count,
 };
@@ -102,6 +103,7 @@ pub(super) struct RainUniform {
     pub(super) across: [f32; 4],
     pub(super) lattice: [f32; 4],
     pub(super) tint: [f32; 4],
+    pub(super) streak_tint: [f32; 4],
     pub(super) atlas: [f32; 4],
     pub(super) window: [f32; 4],
     pub(super) heights: [f32; 4],
@@ -141,6 +143,7 @@ impl RainUniform {
             across: with(axes.across, size.y),
             lattice: with(shift, fall.edge),
             tint: with(tint, 0.0),
+            streak_tint: with(tint * STREAK_BASE_COLOR, 0.0),
             atlas: [
                 input.subtextures.x.max(1) as f32,
                 input.subtextures.y.max(1) as f32,

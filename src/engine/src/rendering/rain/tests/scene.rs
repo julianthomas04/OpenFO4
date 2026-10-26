@@ -27,6 +27,9 @@ const LIT: f32 = 0.02;
 const FOV_Y: f32 = std::f32::consts::FRAC_PI_3;
 /// Where the splash atlas of the rain is looked for below an asset root.
 pub(super) const SPLASH_ATLAS: &str = "textures/effects/rainscene/rain_rainsplash_a_16x1_d.dds";
+/// Where the streak texture of [`super::downpour`] lies below an asset root: white until a test
+/// writes another before its first frame.
+pub(super) const STREAK_FILE: &str = "textures/effects/test_rain.dds";
 
 #[derive(Clone, Copy)]
 pub(super) struct Look {
@@ -152,11 +155,7 @@ impl Scene {
     pub fn with_atlas(test: &str, roofs: &[Slab], write_atlas: impl FnOnce(&Path)) -> Option<Self> {
         let mut rig = rig(test)?;
         let assets = tempfile::tempdir().unwrap();
-        write_white_texture(
-            assets.path(),
-            "textures/effects/test_rain.dds",
-            UVec2::new(4, 4),
-        );
+        write_white_texture(assets.path(), STREAK_FILE, UVec2::new(4, 4));
         write_atlas(assets.path());
         rig.place(roofs, &[]);
         let frame = frame_binding(&rig.device);

@@ -4,6 +4,7 @@ use glam::{UVec2, Vec2, Vec3};
 
 use super::{EYE, GENERATION, downpour};
 use crate::bethesda_space::ENGINE_UNITS_PER_METER;
+use crate::rendering::rain::material::STREAK_BASE_COLOR;
 use crate::rendering::rain::motion::{DropDrift, drop_count, splash_count};
 use crate::rendering::rain::occlusion::{EXTENT, HEIGHT_RANGE, OcclusionWindow};
 use crate::rendering::rain::tuning::{
@@ -173,6 +174,25 @@ fn the_looks_of_the_rain_are_handed_over_as_tuned() {
 }
 
 #[test]
+fn the_streaks_catch_the_light_through_the_raindrop_material_and_the_splashes_as_it_is() {
+    let light = Vec3::new(0.2, 0.4, 0.8);
+
+    let uniform = uniform_of(
+        &RainInput {
+            tint: light,
+            ..downpour()
+        },
+        &view(),
+    );
+
+    assert_eq!(uniform.tint, light.extend(0.0).to_array());
+    assert_eq!(
+        uniform.streak_tint,
+        (light * STREAK_BASE_COLOR).extend(0.0).to_array()
+    );
+}
+
+#[test]
 fn a_texture_of_no_subtextures_is_one_whole_streak() {
     let uniform = uniform_of(&downpour(), &view());
     assert_eq!(&uniform.atlas[..2], &[1.0, 1.0]);
@@ -292,6 +312,7 @@ fn the_uniform_is_laid_out_as_the_shader_declares_it() {
         across,
         lattice,
         tint,
+        streak_tint,
         atlas,
         window,
         heights,

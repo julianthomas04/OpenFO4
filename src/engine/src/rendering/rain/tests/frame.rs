@@ -3,7 +3,9 @@
 
 use glam::{Mat4, UVec2, Vec3, Vec4};
 
-use super::scene::{BACKGROUND, Fog, Look, NO_FOG, Scene, TARGET, lit, roof, roof_over};
+use super::scene::{
+    BACKGROUND, Fog, Look, NO_FOG, STREAK_FILE, Scene, TARGET, lit, roof, roof_over, write_texture,
+};
 use super::{EYE, downpour};
 use crate::rendering::rain::motion::{drop_count, splash_count};
 use crate::rendering::rain::uniform::{Draws, Fall};
@@ -210,35 +212,59 @@ fn the_rain_falls_as_time_passes() {
     assert!(moved > 200, "{moved} pixels changed");
 }
 
+/// How far the brightest pixel of a frame rises over the background.
+fn brightest_rise(pixels: &[Vec4]) -> f32 {
+    pixels
+        .iter()
+        .map(|pixel| pixel.truncate().max_element() - BACKGROUND)
+        .fold(0.0, f32::max)
+}
+
 #[test]
-fn the_fog_covers_the_rain_like_everything_else() {
-    let Some(mut scene) = Scene::new("the_fog_covers_the_rain_like_everything_else", &[]) else {
+fn the_streaks_add_light_to_the_scene_and_never_darken_it() {
+    let Some(mut scene) = Scene::new("the_streaks_add_light_to_the_scene", &[]) else {
         return;
     };
-    let clear = scene.draw(&downpour(), Look::AHEAD);
-    let fogged = scene.draw_at(
-        &downpour(),
-        Look::AHEAD,
-        Fog {
-            colour: Vec3::new(1.0, 0.0, 0.0),
-            opacity: 1.0,
-        },
-        0.0,
-    );
+    write_texture(scene.assets.path(), STREAK_FILE, UVec2::new(4, 4), |_| {
+        [128, 128, 128, 255]
+    });
 
-    let in_clear = lit(&clear);
-    let in_fog = lit(&fogged);
-    assert!(in_clear.len() > 200 && in_fog.len() > 200);
-    let green_of = |pixels: &[Vec4], lit: &[UVec2]| {
-        lit.iter()
-            .map(|pixel| pixels[(pixel.y * TARGET + pixel.x) as usize].y)
-            .fold(f32::INFINITY, f32::min)
+    let pixels = scene.draw(&downpour(), Look::AHEAD);
+
+    assert!(lit(&pixels).len() > 200, "{} pixels", lit(&pixels).len());
+    let darkest = pixels
+        .iter()
+        .map(|pixel| pixel.truncate().min_element())
+        .fold(f32::INFINITY, f32::min);
+    assert!(darkest >= BACKGROUND - 1e-3, "{darkest}");
+}
+
+#[test]
+fn the_fog_takes_its_share_of_the_light_of_the_streaks_without_tinting_them() {
+    let Some(mut scene) = Scene::new("the_fog_takes_its_share_of_the_light", &[]) else {
+        return;
     };
+    let fog = |opacity: f32| Fog {
+        colour: Vec3::new(1.0, 0.0, 0.0),
+        opacity,
+    };
+
+    let clear = scene.draw(&downpour(), Look::AHEAD);
+    let half = scene.draw_at(&downpour(), Look::AHEAD, fog(0.5), 0.0);
+    let thick = scene.draw_at(&downpour(), Look::AHEAD, fog(1.0), 0.0);
+
+    let rise = brightest_rise(&clear);
+    assert!(rise > 0.1, "{rise}");
     assert!(
-        green_of(&clear, &in_clear) >= BACKGROUND - 1e-3,
-        "white rain"
+        (brightest_rise(&half) - 0.5 * rise).abs() < 0.02 * rise,
+        "{} of {rise}",
+        brightest_rise(&half)
     );
-    assert!(green_of(&fogged, &in_fog) < BACKGROUND - 0.02, "red rain");
+    assert_eq!(lit(&thick).len(), 0, "streaks seen through thick fog");
+    assert!(
+        half.iter().all(|pixel| pixel.x <= pixel.y + 1e-3),
+        "red rain"
+    );
 }
 
 #[test]

@@ -1,7 +1,9 @@
 //! The pipelines of the rain pass and the bind group they share. The pass lays out its own
 //! groups: the rain's at 0 and the frame's at 1. Both pipelines draw instanced quads of four
-//! vertices, blended over the scene and tested against its depth without writing it.
+//! vertices, blended with the scene as their materials say and tested against its depth without
+//! writing it.
 
+use super::material::{SPLASH_BLEND, STREAK_BLEND};
 use super::uniform::RainUniform;
 use crate::rendering::post::hdr_target::HDR_FORMAT;
 use crate::rendering::shaders::{self, ShaderSource};
@@ -38,6 +40,7 @@ impl RainPipelines {
                 shader,
                 &pipeline_layout,
                 ("vs_streak", "fs_streak"),
+                STREAK_BLEND,
             ),
             splashes: create_pipeline(
                 device,
@@ -45,6 +48,7 @@ impl RainPipelines {
                 shader,
                 &pipeline_layout,
                 ("vs_splash", "fs_splash"),
+                SPLASH_BLEND,
             ),
             layout,
         }
@@ -156,13 +160,13 @@ pub(super) fn bind_group(
     })
 }
 
-/// Straight alpha over the scene; the target's alpha stays as it is.
 fn create_pipeline(
     device: &wgpu::Device,
     label: &str,
     shader: &ShaderSource,
     layout: &wgpu::PipelineLayout,
     (vertex_entry, fragment_entry): (&str, &str),
+    blend: wgpu::BlendState,
 ) -> wgpu::RenderPipeline {
     let module = shader.compile(device);
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -179,18 +183,7 @@ fn create_pipeline(
             entry_point: Some(fragment_entry),
             targets: &[Some(wgpu::ColorTargetState {
                 format: HDR_FORMAT,
-                blend: Some(wgpu::BlendState {
-                    color: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::SrcAlpha,
-                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                        operation: wgpu::BlendOperation::Add,
-                    },
-                    alpha: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::Zero,
-                        dst_factor: wgpu::BlendFactor::One,
-                        operation: wgpu::BlendOperation::Add,
-                    },
-                }),
+                blend: Some(blend),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),

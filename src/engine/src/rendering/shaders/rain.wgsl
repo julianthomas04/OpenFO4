@@ -10,8 +10,10 @@ struct RainUniform {
     across: vec4<f32>,
     // xyz: where the lattice of drops lies relative to the camera, w: the box edge.
     lattice: vec4<f32>,
-    // rgb: the tint of the rain.
+    // rgb: the light the rain catches, which the splashes are tinted with.
     tint: vec4<f32>,
+    // rgb: the same times the base colour of the raindrop material.
+    streak_tint: vec4<f32>,
     // x, y: columns and rows of streak subtextures, z: frames of a splash, w: the splash's edge.
     atlas: vec4<f32>,
     // xy: the corner of the occlusion map with the smallest x and z, z: its edge, w: the height
@@ -22,8 +24,8 @@ struct RainUniform {
     // x, y: the distances over which a drop near the camera fades in, z: the share of the box
     // edge a drop fades out from, w: the same for a splash.
     fades: vec4<f32>,
-    // x: how opaque the alpha of the streak texture is drawn, y: the same for the splash atlas,
-    // z: the least a drop's brightness varies to.
+    // x: how much the alpha of the streak texture weighs the light a streak adds, y: how opaque
+    // the alpha of the splash atlas is drawn, z: the least a drop's brightness varies to.
     looks: vec4<f32>,
     // x: how far through its cycle the splash phase is, y: the splash lattice edge, zw: where
     // that lattice lies relative to the camera (x and z).
@@ -159,8 +161,10 @@ fn vs_streak(@builtin(vertex_index) vertex: u32, @builtin(instance_index) drop: 
 
 @fragment
 fn fs_streak(in: DropOut) -> @location(0) vec4<f32> {
+    // The streaks add their light to the scene, so the fog takes its share of it rather than
+    // bringing its own colour.
     let texel = textureSample(streak_texture, rain_sampler, in.uv);
-    let colour = apply_fog(texel.rgb * rain.tint.rgb, in.world);
+    let colour = texel.rgb * rain.streak_tint.rgb * fog_transmittance(in.world);
     return vec4<f32>(colour, texel.a * rain.looks.x * in.fade);
 }
 
