@@ -425,6 +425,7 @@ mod tests {
     fn snapshot(model: &PipBoyModel) -> PipBoySnapshot<'_> {
         PipBoySnapshot {
             model,
+            clock: crate::sim::WorldClock::fixture().date(),
             vitals: vitals(),
         }
     }

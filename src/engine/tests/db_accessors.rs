@@ -1777,6 +1777,34 @@ fn climate_and_image_space_data_are_returned_verbatim() {
     ));
 }
 
+#[test]
+fn climate_sun_textures_are_returned_and_may_be_null() {
+    let conn = schema_connection();
+    insert(
+        &conn,
+        "climates",
+        &[
+            ("form_key", text("CL")),
+            ("sun_texture", text(r"Sky\Sun_d.dds")),
+            ("sun_glare_texture", text(r"Sky\SunGlare.dds")),
+        ],
+    );
+    insert(&conn, "climates", &[("form_key", text("BARE"))]);
+    let db = client(conn);
+    assert_eq!(
+        db.get_climate_sun_textures("CL").unwrap(),
+        (
+            Some(r"Sky\Sun_d.dds".to_owned()),
+            Some(r"Sky\SunGlare.dds".to_owned())
+        )
+    );
+    assert_eq!(db.get_climate_sun_textures("BARE").unwrap(), (None, None));
+    assert!(matches!(
+        db.get_climate_sun_textures("missing").unwrap_err(),
+        rusqlite::Error::QueryReturnedNoRows
+    ));
+}
+
 // ------------------------------------------------- statics / misc records
 
 #[test]
@@ -3321,4 +3349,117 @@ fn a_malformed_collides_with_list_is_an_error() {
         format!("{error:#}").contains("000004:Fallout4.esm"),
         "{error:#}"
     );
+}
+
+// ---------------------------------------------------- globals and game settings
+
+fn seed_global(conn: &Connection, editor_id: &str, value: Value) {
+    insert(
+        conn,
+        "globals",
+        &[
+            ("form_key", text(&format!("{editor_id}:Fallout4.esm"))),
+            ("editor_id", text(editor_id)),
+            ("value_type", text("float")),
+            ("value", value),
+        ],
+    );
+}
+
+fn seed_game_setting(
+    conn: &Connection,
+    editor_id: &str,
+    value_type: &str,
+    (value_int, value_float): (Value, Value),
+) {
+    insert(
+        conn,
+        "game_settings",
+        &[
+            ("form_key", text(&format!("{editor_id}:Fallout4.esm"))),
+            ("editor_id", text(editor_id)),
+            ("value_type", text(value_type)),
+            ("value_int", value_int),
+            ("value_float", value_float),
+        ],
+    );
+}
+
+#[test]
+fn a_global_is_read_by_editor_id() {
+    let conn = schema_connection();
+    seed_global(&conn, "TimeScale", real(20.0));
+    seed_global(&conn, "GameHour", real(11.5));
+    let db = client(conn);
+    assert_eq!(db.get_global("TimeScale").unwrap(), Some(20.0));
+    assert_eq!(db.get_global("GameHour").unwrap(), Some(11.5));
+}
+
+#[test]
+fn an_unknown_global_is_absent_rather_than_an_error() {
+    let db = client(schema_connection());
+    assert_eq!(db.get_global("TimeScale").unwrap(), None);
+}
+
+#[test]
+fn a_global_without_a_value_is_an_error() {
+    let conn = schema_connection();
+    seed_global(&conn, "TimeScale", Value::Null);
+    assert!(client(conn).get_global("TimeScale").is_err());
+}
+
+#[test]
+fn a_global_query_fails_when_the_table_is_missing() {
+    let conn = schema_connection();
+    conn.execute_batch("DROP TABLE globals;").unwrap();
+    assert!(client(conn).get_global("TimeScale").is_err());
+}
+
+#[test]
+fn float_and_int_game_settings_read_as_numbers() {
+    let conn = schema_connection();
+    seed_game_setting(&conn, "fSunXExtreme", "float", (Value::Null, real(600.0)));
+    seed_game_setting(&conn, "iMasserSize", "int", (int(90), Value::Null));
+    let db = client(conn);
+    assert_eq!(
+        db.get_game_setting_number("fSunXExtreme").unwrap(),
+        Some(600.0)
+    );
+    assert_eq!(
+        db.get_game_setting_number("iMasserSize").unwrap(),
+        Some(90.0)
+    );
+}
+
+#[test]
+fn an_unknown_game_setting_is_absent_rather_than_an_error() {
+    let db = client(schema_connection());
+    assert_eq!(db.get_game_setting_number("fSunXExtreme").unwrap(), None);
+}
+
+#[test]
+fn a_non_numeric_game_setting_is_an_error_naming_it() {
+    let conn = schema_connection();
+    seed_game_setting(
+        &conn,
+        "sMasserTexture",
+        "string",
+        (Value::Null, Value::Null),
+    );
+    seed_game_setting(&conn, "bFlag", "bool", (int(1), Value::Null));
+    let db = client(conn);
+    for name in ["sMasserTexture", "bFlag"] {
+        let error = db.get_game_setting_number(name).unwrap_err();
+        assert!(format!("{error:#}").contains(name), "{error:#}");
+    }
+}
+
+#[test]
+fn a_numeric_game_setting_without_a_value_is_an_error_naming_it() {
+    let conn = schema_connection();
+    seed_game_setting(&conn, "fSunXExtreme", "float", (Value::Null, Value::Null));
+    let error = client(conn)
+        .get_game_setting_number("fSunXExtreme")
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("fSunXExtreme"), "{error:#}");
 }

@@ -17,8 +17,9 @@ pub struct FrameUniform {
     /// rgb: linear sun colour times intensity, w: that intensity (the HDR sunlight scale, 1 when
     /// none applies), for consumers that need the unscaled colour.
     pub sun_illuminance: Vec4,
-    /// rgb: linear sun disc colour times intensity, painted by the sky.
-    pub sun_disc_illuminance: Vec4,
+    /// x: the sun's alpha around sunrise and sunset, 0 to 1, for the water. It stays the sun's
+    /// while `to_sun` follows the moon at night.
+    pub daylight: Vec4,
     /// rgb: linear ambient colour of each cube face, order +X, -X, +Y, -Y, +Z, -Z (engine axes).
     pub ambient_cube: [Vec4; AMBIENT_CUBE_FACES],
     pub sky_zenith: Vec4,
@@ -37,7 +38,7 @@ pub struct FrameUniform {
     pub shadow_params: Vec4,
     /// World size of one shadow-map texel, one component per cascade.
     pub cascade_texel_world: Vec4,
-    /// x: PCF taps per axis.
+    /// x: compare taps of the sun shadow filter.
     pub shadow_filter: UVec4,
     /// x: shadows enabled, y: cascade count, z: debug view, w: material sampler anisotropy clamp.
     pub flags: UVec4,
@@ -81,6 +82,11 @@ mod tests {
     fn water_fields_close_the_uniform_at_the_wgsl_offset() {
         assert_eq!(std::mem::offset_of!(FrameUniform, time_water), 864);
         assert_eq!(std::mem::size_of::<FrameUniform>() % 16, 0);
+    }
+
+    #[test]
+    fn the_daylight_field_follows_the_sun_illuminance() {
+        assert_eq!(std::mem::offset_of!(FrameUniform, daylight), 176);
     }
 
     #[test]

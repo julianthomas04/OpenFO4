@@ -90,12 +90,14 @@ use crate::anim::marker_timeline::{FIRST_PERSON_ASSETS_DIR, load_gait_timings};
 use crate::assets::AssetServer;
 use crate::assets::layout;
 use crate::assets::pipboy_art::ArtLibrary;
+use crate::assets::sky_game_settings::load_sky_game_config;
+use crate::audio::conditions::GameTime;
 use crate::audio::world_music_loader::{load_world_music, seed_from_clock};
 use crate::audio::{
     AudioError, AudioFrame, AudioSystem, Footsteps, PLACE_POLLS_PER_SECOND, PlacePoll,
 };
 use crate::bethesda_space::UNITS_FROM_ENGINE;
-use crate::game_flow::{GameFlow, SpawnLocation, SpawnPlace, StartMode};
+use crate::game_flow::{GameFlow, Phase, SpawnLocation, SpawnPlace, StartMode};
 use crate::rendering::water::ssr::constants::Surroundings;
 use crate::rendering::{
     anim_debug_panel::{AnimDebugPanel, characters_section},
@@ -117,8 +119,8 @@ use crate::rendering::{
     hiz::HizPipeline,
     lighting::{
         FrameBinding, LightingState, debug_panel::lighting_panel,
-        exterior_weather::ExteriorWeather, interior_catalog::InteriorLightingCatalog,
-        state::FrameInputs,
+        exterior_weather::ExteriorWeatherSlots, interior_catalog::InteriorLightingCatalog,
+        state::FrameInputs, time_of_day::DayTime, time_panel::time_panel,
     },
     line_buffer::LineBuffer,
     local_lights::{
@@ -136,6 +138,7 @@ use crate::rendering::{
         PostChain,
         depth_of_field::{BokehGate, DofCamera, select_frame},
         hdr_target::{HDR_FORMAT, clear_color},
+        night_sky::{MoonSizes, NightSky, NightSkyInput, SkySizes},
         tonemap,
     },
     ragdoll_debug_panel::ragdoll_settings_section,
@@ -169,7 +172,8 @@ use crate::rendering::{
 };
 use crate::sim::pipboy::PipBoyAction;
 use crate::sim::{
-    DynamicPose, MaterialBuoyancy, PlayerInput, PlayerMovement, SimCommand, SimWorld, water_physics,
+    ClockFrame, DynamicPose, MaterialBuoyancy, PlayerInput, PlayerMovement, SimCommand, SimWorld,
+    water_physics,
 };
 use crate::spawn_cell::SpawnCellTarget;
 use crate::startup::{StartupError, StartupTimer};
@@ -499,6 +503,8 @@ pub struct State {
 
     // Post
     post: PostChain,
+    /// `None` while the exterior has no clocked sky.
+    night_sky: Option<NightSky>,
     scene_copy: SceneCopy,
     water_stage: WaterStage,
     effect_stage: EffectStage,
@@ -1180,9 +1186,13 @@ impl State {
             LampShadowState::new(settings.lamp_shadows),
             LocalLightSettings::new(settings.light_fade),
         );
-        if let Some(weather) = ExteriorWeather::load_or_report(&asset_server.db_path(), WORLDSPACE)
+        if let Some(slots) =
+            ExteriorWeatherSlots::load_or_report(&asset_server.db_path(), WORLDSPACE)
         {
-            lighting.set_exterior_weather(weather);
+            let game = crate::assets::db::DbClient::new(&asset_server.db_path())
+                .and_then(|db| load_sky_game_config(&db))
+                .map_err(StartupError::SkySettings)?;
+            lighting.set_exterior_sky(slots, game);
         }
         let shadow_maps = ShadowMaps::new(&device, &lighting.shadows.config);
         let lamp_atlas_resolution = lighting.lamp_shadows.config.atlas_resolution;
@@ -1213,6 +1223,29 @@ impl State {
             &frame_binding.layout,
             &world_pass_layout.pipeline_layout,
         );
+        let night_sky = lighting.sky_game_config().map(|game| {
+            let (initial_moon, initial_sky_model) = lighting.initial_night_sky();
+            let sizes = SkySizes {
+                moon: MoonSizes {
+                    masser: game.masser_size(),
+                    secunda: game.secunda_size(),
+                },
+                sun: settings.sun,
+            };
+            NightSky::new(
+                &device,
+                &queue,
+                asset_server.asset_location(),
+                [
+                    &world_pass_layout.material_bind_group_layout,
+                    &frame_binding.layout,
+                    &world_pass_layout.instance_bind_group_layout,
+                ],
+                sizes,
+                initial_moon,
+                initial_sky_model,
+            )
+        });
         timer.mark("frame_resources")?;
 
         // GPU-driven: textures & materials
@@ -1554,7 +1587,10 @@ impl State {
 
         // The player spawns at the camera start and snaps to the ground as
         // soon as the cell's terrain collision streams in.
-        let mut sim = SimWorld::new(player_movement);
+        let world_clock = crate::assets::db::DbClient::new(&db_path)
+            .and_then(|db| crate::assets::world_clock_start::load_world_clock(&db))
+            .map_err(StartupError::WorldClock)?;
+        let mut sim = SimWorld::new(player_movement, world_clock);
         if let Some(table) = buoyancy_table {
             sim.set_material_buoyancy_table(std::sync::Arc::new(table));
         }
@@ -1643,6 +1679,7 @@ impl State {
             lighting,
             interior_lighting,
             frame_binding,
+            night_sky,
             shadow_renderer,
             lamp_shadow_cache,
             lamp_candidates: Vec::new(),
@@ -2177,6 +2214,11 @@ impl State {
                 // instead.
                 if self.lighting.draws_sky() {
                     self.post.draw_sky(&mut render_pass);
+                    if self.lighting.sky_objects().is_some()
+                        && let Some(night_sky) = &self.night_sky
+                    {
+                        night_sky.draw(&mut render_pass, self.texture_feedback.bind_group());
+                    }
                 }
             }
         }
@@ -2930,6 +2972,22 @@ impl State {
                                 );
                             });
 
+                        egui::CollapsingHeader::new("Environment")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                let mut clock_edits = Vec::new();
+                                time_panel(
+                                    ui,
+                                    self.sim.world_clock(),
+                                    self.lighting.sky_moment(),
+                                    self.night_sky.as_ref().map(NightSky::asset_status),
+                                    &mut clock_edits,
+                                );
+                                for edit in clock_edits {
+                                    self.sim.apply(SimCommand::SetWorldClock(edit));
+                                }
+                            });
+
                         egui::CollapsingHeader::new("Lighting")
                             .default_open(false)
                             .show(ui, |ui| {
@@ -3274,7 +3332,10 @@ impl State {
         let frame = AudioFrame {
             phase,
             dt,
-            hour: self.sim.pipboy_snapshot().model.clock.hour(),
+            time: {
+                let clock = self.sim.world_clock();
+                GameTime::new(clock.hour(), clock.days_passed())
+            },
             place,
         };
         match &mut self.audio {
@@ -3309,8 +3370,12 @@ impl State {
         let pipboy_open = self.sim.pipboy_snapshot().model.open;
         self.sync_pipboy_session(pipboy_open);
         // The world stands still behind the Pip-Boy: render-side clocks get no time.
-        let world_dt = if pipboy_open { 0.0 } else { dt };
+        let world_dt = self.sim.world_dt(dt);
         self.world_seconds += world_dt;
+        self.sim.advance_world_clock(ClockFrame {
+            in_game: self.flow.phase() == Phase::InGame,
+            world_dt,
+        });
 
         // Apply a debug-UI worldspace selection before anything reads the
         // camera this frame: the streamer tears the old content down and reports
@@ -3504,6 +3569,20 @@ impl State {
             self.streamer.current_interior(),
             self.interior_lighting.as_ref(),
         );
+        let clock = self.sim.world_clock();
+        self.lighting
+            .set_time_of_day(DayTime::clamped(clock.days_passed(), clock.hour()));
+        if self.lighting.draws_sky()
+            && let Some(objects) = self.lighting.sky_objects()
+            && let Some(night_sky) = &mut self.night_sky
+        {
+            night_sky.update(
+                &self.device,
+                &self.queue,
+                &NightSkyInput::new(objects, self.lighting.sun_input()),
+                self.lighting.sky.radiance_scale,
+            );
+        }
         let mut water_entries = Vec::new();
         if self.water_stage.wants_water_entries() {
             self.sim.drain_water_entries(&mut water_entries);

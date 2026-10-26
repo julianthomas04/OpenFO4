@@ -136,11 +136,76 @@ pub fn load_dds_view(
     asset_root: &str,
     path: &str,
 ) -> Result<wgpu::TextureView, crate::assets::types::texture::TextureError> {
+    load_dds_view_as(device, queue, asset_root, path, false)
+}
+
+/// Like [`load_dds_view`], but the view decodes sRGB-encoded colour to linear when sampled.
+pub fn load_dds_view_srgb(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    asset_root: &str,
+    path: &str,
+) -> Result<wgpu::TextureView, crate::assets::types::texture::TextureError> {
+    load_dds_view_as(device, queue, asset_root, path, true)
+}
+
+fn load_dds_view_as(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    asset_root: &str,
+    path: &str,
+    srgb: bool,
+) -> Result<wgpu::TextureView, crate::assets::types::texture::TextureError> {
     use crate::assets::types::texture;
     let full_path = format!("{asset_root}/{path}");
     let layout = std::sync::Arc::new(texture::read_layout(&full_path)?);
     let payload = texture::read_mips(&full_path, &layout, 0..layout.mip_count)?;
-    let gpu = texture::create_texture(device, &layout, 0, false, path);
+    let gpu = texture::create_texture(device, &layout, 0, srgb, path);
     texture::write_payload(queue, &gpu, 0, &payload)?;
     Ok(gpu.create_view(&wgpu::TextureViewDescriptor::default()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rendering::gpu_test::test_device;
+
+    fn write_dds(dir: &std::path::Path) -> &'static str {
+        const NAME: &str = "texel.dds";
+        let mut dds = ddsfile::Dds::new_dxgi(ddsfile::NewDxgiParams {
+            height: 4,
+            width: 4,
+            depth: None,
+            format: ddsfile::DxgiFormat::R8G8B8A8_UNorm,
+            mipmap_levels: Some(1),
+            array_layers: None,
+            caps2: None,
+            is_cubemap: false,
+            resource_dimension: ddsfile::D3D10ResourceDimension::Texture2D,
+            alpha_mode: ddsfile::AlphaMode::Unknown,
+        })
+        .unwrap();
+        dds.data.fill(200);
+        let mut file = std::fs::File::create(dir.join(NAME)).unwrap();
+        dds.write(&mut file).unwrap();
+        NAME
+    }
+
+    #[test]
+    fn the_srgb_loader_decodes_colour_and_the_plain_loader_keeps_it_as_stored() {
+        let Some((device, queue)) =
+            test_device("the_srgb_loader_decodes_colour_and_the_plain_loader_keeps_it_as_stored")
+        else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let name = write_dds(dir.path());
+        let root = dir.path().to_str().unwrap();
+
+        let plain = load_dds_view(&device, &queue, root, name).unwrap();
+        let srgb = load_dds_view_srgb(&device, &queue, root, name).unwrap();
+
+        assert_eq!(plain.texture().format(), wgpu::TextureFormat::Rgba8Unorm);
+        assert_eq!(srgb.texture().format(), wgpu::TextureFormat::Rgba8UnormSrgb);
+    }
 }

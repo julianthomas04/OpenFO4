@@ -1,12 +1,18 @@
+use std::sync::Arc;
+
 use glam::{UVec2, UVec4, Vec3, Vec4};
 
 use super::ambient::{AmbientCube, EXTERIOR_AMBIENT_FILL};
 use super::cell_lighting::CellLighting;
 use super::environment::{Environment, InteriorLighting};
-use super::exterior_weather::{ExteriorWeather, ImageSpaceHdr};
+use super::exterior_weather::{ExteriorWeather, ExteriorWeatherSlots, ImageSpaceHdr};
 use super::fog::{Fog, FogParams};
 use super::frame_uniform::{FrameUniform, wrapped_time};
 use super::interior_catalog::InteriorLightingCatalog;
+use super::sky_clock::{ClockedSky, SkyClock};
+use super::time_of_day::{
+    DayTime, MoonKind, SkyGameConfig, SkyMoment, SkyObjects, sun_light_weight,
+};
 use super::tonemap_settings::TonemapSettings;
 use crate::rendering::camera::Camera;
 use crate::rendering::debug_view::DebugView;
@@ -14,15 +20,20 @@ use crate::rendering::local_lights::LocalLightSettings;
 use crate::rendering::local_lights::cluster_grid::{ClusterDepth, cluster_grid};
 use crate::rendering::post::auto_exposure::AutoExposureParams;
 use crate::rendering::post::depth_of_field::ImageSpaceDepthOfField;
+use crate::rendering::post::night_sky::SunInput;
 use crate::rendering::shadows::{CascadeSet, ShadowState, lamps::LampShadowState};
 use crate::rendering::water::CameraWater;
 
-const SUN_ANGULAR_RADIUS_DEG: f32 = 0.5;
+/// Angular radius of the real sun's disc; sun shadow edges soften with it.
+const SUN_ANGULAR_RADIUS_DEG: f32 = 0.266;
 /// The Creation Kit states the eye adaptation speed per frame at 30 fps.
 const ADAPTATION_REFERENCE_FPS: f32 = 30.0;
 /// Compensates for the unproven AutoExposureMin/Max semantics; calibrated against the vanilla reference screenshot.
 const EXPOSURE_CALIBRATION: f32 = 0.38;
 
+/// The exterior's one directional light and the sun disc the sky paints. With the clock in
+/// charge the direction and strength are those of the body that currently lights the ground (the
+/// moon at night); the disc is always the sun's.
 #[derive(Debug, Copy, Clone)]
 pub struct SunSettings {
     /// 0 = north (engine -Z), increasing clockwise towards +X (east).
@@ -31,6 +42,10 @@ pub struct SunSettings {
     pub color: Vec3,
     pub disc_color: Vec3,
     pub intensity: f32,
+    /// 0 to 1, multiplies the direct light: how far the lighting body has risen.
+    pub light_strength: f32,
+    /// 0 to 1, multiplies the sun disc: the sun's alpha around sunrise and sunset.
+    pub daylight: f32,
 }
 
 impl SunSettings {
@@ -44,17 +59,26 @@ impl SunSettings {
         )
     }
 
-    /// No direct light once the sun is at or below the horizon.
+    /// Points the light along `direction`, a unit vector in engine space; the inverse of
+    /// [`Self::direction_to_sun`].
+    pub fn set_direction(&mut self, direction: Vec3) {
+        self.azimuth_deg = direction
+            .x
+            .atan2(-direction.z)
+            .to_degrees()
+            .rem_euclid(360.0);
+        self.elevation_deg = direction.y.clamp(-1.0, 1.0).asin().to_degrees();
+    }
+
+    /// Lets the light and the disc fade in with the elevation, as the clock does for the sun.
+    pub fn fade_by_elevation(&mut self) {
+        let weight = sun_light_weight(self.elevation_deg);
+        self.light_strength = weight;
+        self.daylight = weight;
+    }
+
     pub fn illuminance(&self) -> Vec3 {
-        self.above_horizon_scale() * self.color * self.intensity
-    }
-
-    pub fn disc_illuminance(&self) -> Vec3 {
-        self.above_horizon_scale() * self.disc_color * self.intensity
-    }
-
-    fn above_horizon_scale(&self) -> f32 {
-        f32::from(self.direction_to_sun().y > 0.0)
+        self.light_strength * self.color * self.intensity
     }
 }
 
@@ -66,6 +90,8 @@ impl Default for SunSettings {
             color: Vec3::new(1.0, 0.90, 0.75),
             disc_color: Vec3::new(1.0, 0.90, 0.75),
             intensity: 1.5,
+            light_strength: 1.0,
+            daylight: 1.0,
         }
     }
 }
@@ -228,10 +254,11 @@ fn uploaded_ambient(
 /// shading, except the ambient cube, which `uploaded_ambient` chooses.
 struct SceneTerms {
     to_sun: Vec3,
+    /// The sun's alpha, for the water.
+    daylight: f32,
     sun_illuminance: Vec3,
     /// The HDR sunlight scale already folded into `sun_illuminance` (1 when none).
     sunlight_scale: f32,
-    sun_disc_illuminance: Vec3,
     sky_zenith: Vec3,
     sky_horizon: Vec3,
     sky_ground: Vec3,
@@ -259,7 +286,7 @@ pub enum ShadowStatus {
     Active,
     Disabled,
     Interior,
-    SunBelowHorizon,
+    NoDirectLight,
 }
 
 impl ShadowStatus {
@@ -268,7 +295,7 @@ impl ShadowStatus {
             Self::Active => "active",
             Self::Disabled => "disabled in the panel",
             Self::Interior => "off in interiors",
-            Self::SunBelowHorizon => "sun below the horizon",
+            Self::NoDirectLight => "no direct light (sun and moon down)",
         }
     }
 }
@@ -290,7 +317,13 @@ pub struct LightingState {
     /// While on and a weather is loaded, exterior ambient comes from the
     /// weather instead of the sky settings.
     pub use_weather_ambient: bool,
+    /// While on, the clock no longer drives the sun, sky, fog, exposure and ambient: they keep the
+    /// values the panels hold. The slot, moon and star readouts keep following the clock.
+    pub sun_override: bool,
     exterior_weather: Option<ExteriorWeather>,
+    sky_clock: Option<SkyClock>,
+    sky_moment: Option<SkyMoment>,
+    sky_objects: Option<SkyObjects>,
     environment: Environment,
 }
 
@@ -312,7 +345,11 @@ impl LightingState {
             lamp_shadows,
             local_lights,
             use_weather_ambient: true,
+            sun_override: false,
             exterior_weather: None,
+            sky_clock: None,
+            sky_moment: None,
+            sky_objects: None,
             environment: Environment::Exterior,
         }
     }
@@ -342,6 +379,94 @@ impl LightingState {
             None => {}
         }
         self.exterior_weather = Some(weather);
+    }
+
+    /// Hands the exterior its weather and the settings the clock needs. The weather's Day slot
+    /// applies until the first [`Self::set_time_of_day`].
+    pub fn set_exterior_sky(&mut self, slots: ExteriorWeatherSlots, game: SkyGameConfig) {
+        let clock = SkyClock::new(slots, game);
+        self.set_exterior_weather(clock.initial_weather());
+        self.sky_clock = Some(clock);
+    }
+
+    /// Moves the exterior to `day_time`: samples the weather, places the sun, moon and stars,
+    /// and lights the world with whichever body is up. Interior shading has no sky, so it clears
+    /// the sky readouts. The readouts update either way, but with [`Self::sun_override`] on the
+    /// sun, sky, fog and exposure keep their panel values. Whenever the clock does not drive the
+    /// sun (overridden, or no [`Self::set_exterior_sky`] yet) the panel's sun fades with its
+    /// elevation, so it never lights the world from below the horizon.
+    pub fn set_time_of_day(&mut self, day_time: DayTime) {
+        if !matches!(self.shading(), Shading::Exterior) {
+            self.sky_moment = None;
+            self.sky_objects = None;
+            return;
+        }
+        if self.sun_override || self.sky_clock.is_none() {
+            self.sun.fade_by_elevation();
+        }
+        let Some(clock) = &self.sky_clock else {
+            return;
+        };
+        let ClockedSky {
+            moment,
+            weather,
+            sun_alpha,
+            mut objects,
+        } = clock.at(day_time);
+        self.sky_moment = Some(moment);
+        if self.sun_override {
+            objects.sun_disc_direction = self.sun.direction_to_sun();
+        } else {
+            self.set_exterior_weather(weather);
+            self.sun.set_direction(moment.light.direction);
+            self.sun.light_strength = moment.light.strength;
+            self.sun.daylight = sun_alpha;
+        }
+        self.sky_objects = Some(objects);
+    }
+
+    /// The kind of the moon and the sky model the night sky loads first.
+    pub fn initial_night_sky(&self) -> (Option<MoonKind>, Option<&Arc<str>>) {
+        self.sky_clock.as_ref().map_or((None, None), |clock| {
+            (clock.moon_kind(), clock.sky_model_path())
+        })
+    }
+
+    /// The game settings of the sky, once the exterior has its clock.
+    pub fn sky_game_config(&self) -> Option<&SkyGameConfig> {
+        self.sky_clock.as_ref().map(SkyClock::game)
+    }
+
+    /// Where the clock put the sky at the last exterior update; `None` before the first.
+    pub fn sky_moment(&self) -> Option<&SkyMoment> {
+        self.sky_moment.as_ref()
+    }
+
+    /// What the sky renderer draws, as of the last exterior update; `None` before the first.
+    pub fn sky_objects(&self) -> Option<&SkyObjects> {
+        self.sky_objects.as_ref()
+    }
+
+    /// The sun disc's direction: the clock's sun, or the manual one while overridden.
+    fn sun_disc_direction(&self) -> Vec3 {
+        match &self.sky_objects {
+            Some(objects) if !self.sun_override => objects.sun_disc_direction,
+            Some(_) | None => self.sun.direction_to_sun(),
+        }
+    }
+
+    /// The sun the sky draws: the disc's place and alpha, the disc colour (the panel's while the
+    /// sun is overridden) and the weather's glare colour, which the panel has no control for.
+    pub fn sun_input(&self) -> SunInput {
+        SunInput {
+            direction: self.sun_disc_direction(),
+            alpha: self.sun.daylight,
+            disc_color: self.sun.disc_color,
+            glare_color: self
+                .exterior_weather
+                .as_ref()
+                .map_or(self.sun.disc_color, |weather| weather.sun_glare),
+        }
     }
 
     pub fn exterior_weather(&self) -> Option<&ExteriorWeather> {
@@ -409,8 +534,8 @@ impl LightingState {
             ShadowStatus::Disabled
         } else if !matches!(self.environment, Environment::Exterior) {
             ShadowStatus::Interior
-        } else if self.sun.direction_to_sun().y <= 0.0 {
-            ShadowStatus::SunBelowHorizon
+        } else if self.sun.light_strength <= 0.0 {
+            ShadowStatus::NoDirectLight
         } else {
             ShadowStatus::Active
         }
@@ -452,7 +577,7 @@ impl LightingState {
                 .to_sun
                 .extend(SUN_ANGULAR_RADIUS_DEG.to_radians().cos()),
             sun_illuminance: scene.sun_illuminance.extend(scene.sunlight_scale),
-            sun_disc_illuminance: scene.sun_disc_illuminance.extend(0.0),
+            daylight: Vec4::new(scene.daylight, 0.0, 0.0, 0.0),
             ambient_cube: self.uploaded_ambient().uniform_faces(),
             sky_zenith: scene.sky_zenith.extend(0.0),
             sky_horizon: scene.sky_horizon.extend(0.0),
@@ -496,25 +621,27 @@ impl LightingState {
             Shading::Exterior => self.exterior_terms(),
             Shading::Neutral => SceneTerms {
                 sun_illuminance: Vec3::ZERO,
-                sun_disc_illuminance: Vec3::ZERO,
                 sky_zenith: Vec3::ZERO,
                 sky_horizon: Vec3::ZERO,
                 sky_ground: Vec3::ZERO,
                 fog: Fog::Disabled,
                 ..self.exterior_terms()
             },
-            Shading::Cell(cell) => SceneTerms {
-                to_sun: cell.directional.map_or(Vec3::Y, |light| light.to_light),
-                sun_illuminance: cell
-                    .directional
-                    .map_or(Vec3::ZERO, |light| light.color * light.fade.max(0.0)),
-                sunlight_scale: 1.0,
-                sun_disc_illuminance: Vec3::ZERO,
-                sky_zenith: Vec3::ZERO,
-                sky_horizon: Vec3::ZERO,
-                sky_ground: Vec3::ZERO,
-                fog: cell.fog,
-            },
+            Shading::Cell(cell) => {
+                let to_sun = cell.directional.map_or(Vec3::Y, |light| light.to_light);
+                SceneTerms {
+                    to_sun,
+                    daylight: f32::from(to_sun.y > 0.0),
+                    sun_illuminance: cell
+                        .directional
+                        .map_or(Vec3::ZERO, |light| light.color * light.fade.max(0.0)),
+                    sunlight_scale: 1.0,
+                    sky_zenith: Vec3::ZERO,
+                    sky_horizon: Vec3::ZERO,
+                    sky_ground: Vec3::ZERO,
+                    fog: cell.fog,
+                }
+            }
         }
     }
 
@@ -532,9 +659,9 @@ impl LightingState {
     fn exterior_terms(&self) -> SceneTerms {
         SceneTerms {
             to_sun: self.sun.direction_to_sun(),
+            daylight: self.sun.daylight,
             sun_illuminance: self.sun.illuminance(),
             sunlight_scale: self.sun.intensity,
-            sun_disc_illuminance: self.sun.disc_illuminance(),
             sky_zenith: self.sky.zenith * self.sky.radiance_scale,
             sky_horizon: self.sky.horizon * self.sky.radiance_scale,
             sky_ground: self.sky.ground * self.sky.radiance_scale,
@@ -563,6 +690,8 @@ mod tests {
             color: Vec3::new(1.0, 0.5, 0.25),
             disc_color: Vec3::new(2.0, 2.0, 2.0),
             intensity: 3.0,
+            light_strength: 1.0,
+            daylight: 1.0,
         }
     }
 
@@ -595,16 +724,82 @@ mod tests {
     fn a_risen_sun_lights_with_colour_times_intensity() {
         let sun = sun(0.0, 10.0);
         assert_eq!(sun.illuminance(), Vec3::new(3.0, 1.5, 0.75));
-        assert_eq!(sun.disc_illuminance(), Vec3::splat(6.0));
     }
 
     #[test]
-    fn a_sun_at_or_below_the_horizon_gives_no_direct_light() {
-        for elevation in [0.0, -0.1, -45.0] {
-            let sun = sun(0.0, elevation);
+    fn the_light_strength_scales_the_direct_light() {
+        let mut sun = sun(0.0, 10.0);
+        sun.light_strength = 0.5;
+        assert_eq!(sun.illuminance(), Vec3::new(1.5, 0.75, 0.375));
+    }
+
+    #[test]
+    fn the_daylight_leaves_the_direct_light_alone() {
+        let mut sun = sun(0.0, 10.0);
+        sun.daylight = 0.25;
+        assert_eq!(sun.illuminance(), Vec3::new(3.0, 1.5, 0.75));
+    }
+
+    #[test]
+    fn no_strength_gives_no_light_whatever_the_elevation() {
+        for elevation in [-45.0, 0.0, 60.0] {
+            let mut sun = sun(0.0, elevation);
+            sun.light_strength = 0.0;
             assert_eq!(sun.illuminance(), Vec3::ZERO, "{elevation}");
-            assert_eq!(sun.disc_illuminance(), Vec3::ZERO, "{elevation}");
         }
+    }
+
+    #[test]
+    fn fading_by_elevation_lights_nothing_at_the_horizon_and_everything_from_five_degrees() {
+        let faded = |elevation| {
+            let mut sun = sun(0.0, elevation);
+            sun.fade_by_elevation();
+            sun
+        };
+        for elevation in [-45.0, -0.1, 0.0] {
+            let sun = faded(elevation);
+            assert_eq!(sun.illuminance(), Vec3::ZERO, "{elevation}");
+            assert_eq!(sun.daylight, 0.0, "{elevation}");
+        }
+        let halfway = faded(2.5);
+        assert!((halfway.light_strength - 0.5).abs() < 1e-6);
+        assert_eq!(halfway.daylight, halfway.light_strength);
+        for elevation in [5.0, 40.0] {
+            assert_eq!(faded(elevation).illuminance(), Vec3::new(3.0, 1.5, 0.75));
+        }
+    }
+
+    #[test]
+    fn setting_a_direction_is_the_inverse_of_reading_it() {
+        let mut sun = sun(0.0, 0.0);
+        for (azimuth, elevation) in [
+            (0.0_f32, 0.0_f32),
+            (90.0, 30.0),
+            (180.0, -20.0),
+            (270.0, 60.0),
+            (359.0, 5.0),
+        ] {
+            let direction = Vec3::new(
+                f32::sin(azimuth.to_radians()) * f32::cos(elevation.to_radians()),
+                f32::sin(elevation.to_radians()),
+                -f32::cos(azimuth.to_radians()) * f32::cos(elevation.to_radians()),
+            );
+            sun.set_direction(direction);
+            assert!((sun.azimuth_deg - azimuth).abs() < 1e-3, "{azimuth}");
+            assert!((sun.elevation_deg - elevation).abs() < 1e-3, "{elevation}");
+            assert!(sun.direction_to_sun().abs_diff_eq(direction, 1e-5));
+        }
+    }
+
+    #[test]
+    fn setting_a_direction_keeps_the_azimuth_in_range_and_survives_straight_up() {
+        let mut sun = sun(0.0, 0.0);
+        sun.set_direction(Vec3::new(-1.0, 0.0, 0.0));
+        assert!((sun.azimuth_deg - 270.0).abs() < 1e-3);
+        sun.set_direction(Vec3::Y);
+        assert!((sun.elevation_deg - 90.0).abs() < 1e-3);
+        sun.set_direction(Vec3::new(0.0, 1.000_001, 0.0));
+        assert!(sun.elevation_deg.is_finite());
     }
 
     #[test]
@@ -655,13 +850,15 @@ mod tests {
 
     fn weather() -> ExteriorWeather {
         ExteriorWeather {
-            form_key: "TestWeather".to_string(),
+            form_key: "TestWeather".into(),
             editor_id: None,
             sun_light: Vec3::ONE,
             sun_disc: Vec3::ONE,
+            sun_glare: Vec3::ONE,
             sky_upper: Vec3::new(0.1, 0.2, 0.9),
             sky_lower: Vec3::new(0.3, 0.2, 0.1),
             horizon: Vec3::new(0.6, 0.7, 0.8),
+            stars: Vec3::ZERO,
             ambient_cube: weather_cube(),
             ambient_specular: Vec3::ZERO,
             hdr: ImageSpaceHdr::default(),
@@ -720,8 +917,21 @@ mod tests {
         state
     }
 
-    fn uploaded_cube(state: &LightingState) -> [Vec4; AMBIENT_CUBE_FACES] {
-        let camera = Camera {
+    #[test]
+    fn without_a_sky_clock_a_sun_below_the_horizon_gives_no_light_and_no_shadows() {
+        let mut state = state_with(Environment::Exterior, true, true, false);
+        state.sun.elevation_deg = -20.0;
+        state.set_time_of_day(DayTime::clamped(0, 12.0));
+        assert_eq!(state.sun.illuminance(), Vec3::ZERO);
+        assert_eq!(frame_of(&state).daylight.x, 0.0);
+        assert_eq!(state.shadow_status(), ShadowStatus::NoDirectLight);
+        state.sun.elevation_deg = 40.0;
+        state.set_time_of_day(DayTime::clamped(0, 12.0));
+        assert_eq!(state.shadow_status(), ShadowStatus::Active);
+    }
+
+    fn test_camera() -> Camera {
+        Camera {
             eye: Vec3::new(0.0, 10.0, 5.0),
             target: Vec3::ZERO,
             up: Vec3::Y,
@@ -729,18 +939,23 @@ mod tests {
             fovy: 1.0,
             znear: 0.5,
             zfar: 1000.0,
-        };
-        state
-            .frame_uniform(&FrameInputs {
-                camera: &camera,
-                cascades: None,
-                viewport: UVec2::new(64, 64),
-                max_anisotropy: 1,
-                texture_feedback: UVec4::ZERO,
-                elapsed_seconds: 0.0,
-                camera_water: CameraWater::default(),
-            })
-            .ambient_cube
+        }
+    }
+
+    fn frame_of(state: &LightingState) -> FrameUniform {
+        state.frame_uniform(&FrameInputs {
+            camera: &test_camera(),
+            cascades: None,
+            viewport: UVec2::new(64, 64),
+            max_anisotropy: 1,
+            texture_feedback: UVec4::ZERO,
+            elapsed_seconds: 0.0,
+            camera_water: CameraWater::default(),
+        })
+    }
+
+    fn uploaded_cube(state: &LightingState) -> [Vec4; AMBIENT_CUBE_FACES] {
+        frame_of(state).ambient_cube
     }
 
     #[test]
@@ -912,5 +1127,493 @@ mod tests {
         let off = exposure(0.0, false, 3.0).gpu_params(0.0);
         assert_eq!((on.auto, off.auto), (1, 0));
         assert_eq!((on.min, on.max, on.middle_gray), (1.0, 4.0, 0.18));
+    }
+
+    mod time_of_day {
+        use glam::Vec3;
+
+        use super::super::super::exterior_weather::fixtures::{
+            per_slot, rgb, weather_slots, without_moon,
+        };
+        use super::super::super::time_of_day::{MoonKind, MoonPhase, SkyGameSettings, TimeSlot};
+        use super::*;
+
+        const DAY_SUNLIGHT: (u8, u8, u8) = (255, 255, 200);
+        const NIGHT_SUNLIGHT: (u8, u8, u8) = (60, 70, 120);
+        const NIGHT_SUNLIGHT_SCALE: f32 = 0.5;
+        const SUN_ALPHA_TRANS_TIME: f32 = 0.15;
+
+        fn colour(rgb8: (u8, u8, u8)) -> Vec3 {
+            let linear = |channel: u8| {
+                let encoded = f32::from(channel) / 255.0;
+                if encoded <= 0.04045 {
+                    encoded / 12.92
+                } else {
+                    ((encoded + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            Vec3::new(linear(rgb8.0), linear(rgb8.1), linear(rgb8.2))
+        }
+
+        fn assert_colour(actual: Vec3, rgb8: (u8, u8, u8)) {
+            let expected = colour(rgb8);
+            assert!(
+                actual.abs_diff_eq(expected, 1e-6),
+                "{actual} is not {expected}"
+            );
+        }
+
+        fn hdr(slot: TimeSlot) -> ImageSpaceHdr {
+            ImageSpaceHdr {
+                sunlight_scale: if slot == TimeSlot::Night {
+                    NIGHT_SUNLIGHT_SCALE
+                } else {
+                    2.0
+                },
+                ..ImageSpaceHdr::default()
+            }
+        }
+
+        fn game() -> SkyGameConfig {
+            SkyGameConfig::new(
+                SkyGameSettings::new(
+                    600.0,
+                    -325.0,
+                    1.0027,
+                    Vec3::new(-0.09, 0.35, 1.0),
+                    5.0,
+                    10.0,
+                )
+                .unwrap(),
+                SUN_ALPHA_TRANS_TIME,
+                90.0,
+                75.0,
+            )
+            .unwrap()
+        }
+
+        fn slots() -> ExteriorWeatherSlots {
+            weather_slots(
+                |colors| {
+                    colors["Sunlight"] = per_slot(|slot| {
+                        let (r, g, b) = if slot == TimeSlot::Night {
+                            NIGHT_SUNLIGHT
+                        } else {
+                            DAY_SUNLIGHT
+                        };
+                        rgb(r, g, b)
+                    });
+                    colors["Stars"] = per_slot(|slot| {
+                        if slot == TimeSlot::Night {
+                            rgb(255, 255, 255)
+                        } else {
+                            rgb(0, 0, 0)
+                        }
+                    });
+                },
+                hdr,
+            )
+        }
+
+        fn exterior_state(slots: ExteriorWeatherSlots) -> LightingState {
+            let mut state = lighting_state();
+            state.set_exterior_sky(slots, game());
+            state
+        }
+
+        fn state() -> LightingState {
+            exterior_state(slots())
+        }
+
+        fn at_hour(state: &mut LightingState, days: u32, hour: f32) {
+            state.set_time_of_day(DayTime::new(days, hour).unwrap());
+        }
+
+        #[test]
+        fn setting_the_exterior_sky_applies_the_day_slot_before_any_clock_time() {
+            let state = state();
+            assert_colour(state.sun.color, DAY_SUNLIGHT);
+            assert_eq!(state.sun.intensity, 2.0);
+            assert!(state.sky_moment().is_none());
+            assert!(state.sky_objects().is_none());
+        }
+
+        #[test]
+        fn at_noon_the_sun_lights_with_the_day_colour_and_the_day_light_scale() {
+            let mut state = state();
+            at_hour(&mut state, 0, 13.0);
+            let sun = state.sun;
+            assert_colour(sun.color, DAY_SUNLIGHT);
+            assert_eq!(sun.intensity, 2.0);
+            assert_eq!(sun.light_strength, 1.0);
+            assert_eq!(sun.daylight, 1.0);
+            assert!(sun.elevation_deg > 20.0, "{}", sun.elevation_deg);
+            let moment = state.sky_moment().unwrap();
+            assert!(
+                sun.direction_to_sun()
+                    .abs_diff_eq(moment.sun.direction(), 1e-4)
+            );
+            assert!(
+                sun.illuminance()
+                    .abs_diff_eq(colour(DAY_SUNLIGHT) * 2.0, 1e-6),
+                "colour times the light scale times the strength"
+            );
+        }
+
+        #[test]
+        fn at_night_a_full_moon_lights_with_the_night_sunlight_colour() {
+            let mut state = state();
+            at_hour(&mut state, 0, 0.0);
+            let moon = state.sky_objects().unwrap().moon.unwrap();
+            let sun = state.sun;
+            assert_eq!(moon.phase, MoonPhase::Full);
+            assert!(sun.direction_to_sun().abs_diff_eq(moon.direction, 1e-4));
+            assert!(sun.elevation_deg > 20.0, "{}", sun.elevation_deg);
+            assert_colour(sun.color, NIGHT_SUNLIGHT);
+            assert_eq!(sun.light_strength, 1.0);
+            assert!(
+                sun.illuminance()
+                    .abs_diff_eq(colour(NIGHT_SUNLIGHT) * NIGHT_SUNLIGHT_SCALE, 1e-6),
+            );
+        }
+
+        #[test]
+        fn at_night_the_disc_stays_with_the_sun_below_the_horizon_and_is_dark() {
+            let mut state = state();
+            at_hour(&mut state, 0, 0.0);
+            let frame = frame_of(&state);
+            let sun_direction = state.sky_moment().unwrap().sun.direction();
+            assert!(sun_direction.y < 0.0);
+            assert!(state.sun_input().direction.abs_diff_eq(sun_direction, 1e-5));
+            assert!(frame.to_sun.truncate().y > 0.0, "the light is the moon");
+            assert_eq!(frame.daylight.x, 0.0);
+            assert_eq!(state.sun_input().alpha, 0.0);
+        }
+
+        #[test]
+        fn at_noon_the_disc_and_the_light_share_the_suns_direction() {
+            let mut state = state();
+            at_hour(&mut state, 0, 13.0);
+            let frame = frame_of(&state);
+            assert!(
+                state
+                    .sun_input()
+                    .direction
+                    .abs_diff_eq(frame.to_sun.truncate(), 1e-4)
+            );
+            assert_eq!(frame.daylight.x, 1.0);
+        }
+
+        #[test]
+        fn the_sun_alpha_ramps_around_the_sunrise_midpoint_over_the_game_setting() {
+            // The default climate rises at 07:00; the ramp is 0.15 h wide.
+            let mut state = state();
+            for (hour, alpha) in [(6.9, 0.0), (7.0, 0.5), (7.1, 1.0), (13.0, 1.0)] {
+                at_hour(&mut state, 0, hour);
+                let daylight = frame_of(&state).daylight.x;
+                assert!((daylight - alpha).abs() < 1e-4, "{hour}: {daylight}");
+            }
+        }
+
+        #[test]
+        fn the_sun_alpha_falls_around_the_sunset_midpoint() {
+            let mut state = state();
+            for (hour, alpha) in [(18.9, 1.0), (19.0, 0.5), (19.1, 0.0)] {
+                at_hour(&mut state, 0, hour);
+                let daylight = frame_of(&state).daylight.x;
+                assert!((daylight - alpha).abs() < 1e-4, "{hour}: {daylight}");
+            }
+        }
+
+        #[test]
+        fn the_readouts_name_the_slot_blend_and_the_moon_phase() {
+            let mut state = state();
+            at_hour(&mut state, 0, 6.5);
+            let moment = state.sky_moment().unwrap();
+            assert_eq!(
+                (moment.blend.from, moment.blend.to),
+                (TimeSlot::EarlySunrise, TimeSlot::Sunrise)
+            );
+            assert!((moment.blend.t - 0.5).abs() < 1e-5);
+            assert_eq!(moment.moon.unwrap().phase, MoonPhase::Full);
+            at_hour(&mut state, 4, 6.5);
+            assert_eq!(
+                state.sky_moment().unwrap().moon.unwrap().phase,
+                MoonPhase::ThreeWan
+            );
+        }
+
+        #[test]
+        fn the_sky_objects_carry_the_moon_the_stars_and_the_climate_model() {
+            let mut state = state();
+            at_hour(&mut state, 0, 0.0);
+            let objects = state.sky_objects().unwrap();
+            let moon = objects.moon.unwrap();
+            assert_eq!(moon.kind, MoonKind::Masser);
+            assert_eq!(moon.visibility, 1.0);
+            assert!((moon.direction.length() - 1.0).abs() < 1e-5);
+            assert_eq!(objects.star_alpha, 1.0);
+            assert_eq!(objects.sky_model_path.as_deref(), Some("Sky\\Stars.nif"));
+            assert!((objects.star_rotation.axis.length() - 1.0).abs() < 1e-5);
+        }
+
+        #[test]
+        fn the_stars_are_dark_by_day_and_follow_the_sampled_stars_colour() {
+            let mut state = state();
+            at_hour(&mut state, 0, 13.0);
+            assert_eq!(state.sky_objects().unwrap().star_alpha, 0.0);
+            // Halfway between Night and Day the Stars colour is half way too, in linear space.
+            at_hour(&mut state, 0, 5.0);
+            let before_dawn = state.sky_objects().unwrap().star_alpha;
+            at_hour(&mut state, 0, 5.5);
+            let at_dawn = state.sky_objects().unwrap().star_alpha;
+            assert_eq!(before_dawn, 1.0);
+            assert!(at_dawn < before_dawn && at_dawn > 0.0, "{at_dawn}");
+        }
+
+        #[test]
+        fn a_climate_without_a_moon_has_no_moon_object_and_a_dark_night() {
+            let mut state = exterior_state(without_moon(slots()));
+            at_hour(&mut state, 0, 0.0);
+            assert!(state.sky_objects().unwrap().moon.is_none());
+            assert!(state.sky_moment().unwrap().moon.is_none());
+            assert_eq!(state.sun.light_strength, 0.0);
+            assert_eq!(state.sun.illuminance(), Vec3::ZERO);
+        }
+
+        #[test]
+        fn the_direct_light_never_pops_over_a_whole_day() {
+            let mut state = state();
+            let mut previous: Option<Vec3> = None;
+            for step in 0..2400 {
+                at_hour(&mut state, 0, step as f32 * 0.01);
+                let light = state.sun.illuminance();
+                if let Some(previous) = previous {
+                    assert!(
+                        (light - previous).abs().max_element() < 0.1,
+                        "hour {}: {previous} -> {light}",
+                        step as f32 * 0.01
+                    );
+                }
+                previous = Some(light);
+            }
+        }
+
+        #[test]
+        fn the_weather_follows_the_clock_across_the_day() {
+            let mut state = state();
+            at_hour(&mut state, 0, 13.0);
+            let noon_exposure = state.exposure.hdr;
+            let noon_sky = state.sky.zenith;
+            at_hour(&mut state, 0, 0.0);
+            assert_eq!(state.exposure.hdr.sunlight_scale, NIGHT_SUNLIGHT_SCALE);
+            assert_eq!(noon_exposure.sunlight_scale, 2.0);
+            assert_eq!(state.sky.zenith, noon_sky, "uniform colours stay put");
+            assert_colour(state.exterior_weather().unwrap().sun_light, NIGHT_SUNLIGHT);
+        }
+
+        #[test]
+        fn shadows_follow_the_moon_at_night() {
+            let mut state = state();
+            state.shadows.settings.enabled = true;
+            at_hour(&mut state, 0, 0.0);
+            assert_eq!(state.shadow_status(), ShadowStatus::Active);
+            let moon = state.sky_objects().unwrap().moon.unwrap();
+            let cascades = state
+                .shadow_cascades(&test_camera(), 0)
+                .expect("the moon casts shadows");
+            assert!(cascades.to_sun.abs_diff_eq(moon.direction, 1e-4));
+        }
+
+        #[test]
+        fn shadows_follow_the_sun_by_day() {
+            let mut state = state();
+            state.shadows.settings.enabled = true;
+            at_hour(&mut state, 0, 13.0);
+            let cascades = state.shadow_cascades(&test_camera(), 0).unwrap();
+            let sun = state.sky_moment().unwrap().sun.direction();
+            assert!(cascades.to_sun.abs_diff_eq(sun, 1e-4));
+        }
+
+        #[test]
+        fn shadows_switch_off_only_when_neither_body_gives_light() {
+            let mut state = exterior_state(without_moon(slots()));
+            state.shadows.settings.enabled = true;
+            at_hour(&mut state, 0, 0.0);
+            assert_eq!(state.shadow_status(), ShadowStatus::NoDirectLight);
+            assert!(state.shadow_cascades(&test_camera(), 0).is_none());
+            // 07:15 puts the sun about 2 degrees up: weak, but still a light.
+            at_hour(&mut state, 0, 7.25);
+            assert!(state.sun.light_strength > 0.0 && state.sun.light_strength < 1.0);
+            assert_eq!(state.shadow_status(), ShadowStatus::Active);
+        }
+
+        #[test]
+        fn the_shadow_panel_status_still_reports_a_disabled_setting_first() {
+            let mut state = state();
+            state.shadows.settings.enabled = false;
+            at_hour(&mut state, 0, 0.0);
+            assert_eq!(state.shadow_status(), ShadowStatus::Disabled);
+        }
+
+        fn manual_sun(state: &mut LightingState) {
+            state.sun_override = true;
+            state.sun.azimuth_deg = 123.0;
+            state.sun.elevation_deg = 33.0;
+            state.sun.color = Vec3::new(0.9, 0.1, 0.2);
+            state.sun.disc_color = Vec3::new(0.3, 0.4, 0.5);
+            state.sun.intensity = 4.5;
+            state.sky.zenith = Vec3::new(0.01, 0.02, 0.03);
+            state.sky.horizon = Vec3::new(0.04, 0.05, 0.06);
+            state.sky.ground = Vec3::new(0.07, 0.08, 0.09);
+            state.sky.radiance_scale = 3.5;
+        }
+
+        #[test]
+        fn the_override_keeps_the_manual_sun_and_sky_whatever_the_time() {
+            let mut state = state();
+            at_hour(&mut state, 0, 13.0);
+            manual_sun(&mut state);
+            let (sun, sky) = (state.sun, state.sky);
+            for hour in [0.0, 6.5, 13.0, 19.0] {
+                at_hour(&mut state, 0, hour);
+                assert_eq!(state.sun.azimuth_deg, sun.azimuth_deg, "{hour}");
+                assert_eq!(state.sun.elevation_deg, sun.elevation_deg, "{hour}");
+                assert_eq!(state.sun.color, sun.color, "{hour}");
+                assert_eq!(state.sun.disc_color, sun.disc_color, "{hour}");
+                assert_eq!(state.sun.intensity, sun.intensity, "{hour}");
+                assert_eq!(state.sky.zenith, sky.zenith, "{hour}");
+                assert_eq!(state.sky.horizon, sky.horizon, "{hour}");
+                assert_eq!(state.sky.ground, sky.ground, "{hour}");
+                assert_eq!(state.sky.radiance_scale, sky.radiance_scale, "{hour}");
+            }
+        }
+
+        #[test]
+        fn the_override_freezes_exposure_and_the_ambient_with_the_rest() {
+            let mut state = state();
+            at_hour(&mut state, 0, 13.0);
+            manual_sun(&mut state);
+            let exposure = state.exposure.hdr;
+            let ambient = state.exterior_weather().unwrap().ambient_cube;
+            at_hour(&mut state, 0, 0.0);
+            assert_eq!(state.exposure.hdr, exposure);
+            assert_eq!(state.exterior_weather().unwrap().ambient_cube, ambient);
+        }
+
+        #[test]
+        fn the_readouts_keep_following_the_clock_under_the_override() {
+            let mut state = state();
+            manual_sun(&mut state);
+            at_hour(&mut state, 0, 6.5);
+            let moment = *state.sky_moment().unwrap();
+            assert_eq!(moment.blend.from, TimeSlot::EarlySunrise);
+            let objects = state.sky_objects().unwrap();
+            assert!(objects.moon.is_some());
+            at_hour(&mut state, 0, 0.0);
+            assert_eq!(state.sky_moment().unwrap().blend.from, TimeSlot::Night);
+        }
+
+        #[test]
+        fn the_override_draws_the_disc_where_the_manual_sun_is() {
+            let mut state = state();
+            at_hour(&mut state, 0, 0.0);
+            manual_sun(&mut state);
+            let frame = frame_of(&state);
+            let manual = state.sun.direction_to_sun();
+            assert!(state.sun_input().direction.abs_diff_eq(manual, 1e-5));
+            assert!(frame.to_sun.truncate().abs_diff_eq(manual, 1e-5));
+        }
+
+        #[test]
+        fn the_override_lights_with_a_strength_that_fades_with_the_manual_elevation() {
+            let mut state = state();
+            manual_sun(&mut state);
+            for (elevation, strength) in [(-10.0, 0.0), (0.0, 0.0), (2.5, 0.5), (40.0, 1.0)] {
+                state.sun.elevation_deg = elevation;
+                at_hour(&mut state, 0, 13.0);
+                assert!(
+                    (state.sun.light_strength - strength).abs() < 1e-5,
+                    "{elevation}: {}",
+                    state.sun.light_strength
+                );
+                assert_eq!(state.sun.daylight, state.sun.light_strength);
+            }
+        }
+
+        #[test]
+        fn a_manual_sun_below_the_horizon_casts_no_shadows() {
+            let mut state = state();
+            state.shadows.settings.enabled = true;
+            manual_sun(&mut state);
+            state.sun.elevation_deg = -5.0;
+            at_hour(&mut state, 0, 13.0);
+            assert_eq!(state.shadow_status(), ShadowStatus::NoDirectLight);
+            state.sun.elevation_deg = 20.0;
+            at_hour(&mut state, 0, 13.0);
+            assert_eq!(state.shadow_status(), ShadowStatus::Active);
+        }
+
+        #[test]
+        fn turning_the_override_off_hands_the_lighting_back_to_the_clock() {
+            let mut state = state();
+            manual_sun(&mut state);
+            at_hour(&mut state, 0, 13.0);
+            state.sun_override = false;
+            at_hour(&mut state, 0, 13.0);
+            assert_colour(state.sun.color, DAY_SUNLIGHT);
+            assert_eq!(state.sun.intensity, 2.0);
+            assert!(state.sun.elevation_deg > 20.0 && state.sun.elevation_deg < 32.0);
+        }
+
+        #[test]
+        fn interior_shading_leaves_the_lighting_alone_and_clears_the_sky_readouts() {
+            for lighting in [resolved_cell(), neutral()] {
+                let mut state = state();
+                at_hour(&mut state, 0, 13.0);
+                let sun = state.sun;
+                state.environment = interior(lighting);
+                at_hour(&mut state, 0, 0.0);
+                assert_eq!(state.sun.color, sun.color);
+                assert_eq!(state.sun.azimuth_deg, sun.azimuth_deg);
+                assert!(state.sky_moment().is_none());
+                assert!(state.sky_objects().is_none());
+            }
+        }
+
+        #[test]
+        fn an_interior_shaded_like_the_exterior_still_follows_the_clock() {
+            let mut state = state();
+            state.environment = interior(InteriorLighting::CatalogUnavailable);
+            at_hour(&mut state, 0, 0.0);
+            assert_colour(state.sun.color, NIGHT_SUNLIGHT);
+            state.environment = interior(resolved_cell());
+            state.use_cell_lighting = false;
+            at_hour(&mut state, 0, 13.0);
+            assert_colour(state.sun.color, DAY_SUNLIGHT);
+        }
+
+        #[test]
+        fn without_a_weather_the_clock_changes_nothing() {
+            let mut state = lighting_state();
+            let before = state.sun;
+            at_hour(&mut state, 0, 0.0);
+            assert_eq!(state.sun.color, before.color);
+            assert_eq!(state.sun.elevation_deg, before.elevation_deg);
+            assert!(state.sky_moment().is_none());
+            assert!(state.sky_objects().is_none());
+            assert!(state.exterior_weather().is_none());
+        }
+
+        #[test]
+        fn without_a_weather_the_override_still_fades_the_manual_sun() {
+            let mut state = lighting_state();
+            state.sun_override = true;
+            state.sun.elevation_deg = -5.0;
+            at_hour(&mut state, 0, 13.0);
+            assert_eq!(state.sun.illuminance(), Vec3::ZERO);
+            state.shadows.settings.enabled = true;
+            assert_eq!(state.shadow_status(), ShadowStatus::NoDirectLight);
+        }
     }
 }

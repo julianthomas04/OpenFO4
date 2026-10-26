@@ -27,6 +27,7 @@ mod sidecar_hash;
 mod sound_pose;
 mod water_materials;
 pub mod water_physics;
+pub mod world_clock;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -46,6 +47,19 @@ pub use ragdoll::{BodyDelta, MAX_SKINNED_RAGDOLLS, RagdollEntry, RagdollPoses};
 pub use ragdoll_tuning::RagdollSettings;
 pub use water_materials::{MaterialBuoyancy, WaterBodyProps};
 pub use water_physics::{WaterCurrent, WaterQuery, WaterSurface};
+pub use world_clock::WorldClock;
+
+/// The longest step the world clock takes in one frame.
+const MAX_CLOCK_STEP_SECONDS: f32 = 0.25;
+
+/// What the frame loop tells the sim about one frame, for the world clock.
+#[derive(Clone, Copy, Debug)]
+pub struct ClockFrame {
+    /// Whether the game flow is in gameplay (not a menu, loading or the reveal).
+    pub in_game: bool,
+    /// The world time of the frame, from [`SimWorld::world_dt`].
+    pub world_dt: f32,
+}
 
 /// Stable identity for sim entities. The player is entity 1; static world
 /// collision is tracked per-cell rather than per-entity until something needs
@@ -172,6 +186,7 @@ pub struct SimWorld {
     steps_last_tick: u32,
     warned_substep_clamp: bool,
     pipboy: pipboy::PipBoyModel,
+    world_clock: WorldClock,
     /// While set, `tick` does not advance and collider adds are queued.
     fold_hold: bool,
     pending_colliders: DeferredQueue<CellPayload>,
@@ -180,7 +195,7 @@ pub struct SimWorld {
 }
 
 impl SimWorld {
-    pub fn new(movement: PlayerMovement) -> Self {
+    pub fn new(movement: PlayerMovement, world_clock: WorldClock) -> Self {
         let mut physics = physics::PhysicsContext::new();
         physics.set_water_query(water_physics::test_plane_from_env());
         Self {
@@ -191,6 +206,7 @@ impl SimWorld {
             steps_last_tick: 0,
             warned_substep_clamp: false,
             pipboy: pipboy::PipBoyModel::new(Arc::default()),
+            world_clock,
             fold_hold: false,
             pending_colliders: DeferredQueue::new(),
             footstep_clock: FootstepClock::default(),
@@ -218,6 +234,30 @@ impl SimWorld {
     /// from there, still gated on its cell's collision being installed.
     pub fn set_fold_hold(&mut self, hold: bool) {
         self.fold_hold = hold;
+    }
+
+    pub fn world_clock(&self) -> &WorldClock {
+        &self.world_clock
+    }
+
+    /// The seconds of world time a frame of `dt` seconds carries: none while the Pip-Boy is open.
+    pub fn world_dt(&self, dt: f32) -> f32 {
+        if self.pipboy.open { 0.0 } else { dt }
+    }
+
+    /// Advances the world clock for one frame. The clock runs only in gameplay and not while a
+    /// load holds the simulation; the step is bounded so a hitch cannot jump the day, and a
+    /// negative or NaN step is no step.
+    #[allow(
+        clippy::manual_clamp,
+        reason = "f32::clamp passes NaN through, max/min turn a NaN frame time into no progress"
+    )]
+    pub fn advance_world_clock(&mut self, frame: ClockFrame) {
+        if !frame.in_game || self.fold_hold {
+            return;
+        }
+        self.world_clock
+            .advance(frame.world_dt.max(0.0).min(MAX_CLOCK_STEP_SECONDS));
     }
 
     /// Inserts queued collider work in FIFO order until `budget` is spent, at
@@ -346,6 +386,21 @@ impl SimWorld {
             SimCommand::ReleaseAllKinematicPoses => self.physics.release_all_kinematic_poses(),
             SimCommand::SetRagdollSettings(settings) => self.physics.set_ragdoll_settings(settings),
             SimCommand::PipBoy(action) => self.apply_pipboy(action),
+            SimCommand::SetWorldClock(edit) => self.apply_clock_edit(edit),
+        }
+    }
+
+    fn apply_clock_edit(&mut self, edit: commands::ClockEdit) {
+        let result = match edit {
+            commands::ClockEdit::SetHour(hour) => self.world_clock.set_hour(hour),
+            commands::ClockEdit::SetPaused(paused) => {
+                self.world_clock.set_paused(paused);
+                Ok(())
+            }
+            commands::ClockEdit::SetTimeScale(scale) => self.world_clock.set_time_scale(scale),
+        };
+        if let Err(error) = result {
+            tracing::warn!("sim: world clock edit {edit:?} rejected: {error}");
         }
     }
 
@@ -583,6 +638,7 @@ impl SimWorld {
         };
         pipboy::PipBoySnapshot {
             model: &self.pipboy,
+            clock: self.world_clock.date(),
             vitals: pipboy::PlayerVitals {
                 hp,
                 hp_max,
@@ -743,14 +799,14 @@ mod tests {
 
     #[test]
     fn one_fixed_step_of_time_runs_exactly_one_step() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         sim.tick(FIXED_DT);
         assert_eq!(sim.stats().steps_last_tick, 1);
     }
 
     #[test]
     fn partial_steps_accumulate_across_ticks() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         sim.tick(FIXED_DT * 0.6);
         assert_eq!(sim.stats().steps_last_tick, 0);
         sim.tick(FIXED_DT * 0.6);
@@ -759,7 +815,7 @@ mod tests {
 
     #[test]
     fn a_long_frame_is_clamped_to_the_substep_cap() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         sim.tick(10.0);
         assert_eq!(sim.stats().steps_last_tick, MAX_SUBSTEPS_PER_TICK);
         sim.tick(0.0);
@@ -772,7 +828,7 @@ mod tests {
 
     #[test]
     fn negative_frame_time_runs_no_steps() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         sim.tick(-1.0);
         assert_eq!(sim.stats().steps_last_tick, 0);
     }
@@ -783,7 +839,7 @@ mod tests {
 
     #[test]
     fn no_steps_run_while_the_pipboy_is_open() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         pipboy(&mut sim, pipboy::PipBoyAction::Open);
         sim.tick(FIXED_DT * 3.0);
         assert_eq!(sim.stats().steps_last_tick, 0);
@@ -791,7 +847,7 @@ mod tests {
 
     #[test]
     fn closing_the_pipboy_resumes_stepping_without_a_catch_up_burst() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         pipboy(&mut sim, pipboy::PipBoyAction::Open);
         sim.tick(5.0);
         pipboy(&mut sim, pipboy::PipBoyAction::Close);
@@ -801,7 +857,7 @@ mod tests {
 
     #[test]
     fn opening_the_pipboy_clears_the_latched_movement_input() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         sim.apply(SimCommand::SetPlayerInput(PlayerInput {
             move_dir: Vec2::Y,
             jump: true,
@@ -817,7 +873,7 @@ mod tests {
 
     #[test]
     fn a_rejected_pipboy_action_is_recorded_on_the_snapshot_model() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         pipboy(&mut sim, pipboy::PipBoyAction::UseFirstStimpak);
         assert_eq!(
             sim.pipboy_snapshot().model.last_rejection,
@@ -827,7 +883,7 @@ mod tests {
 
     #[test]
     fn the_snapshot_reports_full_vitals_the_heading_and_no_position_before_spawn() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         sim.apply(SimCommand::SetPlayerInput(PlayerInput {
             yaw: 0.75,
             ..PlayerInput::default()
@@ -840,7 +896,7 @@ mod tests {
     }
 
     fn sim_with_stimpaks(heal: f32, count: u32) -> SimWorld {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         let mut model = pipboy::PipBoyModel::new(Arc::default());
         model.inventory.insert(pipboy::InventoryItem {
             id: pipboy::ItemId(0),
@@ -885,7 +941,7 @@ mod tests {
 
     #[test]
     fn a_rejected_use_heals_nothing() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         let hp_max = sim.player.health().1;
         sim.player.set_health(hp_max - 50.0);
         pipboy(&mut sim, pipboy::PipBoyAction::UseFirstStimpak);
@@ -894,7 +950,7 @@ mod tests {
 
     #[test]
     fn player_input_sent_while_the_pipboy_is_open_keeps_the_heading_but_not_the_movement() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         pipboy(&mut sim, pipboy::PipBoyAction::Open);
         sim.apply(SimCommand::SetPlayerInput(PlayerInput {
             move_dir: Vec2::Y,
@@ -910,7 +966,7 @@ mod tests {
 
     #[test]
     fn player_input_is_applied_again_once_the_pipboy_closed() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         pipboy(&mut sim, pipboy::PipBoyAction::Open);
         pipboy(&mut sim, pipboy::PipBoyAction::Close);
         sim.apply(SimCommand::SetPlayerInput(PlayerInput {
@@ -939,7 +995,7 @@ mod tests {
         }
 
         fn held_sim() -> SimWorld {
-            let mut sim = SimWorld::new(PlayerMovement::default());
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
             sim.set_fold_hold(true);
             sim
         }
@@ -950,7 +1006,7 @@ mod tests {
 
         #[test]
         fn without_a_hold_and_with_an_empty_queue_an_add_is_inserted_at_once() {
-            let mut sim = SimWorld::new(PlayerMovement::default());
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
             add_ground(&mut sim, SPAWN_GRID);
             assert_eq!(inserted_cells(&sim), 1);
             assert!(!sim.has_pending_colliders());
@@ -996,7 +1052,7 @@ mod tests {
 
         #[test]
         fn removing_a_resident_cell_still_removes_it_while_held() {
-            let mut sim = SimWorld::new(PlayerMovement::default());
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
             add_ground(&mut sim, (0, 0));
             sim.set_fold_hold(true);
             sim.apply(SimCommand::RemoveCellColliders { grid: (0, 0) });
@@ -1076,7 +1132,7 @@ mod tests {
 
         #[test]
         fn a_held_tick_leaves_the_sub_step_remainder_untouched() {
-            let mut sim = SimWorld::new(PlayerMovement::default());
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
             sim.tick(FIXED_DT * 0.5);
             let before = sim.interp_alpha();
             assert!((before - 0.5).abs() < 1e-4, "{before}");
@@ -1181,10 +1237,149 @@ mod tests {
 
     #[test]
     fn there_is_no_eye_and_no_hud_before_the_player_spawns() {
-        let sim = SimWorld::new(PlayerMovement::default());
+        let sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         assert!(sim.player_eye().is_none());
         let hud = sim.hud_snapshot();
         assert!(!hud.visible);
         assert_eq!(hud.crosshair, CrosshairState::Hidden);
+    }
+
+    mod world_clock_commands {
+        use super::*;
+        use commands::ClockEdit;
+
+        fn edit(sim: &mut SimWorld, edit: ClockEdit) {
+            sim.apply(SimCommand::SetWorldClock(edit));
+        }
+
+        fn frame(sim: &mut SimWorld, in_game: bool, dt: f32) {
+            let world_dt = sim.world_dt(dt);
+            sim.advance_world_clock(ClockFrame { in_game, world_dt });
+        }
+
+        /// Whole quarter-second in-game frames, as exact in f32 as the step itself.
+        fn run_seconds(sim: &mut SimWorld, seconds: f32) {
+            for _ in 0..(seconds / 0.25) as u32 {
+                frame(sim, true, 0.25);
+            }
+        }
+
+        fn minutes_advanced_by(sim: &mut SimWorld, step: impl FnOnce(&mut SimWorld)) -> f64 {
+            let before = sim.world_clock().minute_of_day();
+            step(sim);
+            sim.world_clock().minute_of_day() - before
+        }
+
+        #[test]
+        fn one_in_game_frame_advances_the_clock_exactly_once() {
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let advanced = minutes_advanced_by(&mut sim, |sim| frame(sim, true, 0.15));
+            assert!((advanced - 0.15 * 20.0 / 60.0).abs() < 1e-6, "{advanced}");
+        }
+
+        #[test]
+        fn a_five_second_hitch_advances_a_quarter_second_of_game_time_at_scale_20() {
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let advanced = minutes_advanced_by(&mut sim, |sim| frame(sim, true, 5.0));
+            let quarter_second = 0.25 * 20.0 / 60.0;
+            assert!((advanced - quarter_second).abs() < 1e-6, "{advanced}");
+            assert!(advanced < 5.0 * 20.0 / 60.0 / 10.0);
+        }
+
+        #[test]
+        fn outside_gameplay_the_clock_stands_still() {
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            assert_eq!(
+                minutes_advanced_by(&mut sim, |sim| frame(sim, false, 0.1)),
+                0.0
+            );
+        }
+
+        #[test]
+        fn a_held_load_stops_the_clock_until_released() {
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            sim.set_fold_hold(true);
+            assert_eq!(
+                minutes_advanced_by(&mut sim, |sim| frame(sim, true, 0.1)),
+                0.0
+            );
+            sim.set_fold_hold(false);
+            assert!(minutes_advanced_by(&mut sim, |sim| frame(sim, true, 0.1)) > 0.0);
+        }
+
+        #[test]
+        fn an_open_pipboy_stops_the_clock_and_the_world_time_of_the_frame() {
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            pipboy(&mut sim, pipboy::PipBoyAction::Open);
+            assert_eq!(sim.world_dt(0.1), 0.0);
+            assert_eq!(
+                minutes_advanced_by(&mut sim, |sim| frame(sim, true, 0.1)),
+                0.0
+            );
+            pipboy(&mut sim, pipboy::PipBoyAction::Close);
+            assert_eq!(sim.world_dt(0.1), 0.1);
+            assert!(minutes_advanced_by(&mut sim, |sim| frame(sim, true, 0.1)) > 0.0);
+        }
+
+        #[test]
+        fn a_negative_or_nan_frame_time_does_not_move_the_clock() {
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            for dt in [-1.0, f32::NAN] {
+                assert_eq!(
+                    minutes_advanced_by(&mut sim, |sim| frame(sim, true, dt)),
+                    0.0
+                );
+            }
+        }
+
+        #[test]
+        fn setting_the_hour_moves_the_clock_the_pipboy_shows() {
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            edit(&mut sim, ClockEdit::SetHour(3.5));
+            assert_eq!(sim.world_clock().hour(), 3.5);
+            assert_eq!(sim.pipboy_snapshot().clock.minute_of_day, 3 * 60 + 30);
+        }
+
+        #[test]
+        fn an_invalid_hour_is_rejected_and_the_clock_stays() {
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let before = sim.world_clock().clone();
+            edit(&mut sim, ClockEdit::SetHour(f32::NAN));
+            edit(&mut sim, ClockEdit::SetHour(30.0));
+            assert_eq!(*sim.world_clock(), before);
+        }
+
+        #[test]
+        fn pausing_stops_the_advance_and_resuming_restarts_it() {
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let start = sim.world_clock().minute_of_day();
+            edit(&mut sim, ClockEdit::SetPaused(true));
+            run_seconds(&mut sim, 60.0);
+            assert_eq!(sim.world_clock().minute_of_day(), start);
+            edit(&mut sim, ClockEdit::SetPaused(false));
+            run_seconds(&mut sim, 60.0);
+            assert!((sim.world_clock().minute_of_day() - (start + 20.0)).abs() < 1e-6);
+        }
+
+        #[test]
+        fn a_time_scale_edit_changes_the_rate_and_an_invalid_one_keeps_it() {
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let start = sim.world_clock().minute_of_day();
+            edit(&mut sim, ClockEdit::SetTimeScale(60.0));
+            edit(&mut sim, ClockEdit::SetTimeScale(0.0));
+            run_seconds(&mut sim, 60.0);
+            assert_eq!(sim.world_clock().minute_of_day(), start + 60.0);
+        }
+
+        #[test]
+        fn the_sim_runs_the_clock_it_was_given() {
+            let clock = world_clock::WorldClock::new(world_clock::ClockStart {
+                hour: 6.0,
+                ..world_clock::ClockStart::fixture()
+            })
+            .unwrap();
+            let sim = SimWorld::new(PlayerMovement::default(), clock);
+            assert_eq!(sim.world_clock().hour(), 6.0);
+        }
     }
 }

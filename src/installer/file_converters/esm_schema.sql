@@ -1004,7 +1004,7 @@ CREATE TABLE IF NOT EXISTS climates (
     editor_id TEXT,
     sun_texture TEXT,
     sun_glare_texture TEXT,
-    data TEXT                           -- JSON: WLST, FNAM, GNAM, TNAM
+    data TEXT                           -- JSON: Weathers, SunriseBegin/End, SunsetBegin/End, MoonPhaseLength, Moons, ModelPath
 );
 
 -- ============================================

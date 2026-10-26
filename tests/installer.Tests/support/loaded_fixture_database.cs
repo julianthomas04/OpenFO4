@@ -24,7 +24,7 @@ namespace InstallerTests
         readonly TempDirectory _directory = new();
         internal TinyPlugin Plugin { get; } = new();
 
-        public string DatabasePath => Path.Combine(_directory.Path, "data.db");
+        string DatabasePath => Path.Combine(_directory.Path, "data.db");
 
         public string EsmPath { get; private set; } = "";
 
@@ -71,6 +71,19 @@ namespace InstallerTests
             return connection.QuerySingle<T>(sql, parameters);
         }
 
+        /// <summary>
+        /// Copies the database with SQLite's backup API, waiting out any checkpoint. A plain file copy can tear: the loaded
+        /// database still sits in the write-ahead log, and any test clearing the connection pools checkpoints it into the file.
+        /// </summary>
+        public void CopyDatabaseTo(string path)
+        {
+            using var source = Open();
+            source.Execute("PRAGMA busy_timeout = 30000");
+            using var destination = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString());
+            destination.Open();
+            source.BackupDatabase(destination);
+        }
+
         SqliteConnection Open()
         {
             var connection = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -87,6 +100,17 @@ namespace InstallerTests
         {
             var plugin = Plugin;
             plugin.AddClimate("FixtureClimate");
+            plugin.AddClimate("MasserClimate", climate =>
+            {
+                climate.PhaseLength = 4;
+                climate.Moons = Climate.Moon.Masser;
+                climate.Model = new Model { File = @"Sky\Stars.nif" };
+            });
+            plugin.AddClimate("TwinMoonClimate", climate =>
+            {
+                climate.PhaseLength = 63;
+                climate.Moons = Climate.Moon.Masser | Climate.Moon.Secunda;
+            });
             plugin.AddWorldspace("FixtureWorld").Climate.FormKey = plugin.FormKeyOf("FixtureClimate");
             DescribeWater(plugin);
             plugin.AddImageSpace("FixtureImageSpace", imageSpace =>

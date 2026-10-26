@@ -14,6 +14,7 @@ use kira::sound::streaming::StreamingSoundData;
 use openfo4::assets::db::DbClient;
 use openfo4::assets::db::music::MusicCatalog;
 use openfo4::assets::layout::audio_dir;
+use openfo4::audio::conditions::GameTime;
 use openfo4::audio::place::PlaceSnapshot;
 use openfo4::audio::scheduler::{LayerStep, PlayPlan};
 use openfo4::audio::test_support::{
@@ -132,7 +133,7 @@ impl Replay {
             .sync(AudioFrame {
                 phase: Phase::InGame,
                 dt,
-                hour: HOUR,
+                time: GameTime::at_hour(HOUR),
                 place,
             })
             .unwrap();

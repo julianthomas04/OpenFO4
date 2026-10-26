@@ -12,7 +12,7 @@ use std::time::Duration;
 use kira::Decibels;
 use kira::sound::FromFileError;
 
-use super::conditions::{self, ConditionError, FreshWorldContext, global_entries};
+use super::conditions::{self, ConditionError, FreshWorldContext, GameTime, global_entries};
 use super::file_probe::{ProbeError, probe_files};
 use super::music_output::open_music_stream;
 use super::music_stack::pick;
@@ -219,7 +219,7 @@ impl WorldMusic {
     pub fn update_place(
         &mut self,
         place: &PlaceSnapshot,
-        hour: f32,
+        time: GameTime,
     ) -> Result<Option<MusicChange>, WorldMusicError> {
         if self.last_place.as_ref() == Some(place) {
             return Ok(None);
@@ -258,7 +258,7 @@ impl WorldMusic {
                 plan: None,
             }));
         };
-        self.context.set_hour(hour);
+        self.context.set_time(time);
         let music_type = lookup_type(&self.music_types, key)?;
         let fade = fade_of(music_type)?;
         self.plan =
@@ -273,7 +273,7 @@ impl WorldMusic {
 
     /// The plan after the previous one ended. `None` is silence: the type does not cycle, or
     /// nothing is eligible.
-    pub fn next_plan(&mut self, hour: f32) -> Result<Option<PlayPlan>, WorldMusicError> {
+    pub fn next_plan(&mut self, time: GameTime) -> Result<Option<PlayPlan>, WorldMusicError> {
         self.plan = None;
         let Selection::Type(key) = &self.selection else {
             return Ok(None);
@@ -287,7 +287,7 @@ impl WorldMusic {
             );
             return Ok(None);
         }
-        self.context.set_hour(hour);
+        self.context.set_time(time);
         self.plan =
             self.scheduler
                 .next_plan(music_type, &self.tracks, &self.context, &mut self.rng)?;
@@ -520,7 +520,7 @@ mod tests {
 
     fn update(music: &mut WorldMusic, worldspace: &str) -> Option<MusicChange> {
         music
-            .update_place(&exterior_place(worldspace), 9.0)
+            .update_place(&exterior_place(worldspace), GameTime::at_hour(9.0))
             .unwrap()
     }
 
@@ -565,7 +565,10 @@ mod tests {
         let mut moved = exterior_place("ws1");
         moved.point_beth = (10.0, 20.0);
 
-        assert_eq!(music.update_place(&moved, 9.0).unwrap(), None);
+        assert_eq!(
+            music.update_place(&moved, GameTime::at_hour(9.0)).unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -618,10 +621,10 @@ mod tests {
     fn only_a_cycling_type_asks_for_a_next_plan() {
         let mut music = world(two_types());
         update(&mut music, "ws1");
-        assert!(music.next_plan(9.0).unwrap().is_some());
+        assert!(music.next_plan(GameTime::at_hour(9.0)).unwrap().is_some());
 
         update(&mut music, "ws2");
-        assert_eq!(music.next_plan(9.0).unwrap(), None);
+        assert_eq!(music.next_plan(GameTime::at_hour(9.0)).unwrap(), None);
         assert_eq!(music.current_plan(), None);
     }
 
@@ -646,7 +649,7 @@ mod tests {
 
         assert_eq!(single_file(music.current_plan()), "music/day.flac");
         assert_eq!(
-            single_file(music.next_plan(23.0).unwrap().as_ref()),
+            single_file(music.next_plan(GameTime::at_hour(23.0)).unwrap().as_ref()),
             "music/night.flac"
         );
     }
@@ -816,7 +819,7 @@ mod tests {
         );
         for _ in 0..50 {
             assert_eq!(
-                single_file(music.next_plan(9.0).unwrap().as_ref()),
+                single_file(music.next_plan(GameTime::at_hour(9.0)).unwrap().as_ref()),
                 "music/here.flac"
             );
         }

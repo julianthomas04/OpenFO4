@@ -5,7 +5,10 @@ pub mod layout;
 pub mod pipboy_art;
 pub mod pipboy_catalog;
 pub mod pipboy_playback;
+pub mod resolve;
+pub mod sky_game_settings;
 pub mod types;
+pub mod world_clock_start;
 pub mod world_settings;
 
 use std::ffi::OsString;

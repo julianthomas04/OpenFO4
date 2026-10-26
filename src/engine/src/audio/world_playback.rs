@@ -18,6 +18,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use super::conditions::GameTime;
 use super::error::AudioError;
 use super::music_output::{MusicOutput, Playing, SoundSettings};
 use super::place::PlaceSnapshot;
@@ -119,20 +120,20 @@ impl WorldPlayback {
         &mut self,
         output: &mut MusicOutput,
         now: Duration,
-        hour: f32,
+        time: GameTime,
         place: Option<&PlaceSnapshot>,
     ) -> Result<(), AudioError> {
         if !self.active {
             return Ok(());
         }
         if let Some(place) = place
-            && let Some(change) = self.music.update_place(place, hour)?
+            && let Some(change) = self.music.update_place(place, time)?
         {
             return self.change_music_type(output, now, change);
         }
         self.advance_run(output, now, Duration::ZERO)?;
         if self.plan_is_over(now) {
-            self.start_next_plan(output, now, hour)?;
+            self.start_next_plan(output, now, time)?;
         }
         Ok(())
     }
@@ -213,7 +214,7 @@ impl WorldPlayback {
         &mut self,
         output: &mut MusicOutput,
         now: Duration,
-        hour: f32,
+        time: GameTime,
     ) -> Result<(), AudioError> {
         tracing::debug!(target: LOG_TARGET, at = ?now, end = ?self.end, "plan ended");
         let sounds = self.run.take_sounds();
@@ -224,7 +225,7 @@ impl WorldPlayback {
         if let Some(queued) = self.queued.take() {
             return self.start_plan(output, now, queued.plan, queued.fade);
         }
-        let plan = self.music.next_plan(hour)?;
+        let plan = self.music.next_plan(time)?;
         self.start_plan(output, now, plan, Duration::ZERO)
     }
 

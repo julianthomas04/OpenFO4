@@ -35,6 +35,18 @@ pub fn get_climate_data(
     )
 }
 
+/// The sun and sun glare texture columns of a climate; `QueryReturnedNoRows` when the climate is unknown.
+pub fn get_climate_sun_textures(
+    climate: &str,
+    conn: &rusqlite::Connection,
+) -> rusqlite::Result<(Option<String>, Option<String>)> {
+    conn.query_row(
+        "SELECT sun_texture, sun_glare_texture FROM climates WHERE form_key = ?",
+        rusqlite::params![climate],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+}
+
 /// `QueryReturnedNoRows` when the weather is unknown.
 pub fn get_weather(
     form_key: &str,

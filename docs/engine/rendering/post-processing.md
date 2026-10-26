@@ -5,7 +5,10 @@ the high-range colour target, the sky, depth of field, exposure and
 tonemapping.
 
 The sky is drawn as part of the world pass and only fills pixels where nothing
-else was drawn.
+else was drawn. A gradient comes first, then the moon and the stars
+(`night_sky/`) at the positions the clock gives them. A moon or star texture or
+the star mesh that is missing from the install is logged and that object is
+skipped.
 
 Depth of field blurs the scene by distance. It runs after the translucent pass
 and before exposure, and its shaders are translated from the game.

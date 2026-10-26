@@ -15,6 +15,22 @@ The simulation pauses while the Pip-Boy is open and holds during loading (see
 [game flow](game-flow.md)). The physics step is skipped when nothing in the
 world is awake or changed.
 
+## World clock
+
+`WorldClock` (`sim/world_clock.rs`) is the game's time: hour, calendar date,
+days passed and the time scale. It starts from the game's `GameHour`,
+`GameDay`, `GameMonth`, `GameYear`, `GameDaysPassed` and `TimeScale` globals.
+
+The time scale is game minutes per real minute. The clock advances by world
+time, so it stands still in menus, while loading and while the Pip-Boy is open.
+The step of one frame is capped, so a hitch cannot skip a stretch of the day.
+At midnight the date and the days passed roll over; months have their real
+lengths and there are no leap years.
+
+The renderer reads the hour for the [time of day](rendering/lighting-and-shadows.md#time-of-day),
+and [audio](audio-and-video.md) reads the hour and the days passed as the
+`GameHour` and `GameDaysPassed` globals. The Pip-Boy shows the clock's date.
+
 ## Colliders
 
 The [world streamer](world-streaming.md) holds each cell's collider payload and

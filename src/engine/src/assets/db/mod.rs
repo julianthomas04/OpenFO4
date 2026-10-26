@@ -7,6 +7,8 @@ pub mod doors;
 pub mod flora;
 pub mod footsteps;
 pub mod furniture;
+pub mod game_settings;
+pub mod globals;
 pub mod grass;
 pub mod items;
 pub mod landscape_textures;
@@ -505,6 +507,13 @@ impl DbClient {
         weather::get_climate_data(climate, &self.conn)
     }
 
+    pub fn get_climate_sun_textures(
+        &self,
+        climate: &str,
+    ) -> rusqlite::Result<(Option<String>, Option<String>)> {
+        weather::get_climate_sun_textures(climate, &self.conn)
+    }
+
     pub fn get_image_space_data(&self, form_key: &str) -> rusqlite::Result<Option<String>> {
         weather::get_image_space_data(form_key, &self.conn)
     }
@@ -525,6 +534,18 @@ impl DbClient {
     #[instrument(skip(self))]
     pub fn get_worldspaces(&self) -> anyhow::Result<Vec<Worldspace>> {
         Worldspace::list_all(&self.conn)
+    }
+
+    /// `Ok(None)` when the database has no global with this editor id.
+    #[instrument(skip(self))]
+    pub fn get_global(&self, editor_id: &str) -> anyhow::Result<Option<f32>> {
+        Ok(globals::get_global(editor_id, &self.conn)?)
+    }
+
+    /// `Ok(None)` when the database has no game setting with this editor id.
+    #[instrument(skip(self))]
+    pub fn get_game_setting_number(&self, editor_id: &str) -> anyhow::Result<Option<f32>> {
+        game_settings::get_game_setting_number(editor_id, &self.conn)
     }
 
     #[instrument(skip(self))]

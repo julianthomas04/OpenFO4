@@ -53,9 +53,6 @@ pub const SUN_SCATTER_EXPONENT: f32 = 8.0;
 pub const WATER_BLUR_RATIO: f32 = 0.9;
 /// `cb0[7].y`: INI `[SSLR] fSSLRAngleThreshold`, default 0.2.
 pub const SSLR_ANGLE_THRESHOLD: f32 = 0.2;
-/// `fSunAlphaTransTime` (default 2.0): the sun's alpha transition around
-/// sunrise and sunset.
-pub const SUN_ALPHA_TRANS_TIME: f32 = 2.0;
 
 /// `cb0` and `cb12`: constants shared by every water draw of a frame.
 #[repr(C)]
@@ -300,42 +297,6 @@ fn vertex_cb1(scroll: &NormalScroll, layers: &[NoiseLayer; 3]) -> [Vec4; VS_CB1_
     ]
 }
 
-/// Daylight window of the climate in game hours (the climate stores the four
-/// bounds in 1/6 h).
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub struct DaylightWindow {
-    pub sunrise_begin: f32,
-    pub sunrise_end: f32,
-    pub sunset_begin: f32,
-    pub sunset_end: f32,
-}
-
-/// `cb0[2].w`, the daylight factor: 0 outside
-/// `[rise - T, set + T]`, a linear ramp over `[rise - T, rise + T]`, 1 in
-/// between, a ramp down over `[set - T, set + T]`, with
-/// `rise = (begin + end) / 2`, `set` likewise and `T = trans_time / 2`.
-pub fn daylight_factor(hour: f32, window: &DaylightWindow, trans_time: f32) -> f32 {
-    let rise = f32::midpoint(window.sunrise_begin, window.sunrise_end);
-    let set = f32::midpoint(window.sunset_begin, window.sunset_end);
-    let half = trans_time * 0.5;
-    if hour <= rise - half || hour >= set + half {
-        0.0
-    } else if hour < rise + half {
-        (hour - (rise - half)) / trans_time
-    } else if hour > set - half {
-        ((set + half) - hour) / trans_time
-    } else {
-        1.0
-    }
-}
-
-/// The engine has no clock or climate (its weather is the permanent `Day`
-/// slot), so the factor is the end state of [`daylight_factor`]: 1 while the sun is
-/// up (inside `[rise + T, set - T]`), 0 once it has set.
-fn fixed_day_daylight(frame: &FrameUniform) -> f32 {
-    f32::from(frame.to_sun.y > 0.0)
-}
-
 /// `cb0[3].xyz`: the sun light's linear colour times its dimmer. Unlike the
 /// lighting shader, the water fill does not multiply in the image space's
 /// sunlight scale, so the scale folded
@@ -367,7 +328,7 @@ pub fn frame_constants(frame: &FrameUniform) -> WaterFrameConstants {
         0.0,
         0.0,
     );
-    cb0[2] = axes_from_engine(frame.to_sun.truncate()).extend(fixed_day_daylight(frame));
+    cb0[2] = axes_from_engine(frame.to_sun.truncate()).extend(frame.daylight.x);
     cb0[3] = unscaled_sun_colour(frame).extend(SUN_SCATTER_EXPONENT);
     cb0[7] = Vec4::new(WATER_BLUR_RATIO, SSLR_ANGLE_THRESHOLD, 0.0, 0.0);
 
@@ -528,6 +489,7 @@ mod tests {
         frame.camera_pos = eye.extend(1.0);
         frame.viewport = Vec4::new(1920.0, 1080.0, 1.0 / 1920.0, 1.0 / 1080.0);
         frame.to_sun = Vec3::new(0.0, 1.0, 0.0).extend(0.99);
+        frame.daylight = Vec4::new(1.0, 0.0, 0.0, 0.0);
         frame.sun_illuminance = Vec4::new(3.0, 2.0, 1.0, 0.0);
         frame.sky_zenith = Vec4::new(0.1, 0.2, 0.9, 0.0);
         frame.sky_horizon = Vec4::new(0.6, 0.7, 0.8, 0.0);
@@ -729,39 +691,25 @@ mod tests {
     }
 
     #[test]
-    fn a_set_sun_has_no_daylight() {
+    fn the_daylight_register_carries_the_suns_alpha_whatever_lights_the_scene() {
         let mut frame = frame_fixture();
-        frame.to_sun = Vec4::new(0.0, -1.0, 0.0, 0.99);
-        assert_eq!(frame_constants(&frame).cb0[2].w, 0.0);
+        frame.daylight.x = 0.25;
+        assert_eq!(frame_constants(&frame).cb0[2].w, 0.25);
+        // At night the moon is the light: the direction follows it, the daylight stays 0.
+        frame.to_sun = Vec4::new(0.0, 0.5, 0.0, 0.99);
+        frame.daylight.x = 0.0;
+        let cb0 = frame_constants(&frame).cb0;
+        assert_eq!(cb0[2].w, 0.0);
+        assert_eq!(
+            cb0[2].truncate(),
+            axes_from_engine(Vec3::new(0.0, 0.5, 0.0))
+        );
     }
 
     #[test]
     fn ssr_blend_registers_are_the_ini_defaults() {
         let cb0 = frame_constants(&frame_fixture()).cb0;
         assert_eq!(cb0[7], Vec4::new(0.9, 0.2, 0.0, 0.0));
-    }
-
-    const CLIMATE: DaylightWindow = DaylightWindow {
-        sunrise_begin: 5.0,
-        sunrise_end: 7.0,
-        sunset_begin: 17.0,
-        sunset_end: 19.0,
-    };
-
-    #[test]
-    fn daylight_ramps_over_the_transition_around_sunrise_and_sunset() {
-        // rise = 6, set = 18, T = 1.
-        let factor = |hour| daylight_factor(hour, &CLIMATE, SUN_ALPHA_TRANS_TIME);
-        assert_eq!(factor(5.0), 0.0);
-        assert_eq!(factor(3.0), 0.0);
-        assert_eq!(factor(5.5), 0.25);
-        assert_eq!(factor(6.0), 0.5);
-        assert_eq!(factor(7.0), 1.0);
-        assert_eq!(factor(12.0), 1.0);
-        assert_eq!(factor(17.0), 1.0);
-        assert_eq!(factor(18.5), 0.25);
-        assert_eq!(factor(19.0), 0.0);
-        assert_eq!(factor(23.0), 0.0);
     }
 
     // --- cb12: fog ------------------------------------------

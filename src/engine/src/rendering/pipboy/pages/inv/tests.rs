@@ -66,6 +66,7 @@ fn drawn(category: InventoryCategory, harness: &mut Harness, model: &PipBoyModel
 fn hint_keys(page: &InventoryPage, model: &PipBoyModel) -> Vec<(HintKey, bool)> {
     let snapshot = PipBoySnapshot {
         model,
+        clock: crate::sim::WorldClock::fixture().date(),
         vitals: crate::rendering::pipboy::pages::test_harness::vitals(),
     };
     page.hints(&snapshot)

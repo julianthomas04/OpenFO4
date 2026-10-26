@@ -269,6 +269,7 @@ mod tests {
         let page = chart_page();
         let snapshot = PipBoySnapshot {
             model: &model,
+            clock: crate::sim::WorldClock::fixture().date(),
             vitals: crate::rendering::pipboy::pages::test_harness::vitals(),
         };
 

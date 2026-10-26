@@ -11,6 +11,7 @@ use crate::audio::MenuMusicSettings;
 use crate::rendering::grass::FadeLimits;
 use crate::rendering::local_lights::LightFade;
 use crate::rendering::post::depth_of_field::BokehGate;
+use crate::rendering::post::night_sky::SunSizes;
 use crate::rendering::shadows::lamps::LampShadowConfig;
 use crate::rendering::shadows::settings::ShadowConfig;
 use crate::rendering::texture_streaming::TextureStreamingConfig;
@@ -57,6 +58,7 @@ pub struct GameSettings {
     pub water: WaterConfig,
     /// The depth of field gate in normal gameplay.
     pub bokeh_gate: BokehGate,
+    pub sun: SunSizes,
     pub menu_music: MenuMusicSettings,
     pub menu_video: MenuVideoSettings,
 }
@@ -87,6 +89,7 @@ impl GameSettings {
             grass_placement: GrassSettings::from_ini(ini)?,
             water: WaterConfig::from_ini(ini)?,
             bokeh_gate: BokehGate::gameplay_from_ini(ini)?,
+            sun: SunSizes::from_ini(ini)?,
             menu_music: MenuMusicSettings::from_ini(ini)?,
             menu_video: MenuVideoSettings::from_ini(ini)?,
         })

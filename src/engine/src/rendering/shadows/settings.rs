@@ -16,6 +16,10 @@ const DEFAULT_MIN_CASTER_TEXELS: [f32; MAX_CASCADES] = [1.5, 3.0, 8.0, 8.0];
 const MIN_TEXELS_ENV: &str = "OPENFO4_SHADOW_MIN_TEXELS";
 const ALPHA_LAST_ENV: &str = "OPENFO4_SHADOW_ALPHA_LAST";
 
+/// Cascades the engine adds to `iDirShadowSplits`. More, smaller cascades over the same distance
+/// give every cascade finer texels, so a moving sun crawls along shadow edges in smaller steps.
+const EXTRA_CASCADES: usize = 1;
+
 const MIN_RESOLUTION: u32 = 512;
 /// The largest shadow map the engine allocates; a larger `iShadowMapResolution` is clamped to it.
 const MAX_RESOLUTION: u32 = 8192;
@@ -50,6 +54,16 @@ impl ShadowFilter {
             Self::SingleTap => 1,
             Self::Grid2x2 => 2,
             Self::Grid3x3 => 3,
+        }
+    }
+
+    /// Compare taps of the sun's penumbra filter. Its disc grows to many texels far from a caster,
+    /// so it takes more taps than the lamps' grid to keep the fade smooth.
+    pub fn sun_disc_taps(self) -> u32 {
+        match self {
+            Self::SingleTap => 1,
+            Self::Grid2x2 => 8,
+            Self::Grid3x3 => 16,
         }
     }
 }
@@ -114,11 +128,12 @@ impl ShadowConfig {
             MAX_RESOLUTION,
         );
         let distance = ini.require_positive(DISTANCE)?;
-        let cascade_count = capped_at_engine_limit(
+        let cascade_count = (capped_at_engine_limit(
             SPLITS,
             ini.require_valid::<usize>(SPLITS, "1 or more", |splits| *splits >= 1)?,
             MAX_CASCADES,
-        );
+        ) + EXTRA_CASCADES)
+            .min(MAX_CASCADES);
         let split_blend = ini.require_non_negative(SPLIT_BLEND)?;
         let filter = ShadowFilter::from_ini(ini, FILTER_QUALITY)?;
         let bias_scale = ini.require_non_negative(BIAS_SCALE)?;
@@ -193,6 +208,16 @@ mod tests {
     }
 
     #[test]
+    fn a_higher_filter_quality_never_takes_fewer_sun_disc_taps() {
+        let taps: Vec<u32> = (0..=ShadowFilter::MAX_QUALITY)
+            .map(|quality| ShadowFilter::from_quality(quality).sun_disc_taps())
+            .collect();
+        assert_eq!(taps[0], 1);
+        assert!(taps.windows(2).all(|pair| pair[0] <= pair[1]), "{taps:?}");
+        assert!(taps[ShadowFilter::MAX_QUALITY as usize] > 9, "{taps:?}");
+    }
+
+    #[test]
     fn min_texels_override_the_leading_cascades_and_keep_the_rest() {
         let defaults = [1.5, 3.0, 8.0, 8.0];
         assert_eq!(
@@ -238,7 +263,7 @@ mod tests {
     fn every_setting_comes_from_the_ini() {
         let config = ShadowConfig::from_ini(&ini_with("")).unwrap();
         assert_eq!(config.resolution, 2048);
-        assert_eq!(config.cascade_count, 2);
+        assert_eq!(config.cascade_count, 2 + EXTRA_CASCADES);
         assert_eq!(config.filter, ShadowFilter::Grid2x2);
         assert!((config.distance - 1200.0).abs() < 1e-3);
         assert!((config.split_blend - 3.0).abs() < 1e-4);
@@ -295,11 +320,11 @@ mod tests {
     }
 
     #[test]
-    fn cascade_count_bounds_are_inclusive_and_more_splits_than_cascades_are_clamped() {
+    fn the_engine_adds_cascades_to_the_splits_up_to_its_limit() {
         for (value, expected) in [
-            (1, 1),
-            (2, 2),
-            (3, 3),
+            (1, 1 + EXTRA_CASCADES),
+            (2, 2 + EXTRA_CASCADES),
+            (MAX_CASCADES - EXTRA_CASCADES, MAX_CASCADES),
             (MAX_CASCADES, MAX_CASCADES),
             (MAX_CASCADES + 1, MAX_CASCADES),
             (99, MAX_CASCADES),

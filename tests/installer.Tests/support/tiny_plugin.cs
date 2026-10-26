@@ -190,9 +190,10 @@ namespace InstallerTests
                 data.ParameterOneNumber = (int)((ownIndex << 24) | FormKeyOf(editorId).ID);
         }
 
-        public Climate AddClimate(string editorId)
+        public Climate AddClimate(string editorId, Action<Climate>? configure = null)
         {
             var record = _mod.Climates.AddNew(editorId);
+            configure?.Invoke(record);
             Register(editorId, record.FormKey);
             return record;
         }

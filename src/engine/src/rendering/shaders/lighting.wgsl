@@ -27,6 +27,12 @@ const NO_CASCADE = 0xffffffffu;
 const LAST_CASCADE_FADE_FRACTION = 0.1;
 const MAX_SLOPE_BIAS_TANGENT = 10.0;
 const MIN_NO_L = 1e-4;
+// Widest sun penumbra, as a radius in texels; the blocker search covers it.
+const SUN_MAX_PENUMBRA_TEXELS = 12.0;
+const SUN_MIN_PENUMBRA_TEXELS = 1.0;
+const SUN_BLOCKER_SEARCH_TAPS = 16u;
+const MIN_PLANE_DETERMINANT = 1e-8;
+const GOLDEN_ANGLE = 2.39996323;
 
 // Light flags a receiver is not lit by.
 const RECEIVER_OBJECT = 0u;
@@ -70,19 +76,99 @@ fn cascade_containing(world_pos: vec3<f32>) -> u32 {
     return NO_CASCADE;
 }
 
-// Grid of hardware-filtered compare taps centred on `uv`.
-fn filtered_shadow(uv: vec2<f32>, cascade: u32, depth: f32) -> f32 {
-    let taps = frame.shadow_filter.x;
-    let texel_uv = 1.0 / vec2<f32>(textureDimensions(sun_shadow_maps));
-    let center = f32(taps - 1u) * 0.5;
-    var lit = 0.0;
-    for (var y = 0u; y < taps; y = y + 1u) {
-        for (var x = 0u; x < taps; x = x + 1u) {
-            let offset = (vec2<f32>(f32(x), f32(y)) - center) * texel_uv;
-            lit += textureSampleCompareLevel(sun_shadow_maps, shadow_comparison_sampler, uv + offset, cascade, depth);
+// The `i`th of `taps` points spread evenly over the unit disc (a Vogel spiral).
+fn disc_point(i: u32, taps: u32) -> vec2<f32> {
+    let r = sqrt((f32(i) + 0.5) / f32(taps));
+    let angle = f32(i) * GOLDEN_ANGLE;
+    return vec2<f32>(cos(angle), sin(angle)) * r;
+}
+
+// The receiver's plane in a cascade's clip space: how its depth changes per unit of clip x and
+// y. Lets taps far from the receiver compare against the plane instead of the receiver's own
+// depth, so a wide filter does not shadow a surface with itself.
+fn receiver_depth_slope(cascade: u32, ng: vec3<f32>) -> vec2<f32> {
+    let m = frame.cascade_view_proj[cascade];
+    let helper = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(ng.y) > 0.9);
+    let t1 = normalize(cross(ng, helper));
+    let t2 = cross(ng, t1);
+    let a = (m * vec4<f32>(t1, 0.0)).xyz;
+    let b = (m * vec4<f32>(t2, 0.0)).xyz;
+    let det = a.x * b.y - a.y * b.x;
+    if (abs(det) < MIN_PLANE_DETERMINANT) {
+        return vec2<f32>(0.0);
+    }
+    let slope = vec2<f32>(a.z * b.y - a.y * b.z, a.x * b.z - a.z * b.x) / det;
+    let radius = frame.cascade_spheres[cascade].w;
+    let max_slope = MAX_SLOPE_BIAS_TANGENT * radius / cascade_depth_span(cascade);
+    let length_slope = length(slope);
+    return select(slope, slope * (max_slope / length_slope), length_slope > max_slope);
+}
+
+// World distance one unit of a cascade's clip depth stands for.
+fn cascade_depth_span(cascade: u32) -> f32 {
+    let m = frame.cascade_view_proj[cascade];
+    return 1.0 / length(vec3<f32>(m[0].z, m[1].z, m[2].z));
+}
+
+fn plane_depth(depth: f32, slope: vec2<f32>, offset_uv: vec2<f32>) -> f32 {
+    return depth + dot(slope, offset_uv * vec2<f32>(2.0, -2.0));
+}
+
+// Mean clip-depth lead of the casters in front of the receiver plane within the widest penumbra;
+// negative when there are none.
+fn mean_blocker_lead(uv: vec2<f32>, cascade: u32, depth: f32, slope: vec2<f32>) -> f32 {
+    let size = vec2<f32>(textureDimensions(sun_shadow_maps));
+    let radius_uv = SUN_MAX_PENUMBRA_TEXELS / size;
+    var lead = 0.0;
+    var blockers = 0.0;
+    for (var i = 0u; i < SUN_BLOCKER_SEARCH_TAPS; i = i + 1u) {
+        let offset = disc_point(i, SUN_BLOCKER_SEARCH_TAPS) * radius_uv;
+        let texel = clamp(vec2<i32>((uv + offset) * size), vec2<i32>(0), vec2<i32>(size) - 1);
+        let caster = textureLoad(sun_shadow_maps, texel, cascade, 0);
+        let receiver = plane_depth(depth, slope, offset);
+        if (caster > receiver) {
+            lead += caster - receiver;
+            blockers += 1.0;
         }
     }
-    return lit / f32(taps * taps);
+    if (blockers == 0.0) {
+        return -1.0;
+    }
+    return lead / blockers;
+}
+
+// Contact-hardening sun shadow: the sun is a disc, so an edge softens with the distance from its
+// caster. Hardware-filtered compare taps over a disc whose radius is that penumbra.
+fn filtered_shadow(uv: vec2<f32>, cascade: u32, depth: f32, slope: vec2<f32>) -> f32 {
+    let taps = frame.shadow_filter.x;
+    if (taps <= 1u) {
+        return textureSampleCompareLevel(sun_shadow_maps, shadow_comparison_sampler, uv, cascade, depth);
+    }
+    let lead = mean_blocker_lead(uv, cascade, depth, slope);
+    if (lead < 0.0) {
+        return 1.0;
+    }
+    let cos_radius = frame.to_sun.w;
+    let tan_radius = sqrt(1.0 - cos_radius * cos_radius) / cos_radius;
+    let penumbra_world = lead * cascade_depth_span(cascade) * tan_radius;
+    let penumbra_texels = clamp(
+        penumbra_world / frame.cascade_texel_world[cascade],
+        SUN_MIN_PENUMBRA_TEXELS,
+        SUN_MAX_PENUMBRA_TEXELS,
+    );
+    let radius_uv = penumbra_texels / vec2<f32>(textureDimensions(sun_shadow_maps));
+    var lit = 0.0;
+    for (var i = 0u; i < taps; i = i + 1u) {
+        let offset = disc_point(i, taps) * radius_uv;
+        lit += textureSampleCompareLevel(
+            sun_shadow_maps,
+            shadow_comparison_sampler,
+            uv + offset,
+            cascade,
+            plane_depth(depth, slope, offset),
+        );
+    }
+    return lit / f32(taps);
 }
 
 // Receiver-side biases in texels of the shadow map at the receiver (x
@@ -100,7 +186,7 @@ fn cascade_visibility(cascade: u32, world_pos: vec3<f32>, ng: vec3<f32>, l: vec3
     let biased = biased_receiver(world_pos, ng, l, frame.cascade_texel_world[cascade], frame.shadow_params.xyz);
     let clip = frame.cascade_view_proj[cascade] * vec4<f32>(biased, 1.0);
     let uv = clip.xy * vec2<f32>(0.5, -0.5) + 0.5;
-    return filtered_shadow(uv, cascade, clip.z);
+    return filtered_shadow(uv, cascade, clip.z, receiver_depth_slope(cascade, ng));
 }
 
 // 1 = fully lit. Blends into the next cascade across the split band and fades

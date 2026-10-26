@@ -10,8 +10,8 @@ use super::state::LightingState;
 const SWATCH_SIZE: egui::Vec2 = egui::vec2(28.0, 14.0);
 const AMBIENT_FACE_LABELS: [&str; 6] = ["+X", "-X", "+Y", "-Y", "+Z", "-Z"];
 
-pub fn environment_section(ui: &mut egui::Ui, lighting: &mut LightingState) {
-    egui::CollapsingHeader::new("Environment")
+pub fn weather_section(ui: &mut egui::Ui, lighting: &mut LightingState) {
+    egui::CollapsingHeader::new("Weather")
         .default_open(true)
         .show(ui, |ui| {
             let lighting_weather = lighting.exterior_weather().cloned();

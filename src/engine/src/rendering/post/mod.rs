@@ -8,6 +8,7 @@ mod dof_support;
 #[cfg(test)]
 mod dof_test_support;
 pub mod hdr_target;
+pub mod night_sky;
 pub mod sky;
 pub mod tonemap;
 

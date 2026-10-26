@@ -577,12 +577,12 @@ mod tests {
 
     use super::*;
     use crate::sim::FIXED_DT;
-    use crate::sim::SimWorld;
     use crate::sim::collision::{CellColliderBatch, ColShape, PartShape, TerrainCollision};
     use crate::sim::commands::SimCommand;
     use crate::sim::physics::test_support::{
         bake, box_shape, ground_batch, object_group, placement,
     };
+    use crate::sim::{SimWorld, WorldClock};
 
     const SPAWN_AT: Vec3 = Vec3::new(200.0, 3.0, -100.0);
     const STANDING_CENTER_HEIGHT: f32 = STANDING_CENTER_ABOVE_FEET;
@@ -659,7 +659,7 @@ mod tests {
             .map(|prop| (prop.path, vec![prop.shape.clone()]))
             .collect();
         let baked = bake(&batch, &shapes);
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         sim.apply(SimCommand::AddCellColliders {
             grid: (0, 0),
             batch: Arc::new(batch),
@@ -770,7 +770,7 @@ mod tests {
 
     #[test]
     fn a_spawn_waits_until_the_destination_collision_is_installed() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         sim.apply(SimCommand::SpawnPlayer { pos: SPAWN_AT });
         tick(&mut sim, 5);
         let waiting = sim.player_debug();
@@ -825,7 +825,7 @@ mod tests {
 
     #[test]
     fn a_spawn_waits_forever_for_a_cell_whose_terrain_failed_to_build() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         sim.apply(SimCommand::SpawnPlayer { pos: SPAWN_AT });
         sim.apply(SimCommand::AddCellColliders {
             grid: (0, 0),
@@ -1123,7 +1123,7 @@ mod tests {
             None,
         ));
         let baked = bake(&batch, &[(floor.path, vec![floor.shape.clone()])]);
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         sim.apply(SimCommand::SetInteriorMode(true));
         sim.apply(SimCommand::AddCellColliders {
             grid: (0, 0),
