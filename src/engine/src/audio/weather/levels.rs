@@ -17,10 +17,12 @@ pub struct LoopLevel {
 }
 
 /// The looping sounds to hear and how loud, by descriptor and without the silent ones. A default
-/// sound follows the weight of its weather, a precipitation sound also the precipitation that
-/// shows and a wind sound also the wind speed; thunder is no loop. A descriptor several sounds name
+/// sound follows the weight of its weather and a wind sound also the wind speed. A precipitation
+/// sound follows the precipitation that shows alone, as the fade range of the precipitation already
+/// runs with the transition; thunder is no loop. A descriptor several sounds name
 /// takes the sum of their levels, at most 1: the bed two weathers share keeps its level through
-/// the transition between them. Indoors the weather is not heard, so no loop is wanted.
+/// the transition between them. A weather without weight is not heard, and indoors the weather is
+/// not heard at all, so no loop is wanted.
 pub fn loop_levels(
     table: &WeatherSoundTable,
     sides: &[WeatherSide],
@@ -30,10 +32,10 @@ pub fn loop_levels(
         return Ok(Vec::new());
     }
     let mut levels: BTreeMap<&str, f32> = BTreeMap::new();
-    for side in sides {
+    for side in sides.iter().filter(|side| fraction(side.weight) > 0.0) {
         for sound in table.sounds(side.weather)? {
-            if let Some(share) = share_of(sound.kind, side) {
-                *levels.entry(&sound.descriptor).or_default() += fraction(side.weight) * share;
+            if let Some(level) = side_level(sound.kind, side) {
+                *levels.entry(&sound.descriptor).or_default() += level;
             }
         }
     }
@@ -47,12 +49,12 @@ pub fn loop_levels(
         .collect())
 }
 
-/// How much of its weight a sound of `kind` has on `side`; `None` for the sounds that are no loops.
-fn share_of(kind: SoundKind, side: &WeatherSide) -> Option<f32> {
+/// The level a sound of `kind` has on `side`; `None` for the sounds that are no loops.
+fn side_level(kind: SoundKind, side: &WeatherSide) -> Option<f32> {
     match kind {
-        SoundKind::Default => Some(1.0),
+        SoundKind::Default => Some(fraction(side.weight)),
         SoundKind::Precipitation => Some(fraction(side.precipitation)),
-        SoundKind::Wind => Some(fraction(side.wind)),
+        SoundKind::Wind => Some(fraction(side.weight) * fraction(side.wind)),
         SoundKind::Thunder => None,
     }
 }
@@ -144,9 +146,25 @@ mod tests {
     }
 
     #[test]
-    fn a_precipitation_sound_follows_the_weight_times_the_precipitation() {
-        assert_eq!(level_of(&[side(RAIN, 0.5, 0.5, 1.0)], "rain"), 0.25);
+    fn a_precipitation_sound_follows_the_precipitation_that_shows_and_not_the_weight_again() {
+        assert_eq!(level_of(&[side(RAIN, 0.5, 0.5, 1.0)], "rain"), 0.5);
         assert_eq!(level_of(&[side(RAIN, 1.0, 0.0, 1.0)], "rain"), 0.0);
+    }
+
+    #[test]
+    fn rain_fading_in_late_in_a_transition_is_heard_as_strongly_as_it_falls() {
+        let fades_in_half_way = FadeRange {
+            begin_fade_in: 0.5,
+            end_fade_out: 1.0,
+        };
+        let incoming = WeatherSide::new(
+            RAIN,
+            TransitionSide::Incoming { progress: 0.75 },
+            fades_in_half_way,
+            0.0,
+        );
+
+        assert_eq!(level_of(&[incoming], "rain"), 0.5);
     }
 
     #[test]
