@@ -4,10 +4,9 @@ struct FrameUniform {
     camera_pos: vec4<f32>,
     to_sun: vec4<f32>,
     sun_illuminance: vec4<f32>,
-    sun_disc_illuminance: vec4<f32>,
-    // xyz: unit direction towards the sun disc (the sun's own place; to_sun follows the moon at
-    // night), w: the sun's alpha around sunrise and sunset.
-    sun_disc: vec4<f32>,
+    // x: the sun's alpha around sunrise and sunset, for the water; it stays the sun's while
+    // to_sun follows the moon at night.
+    daylight: vec4<f32>,
     // Linear ambient colour of each cube face, order +X, -X, +Y, -Y, +Z, -Z (engine axes); w unused.
     ambient_cube: array<vec4<f32>, 6>,
     sky_zenith: vec4<f32>,

@@ -256,7 +256,7 @@ pub fn sun_alpha(hour: f32, times: &ClimateTimes, trans_time: f32) -> f32 {
 /// diameter. The quad edge has this diameter, so the visible disc is smaller by the share of
 /// the texture the disc covers: calibrate against the textures, not the size alone. The
 /// settings' unit is undocumented; 30 gives Masser (90) a 3 degree disc and
-/// Secunda (75) 2.5 degrees, a few times the sun's 1 degree disc.
+/// Secunda (75) 2.5 degrees, several times the real sun's half-degree disc.
 pub const MOON_SIZE_UNITS_PER_DEGREE: f32 = 30.0;
 
 /// The sine of the elevation at which the stars are fully faded in; they fade from 0 at the horizon.

@@ -25,7 +25,8 @@ pub struct MoonSizes {
 }
 
 impl MoonSizes {
-    /// The values of the game settings.
+    /// Vanilla's values of the game settings, for tests.
+    #[cfg(test)]
     pub const VANILLA: Self = Self {
         masser: 90.0,
         secunda: 75.0,

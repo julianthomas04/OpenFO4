@@ -18,24 +18,6 @@ const SUN_ALPHA_TRANS_TIME: &str = "fSunAlphaTransTime";
 const MASSER_SIZE: &str = "iMasserSize";
 const SECUNDA_SIZE: &str = "iSecundaSize";
 
-/// Boot-time entry point: a failure is logged and the exterior keeps its static sun, as it does
-/// when the weather does not load.
-pub fn load_sky_game_config_or_report(db_path: &str) -> Option<SkyGameConfig> {
-    report(DbClient::new(db_path).and_then(|db| load_sky_game_config(&db)))
-}
-
-fn report(result: anyhow::Result<SkyGameConfig>) -> Option<SkyGameConfig> {
-    match result {
-        Ok(config) => Some(config),
-        Err(error) => {
-            tracing::error!(
-                "sky game settings not loaded: {error:#}; the exterior keeps its static sun"
-            );
-            None
-        }
-    }
-}
-
 /// A database error propagates. A setting the database lacks is an error naming it, as is a
 /// set of values the sky maths cannot work with.
 pub fn load_sky_game_config(db: &DbClient) -> anyhow::Result<SkyGameConfig> {
@@ -111,20 +93,6 @@ mod tests {
         assert_eq!(settings.masser_angle_fade(), (5.0, 10.0));
         assert_eq!(config.sun_alpha_trans_time(), 0.15);
         assert_eq!((config.masser_size(), config.secunda_size()), (90.0, 75.0));
-    }
-
-    #[test]
-    fn a_failed_load_is_reported_and_yields_no_config() {
-        let missing = config_from(&HashMap::new());
-        assert!(report(missing).is_none());
-        assert!(report(config_from(&vanilla())).is_some());
-    }
-
-    #[test]
-    fn a_database_that_cannot_be_opened_yields_no_config() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("missing.db");
-        assert!(load_sky_game_config_or_report(path.to_str().unwrap()).is_none());
     }
 
     #[test]

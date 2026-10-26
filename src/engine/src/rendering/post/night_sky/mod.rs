@@ -59,6 +59,7 @@ pub struct SkySizes {
 }
 
 impl SkySizes {
+    #[cfg(test)]
     pub const VANILLA: Self = Self {
         moon: MoonSizes::VANILLA,
         sun: SunSizes::VANILLA,

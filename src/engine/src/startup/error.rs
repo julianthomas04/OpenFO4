@@ -51,6 +51,8 @@ pub enum StartupError {
     Pipboy(anyhow::Error),
     #[error("cannot start the world clock: {0:#}")]
     WorldClock(anyhow::Error),
+    #[error("cannot load the sky's game settings: {0:#}")]
+    SkySettings(anyhow::Error),
     #[error("Pip-Boy world map: {0}")]
     PipboyWorldMap(#[from] WorldMapTextureError),
     #[error("Pip-Boy map marker art: {0}")]

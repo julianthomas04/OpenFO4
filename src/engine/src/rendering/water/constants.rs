@@ -328,7 +328,7 @@ pub fn frame_constants(frame: &FrameUniform) -> WaterFrameConstants {
         0.0,
         0.0,
     );
-    cb0[2] = axes_from_engine(frame.to_sun.truncate()).extend(frame.sun_disc.w);
+    cb0[2] = axes_from_engine(frame.to_sun.truncate()).extend(frame.daylight.x);
     cb0[3] = unscaled_sun_colour(frame).extend(SUN_SCATTER_EXPONENT);
     cb0[7] = Vec4::new(WATER_BLUR_RATIO, SSLR_ANGLE_THRESHOLD, 0.0, 0.0);
 
@@ -489,7 +489,7 @@ mod tests {
         frame.camera_pos = eye.extend(1.0);
         frame.viewport = Vec4::new(1920.0, 1080.0, 1.0 / 1920.0, 1.0 / 1080.0);
         frame.to_sun = Vec3::new(0.0, 1.0, 0.0).extend(0.99);
-        frame.sun_disc = Vec3::new(0.0, 1.0, 0.0).extend(1.0);
+        frame.daylight = Vec4::new(1.0, 0.0, 0.0, 0.0);
         frame.sun_illuminance = Vec4::new(3.0, 2.0, 1.0, 0.0);
         frame.sky_zenith = Vec4::new(0.1, 0.2, 0.9, 0.0);
         frame.sky_horizon = Vec4::new(0.6, 0.7, 0.8, 0.0);
@@ -693,11 +693,11 @@ mod tests {
     #[test]
     fn the_daylight_register_carries_the_suns_alpha_whatever_lights_the_scene() {
         let mut frame = frame_fixture();
-        frame.sun_disc.w = 0.25;
+        frame.daylight.x = 0.25;
         assert_eq!(frame_constants(&frame).cb0[2].w, 0.25);
         // At night the moon is the light: the direction follows it, the daylight stays 0.
         frame.to_sun = Vec4::new(0.0, 0.5, 0.0, 0.99);
-        frame.sun_disc = Vec4::new(0.0, -1.0, 0.0, 0.0);
+        frame.daylight.x = 0.0;
         let cb0 = frame_constants(&frame).cb0;
         assert_eq!(cb0[2].w, 0.0);
         assert_eq!(

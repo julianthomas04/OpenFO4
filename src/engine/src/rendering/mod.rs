@@ -90,7 +90,7 @@ use crate::anim::marker_timeline::{FIRST_PERSON_ASSETS_DIR, load_gait_timings};
 use crate::assets::AssetServer;
 use crate::assets::layout;
 use crate::assets::pipboy_art::ArtLibrary;
-use crate::assets::sky_game_settings::load_sky_game_config_or_report;
+use crate::assets::sky_game_settings::load_sky_game_config;
 use crate::audio::conditions::GameTime;
 use crate::audio::world_music_loader::{load_world_music, seed_from_clock};
 use crate::audio::{
@@ -503,7 +503,8 @@ pub struct State {
 
     // Post
     post: PostChain,
-    night_sky: NightSky,
+    /// `None` while the exterior has no clocked sky.
+    night_sky: Option<NightSky>,
     scene_copy: SceneCopy,
     water_stage: WaterStage,
     effect_stage: EffectStage,
@@ -1188,10 +1189,10 @@ impl State {
         if let Some(slots) =
             ExteriorWeatherSlots::load_or_report(&asset_server.db_path(), WORLDSPACE)
         {
-            match load_sky_game_config_or_report(&asset_server.db_path()) {
-                Some(game) => lighting.set_exterior_sky(slots, game),
-                None => lighting.set_exterior_weather(slots.initial()),
-            }
+            let game = crate::assets::db::DbClient::new(&asset_server.db_path())
+                .and_then(|db| load_sky_game_config(&db))
+                .map_err(StartupError::SkySettings)?;
+            lighting.set_exterior_sky(slots, game);
         }
         let shadow_maps = ShadowMaps::new(&device, &lighting.shadows.config);
         let lamp_atlas_resolution = lighting.lamp_shadows.config.atlas_resolution;
@@ -1222,16 +1223,13 @@ impl State {
             &frame_binding.layout,
             &world_pass_layout.pipeline_layout,
         );
-        let night_sky = {
+        let night_sky = lighting.sky_game_config().map(|game| {
             let (initial_moon, initial_sky_model) = lighting.initial_night_sky();
-            let moon_sizes = lighting
-                .sky_game_config()
-                .map_or(MoonSizes::VANILLA, |game| MoonSizes {
+            let sizes = SkySizes {
+                moon: MoonSizes {
                     masser: game.masser_size(),
                     secunda: game.secunda_size(),
-                });
-            let sizes = SkySizes {
-                moon: moon_sizes,
+                },
                 sun: settings.sun,
             };
             NightSky::new(
@@ -1247,7 +1245,7 @@ impl State {
                 initial_moon,
                 initial_sky_model,
             )
-        };
+        });
         timer.mark("frame_resources")?;
 
         // GPU-driven: textures & materials
@@ -2216,9 +2214,10 @@ impl State {
                 // instead.
                 if self.lighting.draws_sky() {
                     self.post.draw_sky(&mut render_pass);
-                    if self.lighting.sky_objects().is_some() {
-                        self.night_sky
-                            .draw(&mut render_pass, self.texture_feedback.bind_group());
+                    if self.lighting.sky_objects().is_some()
+                        && let Some(night_sky) = &self.night_sky
+                    {
+                        night_sky.draw(&mut render_pass, self.texture_feedback.bind_group());
                     }
                 }
             }
@@ -2981,7 +2980,7 @@ impl State {
                                     ui,
                                     self.sim.world_clock(),
                                     self.lighting.sky_moment(),
-                                    self.night_sky.asset_status(),
+                                    self.night_sky.as_ref().map(NightSky::asset_status),
                                     &mut clock_edits,
                                 );
                                 for edit in clock_edits {
@@ -3575,8 +3574,9 @@ impl State {
             .set_time_of_day(DayTime::clamped(clock.days_passed(), clock.hour()));
         if self.lighting.draws_sky()
             && let Some(objects) = self.lighting.sky_objects()
+            && let Some(night_sky) = &mut self.night_sky
         {
-            self.night_sky.update(
+            night_sky.update(
                 &self.device,
                 &self.queue,
                 &NightSkyInput::new(objects, self.lighting.sun_input()),

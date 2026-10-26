@@ -32,12 +32,13 @@ impl TimeControls {
     }
 }
 
-/// `sky` is where the clock last put the sky, `None` before the first exterior frame.
+/// `sky` is where the clock last put the sky, `None` before the first exterior frame;
+/// `sky_assets` is `None` while the exterior has no clocked sky to draw.
 pub fn time_panel(
     ui: &mut egui::Ui,
     clock: &WorldClock,
     sky: Option<&SkyMoment>,
-    sky_assets: &SkyAssetStatus,
+    sky_assets: Option<&SkyAssetStatus>,
     edits: &mut Vec<ClockEdit>,
 ) {
     let before = TimeControls::of(clock);
@@ -54,6 +55,7 @@ pub fn time_panel(
         ui.add(
             egui::Slider::new(&mut after.time_scale, TIME_SCALE_RANGE)
                 .logarithmic(true)
+                .clamping(egui::SliderClamping::Edits)
                 .suffix("x")
                 .text("time scale"),
         );
@@ -66,7 +68,7 @@ pub fn time_panel(
     ui.label(format_time_scale(clock.time_scale()));
     ui.label(weather_slot_label(sky.map(|moment| &moment.blend)));
     ui.label(moon_label(sky));
-    ui.label(sky_assets_label(sky_assets));
+    ui.label(sky_assets.map_or_else(|| "Sky assets: -".to_owned(), sky_assets_label));
 
     edits.extend(clock_edits(&before, &after));
 }

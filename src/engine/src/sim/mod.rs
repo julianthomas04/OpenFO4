@@ -236,12 +236,6 @@ impl SimWorld {
         self.fold_hold = hold;
     }
 
-    /// Whether the fold is held: a bulk load is under way and nothing simulates.
-    pub fn fold_held(&self) -> bool {
-        self.fold_hold
-    }
-
-    /// Installs the clock the world starts from, loaded from the game data at startup.
     pub fn world_clock(&self) -> &WorldClock {
         &self.world_clock
     }

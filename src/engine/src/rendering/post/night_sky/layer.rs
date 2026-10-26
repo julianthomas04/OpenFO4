@@ -1,6 +1,6 @@
-//! What the moon and star layers share: the one bind group shape (a uniform, a texture and a
-//! sampler at group 3), the sampler and the pipeline recipe. Group 1 is the frame uniform the
-//! world pass already bound; groups 0 and 2 stay out of these layouts.
+//! What the moon, star and sun layers share: the one bind group shape (a uniform, a texture and
+//! a sampler at group 3), the sampler and the pipeline recipe. Groups 0 to 2 use the world pass's
+//! own layouts, whose bind groups the pass already holds.
 
 use crate::rendering::{post::hdr_target::HDR_FORMAT, shaders::ShaderSource, texture::Texture};
 
