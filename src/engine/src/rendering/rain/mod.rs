@@ -6,6 +6,7 @@
 //! with the number of drops.
 
 mod assets;
+pub mod impacts;
 mod motion;
 pub mod occlusion;
 mod pipeline;
