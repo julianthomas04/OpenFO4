@@ -23,8 +23,6 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 
-use kira::sound::streaming::StreamingSoundData;
-
 pub use error::WeatherAudioError;
 pub use input::{ThunderStrike, WeatherAudioInput, WeatherSide};
 pub use loader::{load_or_report, load_weather_audio};
@@ -35,7 +33,7 @@ use thunder::{DueThunder, ThunderQueue};
 
 use super::conditions::{FreshWorldContext, GameTime, evaluate};
 use super::decibels::amplitude_to_db;
-use super::file_probe::probe_files;
+use super::file_probe::probe_sounds;
 use super::loop_plan::LoopTarget;
 use super::sound_resolve::{
     LayerPlay, LoopPlay, lookup_descriptor, reachable_sounds, resolve_layers, resolve_loop,
@@ -81,27 +79,7 @@ impl WeatherAudio {
         seed: u64,
     ) -> Result<Self, WeatherAudioError> {
         let reachable = reachable_sounds(&sounds, table.descriptors())?;
-        let missing_files = probe_files(
-            "weather sound",
-            reachable
-                .iter()
-                .flat_map(|sound| sound.file_keys.iter().map(String::as_str)),
-            audio_dir,
-            |path| StreamingSoundData::from_file(path).map(|_| ()),
-        )?;
-        for sound in &reachable {
-            if sound
-                .file_keys
-                .iter()
-                .all(|file_key| missing_files.contains(file_key))
-            {
-                tracing::warn!(
-                    target: LOG_TARGET,
-                    "weather sound {} has no file left; it is silent",
-                    sound.descriptor
-                );
-            }
-        }
+        let missing_files = probe_sounds("weather sound", &reachable, audio_dir)?;
         let mut audio = Self {
             sounds,
             table,

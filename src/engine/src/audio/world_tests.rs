@@ -1,7 +1,6 @@
 //! The world music through kira's mock backend: crossfades, plan timing, the handover from the
 //! menu music, and the fatal errors. Plan decisions have their own tests in `world_music`.
 
-use std::path::Path;
 use std::time::Duration;
 
 use kira::sound::PlaybackState;
@@ -16,6 +15,7 @@ use super::test_support::condition::{day, night};
 use super::test_support::{
     HALF_SECOND_SAMPLES, MockAudio, PeakReader, SAMPLE_RATE, SEED, SETTLED_BUFFERS,
     mock_manager_settings, render, render_buffer, sine_flac, undecodable_flac, wait_until,
+    write_audio_file,
 };
 use super::world_music::WorldMusic;
 use super::{AudioError, AudioFrame, AudioSystem, MenuMusicSettings};
@@ -26,12 +26,6 @@ const MENU_FADE: Duration = Duration::from_millis(100);
 const CYCLES: u32 = FLAG_CYCLE_TRACKS;
 const ABRUPT: u32 = FLAG_ABRUPT_TRANSITION;
 const MENU_FILE: &str = "music/special/mus_maintheme.flac";
-
-fn write_audio(root: &Path, key: &str, bytes: &[u8]) {
-    let path = root.join("audio").join(key);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, bytes).unwrap();
-}
 
 struct World {
     root: tempfile::TempDir,
@@ -44,10 +38,10 @@ struct World {
 fn world_with(catalog: MusicCatalog) -> World {
     let root = tempfile::tempdir().unwrap();
     let sine = sine_flac(SAMPLE_RATE, HALF_SECOND_SAMPLES);
-    write_audio(root.path(), MENU_FILE, &sine);
+    write_audio_file(root.path(), MENU_FILE, &sine);
     for track in &catalog.tracks {
         if let crate::assets::db::music::MusicTrackKind::Single { file_key, .. } = &track.kind {
-            write_audio(root.path(), file_key, &sine);
+            write_audio_file(root.path(), file_key, &sine);
         }
     }
     let (manager_settings, peak) = mock_manager_settings(SAMPLE_RATE);
@@ -468,7 +462,7 @@ fn a_world_music_file_that_vanishes_before_its_plan_starts_is_fatal() {
 #[test]
 fn a_world_music_file_that_fails_to_decode_while_playing_is_fatal() {
     let mut world = world_with(two_types(0.1, 0.1));
-    write_audio(
+    write_audio_file(
         world.root.path(),
         "music/a.flac",
         &undecodable_flac(SAMPLE_RATE, HALF_SECOND_SAMPLES),

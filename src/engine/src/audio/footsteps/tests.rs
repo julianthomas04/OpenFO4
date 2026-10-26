@@ -6,6 +6,7 @@ use super::*;
 use crate::assets::db::footsteps::FootstepCatalog;
 use crate::assets::db::sound_catalog::{COMPOUND_DESCRIPTOR, STANDARD_DESCRIPTOR_TYPE};
 use crate::audio::conditions::{ConditionContext, FreshWorldContext};
+use crate::audio::file_probe::ProbeError;
 use crate::audio::sound_resolve::SoundError;
 use crate::audio::test_support::footsteps::{
     DIRT, DIRT_FIRST_PERSON_FILES, DIRT_QUIET_FILE, GRASS, ORPHAN, SILENT_RUNNING_FILE, SNEAK_FILE,
@@ -14,7 +15,7 @@ use crate::audio::test_support::footsteps::{
 };
 use crate::audio::test_support::{
     HALF_SECOND_SAMPLES, MockAudio, PeakReader, SAMPLE_RATE, SEED, SharedBuffer,
-    mock_manager_settings, render, render_buffer, sine_flac, undecodable_flac,
+    mock_manager_settings, render, render_buffer, sine_flac, undecodable_flac, write_audio_file,
 };
 use crate::audio::{AudioError, AudioFrame, AudioSystem, MenuMusicSettings};
 use crate::footsteps::{FootTag, FootstepEvent, Gait, SurfaceMaterial};
@@ -583,12 +584,6 @@ mod data_errors {
     }
 }
 
-fn write_file(root: &Path, key: &str, bytes: &[u8]) {
-    let path = root.join("audio").join(key);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, bytes).unwrap();
-}
-
 fn sine() -> Vec<u8> {
     sine_flac(SAMPLE_RATE, HALF_SECOND_SAMPLES)
 }
@@ -596,7 +591,7 @@ fn sine() -> Vec<u8> {
 fn install() -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
     for file in all_files() {
-        write_file(root.path(), file, &sine());
+        write_audio_file(root.path(), file, &sine());
     }
     root
 }
@@ -618,7 +613,7 @@ mod startup_and_logging {
         let root = tempfile::tempdir().unwrap();
         assert!(matches!(
             footsteps(root.path()),
-            Err(FootstepError::AudioDirectoryMissing(_))
+            Err(FootstepError::Probe(ProbeError::DirectoryMissing(_)))
         ));
     }
 
@@ -694,10 +689,10 @@ mod startup_and_logging {
     #[test]
     fn a_file_whose_header_cannot_be_opened_is_an_error() {
         let root = install();
-        write_file(root.path(), STONE_FILE, &[]);
+        write_audio_file(root.path(), STONE_FILE, &[]);
         assert!(matches!(
             footsteps(root.path()),
-            Err(FootstepError::UnreadableFile { .. })
+            Err(FootstepError::Probe(ProbeError::Open { .. }))
         ));
     }
 
@@ -887,7 +882,7 @@ mod playback {
     #[test]
     fn a_file_that_cannot_be_decoded_is_fatal() {
         let root = install();
-        write_file(
+        write_audio_file(
             root.path(),
             STONE_FILE,
             &undecodable_flac(SAMPLE_RATE, HALF_SECOND_SAMPLES),

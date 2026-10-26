@@ -51,7 +51,7 @@ impl WeatherSoundTable {
 
 /// The default, precipitation and wind sounds are beds that run as long as their weather shows;
 /// thunder is heard once per strike.
-pub fn plays_in_a_loop(kind: SoundKind) -> bool {
+fn plays_in_a_loop(kind: SoundKind) -> bool {
     match kind {
         SoundKind::Default | SoundKind::Precipitation | SoundKind::Wind => true,
         SoundKind::Thunder => false,

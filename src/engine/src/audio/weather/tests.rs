@@ -7,7 +7,8 @@ use super::*;
 use crate::assets::db::music::{Comparand, CompareOp};
 use crate::assets::db::sound_catalog::{COMPOUND_DESCRIPTOR, SoundDescriptor};
 use crate::audio::conditions::{ConditionError, IS_IN_INTERIOR};
-use crate::audio::sound_resolve::{LayersError, SoundError};
+use crate::audio::file_probe::ProbeError;
+use crate::audio::sound_resolve::SoundError;
 use crate::audio::test_support::condition::{condition, day};
 use crate::audio::test_support::weather::{
     CLEAR, GUSTS, GUSTS_FILE, ONLY_THUNDER, RAIN, RAIN_BED, RAIN_FILES, STORM, STORM_BED,
@@ -489,7 +490,10 @@ mod startup {
         let error = startup_error(root.path(), sound_catalog());
 
         assert!(
-            matches!(error, WeatherAudioError::AudioDirectoryMissing(_)),
+            matches!(
+                error,
+                WeatherAudioError::Probe(ProbeError::DirectoryMissing(_))
+            ),
             "{error:?}"
         );
     }
@@ -547,7 +551,7 @@ mod startup {
         let error = startup_error(root.path(), sound_catalog());
 
         assert!(
-            matches!(error, WeatherAudioError::UnreadableFile { .. }),
+            matches!(error, WeatherAudioError::Probe(ProbeError::Open { .. })),
             "{error:?}"
         );
     }
@@ -604,7 +608,7 @@ mod startup {
         let error = startup_error(root.path(), catalog);
 
         assert!(
-            matches!(&error, WeatherAudioError::Layers(LayersError::Sound(SoundError::Looping(descriptor))) if descriptor == THUNDER_LOW),
+            matches!(&error, WeatherAudioError::Sound(SoundError::Looping(descriptor)) if descriptor == THUNDER_LOW),
             "{error:?}"
         );
     }
@@ -619,7 +623,7 @@ mod startup {
         let error = startup_error(root.path(), catalog);
 
         assert!(
-            matches!(&error, WeatherAudioError::Layers(LayersError::Cycle(descriptor)) if descriptor == THUNDER),
+            matches!(&error, WeatherAudioError::Cycle(descriptor) if descriptor == THUNDER),
             "{error:?}"
         );
     }

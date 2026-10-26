@@ -15,7 +15,7 @@ use kira::sound::FromFileError;
 use super::conditions::{self, ConditionError, FreshWorldContext, GameTime, global_entries};
 use super::decibels::amplitude_to_db;
 use super::file_probe::{ProbeError, probe_files};
-use super::music_output::open_music_stream;
+use super::music_output::open_stream;
 use super::music_stack::pick;
 use super::place::{Candidate, PlaceError, PlaceIndex, PlaceSnapshot};
 use super::scheduler::{LOG_TARGET, PlayPlan, SchedulerError, TrackScheduler};
@@ -73,7 +73,7 @@ impl From<ProbeError> for WorldMusicError {
         match error {
             ProbeError::DirectoryMissing(path) => Self::AudioDirectoryMissing(path),
             ProbeError::Check { path, source } => Self::FileCheck { path, source },
-            ProbeError::Open { path, source } => Self::MusicFile { path, source },
+            ProbeError::Open { path, source, .. } => Self::MusicFile { path, source },
         }
     }
 }
@@ -140,7 +140,7 @@ impl WorldMusic {
             "music file",
             single_file_keys(&reachable),
             audio_dir,
-            |path| open_music_stream(path, false).map(|_| ()),
+            |path| open_stream(path, false).map(|_| ()),
         )?;
         Ok(Self {
             index,
