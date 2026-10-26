@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use super::ambient::AmbientCube;
 use super::fog::{Fog, FogParams};
-use super::lerp::{Lerp, lerp_fields};
+use super::lerp::{Lerp, lerp_fields, snap_to_nearer};
 use super::time_of_day::{
     ClimateMoon, ClimateSky, ClimateSunTextures, ClimateTimes, SlotBlend, TimeSlot,
     fog_daylight_weight,
@@ -47,7 +47,7 @@ impl Lerp for ImageSpaceDepthOfField {
             strength: self.strength.lerp(&other.strength, t),
             distance: self.distance.lerp(&other.distance, t),
             range: self.range.lerp(&other.range, t),
-            mode: if t > 0.5 { other.mode } else { self.mode },
+            mode: *snap_to_nearer(&self.mode, &other.mode, t),
             vignette_radius: self.vignette_radius.lerp(&other.vignette_radius, t),
             vignette_strength: self.vignette_strength.lerp(&other.vignette_strength, t),
         }
@@ -178,6 +178,31 @@ pub struct ExteriorWeather {
     pub fog: Option<Fog>,
 }
 
+/// The blend of two weathers at one moment. The names have no midpoint, so they snap to the
+/// nearer weather (to `self` at exactly one half), as the fog and the depth of field mode do.
+/// Naming every field keeps one added later from being left out.
+impl Lerp for ExteriorWeather {
+    fn lerp(&self, other: &Self, t: f32) -> Self {
+        let nearer = snap_to_nearer(self, other, t);
+        Self {
+            form_key: Arc::clone(&nearer.form_key),
+            editor_id: nearer.editor_id.clone(),
+            sun_light: Lerp::lerp(&self.sun_light, &other.sun_light, t),
+            sun_disc: Lerp::lerp(&self.sun_disc, &other.sun_disc, t),
+            sun_glare: Lerp::lerp(&self.sun_glare, &other.sun_glare, t),
+            sky_upper: Lerp::lerp(&self.sky_upper, &other.sky_upper, t),
+            sky_lower: Lerp::lerp(&self.sky_lower, &other.sky_lower, t),
+            horizon: Lerp::lerp(&self.horizon, &other.horizon, t),
+            stars: Lerp::lerp(&self.stars, &other.stars, t),
+            ambient_cube: Lerp::lerp(&self.ambient_cube, &other.ambient_cube, t),
+            ambient_specular: Lerp::lerp(&self.ambient_specular, &other.ambient_specular, t),
+            hdr: Lerp::lerp(&self.hdr, &other.hdr, t),
+            depth_of_field: Lerp::lerp(&self.depth_of_field, &other.depth_of_field, t),
+            fog: Lerp::lerp(&self.fog, &other.fog, t),
+        }
+    }
+}
+
 /// One weather with the values of all eight time slots, loaded once, and the climate around
 /// it. [`Self::sample`] turns a moment of the day into the weather lighting uses.
 #[derive(Debug, Clone, PartialEq)]
@@ -294,5 +319,126 @@ impl ExteriorWeatherSlots {
             depth_of_field,
             fog: self.fog.as_ref().map(|fog| fog.sample(blend)),
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "the blends below land on exactly representable fractions"
+)]
+mod tests {
+    use super::*;
+
+    /// A weather whose every value is linear in `level`, with a different slope per field, so a
+    /// blend between two levels is the weather at the blended level.
+    fn weather(name: &str, level: f32) -> ExteriorWeather {
+        ExteriorWeather {
+            form_key: name.into(),
+            editor_id: Some(format!("{name}Id").as_str().into()),
+            sun_light: Vec3::splat(level),
+            sun_disc: Vec3::splat(2.0 * level),
+            sun_glare: Vec3::splat(3.0 * level),
+            sky_upper: Vec3::splat(4.0 * level),
+            sky_lower: Vec3::splat(5.0 * level),
+            horizon: Vec3::splat(6.0 * level),
+            stars: Vec3::splat(7.0 * level),
+            ambient_cube: AmbientCube(std::array::from_fn(|face| Vec3::splat(level + face as f32))),
+            ambient_specular: Vec3::splat(8.0 * level),
+            hdr: ImageSpaceHdr {
+                sunlight_scale: 9.0 * level,
+                sky_scale: 10.0 * level,
+                ..ImageSpaceHdr::default()
+            },
+            depth_of_field: Some(ImageSpaceDepthOfField {
+                strength: 11.0 * level,
+                distance: 12.0 * level,
+                range: 13.0 * level,
+                mode: 1,
+                vignette_radius: 14.0 * level,
+                vignette_strength: 15.0 * level,
+            }),
+            fog: Some(Fog::Enabled(FogParams {
+                near_color: Vec3::splat(16.0 * level),
+                far_color: Vec3::splat(17.0 * level),
+                near: 18.0 * level,
+                far: 19.0 * level,
+                power: 20.0 * level,
+                max: 21.0 * level,
+            })),
+        }
+    }
+
+    /// `weather` with the names of another.
+    fn named(name: &str, weather: &ExteriorWeather) -> ExteriorWeather {
+        ExteriorWeather {
+            form_key: name.into(),
+            editor_id: Some(format!("{name}Id").as_str().into()),
+            ..weather.clone()
+        }
+    }
+
+    #[test]
+    fn a_blend_blends_every_value_of_the_two_weathers() {
+        let blended = weather("Dim", 0.0).lerp(&weather("Bright", 1.0), 0.25);
+        assert_eq!(blended, named("Dim", &weather("Dim", 0.25)));
+    }
+
+    #[test]
+    fn a_blend_starts_at_the_first_weather_and_ends_at_the_second() {
+        let (dim, bright) = (weather("Dim", 0.0), weather("Bright", 1.0));
+        assert_eq!(dim.lerp(&bright, 0.0), dim);
+        assert_eq!(dim.lerp(&bright, 1.0), bright);
+    }
+
+    #[test]
+    fn the_depth_of_field_mode_follows_the_nearer_weather_and_the_first_at_exactly_one_half() {
+        let with_mode = |mode| ExteriorWeather {
+            depth_of_field: weather("Mode", 0.0)
+                .depth_of_field
+                .map(|dof| ImageSpaceDepthOfField { mode, ..dof }),
+            ..weather("Mode", 0.0)
+        };
+        let (first, second) = (with_mode(1), with_mode(2));
+        for (t, mode) in [(0.25, 1), (0.5, 1), (0.75, 2)] {
+            let blended = first.lerp(&second, t);
+            assert_eq!(blended.depth_of_field.unwrap().mode, mode, "{t}");
+        }
+    }
+
+    #[test]
+    fn the_names_follow_the_nearer_weather_and_the_first_at_exactly_one_half() {
+        let (dim, bright) = (weather("Dim", 0.0), weather("Bright", 1.0));
+        for (t, name) in [(0.25, "Dim"), (0.5, "Dim"), (0.75, "Bright")] {
+            let blended = dim.lerp(&bright, t);
+            assert_eq!(&*blended.form_key, name, "{t}");
+            assert_eq!(
+                blended.editor_id.as_deref(),
+                Some(format!("{name}Id").as_str()),
+                "{t}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fog_the_weathers_do_not_share_snaps_with_the_names_of_the_nearer_one() {
+        let foggy = weather("Foggy", 1.0);
+        let clear = ExteriorWeather {
+            fog: Some(Fog::Disabled),
+            ..weather("Clear", 0.0)
+        };
+        assert_eq!(foggy.lerp(&clear, 0.25).fog, foggy.fog);
+        assert_eq!(foggy.lerp(&clear, 0.75).fog, Some(Fog::Disabled));
+    }
+
+    #[test]
+    fn a_weather_without_fog_data_keeps_without_it_until_the_midpoint() {
+        let unknown = ExteriorWeather {
+            fog: None,
+            ..weather("Unknown", 0.0)
+        };
+        let foggy = weather("Foggy", 1.0);
+        assert_eq!(unknown.lerp(&foggy, 0.25).fog, None);
+        assert_eq!(unknown.lerp(&foggy, 0.75).fog, foggy.fog);
     }
 }

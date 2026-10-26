@@ -76,6 +76,7 @@ mod walk_in_hook;
 mod walk_in_trace;
 pub mod water;
 pub mod weather;
+mod weather_sync;
 pub mod window_surface;
 pub mod world_streamer;
 
@@ -116,12 +117,12 @@ use crate::rendering::{
     },
     gpu_profiler::{GpuPass, GpuProfiler, SpanPart, panel::gpu_profiler_section},
     gpu_slab::GpuSlab,
-    grass::{GrassPanelState, GrassStage, GrassView, grass_panel},
+    grass::{GrassPanelState, GrassStage, GrassView, commonwealth_clear_wind, grass_panel},
     hiz::HizPipeline,
     lighting::{
         FrameBinding, LightingState, debug_panel::lighting_panel,
         exterior_weather::ExteriorWeatherSlots, interior_catalog::InteriorLightingCatalog,
-        state::FrameInputs, time_of_day::DayTime, time_panel::time_panel,
+        state::FrameInputs, time_panel::time_panel,
     },
     line_buffer::LineBuffer,
     local_lights::{
@@ -139,7 +140,7 @@ use crate::rendering::{
         PostChain,
         depth_of_field::{BokehGate, DofCamera, select_frame},
         hdr_target::{HDR_FORMAT, clear_color},
-        night_sky::{MoonSizes, NightSky, NightSkyInput, SkySizes},
+        night_sky::{MoonSizes, NightSky, SkySizes},
         tonemap,
     },
     ragdoll_debug_panel::ragdoll_settings_section,
@@ -168,6 +169,11 @@ use crate::rendering::{
     texture::Texture,
     texture_streaming::{ResidencyPolicy, TextureFeedback, TextureResidency, demand::ScreenView},
     water::{CameraWater, WaterStage, water_panel},
+    weather::{
+        StartupWeather, WeatherSync,
+        panel::{WeatherPanelState, weather_panel},
+        startup::{WEATHER_SEED_VAR, cycle_seed},
+    },
     window_surface::WindowSurface,
     world_streamer::{LoadMode, StreamTargets, UploadBudget, WorldStreamer},
 };
@@ -487,6 +493,8 @@ pub struct State {
     // Lighting
     lighting: LightingState,
     interior_lighting: Option<InteriorLightingCatalog>,
+    weather: WeatherSync,
+    weather_panel: WeatherPanelState,
     frame_binding: FrameBinding,
     shadow_renderer: ShadowRenderer,
     lamp_shadow_cache: LampShadowCache,
@@ -1187,9 +1195,12 @@ impl State {
             LampShadowState::new(settings.lamp_shadows),
             LocalLightSettings::new(settings.light_fade),
         );
-        if let Some(slots) =
-            ExteriorWeatherSlots::load_or_report(&asset_server.db_path(), WORLDSPACE)
-        {
+        let weather = StartupWeather::load_or_report(&asset_server.db_path(), WORLDSPACE);
+        let exterior_slots = match &weather {
+            Some(weather) => Some(weather.library.initial_weather().slots.clone()),
+            None => ExteriorWeatherSlots::load_or_report(&asset_server.db_path(), WORLDSPACE),
+        };
+        if let Some(slots) = exterior_slots {
             let game = crate::assets::db::DbClient::new(&asset_server.db_path())
                 .and_then(|db| load_sky_game_config(&db))
                 .map_err(StartupError::SkySettings)?;
@@ -1525,6 +1536,11 @@ impl State {
             &world_pass_layout,
             &frame_binding.layout,
             settings.grass_fade_limits,
+            weather
+                .as_ref()
+                .map_or_else(commonwealth_clear_wind, |weather| {
+                    weather.library.wind_ceiling()
+                }),
         );
         timer.mark("effects_and_grass")?;
 
@@ -1592,6 +1608,14 @@ impl State {
             .and_then(|db| crate::assets::world_clock_start::load_world_clock(&db))
             .map_err(StartupError::WorldClock)?;
         let mut sim = SimWorld::new(player_movement, world_clock);
+        let weather_library = weather.map(|StartupWeather { library, table }| {
+            let seed = cycle_seed(std::env::var(WEATHER_SEED_VAR), seed_from_clock());
+            tracing::info!(
+                "weather cycle seed {seed}; set {WEATHER_SEED_VAR}={seed} to roll the same weather again"
+            );
+            sim.install_weather(table, seed);
+            library
+        });
         if let Some(table) = buoyancy_table {
             sim.set_material_buoyancy_table(std::sync::Arc::new(table));
         }
@@ -1679,6 +1703,8 @@ impl State {
             camera_controller,
             lighting,
             interior_lighting,
+            weather: WeatherSync::new(weather_library),
+            weather_panel: WeatherPanelState::default(),
             frame_binding,
             night_sky,
             shadow_renderer,
@@ -2987,6 +3013,21 @@ impl State {
                                 for edit in clock_edits {
                                     self.sim.apply(SimCommand::SetWorldClock(edit));
                                 }
+                                egui::CollapsingHeader::new("Weather cycle")
+                                    .default_open(true)
+                                    .show(ui, |ui| {
+                                        let view = self.weather.view(self.sim.weather_snapshot());
+                                        let mut weather_edits = Vec::new();
+                                        weather_panel(
+                                            ui,
+                                            &mut self.weather_panel,
+                                            view.as_ref(),
+                                            &mut weather_edits,
+                                        );
+                                        for edit in weather_edits {
+                                            self.sim.apply(SimCommand::SetWeather(edit));
+                                        }
+                                    });
                             });
 
                         egui::CollapsingHeader::new("Lighting")
@@ -3570,20 +3611,7 @@ impl State {
             self.streamer.current_interior(),
             self.interior_lighting.as_ref(),
         );
-        let clock = self.sim.world_clock();
-        self.lighting
-            .set_time_of_day(DayTime::clamped(clock.days_passed(), clock.hour()));
-        if self.lighting.draws_sky()
-            && let Some(objects) = self.lighting.sky_objects()
-            && let Some(night_sky) = &mut self.night_sky
-        {
-            night_sky.update(
-                &self.device,
-                &self.queue,
-                &NightSkyInput::new(objects, self.lighting.sun_input()),
-                self.lighting.sky.radiance_scale,
-            );
-        }
+        self.sync_weather(world_dt);
         let mut water_entries = Vec::new();
         if self.water_stage.wants_water_entries() {
             self.sim.drain_water_entries(&mut water_entries);

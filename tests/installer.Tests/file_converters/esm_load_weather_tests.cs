@@ -22,13 +22,13 @@ namespace InstallerTests
         JsonElement WeatherData(string editorId = "FixtureWeather") => Json("weather", "data", editorId);
 
         [Fact]
-        public void Weather_Clouds_HaveThirtyTwoLayersTwentyNineTexturesAndNoModel()
+        public void Weather_Clouds_HaveThirtyTwoLayersAndTwentyNineTexturesAndNothingElse()
         {
             var clouds = Clouds();
 
             Assert.Equal(32, clouds.GetProperty("layers").GetArrayLength());
             Assert.Equal(29, clouds.GetProperty("textures").GetArrayLength());
-            Assert.Equal(JsonValueKind.Null, clouds.GetProperty("model").ValueKind);
+            Assert.Equal(["layers", "textures"], clouds.EnumerateObject().Select(property => property.Name).Order());
         }
 
         [Fact]

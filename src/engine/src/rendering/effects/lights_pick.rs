@@ -3,6 +3,7 @@
 use glam::Vec3;
 
 use super::constants::{EffectLight, LIGHT_COUNT};
+use crate::rendering::lighting::cell_lighting::luminance;
 use crate::rendering::placed_light::{GpuPlacedLight, SKIPPED_FLAGS};
 
 /// A placed light and the factor its animation currently scales its colour by (1.0 when the
@@ -24,9 +25,6 @@ impl PickableLight {
         light
     }
 }
-
-/// Rec. 709 luma weights: how strongly a colour lights a texture on screen.
-const LUMA: Vec3 = Vec3::new(0.2126, 0.7152, 0.0722);
 
 /// The lights that light one draw: at most [`LIGHT_COUNT`], strongest first.
 #[derive(Debug, Clone, Copy)]
@@ -91,7 +89,7 @@ impl LightPicker {
                 continue;
             }
             let light = candidate.effect_light();
-            let strength = light.color.dot(LUMA) * light.attenuation_at(centre);
+            let strength = luminance(light.color) * light.attenuation_at(centre);
             if strength > 0.0 {
                 self.ranked.push((strength, index));
             }

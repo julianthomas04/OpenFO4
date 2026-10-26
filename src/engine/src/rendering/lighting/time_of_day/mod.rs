@@ -15,7 +15,7 @@ mod sky_objects;
 mod slot;
 mod stars;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 pub mod unmeasured;
 mod wrap;
 

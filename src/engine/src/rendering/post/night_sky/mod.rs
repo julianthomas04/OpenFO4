@@ -132,8 +132,8 @@ pub struct NightSky {
     /// `None` is a climate without a sky model.
     installed_model: Installed<Option<Arc<str>>>,
     installed_sun_textures: Installed<ClimateSunTextures>,
-    /// The path of the cloud model that was last requested, `None` before any layer showed.
-    installed_cloud_model: Option<Arc<str>>,
+    /// Whether the cloud model was requested, which the first layer that shows does.
+    cloud_model_requested: bool,
     status: SkyAssetStatus,
 }
 
@@ -167,7 +167,7 @@ impl NightSky {
             clouds: CloudLayer::new(device, world_groups),
             installed_model: Installed::NothingYet,
             installed_sun_textures: Installed::NothingYet,
-            installed_cloud_model: None,
+            cloud_model_requested: false,
             status,
         };
         sky.load_changed_assets(device, queue, initial_moon, initial_sky_model);
@@ -249,19 +249,18 @@ impl NightSky {
 
     /// Readies the clouds of this frame, which cover the stars, the moon and the sun wherever
     /// they are opaque. `radiance_scale` is the sky radiance scale the sky colours are multiplied
-    /// by and `dt` the real seconds since the last call, which the layers scroll by. The cloud model
-    /// loads when the first layer shows and again when the input names another model; the textures
-    /// load the first time a layer shows them, on the calling thread. Without a call, or with
-    /// no layers, no clouds are drawn.
+    /// by and `dt` the world seconds since the last call, which the layers scroll by. The cloud
+    /// model loads when the first layer shows; the textures load the first time a layer shows
+    /// them, on the calling thread. Without a call, or with no layers, no clouds are drawn.
     pub fn update_clouds(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        input: &CloudsInput,
+        input: &CloudsInput<'_>,
         radiance_scale: f32,
         dt: f32,
     ) {
-        self.load_changed_cloud_model(device, input);
+        self.load_cloud_model_for(device, input);
         let asset_root = &self.asset_root;
         self.clouds
             .update(device, queue, input, radiance_scale, dt, |path| {
@@ -269,14 +268,13 @@ impl NightSky {
             });
     }
 
-    fn load_changed_cloud_model(&mut self, device: &wgpu::Device, input: &CloudsInput) {
-        let wanted = input.model.as_deref().unwrap_or(DEFAULT_MODEL);
-        if input.layers.is_empty() || self.installed_cloud_model.as_deref() == Some(wanted) {
+    fn load_cloud_model_for(&mut self, device: &wgpu::Device, input: &CloudsInput<'_>) {
+        if input.layers.is_empty() || self.cloud_model_requested {
             return;
         }
-        let geometry = load_cloud_geometry(&self.asset_root, wanted);
+        let geometry = load_cloud_geometry(&self.asset_root, DEFAULT_MODEL);
         self.status.cloud_mesh = self.clouds.install_mesh(device, geometry);
-        self.installed_cloud_model = Some(Arc::from(wanted));
+        self.cloud_model_requested = true;
     }
 
     /// Draws the stars, then the moon over them, then the sun, then the clouds over all of them.

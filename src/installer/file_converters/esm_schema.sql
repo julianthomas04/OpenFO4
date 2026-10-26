@@ -555,7 +555,7 @@ CREATE TABLE IF NOT EXISTS weather (
     sounds TEXT,                        -- JSON: [{kind, sound}]
     god_rays TEXT,
     directional_ambient TEXT,           -- JSON
-    clouds TEXT,                        -- JSON: model, textures, layers
+    clouds TEXT,                        -- JSON: textures, layers
     data TEXT                           -- JSON: DATA block
 );
 

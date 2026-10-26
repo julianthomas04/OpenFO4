@@ -1,5 +1,7 @@
 use glam::{Vec3, Vec4};
 
+use super::lerp::{Lerp, lerp_fields, snap_to_nearer};
+
 /// Bethesda-style parametric fog in engine units and linear colours; shared by
 /// the exterior fog settings and interior cell lighting.
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -12,10 +14,30 @@ pub struct FogParams {
     pub max: f32,
 }
 
+lerp_fields!(FogParams {
+    near_color,
+    far_color,
+    near,
+    far,
+    power,
+    max
+});
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum Fog {
     Disabled,
     Enabled(FogParams),
+}
+
+/// Fog that is on at one end and off at the other cannot be blended, so it snaps at the midpoint
+/// (to `self` at exactly one half), as a fog that is on at one end of the day only does.
+impl Lerp for Fog {
+    fn lerp(&self, other: &Self, t: f32) -> Self {
+        match (self, other) {
+            (Fog::Enabled(from), Fog::Enabled(to)) => Fog::Enabled(from.lerp(to, t)),
+            _ => *snap_to_nearer(self, other, t),
+        }
+    }
 }
 
 /// The `FrameUniform` fog fields, laid out as `fog_near_color`, `fog_far_color`
@@ -132,5 +154,60 @@ mod tests {
     fn a_nan_fog_range_is_treated_as_disabled() {
         let fields = Fog::Enabled(params(f32::NAN, 100.0)).uniform_fields();
         assert_eq!(fields.params, Vec4::ZERO);
+    }
+
+    fn denser() -> FogParams {
+        FogParams {
+            near_color: Vec3::new(0.3, 0.4, 0.5),
+            far_color: Vec3::new(0.8, 0.9, 1.0),
+            near: 30.0,
+            far: 300.0,
+            power: 4.0,
+            max: 1.0,
+        }
+    }
+
+    #[test]
+    fn two_enabled_fogs_blend_every_parameter() {
+        let halfway = Fog::Enabled(params(10.0, 100.0)).lerp(&Fog::Enabled(denser()), 0.5);
+        assert_eq!(
+            halfway,
+            Fog::Enabled(FogParams {
+                near_color: Vec3::new(0.2, 0.3, 0.4),
+                far_color: Vec3::new(0.6, 0.7, 0.8),
+                near: 20.0,
+                far: 200.0,
+                power: 3.0,
+                max: 0.75,
+            })
+        );
+    }
+
+    #[test]
+    fn a_blend_of_two_enabled_fogs_starts_at_the_first_and_ends_at_the_second() {
+        let (from, to) = (Fog::Enabled(params(10.0, 100.0)), Fog::Enabled(denser()));
+        assert_eq!(from.lerp(&to, 0.0), from);
+        assert_eq!(from.lerp(&to, 1.0), to);
+    }
+
+    #[test]
+    fn a_fog_that_is_on_at_one_end_only_snaps_at_the_midpoint() {
+        let on = Fog::Enabled(params(10.0, 100.0));
+        assert_eq!(on.lerp(&Fog::Disabled, 0.4), on);
+        assert_eq!(on.lerp(&Fog::Disabled, 0.6), Fog::Disabled);
+        assert_eq!(Fog::Disabled.lerp(&on, 0.4), Fog::Disabled);
+        assert_eq!(Fog::Disabled.lerp(&on, 0.6), on);
+    }
+
+    #[test]
+    fn a_fog_that_is_on_at_one_end_only_stays_with_the_first_at_exactly_one_half() {
+        let on = Fog::Enabled(params(10.0, 100.0));
+        assert_eq!(on.lerp(&Fog::Disabled, 0.5), on);
+        assert_eq!(Fog::Disabled.lerp(&on, 0.5), Fog::Disabled);
+    }
+
+    #[test]
+    fn two_disabled_fogs_stay_disabled() {
+        assert_eq!(Fog::Disabled.lerp(&Fog::Disabled, 0.7), Fog::Disabled);
     }
 }

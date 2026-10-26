@@ -12,7 +12,7 @@ use super::interior_catalog::InteriorLightingCatalog;
 use super::lightning::tuning::{FLASH_AMBIENT_GAIN, FLASH_SKY_GAIN};
 use super::sky_clock::{ClockedSky, SkyClock};
 use super::time_of_day::{
-    DayTime, MoonKind, SkyGameConfig, SkyMoment, SkyObjects, sun_light_weight,
+    DayTime, MoonKind, SkyGameConfig, SkyMoment, SkyObjects, SlotBlend, sun_light_weight,
 };
 use super::tonemap_settings::TonemapSettings;
 use crate::rendering::camera::Camera;
@@ -403,6 +403,25 @@ impl LightingState {
     /// sun (overridden, or no [`Self::set_exterior_sky`] yet) the panel's sun fades with its
     /// elevation, so it never lights the world from below the horizon.
     pub fn set_time_of_day(&mut self, day_time: DayTime) {
+        self.apply_time_of_day(day_time, None);
+    }
+
+    /// [`Self::set_time_of_day`] with `weather` instead of the one weather of the clock: the
+    /// weather of the weather cycle, sampled at [`Self::slot_blend_at`] of the same time. Without
+    /// a clock there is nothing to light, as for `set_time_of_day`.
+    pub fn set_time_of_day_with_weather(&mut self, day_time: DayTime, weather: &ExteriorWeather) {
+        self.apply_time_of_day(day_time, Some(weather));
+    }
+
+    /// The slots and the way between them that a weather is sampled at for `day_time`; `None`
+    /// until [`Self::set_exterior_sky`] gave the exterior its clock.
+    pub fn slot_blend_at(&self, day_time: DayTime) -> Option<SlotBlend> {
+        self.sky_clock
+            .as_ref()
+            .map(|clock| clock.slot_blend(day_time))
+    }
+
+    fn apply_time_of_day(&mut self, day_time: DayTime, given: Option<&ExteriorWeather>) {
         if !matches!(self.shading(), Shading::Exterior) {
             self.sky_moment = None;
             self.sky_objects = None;
@@ -419,7 +438,10 @@ impl LightingState {
             weather,
             sun_alpha,
             mut objects,
-        } = clock.at(day_time);
+        } = match given {
+            Some(weather) => clock.at_weather(day_time, weather),
+            None => clock.at(day_time),
+        };
         self.sky_moment = Some(moment);
         if self.sun_override {
             objects.sun_disc_direction = self.sun.direction_to_sun();
@@ -701,6 +723,44 @@ impl LightingState {
 }
 
 #[cfg(test)]
+pub(crate) mod fixtures {
+    //! Lighting states for the tests of what drives the lighting.
+
+    use super::super::environment::NeutralReason;
+    use super::super::time_of_day::test_support::vanilla_game_config;
+    use super::*;
+    use crate::rendering::game_settings::GameSettings;
+    use crate::rendering::test_support::ini_with;
+
+    /// A state in the exterior with no weather and no sky clock yet.
+    pub(crate) fn lighting_state() -> LightingState {
+        let settings = GameSettings::from_ini(&ini_with("")).unwrap();
+        LightingState::new(
+            ShadowState::new(settings.shadows),
+            LampShadowState::new(settings.lamp_shadows),
+            LocalLightSettings::new(settings.light_fade),
+        )
+    }
+
+    /// A state in the exterior whose sky clock samples `slots` with the vanilla sky settings.
+    pub(crate) fn exterior_state(slots: ExteriorWeatherSlots) -> LightingState {
+        let mut state = lighting_state();
+        state.set_exterior_sky(slots, vanilla_game_config());
+        state
+    }
+
+    /// `state` inside an interior that has no lighting of its own, which is shaded with neutral
+    /// light and draws no sky.
+    pub(crate) fn in_neutral_interior(mut state: LightingState) -> LightingState {
+        state.environment = Environment::Interior {
+            cell: "TestCell".to_owned(),
+            lighting: InteriorLighting::Neutral(NeutralReason::NotInCatalog),
+        };
+        state
+    }
+}
+
+#[cfg(test)]
 #[allow(
     clippy::float_cmp,
     reason = "tests compare exact sentinels and copied values"
@@ -709,9 +769,8 @@ mod tests {
     use super::super::ambient::AMBIENT_CUBE_FACES;
     use super::super::cell_lighting::{ResolvedLighting, TemplateStatus};
     use super::super::environment::NeutralReason;
+    use super::fixtures::lighting_state;
     use super::*;
-    use crate::rendering::game_settings::GameSettings;
-    use crate::rendering::test_support::ini_with;
 
     fn sun(azimuth_deg: f32, elevation_deg: f32) -> SunSettings {
         SunSettings {
@@ -919,15 +978,6 @@ mod tests {
             cell: "TestCell".to_string(),
             lighting,
         }
-    }
-
-    fn lighting_state() -> LightingState {
-        let settings = GameSettings::from_ini(&ini_with("")).unwrap();
-        LightingState::new(
-            ShadowState::new(settings.shadows),
-            LampShadowState::new(settings.lamp_shadows),
-            LocalLightSettings::new(settings.light_fade),
-        )
     }
 
     /// A state in `environment`, with a weather loaded or not and the two panel toggles set.
@@ -1166,13 +1216,13 @@ mod tests {
             per_slot, rgb, weather_slots, without_moon,
         };
         use super::super::super::lightning::tuning::FLASH_SKY_GAIN;
-        use super::super::super::time_of_day::{MoonKind, MoonPhase, SkyGameSettings, TimeSlot};
+        use super::super::super::time_of_day::{MoonKind, MoonPhase, TimeSlot};
+        use super::super::fixtures::exterior_state;
         use super::*;
 
         const DAY_SUNLIGHT: (u8, u8, u8) = (255, 255, 200);
         const NIGHT_SUNLIGHT: (u8, u8, u8) = (60, 70, 120);
         const NIGHT_SUNLIGHT_SCALE: f32 = 0.5;
-        const SUN_ALPHA_TRANS_TIME: f32 = 0.15;
 
         fn colour(rgb8: (u8, u8, u8)) -> Vec3 {
             let linear = |channel: u8| {
@@ -1205,24 +1255,6 @@ mod tests {
             }
         }
 
-        fn game() -> SkyGameConfig {
-            SkyGameConfig::new(
-                SkyGameSettings::new(
-                    600.0,
-                    -325.0,
-                    1.0027,
-                    Vec3::new(-0.09, 0.35, 1.0),
-                    5.0,
-                    10.0,
-                )
-                .unwrap(),
-                SUN_ALPHA_TRANS_TIME,
-                90.0,
-                75.0,
-            )
-            .unwrap()
-        }
-
         fn slots() -> ExteriorWeatherSlots {
             weather_slots(
                 |colors| {
@@ -1244,12 +1276,6 @@ mod tests {
                 },
                 hdr,
             )
-        }
-
-        fn exterior_state(slots: ExteriorWeatherSlots) -> LightingState {
-            let mut state = lighting_state();
-            state.set_exterior_sky(slots, game());
-            state
         }
 
         fn state() -> LightingState {
@@ -1665,6 +1691,162 @@ mod tests {
             assert_eq!(state.sun.illuminance(), Vec3::ZERO);
             state.shadows.settings.enabled = true;
             assert_eq!(state.shadow_status(), ShadowStatus::NoDirectLight);
+        }
+
+        fn time(hour: f32) -> DayTime {
+            DayTime::new(0, hour).unwrap()
+        }
+
+        /// A weather that differs from `slots()` in everything lighting reads from it.
+        fn other_weather(state: &LightingState, hour: f32) -> ExteriorWeather {
+            let own = slots().sample(state.slot_blend_at(time(hour)).unwrap());
+            ExteriorWeather {
+                sun_light: Vec3::new(0.2, 0.4, 0.6),
+                sky_upper: Vec3::new(0.1, 0.1, 0.9),
+                stars: Vec3::ZERO,
+                hdr: ImageSpaceHdr {
+                    sunlight_scale: 7.0,
+                    sky_scale: 3.0,
+                    ..ImageSpaceHdr::default()
+                },
+                ..own
+            }
+        }
+
+        #[test]
+        fn the_blend_of_a_time_is_the_one_the_clock_places_the_sky_at() {
+            let mut state = state();
+            for hour in [0.0, 5.5, 6.5, 13.0, 19.25, 23.5] {
+                at_hour(&mut state, 0, hour);
+                assert_eq!(
+                    state.slot_blend_at(time(hour)),
+                    state.sky_moment().map(|moment| moment.blend),
+                    "{hour}"
+                );
+            }
+        }
+
+        #[test]
+        fn without_a_clock_there_is_no_blend_to_sample_a_weather_at() {
+            assert_eq!(lighting_state().slot_blend_at(time(12.0)), None);
+        }
+
+        #[test]
+        fn the_clocks_own_weather_given_explicitly_lights_the_world_exactly_as_the_clock_does() {
+            let (mut own, mut given) = (state(), state());
+            for hour in [0.0, 5.5, 7.0, 13.0, 19.0, 23.5] {
+                at_hour(&mut own, 0, hour);
+                let weather = slots().sample(given.slot_blend_at(time(hour)).unwrap());
+                given.set_time_of_day_with_weather(time(hour), &weather);
+                assert_eq!(
+                    bytemuck::bytes_of(&frame_of(&given)),
+                    bytemuck::bytes_of(&frame_of(&own)),
+                    "{hour}: frame"
+                );
+                assert_eq!(given.exterior_weather(), own.exterior_weather(), "{hour}");
+                assert_eq!(given.sky_objects(), own.sky_objects(), "{hour}");
+                assert_eq!(given.sky_moment(), own.sky_moment(), "{hour}");
+            }
+        }
+
+        #[test]
+        fn a_given_weather_lights_the_world_instead_of_the_clocks_own() {
+            let mut state = state();
+            let given = other_weather(&state, 13.0);
+
+            state.set_time_of_day_with_weather(time(13.0), &given);
+
+            assert_eq!(state.sun.color, given.sun_light);
+            assert_eq!(state.sun.intensity, 7.0);
+            assert_eq!(state.sky.zenith, given.sky_upper);
+            assert_eq!(state.sky.radiance_scale, 3.0);
+            assert_eq!(state.exterior_weather(), Some(&given));
+        }
+
+        #[test]
+        fn the_stars_follow_the_given_weather() {
+            let mut state = state();
+            let given = other_weather(&state, 0.0);
+            at_hour(&mut state, 0, 0.0);
+            assert_eq!(state.sky_objects().unwrap().star_alpha, 1.0);
+
+            state.set_time_of_day_with_weather(time(0.0), &given);
+
+            assert_eq!(state.sky_objects().unwrap().star_alpha, 0.0);
+        }
+
+        #[test]
+        fn a_given_weather_does_not_move_the_sun_the_moon_or_the_stars() {
+            let (mut own, mut given) = (state(), state());
+            let weather = other_weather(&given, 6.5);
+            at_hour(&mut own, 0, 6.5);
+
+            given.set_time_of_day_with_weather(time(6.5), &weather);
+
+            assert_eq!(given.sky_moment(), own.sky_moment());
+            assert_eq!(given.sun.azimuth_deg, own.sun.azimuth_deg);
+            assert_eq!(given.sun.elevation_deg, own.sun.elevation_deg);
+            assert_eq!(given.sun.light_strength, own.sun.light_strength);
+            assert_eq!(given.sun.daylight, own.sun.daylight);
+            let (given_objects, own_objects) =
+                (given.sky_objects().unwrap(), own.sky_objects().unwrap());
+            assert_eq!(given_objects.moon, own_objects.moon);
+            assert_eq!(given_objects.star_rotation, own_objects.star_rotation);
+        }
+
+        #[test]
+        fn the_override_keeps_the_panel_values_whatever_weather_is_given() {
+            let mut state = state();
+            at_hour(&mut state, 0, 13.0);
+            manual_sun(&mut state);
+            let (sun, sky, exposure) = (state.sun, state.sky, state.exposure.hdr);
+            let given = other_weather(&state, 0.0);
+
+            state.set_time_of_day_with_weather(time(0.0), &given);
+
+            assert_eq!(state.sun.color, sun.color);
+            assert_eq!(state.sun.intensity, sun.intensity);
+            assert_eq!(state.sky.zenith, sky.zenith);
+            assert_eq!(state.sky.radiance_scale, sky.radiance_scale);
+            assert_eq!(state.exposure.hdr, exposure);
+            assert_eq!(
+                state.sky_moment().map(|moment| moment.blend),
+                state.slot_blend_at(time(0.0)),
+                "the readouts keep following the clock"
+            );
+        }
+
+        #[test]
+        fn interior_shading_ignores_a_given_weather_as_it_ignores_the_clocks_own() {
+            for lighting in [resolved_cell(), neutral()] {
+                let mut state = state();
+                at_hour(&mut state, 0, 13.0);
+                let sun_color = state.sun.color;
+                let given = other_weather(&state, 0.0);
+                state.environment = interior(lighting);
+
+                state.set_time_of_day_with_weather(time(0.0), &given);
+
+                assert_eq!(state.sun.color, sun_color);
+                assert!(state.sky_moment().is_none());
+                assert!(state.sky_objects().is_none());
+            }
+        }
+
+        #[test]
+        fn without_a_clock_a_given_weather_changes_nothing() {
+            let mut state = lighting_state();
+            let before = state.sun.color;
+            let given = ExteriorWeather {
+                sun_light: Vec3::new(0.2, 0.4, 0.6),
+                ..weather()
+            };
+
+            state.set_time_of_day_with_weather(time(0.0), &given);
+
+            assert_eq!(state.sun.color, before);
+            assert!(state.exterior_weather().is_none());
+            assert!(state.sky_moment().is_none());
         }
     }
 

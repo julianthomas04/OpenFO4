@@ -1,12 +1,9 @@
-use glam::Vec3;
-
 use super::clouds::Clouds;
 use super::data::{WeatherData, parse_sounds};
 use super::error::WeatherLibraryError;
 use super::precipitation::PrecipitationParams;
 use crate::assets::db::DbClient;
 use crate::assets::db::weather_library::{ParticleGeometryRow, WeatherLibraryRow};
-use crate::rendering::lighting::cell_lighting::srgb_to_linear;
 use crate::rendering::lighting::exterior_weather::{
     ClimateInfo, ExteriorWeatherError, ExteriorWeatherSlots,
 };
@@ -43,10 +40,11 @@ pub struct WeatherDef {
 }
 
 impl WeatherDef {
-    /// The lightning flash colour in linear space.
-    pub fn lightning_color_linear(&self) -> Vec3 {
-        let [r, g, b] = self.lightning.color_srgb;
-        Vec3::new(srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b))
+    /// Whether the weather has thunder to play; only such a weather strikes lightning.
+    pub fn has_thunder_sound(&self) -> bool {
+        self.sounds
+            .iter()
+            .any(|sound| sound.kind == SoundKind::Thunder)
     }
 
     /// What the weather cycle reads of this weather.
@@ -55,10 +53,7 @@ impl WeatherDef {
             trans_delta_raw: self.trans_delta_raw,
             volatility_mult: self.volatility_mult,
             lightning: self.lightning,
-            has_thunder_sound: self
-                .sounds
-                .iter()
-                .any(|sound| sound.kind == SoundKind::Thunder),
+            has_thunder_sound: self.has_thunder_sound(),
         }
     }
 
@@ -305,20 +300,13 @@ mod tests {
     }
 
     #[test]
-    fn the_lightning_colour_is_converted_from_srgb_to_linear() {
-        let color = weather_def(FORM_KEY).lightning_color_linear();
-        assert_eq!(color.x, 1.0);
-        assert_eq!(color.y, 0.0);
-        assert!((color.z - 0.2159).abs() < 1e-3, "{}", color.z);
-    }
-
-    #[test]
     fn the_roll_traits_carry_what_the_cycle_reads() {
         let def = weather_def(FORM_KEY);
         let traits = def.roll_traits();
         assert_eq!(traits.trans_delta_raw, 4);
         assert_eq!(traits.volatility_mult, 2.0);
         assert_eq!(traits.lightning, def.lightning);
+        assert!(!def.has_thunder_sound());
         assert!(!traits.has_thunder_sound);
     }
 
@@ -333,6 +321,7 @@ mod tests {
             .to_string(),
         );
         let def = from_rows(&row, Some(rain_geometry())).unwrap();
+        assert!(def.has_thunder_sound());
         assert!(def.roll_traits().has_thunder_sound);
     }
 }

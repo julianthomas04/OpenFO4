@@ -8,7 +8,7 @@
 
 use glam::Vec3;
 
-use super::cell_lighting::srgb_to_linear;
+use super::cell_lighting::srgb8_to_linear;
 
 /// The numbers that shape a flash; the rest of this module is mechanism.
 pub mod tuning {
@@ -88,10 +88,9 @@ impl Strike {
     /// A strike in the weather's lightning colour, stored as 0 to 255 per channel, converted to
     /// linear light as the weather's other colours are.
     pub fn from_srgb8(intensity: f32, colour: [u8; 3]) -> Self {
-        let [red, green, blue] = colour.map(srgb_to_linear);
         Self {
             intensity,
-            colour: Vec3::new(red, green, blue),
+            colour: srgb8_to_linear(colour),
         }
     }
 
@@ -126,7 +125,7 @@ pub struct LightningFlashes {
 }
 
 impl LightningFlashes {
-    /// Advances every flash by `dt_s` real seconds (a negative or NaN step is no time), starts a
+    /// Advances every flash by `dt_s` world seconds (a negative or NaN step is no time), starts a
     /// flash for each of `strikes` and returns the light all flashes add together. A new flash
     /// starts at age 0, so its light rises from the next update on. Flashes that have ended are
     /// dropped; a strike with an unusable number is reported and left out.

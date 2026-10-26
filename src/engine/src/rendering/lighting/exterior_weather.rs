@@ -698,6 +698,25 @@ pub(crate) mod fixtures {
         load(row).unwrap()
     }
 
+    /// The default weather's slots under another form key, with the upper sky colour that
+    /// `sky_upper` gives for each time slot.
+    pub(crate) fn slots_with_sky(
+        form_key: &str,
+        editor_id: &str,
+        sky_upper: impl Fn(TimeSlot) -> (u8, u8, u8),
+    ) -> ExteriorWeatherSlots {
+        let mut colors = colors();
+        colors["SkyUpper"] = per_slot(|slot| {
+            let (r, g, b) = sky_upper(slot);
+            rgb(r, g, b)
+        });
+        let mut row = row();
+        form_key.clone_into(&mut row.form_key);
+        row.editor_id = Some(editor_id.to_owned());
+        row.colors = Some(colors.to_string());
+        load(row).unwrap()
+    }
+
     pub(super) fn slots_with(
         row: WeatherRow,
         image_spaces: &[ImageSpaceData; TimeSlot::COUNT],

@@ -46,6 +46,7 @@ use super::moon::{MoonError, MoonPhase, cycle_days, moon_visibility};
 use super::sky::{SkyGameSettings, SkyPosition, linear_fade};
 use super::slot::TimeSlot;
 use super::wrap::{HOURS_PER_DAY, wrap_hours};
+use crate::rendering::lighting::cell_lighting::luminance;
 
 /// Elevations (start, end) in degrees over which the sun direct light fades in.
 pub const SUN_LIGHT_FADE_DEG: (f32, f32) = (0.0, 5.0);
@@ -59,8 +60,6 @@ pub const STAR_ROTATION_SENSE: f64 = -1.0;
 
 /// The star dome turn at day 0, 00:00.
 pub const STAR_ANGLE_AT_DAY_ZERO_RAD: f32 = 0.0;
-
-const STAR_LUMINANCE_WEIGHTS: Vec3 = Vec3::new(0.2126, 0.7152, 0.0722);
 
 /// A point on the day timeline: a position inside one of the climate windows.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -177,9 +176,7 @@ pub fn moon_position(
 
 /// The star layer opacity from the weather linear Stars colour: its luminance, within 0 to 1.
 pub fn star_alpha(stars_colour_linear: Vec3) -> f32 {
-    stars_colour_linear
-        .dot(STAR_LUMINANCE_WEIGHTS)
-        .clamp(0.0, 1.0)
+    luminance(stars_colour_linear).clamp(0.0, 1.0)
 }
 
 /// 0 while the sun is at or below the horizon, 1 from [`SUN_LIGHT_FADE_DEG`]'s end upwards.
@@ -740,10 +737,10 @@ mod tests {
     }
 
     #[test]
-    fn star_alpha_weighs_each_channel_by_its_luminance_share() {
-        assert!((star_alpha(Vec3::X) - 0.2126).abs() < 1e-6);
-        assert!((star_alpha(Vec3::Y) - 0.7152).abs() < 1e-6);
-        assert!((star_alpha(Vec3::Z) - 0.0722).abs() < 1e-6);
+    fn star_alpha_is_the_luminance_of_the_colour_below_its_cap() {
+        let colour = Vec3::new(0.5, 0.25, 0.125);
+        assert_eq!(star_alpha(colour), luminance(colour));
+        assert!(luminance(colour) < 0.5, "the colour must not be capped");
     }
 
     fn at_sky(elevation_deg: f32, azimuth_deg: f32) -> SkyPosition {

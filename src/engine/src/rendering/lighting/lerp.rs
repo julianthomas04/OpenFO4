@@ -48,14 +48,19 @@ impl Lerp for AmbientCube {
     }
 }
 
+/// The end a value that has no midpoint snaps to: `from` up to and including exactly one half of
+/// the way, `to` beyond it.
+pub(crate) fn snap_to_nearer<'a, T: ?Sized>(from: &'a T, to: &'a T, t: f32) -> &'a T {
+    if t > 0.5 { to } else { from }
+}
+
 /// An absent value cannot be blended with a present one, so the nearer end wins and the result
 /// snaps at the midpoint (`self` at exactly one half).
 impl<T: Lerp + Clone> Lerp for Option<T> {
     fn lerp(&self, other: &Self, t: f32) -> Self {
         match (self, other) {
             (Some(from), Some(to)) => Some(from.lerp(to, t)),
-            _ if t > 0.5 => other.clone(),
-            _ => self.clone(),
+            _ => snap_to_nearer(self, other, t).clone(),
         }
     }
 }
@@ -111,6 +116,20 @@ mod tests {
     #[test]
     fn a_struct_blends_every_listed_field() {
         assert_eq!(pair(0.0, 0.0).lerp(&pair(2.0, 4.0), 0.5), pair(1.0, 2.0));
+    }
+
+    #[test]
+    fn a_value_without_a_midpoint_snaps_to_the_nearer_end_and_the_first_at_exactly_one_half() {
+        let ends = [
+            (0.0, "from"),
+            (0.4, "from"),
+            (0.5, "from"),
+            (0.6, "to"),
+            (1.0, "to"),
+        ];
+        for (t, nearer) in ends {
+            assert_eq!(snap_to_nearer("from", "to", t), nearer, "{t}");
+        }
     }
 
     #[test]

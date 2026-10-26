@@ -11,7 +11,7 @@ mod common;
 use openfo4::assets::db::DbClient;
 use openfo4::game_flow::spawn_locations::COMMONWEALTH;
 use openfo4::rendering::lighting::exterior_weather::ExteriorWeatherSlots;
-use openfo4::rendering::weather::{CLOUD_LAYER_COUNT, WeatherDef, WeatherLibrary};
+use openfo4::rendering::weather::{CLOUD_LAYER_COUNT, StartupWeather, WeatherDef, WeatherLibrary};
 use openfo4::weather::{SoundKind, WeatherFlag};
 
 const DEFAULT_CLIMATE_VOLATILITY: u8 = 175;
@@ -52,7 +52,7 @@ fn the_commonwealth_climate_loads_all_its_weathers() {
             .sum::<u32>(),
         COMMONWEALTH_CLIMATE_CHANCE_SUM
     );
-    let initial = library.weather(library.initial_weather());
+    let initial = library.initial_weather();
     assert_eq!(initial.form_key, COMMONWEALTH_CLEAR);
     assert_eq!(initial.editor_id.as_deref(), Some("CommonwealthClear"));
     for weather in library.weathers() {
@@ -114,14 +114,50 @@ fn only_the_two_rainy_weathers_have_precipitation_and_a_resolved_texture() {
 
 #[test]
 #[ignore = "needs a converted installation"]
+fn the_rain_weather_has_thunder_and_a_lightning_colour() {
+    let library = library();
+
+    let rain = weather(&library, COMMONWEALTH_RAIN);
+    assert!(
+        rain.sounds
+            .iter()
+            .any(|sound| sound.kind == SoundKind::Thunder)
+    );
+    assert!(
+        rain.sounds
+            .iter()
+            .any(|sound| sound.kind == SoundKind::Precipitation)
+    );
+    assert!(rain.has_thunder_sound());
+    assert!(rain.lightning.frequency > 0.0);
+    assert!(
+        rain.lightning.color_srgb.iter().any(|channel| *channel > 0),
+        "{:?}",
+        rain.lightning
+    );
+}
+
+#[test]
+#[ignore = "needs a converted installation"]
 fn the_static_start_and_the_library_begin_on_the_same_weather() {
     let db = database();
     let library = WeatherLibrary::load(&db, COMMONWEALTH).unwrap_or_else(|error| panic!("{error}"));
     let slots =
         ExteriorWeatherSlots::load(&db, COMMONWEALTH).unwrap_or_else(|error| panic!("{error}"));
 
+    assert_eq!(slots.form_key(), library.initial_weather().form_key);
+}
+
+#[test]
+#[ignore = "needs a converted installation"]
+fn the_boot_path_builds_the_weather_cycle_from_the_installation() {
+    let startup =
+        StartupWeather::load(&database(), COMMONWEALTH).unwrap_or_else(|error| panic!("{error}"));
+
+    assert_eq!(startup.table.initial(), startup.library.initial());
+    assert_eq!(startup.table.entries(), startup.library.entries());
     assert_eq!(
-        slots.form_key(),
-        library.weather(library.initial_weather()).form_key
+        startup.table.climate_volatility(),
+        DEFAULT_CLIMATE_VOLATILITY
     );
 }

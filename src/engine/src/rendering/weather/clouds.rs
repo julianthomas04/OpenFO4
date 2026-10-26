@@ -1,10 +1,11 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use glam::Vec3;
 use serde::Deserialize;
 
 use super::error::WeatherLibraryError;
-use crate::rendering::lighting::cell_lighting::srgb_to_linear;
+use crate::rendering::lighting::cell_lighting::srgb8_to_linear;
 use crate::rendering::lighting::exterior_weather::parse_json;
 use crate::rendering::lighting::lerp::{Lerp, lerp_fields};
 use crate::rendering::lighting::time_of_day::{SlotBlend, TimeSlot};
@@ -32,7 +33,7 @@ lerp_fields!(CloudSlotValues {
 pub struct CloudLayer {
     pub enabled: bool,
     /// The cloud texture with the layer's index, when the weather has one.
-    pub texture: Option<String>,
+    pub texture: Option<Arc<str>>,
     pub x_speed: f32,
     pub y_speed: f32,
     /// In the order of [`TimeSlot::index`]; `None` for a layer without colours and alphas.
@@ -51,13 +52,11 @@ impl CloudLayer {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Clouds {
-    pub model: Option<String>,
     pub layers: [CloudLayer; CLOUD_LAYER_COUNT],
 }
 
 #[derive(Debug, Deserialize)]
 struct RawClouds {
-    model: Option<String>,
     textures: Vec<Option<String>>,
     layers: Vec<RawLayer>,
 }
@@ -86,12 +85,11 @@ impl Clouds {
             .iter()
             .enumerate()
             .map(|(index, layer)| {
-                let texture = raw.textures.get(index).cloned().flatten();
+                let texture = raw.textures.get(index).cloned().flatten().map(Arc::from);
                 parse_layer(weather, index, texture, layer)
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
-            model: raw.model,
             layers: layers
                 .try_into()
                 .expect("the layer count was checked against CLOUD_LAYER_COUNT"),
@@ -119,7 +117,7 @@ fn expect_count(
 fn parse_layer(
     weather: &str,
     index: usize,
-    texture: Option<String>,
+    texture: Option<Arc<str>>,
     raw: &RawLayer,
 ) -> Result<CloudLayer, WeatherLibraryError> {
     let missing = |entry, slot: TimeSlot| WeatherLibraryError::MissingCloudSlot {
@@ -143,7 +141,7 @@ fn parse_layer(
                 .get(slot.json_key())
                 .ok_or_else(|| missing("alphas", slot))?;
             Ok::<_, WeatherLibraryError>(CloudSlotValues {
-                color: Vec3::new(srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b)),
+                color: srgb8_to_linear([r, g, b]),
                 color_alpha: f32::from(a) / 255.0,
                 alpha,
             })
@@ -191,7 +189,6 @@ pub(super) mod fixtures {
             .map(|index| json!(format!("textures\\sky\\cloud{index:02}.dds")))
             .collect();
         json!({
-            "model": "sky\\clouds.nif",
             "textures": textures,
             "layers": vec![layer(); CLOUD_LAYER_COUNT],
         })
@@ -219,7 +216,6 @@ mod tests {
     #[test]
     fn a_complete_cloud_block_yields_all_layers_with_their_textures() {
         let clouds = parse(&clouds()).unwrap();
-        assert_eq!(clouds.model.as_deref(), Some("sky\\clouds.nif"));
         assert_eq!(clouds.layers.len(), CLOUD_LAYER_COUNT);
         let first = &clouds.layers[0];
         assert!(first.enabled);
@@ -229,6 +225,13 @@ mod tests {
             clouds.layers[CLOUD_TEXTURE_COUNT - 1].texture.as_deref(),
             Some("textures\\sky\\cloud28.dds")
         );
+    }
+
+    #[test]
+    fn a_database_converted_with_a_cloud_model_is_still_read() {
+        let mut value = clouds();
+        value["model"] = json!("sky\\clouds.nif");
+        assert_eq!(parse(&value).unwrap(), parse(&clouds()).unwrap());
     }
 
     #[test]
@@ -387,7 +390,7 @@ mod tests {
 
     #[test]
     fn malformed_cloud_json_is_an_error_naming_the_weather() {
-        for text in ["{ not json", r#"{"model":null,"textures":[],"layers":"x"}"#] {
+        for text in ["{ not json", r#"{"textures":[],"layers":"x"}"#] {
             let error = Clouds::parse(WEATHER, text).unwrap_err();
             assert!(
                 matches!(&error, WeatherLibraryError::Lighting(ExteriorWeatherError::Malformed { weather, field: "clouds", .. }) if weather == WEATHER),

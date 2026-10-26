@@ -73,11 +73,7 @@ impl RawColor {
     }
 
     pub(super) fn linear(self) -> Vec3 {
-        Vec3::new(
-            srgb_to_linear(self.r),
-            srgb_to_linear(self.g),
-            srgb_to_linear(self.b),
-        )
+        srgb8_to_linear([self.r, self.g, self.b])
     }
 }
 
@@ -88,6 +84,23 @@ pub(crate) fn srgb_to_linear(channel: u8) -> f32 {
     } else {
         ((encoded + 0.055) / 1.055).powf(2.4)
     }
+}
+
+/// A colour stored as 0 to 255 per channel, as the linear light the lighting adds up.
+pub(crate) fn srgb8_to_linear([red, green, blue]: [u8; 3]) -> Vec3 {
+    Vec3::new(
+        srgb_to_linear(red),
+        srgb_to_linear(green),
+        srgb_to_linear(blue),
+    )
+}
+
+/// Rec. 709 luma weights: how much each linear channel counts towards how bright a colour looks.
+const LUMINANCE_WEIGHTS: Vec3 = Vec3::new(0.2126, 0.7152, 0.0722);
+
+/// How bright the linear colour `light` looks: 1 for white at full strength.
+pub(crate) fn luminance(light: Vec3) -> f32 {
+    light.dot(LUMINANCE_WEIGHTS)
 }
 
 /// Bethesda Z is up and Y is forward; engine Y is up and -Z is forward.
@@ -508,6 +521,37 @@ mod tests {
         assert!((srgb_to_linear(10) - 0.003_035).abs() < 1e-5);
         // Mid grey 128 is 0.2158605 in linear light (standard sRGB table value).
         assert!((srgb_to_linear(128) - 0.215_860).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_stored_colour_converts_each_channel_by_itself() {
+        let linear = srgb8_to_linear([128, 64, 200]);
+        for (channel, expected) in [
+            (linear.x, 0.215_860_5),
+            (linear.y, 0.051_269_46),
+            (linear.z, 0.577_580_4),
+        ] {
+            assert!((channel - expected).abs() < 1e-6, "{channel} vs {expected}");
+        }
+    }
+
+    #[test]
+    fn no_light_is_no_luminance_and_white_light_at_full_strength_is_one() {
+        assert_eq!(luminance(Vec3::ZERO), 0.0);
+        assert!((luminance(Vec3::ONE) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn each_channel_counts_by_its_share_of_the_luminance() {
+        assert!((luminance(Vec3::X) - 0.2126).abs() < 1e-6);
+        assert!((luminance(Vec3::Y) - 0.7152).abs() < 1e-6);
+        assert!((luminance(Vec3::Z) - 0.0722).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_luminance_of_light_scales_with_the_light() {
+        let light = Vec3::new(0.5, 0.25, 1.0);
+        assert!((luminance(light * 3.0) - 3.0 * luminance(light)).abs() < 1e-6);
     }
 
     #[test]

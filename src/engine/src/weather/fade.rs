@@ -21,6 +21,18 @@ pub enum TransitionSide {
     Outgoing { progress: f32 },
 }
 
+impl TransitionSide {
+    /// How much of the world the weather is: all of it while settled, as much as the transition
+    /// has come while it comes in and as much as is left of it while it goes out.
+    pub fn weight(self) -> f32 {
+        match self {
+            Self::Settled => 1.0,
+            Self::Incoming { progress } => progress,
+            Self::Outgoing { progress } => 1.0 - progress,
+        }
+    }
+}
+
 impl FadeRange {
     /// How strongly the effect shows on `side`, `0..=1`. A settled weather shows it fully
     /// whatever its range. Fractions outside `0..=1` are clamped and NaN counts as 0, so the
@@ -87,6 +99,24 @@ mod tests {
 
     fn outgoing(range: FadeRange, progress: f32) -> f32 {
         range.intensity(TransitionSide::Outgoing { progress })
+    }
+
+    #[test]
+    fn a_settled_weather_is_all_of_the_world() {
+        assert_eq!(TransitionSide::Settled.weight(), 1.0);
+    }
+
+    #[test]
+    fn a_weather_is_as_much_of_the_world_as_the_transition_has_brought_it_in_or_left_of_it() {
+        let weights = |progress| {
+            (
+                TransitionSide::Incoming { progress }.weight(),
+                TransitionSide::Outgoing { progress }.weight(),
+            )
+        };
+        assert_eq!(weights(0.0), (0.0, 1.0));
+        assert_eq!(weights(0.25), (0.25, 0.75));
+        assert_eq!(weights(1.0), (1.0, 0.0));
     }
 
     #[test]

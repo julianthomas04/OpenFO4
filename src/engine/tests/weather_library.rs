@@ -3,8 +3,10 @@
 
 use openfo4::assets::db::DbClient;
 use openfo4::rendering::lighting::exterior_weather::{ExteriorWeatherError, ExteriorWeatherSlots};
-use openfo4::rendering::weather::{WeatherLibrary, WeatherLibraryError};
-use openfo4::weather::{SoundKind, WeatherId};
+use openfo4::rendering::weather::{
+    StartupWeather, StartupWeatherError, WeatherLibrary, WeatherLibraryError,
+};
+use openfo4::weather::{SoundKind, WeatherId, WeatherTableError};
 use rusqlite::Connection;
 use rusqlite::types::Value;
 use serde_json::{Value as Json, json};
@@ -94,7 +96,6 @@ fn clouds() -> Json {
         "alphas": per_slot(&json!(1.0)),
     });
     json!({
-        "model": null,
         "textures": vec![json!(null); 29],
         "layers": vec![layer; 32],
     })
@@ -215,12 +216,16 @@ fn load(conn: Connection) -> Result<WeatherLibrary, WeatherLibraryError> {
     WeatherLibrary::load(&DbClient::from_connection(conn).unwrap(), WORLDSPACE)
 }
 
+fn start(conn: Connection) -> Result<StartupWeather, StartupWeatherError> {
+    StartupWeather::load(&DbClient::from_connection(conn).unwrap(), WORLDSPACE)
+}
+
 #[test]
 fn the_library_loads_every_climate_weather_from_the_database() {
     let library = load(seeded(&two_weathers())).unwrap();
     assert_eq!(library.climate_volatility(), 45);
     assert_eq!(library.weathers().len(), 2);
-    let initial = library.weather(library.initial_weather());
+    let initial = library.initial_weather();
     assert_eq!(initial.form_key, CLEAR);
     assert!(initial.precipitation.is_none());
     let rain = library
@@ -248,7 +253,7 @@ fn a_global_gated_entry_is_left_out_of_the_library_and_of_the_static_start_alike
     let library = WeatherLibrary::load(&db, WORLDSPACE).unwrap();
     assert_eq!(library.entries().len(), 1);
     assert_eq!(library.weathers().len(), 1);
-    assert_eq!(library.weather(library.initial_weather()).form_key, CLEAR);
+    assert_eq!(library.initial_weather().form_key, CLEAR);
     let slots = ExteriorWeatherSlots::load(&db, WORLDSPACE).unwrap();
     assert_eq!(slots.form_key(), CLEAR);
 }
@@ -398,7 +403,7 @@ fn the_library_hands_the_weather_cycle_its_roll_table() {
     assert_eq!(table.climate_volatility(), 45);
     assert_eq!(table.total_chance(), 100);
     assert_eq!(table.entries().len(), 2);
-    assert_eq!(library.weather(table.initial()).form_key, CLEAR);
+    assert_eq!(library.get(table.initial()).unwrap().form_key, CLEAR);
     let rain = table.traits(WeatherId::new(1)).unwrap();
     assert_eq!(rain.trans_delta_raw, 0);
     assert!((rain.volatility_mult - 1.0).abs() < 1e-6);
@@ -418,4 +423,53 @@ fn a_weather_with_a_thunder_sound_is_marked_in_the_roll_table() {
     let table = library.roll_table().unwrap();
     assert!(table.traits(WeatherId::new(1)).unwrap().has_thunder_sound);
     assert!(!table.traits(WeatherId::new(0)).unwrap().has_thunder_sound);
+}
+
+#[test]
+fn the_world_starts_its_weather_cycle_on_the_weathers_of_the_library() {
+    let startup = start(seeded(&two_weathers())).unwrap();
+    assert_eq!(startup.table.initial(), startup.library.initial());
+    assert_eq!(
+        startup
+            .library
+            .get(startup.table.initial())
+            .unwrap()
+            .form_key,
+        CLEAR
+    );
+    assert_eq!(startup.table.total_chance(), 100);
+}
+
+#[test]
+fn a_database_without_the_library_columns_starts_no_cycle_and_names_the_fix() {
+    let conn = connection_without(&[("weather", "clouds"), ("weather", "data")]);
+    let error = start(conn).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            StartupWeatherError::Library(WeatherLibraryError::SchemaOutdated)
+        ),
+        "{error:?}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("esm-only --tables weather,climates,shader_particle_geometries")
+    );
+}
+
+#[test]
+fn a_climate_where_no_weather_has_a_chance_starts_no_cycle() {
+    let weathers = json!([
+        {"Weather": CLEAR, "Chance": 0, "Global": null},
+        {"Weather": RAIN, "Chance": 0, "Global": null},
+    ]);
+    let error = start(seeded(&weathers)).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            StartupWeatherError::RollTable(WeatherTableError::NoChance)
+        ),
+        "{error:?}"
+    );
 }

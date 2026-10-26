@@ -34,9 +34,9 @@ fn layer_draw(index: u8, alpha: f32) -> CloudLayerDraw {
     }
 }
 
-fn input(layers: Vec<CloudLayerDraw>) -> CloudsInput {
+fn input(layers: Vec<CloudLayerDraw>) -> CloudsInput<'static> {
     CloudsInput {
-        layers,
+        layers: layers.into(),
         ..CloudsInput::default()
     }
 }
@@ -1514,32 +1514,6 @@ mod gpu {
             &sky.asset_status().cloud_mesh,
             AssetState::Failed(failure) if failure.kind == AssetFailureKind::NotFound
         ));
-    }
-
-    #[test]
-    fn a_night_sky_loads_the_model_a_weather_names_when_it_changes() {
-        let Some(rig) = rig("a_night_sky_loads_the_model_a_weather_names_when_it_changes") else {
-            return;
-        };
-        let root = install();
-        let mut sky = new_sky(&rig, root.path().to_str().unwrap());
-        let mut weather = input(vec![installed_layer("Sky\\CloudsTest_d.dds")]);
-        night_sky_frame(&rig, &mut sky, &weather);
-        assert_eq!(sky.asset_status().cloud_mesh, AssetState::Loaded);
-
-        weather.model = Some(Arc::from("Sky\\Other.nif"));
-        let other = night_sky_frame(&rig, &mut sky, &weather);
-        let missing = sky.asset_status().cloud_mesh.clone();
-        weather.model = Some(Arc::from("sky\\clouds.nif"));
-        let back = night_sky_frame(&rig, &mut sky, &weather);
-
-        assert_black(&other);
-        assert!(matches!(
-            missing,
-            AssetState::Failed(failure) if failure.kind == AssetFailureKind::NotFound
-        ));
-        assert_eq!(sky.asset_status().cloud_mesh, AssetState::Loaded);
-        assert_color(at(&back, SKY_CENTER), INSTALLED_COLOR);
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //! One uniform and one bind group serve each layer drawn; a bind group is built again only when
 //! its position in the draw order shows another texture.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
@@ -43,12 +44,10 @@ pub struct CloudLayerDraw {
 /// What the clouds show this frame, as plain data: the renderer stays testable without the
 /// lighting state.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct CloudsInput {
-    /// The path of the weather's cloud model, a `.nif`; `None` is the vanilla model.
-    pub model: Option<Arc<str>>,
+pub struct CloudsInput<'a> {
     /// The layers to draw, the first at the back. While one weather turns into another this holds
-    /// the layers of both, so a layer index can be there twice.
-    pub layers: Vec<CloudLayerDraw>,
+    /// the layers of both, so a layer index can be there twice. The frame lends its layers.
+    pub layers: Cow<'a, [CloudLayerDraw]>,
     /// 0 for none: how much a lightning flash brightens the clouds, which take `1 + flash` times
     /// their colour.
     pub flash: f32,
@@ -80,13 +79,13 @@ pub(super) struct DrawPlan<'a> {
 
 /// Drops the layers that cannot be seen (solo of another layer, no opacity) and gives the rest
 /// the mesh of their layer index: `ranges` holds the index range of each mesh of the model.
-pub(super) fn plan_draws<'a>(input: &'a CloudsInput, ranges: &[Range<u32>]) -> DrawPlan<'a> {
+pub(super) fn plan_draws<'a>(input: &'a CloudsInput<'_>, ranges: &[Range<u32>]) -> DrawPlan<'a> {
     let mut plan = DrawPlan {
         draws: Vec::new(),
         without_mesh: Vec::new(),
         truncated: false,
     };
-    for layer in &input.layers {
+    for layer in input.layers.iter() {
         let shows =
             input.solo.is_none_or(|solo| solo == layer.layer) && opacity(layer) >= MIN_OPACITY;
         if !shows {
@@ -318,7 +317,7 @@ impl CloudLayer {
         }
     }
 
-    /// Scrolls the layers on by `dt` real seconds and readies this frame's draws. `load_texture`
+    /// Scrolls the layers on by `dt` world seconds and readies this frame's draws. `load_texture`
     /// loads the texture a layer names the first time that layer shows; a layer whose texture
     /// fails to load is not drawn. `radiance_scale` is the sky radiance scale the sky colours
     /// are multiplied by.
@@ -326,7 +325,7 @@ impl CloudLayer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        input: &CloudsInput,
+        input: &CloudsInput<'_>,
         radiance_scale: f32,
         dt: f32,
         mut load_texture: impl FnMut(&str) -> Result<wgpu::TextureView, SkyAssetError>,

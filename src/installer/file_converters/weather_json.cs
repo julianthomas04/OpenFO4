@@ -40,7 +40,6 @@ namespace AssetConverter
 
             return new JsonObject
             {
-                ["model"] = null,
                 ["textures"] = textureArray,
                 ["layers"] = layerArray
             };

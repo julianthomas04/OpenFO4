@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use super::definition::WeatherDef;
 use super::error::WeatherLibraryError;
+use super::frame::WindFrame;
 use crate::assets::db::DbClient;
 use crate::rendering::lighting::exterior_weather::{
     ClimateInfo, ExteriorWeatherError, load_worldspace_climate,
@@ -46,13 +47,27 @@ impl WeatherLibrary {
         &self.weathers
     }
 
-    pub fn weather(&self, id: WeatherId) -> &WeatherDef {
-        &self.weathers[id.index()]
+    /// `None` for an id that is none of the weathers of the library.
+    pub fn get(&self, id: WeatherId) -> Option<&WeatherDef> {
+        self.weathers.get(id.index())
     }
 
-    /// The most likely weather of the climate, the one lighting starts from.
-    pub fn initial_weather(&self) -> WeatherId {
+    /// The most likely weather of the climate, the one the world starts on.
+    pub fn initial(&self) -> WeatherId {
         self.initial
+    }
+
+    pub fn initial_weather(&self) -> &WeatherDef {
+        &self.weathers[self.initial.index()]
+    }
+
+    /// The strongest wind that any blend of the weathers can make.
+    pub fn wind_ceiling(&self) -> WindFrame {
+        WindFrame::ceiling(
+            self.weathers
+                .iter()
+                .map(|weather| WindFrame::of(&weather.wind)),
+        )
     }
 
     /// What the weather cycle needs to roll between the weathers of the climate, in the order of
@@ -122,10 +137,33 @@ fn checked_volatility(climate: &str, value: i64) -> Result<u8, WeatherLibraryErr
 }
 
 #[cfg(test)]
+pub(super) mod fixtures {
+    use super::*;
+
+    /// A library of `weathers`, each entry as likely as the next; the first is the initial one.
+    pub(in crate::rendering::weather) fn library_of(weathers: Vec<WeatherDef>) -> WeatherLibrary {
+        let entries = (0..weathers.len())
+            .map(|index| ClimateEntry {
+                weather: WeatherId::new(index),
+                chance: 1,
+            })
+            .collect();
+        WeatherLibrary {
+            climate_volatility: 0,
+            entries,
+            weathers,
+            initial: WeatherId::new(0),
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
+    use super::fixtures::library_of;
     use super::*;
     use crate::rendering::lighting::exterior_weather::fixtures::climate_with_entries;
     use crate::rendering::weather::definition::fixtures::weather_def;
+    use crate::weather::WindParams;
 
     #[allow(
         clippy::unnecessary_wraps,
@@ -150,21 +188,28 @@ mod tests {
         let keys: Vec<&str> = library
             .entries()
             .iter()
-            .map(|entry| library.weather(entry.weather).form_key.as_str())
+            .map(|entry| library.get(entry.weather).unwrap().form_key.as_str())
             .collect();
         assert_eq!(keys, ["A", "B"]);
     }
 
     #[test]
+    fn a_weather_is_found_by_its_id_and_an_id_of_none_is_not() {
+        let library = build(TWO_WEATHERS).unwrap();
+        assert_eq!(library.get(WeatherId::new(1)).unwrap().form_key, "B");
+        assert_eq!(library.get(WeatherId::new(2)), None);
+    }
+
+    #[test]
     fn the_initial_weather_is_the_most_likely_entry() {
         let library = build(TWO_WEATHERS).unwrap();
-        assert_eq!(library.weather(library.initial_weather()).form_key, "B");
+        assert_eq!(library.initial_weather().form_key, "B");
     }
 
     #[test]
     fn among_equal_chances_the_first_listed_weather_is_initial() {
         let library = build(r#"[{"Weather":"A","Chance":5},{"Weather":"B","Chance":5}]"#).unwrap();
-        assert_eq!(library.weather(library.initial_weather()).form_key, "A");
+        assert_eq!(library.initial_weather().form_key, "A");
     }
 
     #[test]
@@ -185,7 +230,7 @@ mod tests {
         assert_eq!(library.weathers().len(), 2);
         assert_eq!(library.entries().len(), 3);
         assert_eq!(library.entries()[0].weather, library.entries()[2].weather);
-        assert_eq!(library.weather(library.initial_weather()).form_key, "A");
+        assert_eq!(library.initial_weather().form_key, "A");
     }
 
     #[test]
@@ -204,7 +249,7 @@ mod tests {
         .unwrap();
         assert_eq!(loads, ["B", "C"]);
         assert_eq!(library.entries().len(), 2);
-        assert_eq!(library.weather(library.initial_weather()).form_key, "C");
+        assert_eq!(library.initial_weather().form_key, "C");
     }
 
     #[test]
@@ -237,7 +282,7 @@ mod tests {
         let table = library.roll_table().unwrap();
         assert_eq!(table.climate_volatility(), 30);
         assert_eq!(table.entries(), library.entries());
-        assert_eq!(table.initial(), library.initial_weather());
+        assert_eq!(table.initial(), library.initial());
         for (index, def) in library.weathers().iter().enumerate() {
             assert_eq!(
                 table.traits(WeatherId::new(index)),
@@ -250,6 +295,23 @@ mod tests {
     fn a_climate_where_no_weather_has_a_chance_has_no_roll_table() {
         let library = build(r#"[{"Weather":"A","Chance":0},{"Weather":"B","Chance":0}]"#).unwrap();
         assert_eq!(library.roll_table(), Err(WeatherTableError::NoChance));
+    }
+
+    #[test]
+    fn the_wind_ceiling_is_the_strongest_speed_and_turbulence_of_the_weathers() {
+        let windy = |speed, turbulence| {
+            let mut weather = weather_def("W");
+            weather.wind = WindParams {
+                speed,
+                turbulence: Some(turbulence),
+                direction_raw: 0,
+                direction_range_raw: 0,
+            };
+            weather
+        };
+        let library = library_of(vec![windy(0.5, 0.1), windy(0.2, 0.9), windy(0.3, 0.3)]);
+        let ceiling = library.wind_ceiling();
+        assert_eq!((ceiling.speed, ceiling.turbulence), (0.5, 0.9));
     }
 
     #[test]

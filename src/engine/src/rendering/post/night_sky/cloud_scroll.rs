@@ -1,5 +1,6 @@
-//! How far each cloud layer's texture has scrolled. The offsets are visual state in real seconds:
-//! they do not follow the world clock, so pausing or speeding up time does not stop the clouds.
+//! How far each cloud layer's texture has scrolled. The offsets are visual state in world seconds:
+//! they stand still while the world does, behind the Pip-Boy, but do not follow the world clock,
+//! so pausing or speeding up the clock neither stops nor speeds up the clouds.
 
 use glam::Vec2;
 

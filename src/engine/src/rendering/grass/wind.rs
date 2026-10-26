@@ -5,6 +5,8 @@
 use std::f32::consts::TAU;
 
 use crate::bethesda_space::UNITS_TO_ENGINE;
+use crate::rendering::weather::WindFrame;
+use crate::weather::wind::heading_of;
 
 /// Game units of sway amplitude per unit of wind speed (the 300 multiplier
 /// applied to both amplitude bounds).
@@ -20,37 +22,20 @@ const LOWEST_FREQUENCY: f32 = 0.5;
 const HIGHEST_FREQUENCY: f32 = 4.0;
 /// Divisor that turns a GRAS wave period into the wave phase rate in radians per second.
 const WAVE_PERIOD_DIVISOR: f32 = 600.0;
-/// WTHR wind bytes are fractions of 255; the heading byte spans a full turn.
+/// WTHR wind bytes are fractions of 255.
 const BYTE_SCALE: f32 = 255.0;
 /// Upper bound of the wave factor on the amplitude, used for the culling bounds.
 const MAX_WAVE_FACTOR: f32 = 1.8;
 /// Upper bound on the blade lean in game units per unit of amplitude, used for the culling bounds.
 const LEAN_PER_AMPLITUDE: f32 = 0.5;
 
-/// The wind of a weather, as the WTHR record stores it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct WindConditions {
-    /// 0..1.
-    pub speed: f32,
-    /// 0..1.
-    pub turbulence: f32,
-    /// Radians from +X in the Bethesda XY plane.
-    pub heading: f32,
-}
-
-impl WindConditions {
-    pub fn from_weather_bytes(speed: u8, turbulence: u8, heading: u8) -> Self {
-        Self {
-            speed: f32::from(speed) / BYTE_SCALE,
-            turbulence: f32::from(turbulence) / BYTE_SCALE,
-            heading: f32::from(heading) / BYTE_SCALE * TAU,
-        }
-    }
-
-    /// Stand-in until weather wind is loaded: the values of the vanilla weather
-    /// `CommonwealthClear` (wind speed 120, direction 15, turbulence 48).
-    pub fn commonwealth_clear() -> Self {
-        Self::from_weather_bytes(120, 48, 15)
+/// Stand-in for a world without a weather library: the values of the vanilla weather
+/// `CommonwealthClear` (wind speed 120, direction 15, turbulence 48).
+pub fn commonwealth_clear_wind() -> WindFrame {
+    WindFrame {
+        speed: 120.0 / BYTE_SCALE,
+        turbulence: 48.0 / BYTE_SCALE,
+        heading: heading_of(15),
     }
 }
 
@@ -67,7 +52,7 @@ pub struct GrassWind {
 }
 
 impl GrassWind {
-    pub fn from_conditions(wind: WindConditions) -> Self {
+    pub fn from_wind(wind: WindFrame) -> Self {
         let calm_share = 1.0 - wind.turbulence;
         let amplitude = |multiplier: f32| {
             (wind.turbulence * multiplier + calm_share) * wind.speed * WIND_SPEED_AMPLITUDE
@@ -81,7 +66,7 @@ impl GrassWind {
     }
 
     pub fn default_weather() -> Self {
-        Self::from_conditions(WindConditions::commonwealth_clear())
+        Self::from_wind(commonwealth_clear_wind())
     }
 
     /// Upper bound on how far a blade leans from its rest position, in engine units.
@@ -110,16 +95,16 @@ mod tests {
     }
 
     #[test]
-    fn weather_bytes_become_unit_fractions_and_a_heading_in_radians() {
-        let wind = WindConditions::from_weather_bytes(255, 51, 64);
-        close(wind.speed, 1.0);
-        close(wind.turbulence, 0.2);
-        close(wind.heading, 64.0 / 255.0 * TAU);
+    fn the_stand_in_wind_is_the_wind_bytes_of_the_commonwealth_clear_weather() {
+        let wind = commonwealth_clear_wind();
+        close(wind.speed, 120.0 / 255.0);
+        close(wind.turbulence, 48.0 / 255.0);
+        close(wind.heading, 15.0 / 255.0 * TAU);
     }
 
     #[test]
     fn calm_wind_bounds_the_amplitude_by_the_speed_alone() {
-        let wind = GrassWind::from_conditions(WindConditions {
+        let wind = GrassWind::from_wind(WindFrame {
             speed: 0.5,
             turbulence: 0.0,
             heading: 0.0,
@@ -131,7 +116,7 @@ mod tests {
 
     #[test]
     fn full_turbulence_spreads_the_amplitude_and_raises_the_frequency() {
-        let wind = GrassWind::from_conditions(WindConditions {
+        let wind = GrassWind::from_wind(WindFrame {
             speed: 1.0,
             turbulence: 1.0,
             heading: 0.0,
@@ -143,7 +128,7 @@ mod tests {
 
     #[test]
     fn no_wind_gives_no_amplitude() {
-        let wind = GrassWind::from_conditions(WindConditions {
+        let wind = GrassWind::from_wind(WindFrame {
             speed: 0.0,
             turbulence: 0.7,
             heading: 1.0,
@@ -181,5 +166,47 @@ mod tests {
         close(wave_rate(600.0), TAU);
         close(wave_rate(100.0), TAU / 6.0);
         close(wave_rate(0.0), 0.0);
+    }
+
+    fn lean(speed: f32, turbulence: f32) -> f32 {
+        GrassWind::from_wind(WindFrame {
+            speed,
+            turbulence,
+            heading: 0.0,
+        })
+        .max_lean()
+    }
+
+    #[test]
+    fn a_stronger_or_more_turbulent_wind_never_leans_the_blades_less() {
+        let steps = [0.0, 0.25, 0.5, 0.75, 1.0];
+        for speed in steps {
+            for turbulence in steps {
+                for (faster, more_turbulent) in [(0.25, 0.0), (0.0, 0.25), (0.25, 0.25)] {
+                    assert!(
+                        lean(speed + faster, turbulence + more_turbulent)
+                            >= lean(speed, turbulence),
+                        "speed {speed} turbulence {turbulence}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn no_blend_of_two_winds_leans_the_blades_more_than_the_wind_ceiling_of_both() {
+        // Fast and smooth against slower and gusty: the blend leans more than either end.
+        let (smooth, gusty): ((f32, f32), (f32, f32)) = ((1.0, 0.0), (0.74, 1.0));
+        let ceiling = lean(smooth.0.max(gusty.0), smooth.1.max(gusty.1));
+        for step in 0..=20 {
+            let t = step as f32 / 20.0;
+            let blend = lean(
+                smooth.0 + (gusty.0 - smooth.0) * t,
+                smooth.1 + (gusty.1 - smooth.1) * t,
+            );
+            assert!(blend <= ceiling, "{blend} at {t}");
+        }
+        let halfway = lean(0.87, 0.5);
+        assert!(halfway > lean(smooth.0, smooth.1).max(lean(gusty.0, gusty.1)));
     }
 }
