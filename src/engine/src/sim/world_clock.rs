@@ -36,9 +36,7 @@ pub enum ClockError {
     InvalidDate { year: u16, month: u8, day: u8 },
 }
 
-/// Where a world clock begins. The default is the vanilla `Fallout4.esm` values of the matching
-/// globals (`GameHour` 11, `GameDay` 23, `GameMonth` 10, `GameYear` 287, `GameDaysPassed` 1,
-/// `TimeScale` 20), which stand in for a global the database does not carry.
+/// Where a world clock begins, read from the game's globals.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClockStart {
     pub year: u16,
@@ -49,8 +47,10 @@ pub struct ClockStart {
     pub time_scale: f32,
 }
 
-impl Default for ClockStart {
-    fn default() -> Self {
+#[cfg(test)]
+impl ClockStart {
+    /// A valid start for tests: 11:00 on 23 October 2287, one day passed, time scale 20.
+    pub fn fixture() -> Self {
         Self {
             year: GAME_YEAR_BASE + 287,
             month: 10,
@@ -74,23 +74,12 @@ pub struct WorldClock {
     paused: bool,
 }
 
-impl Default for WorldClock {
-    fn default() -> Self {
-        let start = ClockStart::default();
-        Self {
-            year: start.year,
-            month: start.month,
-            day: start.day,
-            minute_of_day: minute_of_day(start.hour),
-            days_passed: start.days_passed,
-            time_scale: start.time_scale,
-            start_time_scale: start.time_scale,
-            paused: false,
-        }
-    }
-}
-
 impl WorldClock {
+    #[cfg(test)]
+    pub fn fixture() -> Self {
+        Self::new(ClockStart::fixture()).expect("the fixture start is valid")
+    }
+
     pub fn new(start: ClockStart) -> Result<Self, ClockError> {
         validate_date(start.year, start.month, start.day)?;
         validate_hour(start.hour)?;
@@ -241,7 +230,7 @@ mod tests {
             month,
             day,
             hour,
-            ..ClockStart::default()
+            ..ClockStart::fixture()
         })
         .unwrap()
     }
@@ -252,8 +241,8 @@ mod tests {
     }
 
     #[test]
-    fn a_default_clock_starts_on_the_vanilla_globals() {
-        let clock = WorldClock::default();
+    fn a_new_clock_runs_from_its_start() {
+        let clock = WorldClock::fixture();
         assert_eq!(
             clock.date(),
             GameClock {
@@ -266,14 +255,13 @@ mod tests {
         assert_eq!(clock.days_passed(), 1);
         assert_eq!(clock.time_scale(), 20.0);
         assert!(!clock.paused());
-        assert_eq!(WorldClock::new(ClockStart::default()), Ok(clock));
     }
 
     #[test]
     fn the_start_time_scale_survives_later_time_scale_changes() {
         let mut clock = WorldClock::new(ClockStart {
             time_scale: 6.0,
-            ..ClockStart::default()
+            ..ClockStart::fixture()
         })
         .unwrap();
         clock.set_time_scale(500.0).unwrap();
@@ -291,7 +279,7 @@ mod tests {
     #[test]
     fn a_start_with_an_impossible_date_hour_or_time_scale_is_rejected() {
         let rejected = |change: fn(&mut ClockStart)| {
-            let mut start = ClockStart::default();
+            let mut start = ClockStart::fixture();
             change(&mut start);
             WorldClock::new(start).unwrap_err()
         };
@@ -456,7 +444,7 @@ mod tests {
 
     #[test]
     fn the_time_scale_accepts_the_range_up_to_the_maximum_and_nothing_else() {
-        let mut clock = WorldClock::default();
+        let mut clock = WorldClock::fixture();
         for good in [0.001, 1.0, 20.0, 500.0, MAX_TIME_SCALE] {
             clock.set_time_scale(good).unwrap();
             assert_eq!(clock.time_scale(), good);
@@ -483,7 +471,7 @@ mod tests {
     fn the_hour_stays_below_24_just_before_midnight() {
         let clock = WorldClock {
             minute_of_day: MINUTES_PER_DAY - 1e-9,
-            ..WorldClock::default()
+            ..WorldClock::fixture()
         };
         assert!(clock.hour() < 24.0);
         assert!(clock.date().minute_of_day < 24 * 60);

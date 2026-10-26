@@ -259,7 +259,7 @@ mod tests {
 
     #[test]
     fn the_text_matches_the_clock_minute_the_pip_boy_shows() {
-        let mut clock = WorldClock::default();
+        let mut clock = WorldClock::fixture();
         clock.advance(123.4);
         let minute = clock.date().minute_of_day;
         assert_eq!(
@@ -367,7 +367,7 @@ mod tests {
 
     #[test]
     fn the_controls_mirror_the_clock() {
-        let clock = WorldClock::default();
+        let clock = WorldClock::fixture();
         assert_eq!(
             TimeControls::of(&clock),
             TimeControls {
@@ -380,13 +380,13 @@ mod tests {
 
     #[test]
     fn the_default_time_scale_lies_inside_the_slider_range() {
-        assert!(TIME_SCALE_RANGE.contains(&WorldClock::default().time_scale()));
+        assert!(TIME_SCALE_RANGE.contains(&WorldClock::fixture().time_scale()));
         assert!(*TIME_SCALE_RANGE.end() <= crate::sim::world_clock::MAX_TIME_SCALE);
     }
 
     #[test]
     fn dates_read_as_year_month_day() {
-        let date = WorldClock::default().date();
+        let date = WorldClock::fixture().date();
         assert_eq!(format_date(&date), "2287-10-23");
     }
 

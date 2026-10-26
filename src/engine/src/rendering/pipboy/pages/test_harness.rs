@@ -97,7 +97,7 @@ impl Harness {
         let painter = self.ctx.layer_painter(Self::layer());
         let snapshot = PipBoySnapshot {
             model,
-            clock: crate::sim::WorldClock::default().date(),
+            clock: crate::sim::WorldClock::fixture().date(),
             vitals: self.vitals,
         };
         let mut cx = TabContext {

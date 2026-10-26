@@ -83,13 +83,13 @@ mod tests {
 
     use super::*;
     use crate::sim::collision::{CellColliderBatch, TerrainColliderSpec, TerrainCollision};
-    use crate::sim::{FIXED_DT, PlayerMovement};
+    use crate::sim::{FIXED_DT, PlayerMovement, WorldClock};
     use glam::Vec3;
 
     const SPAWN_CELL: (i32, i32) = (-3, 12);
 
     fn held_sim() -> SimWorld {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         sim.set_fold_hold(true);
         sim
     }

@@ -530,7 +530,7 @@ mod tests {
         let hint = |page: &WorkshopsPage, model: &PipBoyModel| {
             page.hints(&PipBoySnapshot {
                 model,
-                clock: crate::sim::WorldClock::default().date(),
+                clock: crate::sim::WorldClock::fixture().date(),
                 vitals: vitals(),
             })
         };

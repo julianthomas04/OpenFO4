@@ -13,8 +13,7 @@ const GAME_YEAR: &str = "GameYear";
 const GAME_DAYS_PASSED: &str = "GameDaysPassed";
 const TIME_SCALE: &str = "TimeScale";
 
-/// A database error propagates. A global the database lacks is logged and replaced by the
-/// matching [`ClockStart::default`] value; a global with an impossible value is an error.
+/// A database error, a missing global or a global with an impossible value is an error.
 pub fn load_world_clock(db: &DbClient) -> anyhow::Result<WorldClock> {
     let start = clock_start_from(|editor_id| db.get_global(editor_id))?;
     WorldClock::new(start).context("the game's clock globals do not describe a valid start")
@@ -23,33 +22,25 @@ pub fn load_world_clock(db: &DbClient) -> anyhow::Result<WorldClock> {
 fn clock_start_from(
     lookup: impl Fn(&str) -> anyhow::Result<Option<f32>>,
 ) -> anyhow::Result<ClockStart> {
-    let fallback = ClockStart::default();
-    let value = |editor_id: &str, fallback: f32| -> anyhow::Result<f32> {
-        let found = lookup(editor_id).with_context(|| format!("reading global {editor_id}"))?;
-        if found.is_none() {
-            tracing::warn!(
-                "global {editor_id} is missing from the database; the world clock starts from {fallback}"
-            );
-        }
-        Ok(found.unwrap_or(fallback))
+    let value = |editor_id: &str| -> anyhow::Result<f32> {
+        lookup(editor_id)
+            .with_context(|| format!("reading global {editor_id}"))?
+            .with_context(|| format!("global {editor_id} is missing from the database"))
     };
-    let count = |editor_id: &str, fallback: u32| -> anyhow::Result<u32> {
-        whole_number(editor_id, value(editor_id, fallback as f32)?)
+    let count = |editor_id: &str| -> anyhow::Result<u32> {
+        whole_number(editor_id, value(editor_id)?)
     };
-    let days_passed = floored_count(
-        GAME_DAYS_PASSED,
-        value(GAME_DAYS_PASSED, fallback.days_passed as f32)?,
-    )?;
-    let years_since_base = count(GAME_YEAR, u32::from(fallback.year - GAME_YEAR_BASE))?;
+    let days_passed = floored_count(GAME_DAYS_PASSED, value(GAME_DAYS_PASSED)?)?;
+    let years_since_base = count(GAME_YEAR)?;
     Ok(ClockStart {
         year: GAME_YEAR_BASE
             .checked_add(narrow(GAME_YEAR, years_since_base)?)
             .with_context(|| format!("global {GAME_YEAR} is out of range: {years_since_base}"))?,
-        month: narrow(GAME_MONTH, count(GAME_MONTH, u32::from(fallback.month))?)?,
-        day: narrow(GAME_DAY, count(GAME_DAY, u32::from(fallback.day))?)?,
-        hour: value(GAME_HOUR, fallback.hour)?,
+        month: narrow(GAME_MONTH, count(GAME_MONTH)?)?,
+        day: narrow(GAME_DAY, count(GAME_DAY)?)?,
+        hour: value(GAME_HOUR)?,
         days_passed,
-        time_scale: value(TIME_SCALE, fallback.time_scale)?,
+        time_scale: value(TIME_SCALE)?,
     })
 }
 
@@ -152,18 +143,23 @@ mod tests {
     }
 
     #[test]
-    fn every_missing_global_falls_back_to_the_default_start() {
-        assert_eq!(start_from(&HashMap::new()).unwrap(), ClockStart::default());
-    }
-
-    #[test]
-    fn only_the_missing_global_falls_back() {
-        let mut globals = vanilla();
-        globals.remove(TIME_SCALE);
-        globals.insert(GAME_HOUR, 4.0);
-        let start = start_from(&globals).unwrap();
-        assert_eq!(start.time_scale, ClockStart::default().time_scale);
-        assert_eq!(start.hour, 4.0);
+    fn a_missing_global_is_an_error_naming_it() {
+        for editor_id in [
+            GAME_HOUR,
+            GAME_DAY,
+            GAME_MONTH,
+            GAME_YEAR,
+            GAME_DAYS_PASSED,
+            TIME_SCALE,
+        ] {
+            let mut globals = vanilla();
+            globals.remove(editor_id);
+            let message = format!("{:#}", start_from(&globals).unwrap_err());
+            assert!(
+                message.contains(editor_id) && message.contains("missing"),
+                "{message}"
+            );
+        }
     }
 
     #[test]
@@ -172,7 +168,7 @@ mod tests {
             if editor_id == GAME_DAY {
                 anyhow::bail!("disk on fire")
             }
-            Ok(None)
+            Ok(vanilla().get(editor_id).copied())
         })
         .unwrap_err();
         let message = format!("{error:#}");

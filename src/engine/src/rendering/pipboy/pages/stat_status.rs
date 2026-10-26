@@ -996,7 +996,7 @@ mod tests {
     fn snapshot(model: &crate::sim::pipboy::PipBoyModel) -> PipBoySnapshot<'_> {
         PipBoySnapshot {
             model,
-            clock: crate::sim::WorldClock::default().date(),
+            clock: crate::sim::WorldClock::fixture().date(),
             vitals: crate::sim::pipboy::PlayerVitals {
                 hp: 50.0,
                 hp_max: 100.0,

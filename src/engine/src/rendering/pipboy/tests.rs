@@ -213,7 +213,7 @@ fn every_screen_paints_something_with_an_empty_and_a_populated_model() {
     for model in [PipBoyModel::new(Arc::default()), populated_model()] {
         let snapshot = PipBoySnapshot {
             model: &model,
-            clock: crate::sim::WorldClock::default().date(),
+            clock: crate::sim::WorldClock::fixture().date(),
             vitals: vitals(),
         };
         for target in all_screens() {
@@ -236,7 +236,7 @@ fn the_painted_frame_is_laid_out_for_the_stage_of_the_screen() {
     let model = PipBoyModel::new(Arc::default());
     let snapshot = PipBoySnapshot {
         model: &model,
-        clock: crate::sim::WorldClock::default().date(),
+        clock: crate::sim::WorldClock::fixture().date(),
         vitals: vitals(),
     };
 
@@ -262,7 +262,7 @@ fn closing_from_a_page_asks_the_sim_to_close_and_from_the_perk_chart_returns_to_
     let model = populated_model();
     let snapshot = PipBoySnapshot {
         model: &model,
-        clock: crate::sim::WorldClock::default().date(),
+        clock: crate::sim::WorldClock::fixture().date(),
         vitals: vitals(),
     };
 
@@ -282,7 +282,7 @@ fn page_and_sub_tab_keys_move_through_the_navigation_and_stop_at_the_ends() {
     let model = populated_model();
     let snapshot = PipBoySnapshot {
         model: &model,
-        clock: crate::sim::WorldClock::default().date(),
+        clock: crate::sim::WorldClock::fixture().date(),
         vitals: vitals(),
     };
 
@@ -356,7 +356,7 @@ fn the_perk_chart_uses_the_hud_colour_and_the_pages_the_pipboy_colour() {
     let model = populated_model();
     let snapshot = PipBoySnapshot {
         model: &model,
-        clock: crate::sim::WorldClock::default().date(),
+        clock: crate::sim::WorldClock::fixture().date(),
         vitals: vitals(),
     };
 
@@ -392,7 +392,7 @@ fn the_perk_chart_key_on_perks_opens_the_chart() {
     let model = populated_model();
     let snapshot = PipBoySnapshot {
         model: &model,
-        clock: crate::sim::WorldClock::default().date(),
+        clock: crate::sim::WorldClock::fixture().date(),
         vitals: vitals(),
     };
 
@@ -409,7 +409,7 @@ fn inventory_keys_emit_the_matching_actions() {
     let model = populated_model();
     let snapshot = PipBoySnapshot {
         model: &model,
-        clock: crate::sim::WorldClock::default().date(),
+        clock: crate::sim::WorldClock::fixture().date(),
         vitals: vitals(),
     };
     let weapon = model.inventory.listed(InventoryCategory::Weapons)[0].id;
@@ -445,7 +445,7 @@ fn a_click_on_a_page_title_selects_the_page() {
     let model = populated_model();
     let snapshot = PipBoySnapshot {
         model: &model,
-        clock: crate::sim::WorldClock::default().date(),
+        clock: crate::sim::WorldClock::fixture().date(),
         vitals: vitals(),
     };
     paint(&mut screen, &snapshot, 0.0);
@@ -465,7 +465,7 @@ fn a_notify_request_shows_on_the_message_line_and_fades_after_three_seconds() {
     let model = populated_model();
     let snapshot = PipBoySnapshot {
         model: &model,
-        clock: crate::sim::WorldClock::default().date(),
+        clock: crate::sim::WorldClock::fixture().date(),
         vitals: vitals(),
     };
 
@@ -491,7 +491,7 @@ fn a_new_sim_rejection_is_shown_as_the_games_text_once_per_change() {
     });
     let snapshot = PipBoySnapshot {
         model: &model,
-        clock: crate::sim::WorldClock::default().date(),
+        clock: crate::sim::WorldClock::fixture().date(),
         vitals: vitals(),
     };
 
@@ -513,7 +513,7 @@ fn a_rejection_the_game_has_no_text_for_is_not_shown_to_the_player() {
     )));
     let snapshot = PipBoySnapshot {
         model: &model,
-        clock: crate::sim::WorldClock::default().date(),
+        clock: crate::sim::WorldClock::fixture().date(),
         vitals: vitals(),
     };
 
@@ -528,7 +528,7 @@ fn page_and_chrome_input_is_swallowed_while_the_tab_is_modal() {
     let model = populated_model();
     let snapshot = PipBoySnapshot {
         model: &model,
-        clock: crate::sim::WorldClock::default().date(),
+        clock: crate::sim::WorldClock::fixture().date(),
         vitals: vitals(),
     };
     screen.show(Screen::Shell(TabId::Sub(SubTab::Weapons)), None);
@@ -556,7 +556,7 @@ fn opening_the_pip_boy_drops_a_prompt_left_open() {
     let model = populated_model();
     let snapshot = PipBoySnapshot {
         model: &model,
-        clock: crate::sim::WorldClock::default().date(),
+        clock: crate::sim::WorldClock::fixture().date(),
         vitals: vitals(),
     };
     screen.show(Screen::Shell(TabId::Sub(SubTab::Weapons)), None);
@@ -575,7 +575,7 @@ fn the_cursor_seen_while_closed_hovers_and_clicks_on_the_first_open_frame() {
     let model = populated_model();
     let snapshot = PipBoySnapshot {
         model: &model,
-        clock: crate::sim::WorldClock::default().date(),
+        clock: crate::sim::WorldClock::fixture().date(),
         vitals: vitals(),
     };
     let (stage, fraction) = screen.stages.of(Screen::Shell(TabId::Map));
@@ -620,7 +620,7 @@ fn rank_keys_on_a_perk_without_rank_data_do_not_panic() {
     model.perks.0.insert(PerkId("empty".into()), 1);
     let snapshot = PipBoySnapshot {
         model: &model,
-        clock: crate::sim::WorldClock::default().date(),
+        clock: crate::sim::WorldClock::fixture().date(),
         vitals: vitals(),
     };
 
@@ -637,7 +637,7 @@ fn stimpak_and_radaway_keys_do_nothing_without_the_item() {
     let model = PipBoyModel::new(Arc::default());
     let snapshot = PipBoySnapshot {
         model: &model,
-        clock: crate::sim::WorldClock::default().date(),
+        clock: crate::sim::WorldClock::fixture().date(),
         vitals: vitals(),
     };
 
@@ -716,7 +716,7 @@ fn a_frame_reaches_the_target_inside_the_stage_and_leaves_the_bars_untouched() {
     let model = populated_model();
     let snapshot = PipBoySnapshot {
         model: &model,
-        clock: crate::sim::WorldClock::default().date(),
+        clock: crate::sim::WorldClock::fixture().date(),
         vitals: vitals(),
     };
     let size = [1920_u32, 1080];

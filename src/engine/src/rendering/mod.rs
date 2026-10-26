@@ -1589,7 +1589,10 @@ impl State {
 
         // The player spawns at the camera start and snaps to the ground as
         // soon as the cell's terrain collision streams in.
-        let mut sim = SimWorld::new(player_movement);
+        let world_clock = crate::assets::db::DbClient::new(&db_path)
+            .and_then(|db| crate::assets::world_clock_start::load_world_clock(&db))
+            .map_err(StartupError::WorldClock)?;
+        let mut sim = SimWorld::new(player_movement, world_clock);
         if let Some(table) = buoyancy_table {
             sim.set_material_buoyancy_table(std::sync::Arc::new(table));
         }
@@ -1654,10 +1657,6 @@ impl State {
         }
         pipboy.load_perk_grid(&device, &queue, surface_format)?;
         sim.set_pipboy_catalog(std::sync::Arc::new(pipboy_catalog));
-        let world_clock = crate::assets::db::DbClient::new(&db_path)
-            .and_then(|db| crate::assets::world_clock_start::load_world_clock(&db))
-            .map_err(StartupError::WorldClock)?;
-        sim.set_world_clock(world_clock);
 
         let cull_stats = CullStatsReadback::new(&device);
         let gpu_profiler = GpuProfiler::new(&device, &queue);
