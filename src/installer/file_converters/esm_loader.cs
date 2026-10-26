@@ -546,10 +546,12 @@ namespace AssetConverter
             ("weather", "directional_ambient", "TEXT"),
             ("weather", "clouds", "TEXT"),
             ("weather", "data", "TEXT"),
+            ("god_rayses", "data", "TEXT"),
             ("climates", "volatility", "INTEGER"),
             ("shader_particle_geometries", "data", "TEXT"),
             ("shader_particle_geometries", "particle_material", "TEXT"),
             ("shader_particle_geometries", "particle_texture", "TEXT"),
+            ("shader_particle_geometries", "particle_material_data", "TEXT"),
             ("worldspaces", "climate", "TEXT"),
             ("worldspaces", "water_type", "TEXT"),
             ("worldspaces", "lod_water_type", "TEXT"),
@@ -3173,7 +3175,7 @@ namespace AssetConverter
                 Colors = SafeSerialize(ColorGroups(record)),
                 ImageSpaces = SafeSerialize(ByTimeOfDay(t => Slot(record, t) is { IsNull: false } link ? link.FormKey.ToString() : null)),
                 Sounds = SafeSerialize(WeatherJson.Sounds(record)),
-                GodRays = (string?)null,
+                GodRays = SafeSerialize(WeatherJson.GodRays(record)),
                 DirectionalAmbient = record.DirectionalAmbientLightingColors is { } ambientColors
                     ? SafeSerialize(ByTimeOfDay(t => DirectionalAmbient(Slot(ambientColors, t))))
                     : null,
@@ -3188,6 +3190,7 @@ namespace AssetConverter
         private readonly MaterialTextureResolver _materials; // no materials root disables resolving the particle material
         private int _resolvedFromMaterial;
         private int _materialMisses;
+        private int _materialDataMisses;
 
         public ShaderParticleGeometryProcessor(string? materialsRoot = null)
         {
@@ -3198,6 +3201,7 @@ namespace AssetConverter
         {
             string? material = string.IsNullOrEmpty(record.ParticleTexture) ? null : record.ParticleTexture;
             string? texture = null;
+            EffectMaterialParams? materialData = null;
             if (material != null && _materials.Enabled)
             {
                 texture = _materials.Resolve(material)?.Diffuse;
@@ -3211,16 +3215,26 @@ namespace AssetConverter
                     Console.Error.WriteLine(
                         $"  CONVERSION ERROR SPGD {formKey} ({record.EditorID}): could not resolve particle material `{material}` to a texture");
                 }
+
+                materialData = _materials.ResolveEffect(material);
+                if (materialData == null)
+                {
+                    _materialDataMisses++;
+                    Console.Error.WriteLine(
+                        $"  CONVERSION ERROR SPGD {formKey} ({record.EditorID}): could not read particle material `{material}` as an effect material");
+                }
             }
 
-            await conn.ExecuteAsync(@"INSERT OR REPLACE INTO shader_particle_geometries (form_key, editor_id, data, particle_material, particle_texture) VALUES (@FormKey, @EditorId, @Data, @ParticleMaterial, @ParticleTexture)",
+            await conn.ExecuteAsync(@"INSERT OR REPLACE INTO shader_particle_geometries (form_key, editor_id, data, particle_material, particle_texture, particle_material_data)
+                VALUES (@FormKey, @EditorId, @Data, @ParticleMaterial, @ParticleTexture, @ParticleMaterialData)",
                 new
                 {
                     FormKey = formKey,
                     EditorId = record.EditorID,
                     Data = SafeSerialize(ShaderParticleGeometryJson.Data(record)),
                     ParticleMaterial = material,
-                    ParticleTexture = texture
+                    ParticleTexture = texture,
+                    ParticleMaterialData = materialData == null ? null : SafeSerialize(ShaderParticleGeometryJson.MaterialData(materialData))
                 }, transaction);
         }
 
@@ -3229,6 +3243,19 @@ namespace AssetConverter
             Console.WriteLine($"  Particle geometries resolved via BGEM material: {_resolvedFromMaterial}");
             if (_materialMisses > 0)
                 Console.WriteLine($"  Particle geometries with unresolvable material: {_materialMisses}");
+            if (_materialDataMisses > 0)
+                Console.WriteLine($"  Particle geometries without readable effect material data: {_materialDataMisses}");
+        }
+    }
+
+    // A DATA block Mutagen cannot read (too short) is tallied as a read failure and stored as NULL.
+    public class GodRaysProcessor : BaseRecordProcessor<IGodRaysGetter>
+    {
+        protected override async Task ProcessSpecificRecordAsync(IGodRaysGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
+        {
+            var data = ReadFailureTally.Shared.Read("GDRY DATA", record.EditorID, () => GodRaysJson.Data(record), null);
+            await conn.ExecuteAsync("INSERT OR REPLACE INTO god_rayses (form_key, editor_id, data) VALUES (@FormKey, @EditorId, @Data)",
+                new { FormKey = formKey, EditorId = record.EditorID, Data = SafeSerialize(data) }, transaction);
         }
     }
 

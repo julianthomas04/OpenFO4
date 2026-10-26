@@ -21,5 +21,26 @@ namespace AssetConverter
             ["box_size"] = record.BoxSize,
             ["particle_density"] = record.ParticleDensity
         };
+
+        /// <summary>
+        /// The particle material's draw state: blend enable and factors (named as in <c>material.extras.effect</c>),
+        /// base colour as 0..255 bytes, depth write and effect lighting with its influence.
+        /// </summary>
+        public static JsonObject MaterialData(EffectMaterialParams material)
+        {
+            var (blendEnabled, source, destination) = BaseMaterialFile.BlendFactorsOf(material.Blend);
+            return new JsonObject
+            {
+                ["blend_enabled"] = blendEnabled,
+                ["blend_src"] = EffectMaterialExtras.BlendFactors[source],
+                ["blend_dst"] = EffectMaterialExtras.BlendFactors[destination],
+                ["base_color"] = new JsonArray(Byte(material.BaseColor.X), Byte(material.BaseColor.Y), Byte(material.BaseColor.Z)),
+                ["depth_write"] = material.ZWrite,
+                ["effect_lighting"] = material.EffectLightingEnabled,
+                ["lighting_influence"] = material.LightingInfluence
+            };
+        }
+
+        private static int Byte(float channel) => (int)MathF.Round(channel * 255f);
     }
 }

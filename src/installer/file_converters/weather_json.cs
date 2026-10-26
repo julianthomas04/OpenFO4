@@ -1,12 +1,13 @@
 using System.Text.Json.Nodes;
 using Mutagen.Bethesda.Fallout4;
+using Mutagen.Bethesda.Plugins;
 using Noggog;
 
 namespace AssetConverter
 {
     /// <summary>
     /// JSON projections of the WTHR fields the engine reads beyond the colour, fog and image space columns:
-    /// cloud layers, the DATA block and the weather sound list. Property names are snake_case, form links are form key strings,
+    /// cloud layers, the DATA block, the weather sound list and the god rays per time of day. Property names are snake_case, form links are form key strings,
     /// colours are <c>[r,g,b,a]</c> bytes and the time-of-day slots use the names of the <c>weather.colors</c> column.
     /// </summary>
     internal static class WeatherJson
@@ -66,6 +67,24 @@ namespace AssetConverter
                 slots[time] = select(time);
             return slots;
         }
+
+        public static JsonObject? GodRays(IWeatherGetter weather) =>
+            weather.GodRays is { } godRays
+                ? ByTimeOfDay(time => LinkKey.Text(GodRaysSlot(godRays, time)))
+                : null;
+
+        private static IFormLinkGetter<IGodRaysGetter> GodRaysSlot(IWeatherGodRaysGetter godRays, string time) => time switch
+        {
+            "Sunrise" => godRays.GodRaySunrise,
+            "Day" => godRays.GodRayDay,
+            "Sunset" => godRays.GodRaySunset,
+            "Night" => godRays.GodRayNight,
+            "EarlySunrise" => godRays.GodRayEarlySunrise,
+            "LateSunrise" => godRays.GodRayLateSunrise,
+            "EarlySunset" => godRays.GodRayEarlySunset,
+            "LateSunset" => godRays.GodRayLateSunset,
+            _ => throw new ArgumentOutOfRangeException(nameof(time), time, "Unknown time of day")
+        };
 
         private static float Alpha(IWeatherAlphaGetter alphas, string time) => time switch
         {

@@ -553,7 +553,7 @@ CREATE TABLE IF NOT EXISTS weather (
     colors TEXT,                        -- JSON
     image_spaces TEXT,                  -- JSON
     sounds TEXT,                        -- JSON: [{kind, sound}]
-    god_rays TEXT,
+    god_rays TEXT,                      -- JSON: GDRY form_key per time of day
     directional_ambient TEXT,           -- JSON
     clouds TEXT,                        -- JSON: textures, layers
     data TEXT                           -- JSON: DATA block
@@ -1154,7 +1154,7 @@ CREATE TABLE IF NOT EXISTS dialog_views              (form_key TEXT PRIMARY KEY,
 CREATE TABLE IF NOT EXISTS dual_cast_datas           (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS effect_shaders            (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS footstep_sets             (form_key TEXT PRIMARY KEY, editor_id TEXT);
-CREATE TABLE IF NOT EXISTS god_rayses                (form_key TEXT PRIMARY KEY, editor_id TEXT);
+CREATE TABLE IF NOT EXISTS god_rayses                (form_key TEXT PRIMARY KEY, editor_id TEXT, data TEXT); -- data: JSON, DATA block
 CREATE TABLE IF NOT EXISTS idle_animations           (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS idle_markers              (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS image_space_adapters      (form_key TEXT PRIMARY KEY, editor_id TEXT);
@@ -1226,7 +1226,8 @@ CREATE TABLE IF NOT EXISTS shader_particle_geometries (
     editor_id TEXT,
     data TEXT,                          -- JSON
     particle_material TEXT,             -- authored BGEM path
-    particle_texture TEXT               -- the material's base texture
+    particle_texture TEXT,              -- the material's base texture
+    particle_material_data TEXT         -- JSON: blend, base colour, depth write, effect lighting
 );
 CREATE TABLE IF NOT EXISTS sound_keyword_mappings    (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS sound_markers             (form_key TEXT PRIMARY KEY, editor_id TEXT);

@@ -289,6 +289,16 @@ namespace AssetConverter
             throw new NotSupportedException();
         }
 
+        /// <summary>The stored alpha-blend triple of <paramref name="type"/>: the enable byte and the source and destination factor indices.</summary>
+        public static (bool Enabled, uint Source, uint Destination) BlendFactorsOf(AlphaBlendModeType type)
+        {
+            byte enabled = 0;
+            uint source = 0;
+            uint destination = 0;
+            ConvertAlphaBlendMode(type, ref enabled, ref source, ref destination);
+            return (enabled != 0, source, destination);
+        }
+
         private static void ConvertAlphaBlendMode(AlphaBlendModeType type, ref byte a, ref uint b, ref uint c)
         {
             if (type == AlphaBlendModeType.Unknown)

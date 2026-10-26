@@ -47,5 +47,13 @@ namespace InstallerTests
         public const int CloudDayRed = 200;
         public const float CloudDayAlpha = 0.5f;
         public const float CloudEarlySunriseAlpha = 0.25f;
+
+        public const int GodRaysBackRed = 255;
+        public const float GodRaysBackColorScale = 2f;
+        public const float GodRaysForwardColorScale = 4f;
+        public const float GodRaysAirColorScale = 3f;
+        public const float GodRaysIntensity = 1.25f;
+        public const float GodRaysBackPhase = 0.5f;
+        public const float GodRaysForwardPhase = 0.75f;
     }
 }

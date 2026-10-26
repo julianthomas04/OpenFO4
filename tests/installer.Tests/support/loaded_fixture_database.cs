@@ -363,8 +363,23 @@ namespace InstallerTests
         static void DescribeWeather(TinyPlugin plugin)
         {
             plugin.AddSoundDescriptor("ThunderSound", descriptor => descriptor.Data = new SoundDescriptorStandardData());
+            plugin.AddGodRays("FixtureGodRays", godRays =>
+            {
+                godRays.BackColor = TinyPlugin.Rgb(WeatherFixture.GodRaysBackRed, 128, 0);
+                godRays.ForwardColor = TinyPlugin.Rgb(1, 2, 3);
+                godRays.AirColor = TinyPlugin.Rgb(10, 20, 30);
+                godRays.BackColorScale = WeatherFixture.GodRaysBackColorScale;
+                godRays.ForwardColorScale = WeatherFixture.GodRaysForwardColorScale;
+                godRays.AirColorScale = WeatherFixture.GodRaysAirColorScale;
+                godRays.Intensity = WeatherFixture.GodRaysIntensity;
+                godRays.BackPhase = WeatherFixture.GodRaysBackPhase;
+                godRays.ForwardPhase = WeatherFixture.GodRaysForwardPhase;
+            });
             plugin.AddWeather("FixtureWeather", weather =>
             {
+                weather.GodRays = new WeatherGodRays();
+                weather.GodRays.GodRayDay.SetTo(plugin.FormKeyOf("FixtureGodRays"));
+                weather.GodRays.GodRayLateSunset.SetTo(plugin.FormKeyOf("FixtureGodRays"));
                 weather.SkyUpperColor.Day = TinyPlugin.Rgb(10, 20, 30);
                 weather.SkyUpperColor.Night = TinyPlugin.Rgb(1, 2, 3);
                 weather.FogDistanceDayNear = 100f;
