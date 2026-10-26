@@ -141,6 +141,18 @@ impl DbClient {
         footsteps::FootstepCatalog::from_connection(&self.conn)
     }
 
+    /// The sound descriptors reachable from the weather sound descriptors `roots`, with the output
+    /// models and categories they name; errors when the installer has not extracted the sound
+    /// tables, a root is not a sound descriptor or a row is malformed.
+    #[instrument(skip(self, roots))]
+    pub fn get_weather_sound_catalog(
+        &self,
+        roots: impl IntoIterator<Item = String>,
+    ) -> anyhow::Result<sound_catalog::SoundCatalog> {
+        schema::require_weather_sound_tables(&self.conn)?;
+        sound_catalog::SoundCatalog::load_reachable(&self.conn, roots)
+    }
+
     /// Which layers never touch the player. A database converted before the
     /// installer extracted the layers, or one lacking a character layer,
     /// yields a set that keeps every shape solid, after one `error!`.

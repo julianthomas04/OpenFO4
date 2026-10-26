@@ -7,14 +7,12 @@
 //! material that has one -> the impact's player sound -> the layers: a compound sound plays every
 //! child whose conditions hold, a standard sound plays itself when its own conditions hold.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
 use crate::assets::db::footsteps::{FootstepCatalog, ImpactDataSet};
-use crate::assets::db::sound_catalog::{COMPOUND_DESCRIPTOR, STANDARD_DESCRIPTOR_TYPE};
-use crate::audio::conditions::{ConditionContext, ConditionError, evaluate};
-use crate::audio::sound_resolve::{
-    LayerPlay, SoundError, descriptor_file_keys, lookup_descriptor, one_shot_layer,
-};
+use crate::audio::conditions::{ConditionContext, ConditionError};
+pub use crate::audio::sound_resolve::ReachableSound;
+use crate::audio::sound_resolve::{self, LayerPlay, LayersError, SoundError, resolve_layers};
 use crate::footsteps::{FootTag, FootstepEvent, Gait};
 use crate::random::RandomSource;
 
@@ -79,6 +77,16 @@ pub enum ResolveError {
     Sound(#[from] SoundError),
 }
 
+impl From<LayersError> for ResolveError {
+    fn from(error: LayersError) -> Self {
+        match error {
+            LayersError::Cycle(descriptor) => Self::DescriptorCycle(descriptor),
+            LayersError::Condition(error) => Self::Condition(error),
+            LayersError::Sound(error) => Self::Sound(error),
+        }
+    }
+}
+
 /// The layers `event` plays on `material` (the hash of the surface's material, `None` when it
 /// has none; a terrain surface is turned into its landscape texture's material by the caller).
 /// `missing_files` are file keys known to be absent; a layer never picks them and a layer left
@@ -119,16 +127,7 @@ pub fn resolve(
             impact: impact.form_key.clone(),
         }));
     };
-    let mut layers = Vec::new();
-    collect_layers(
-        catalog,
-        ctx,
-        sound,
-        &mut Vec::new(),
-        missing_files,
-        rng,
-        &mut layers,
-    )?;
+    let layers = resolve_layers(&catalog.sounds, ctx, sound, missing_files, rng)?;
     Ok(if layers.is_empty() {
         Resolution::Silent(SilentReason::NoLayerPlays {
             descriptor: sound.clone(),
@@ -190,55 +189,6 @@ fn impact_of<'a>(
     Err(ResolveError::MaterialCycle(material))
 }
 
-fn collect_layers(
-    catalog: &FootstepCatalog,
-    ctx: &dyn ConditionContext,
-    key: &str,
-    path: &mut Vec<String>,
-    missing_files: &HashSet<String>,
-    rng: &mut dyn RandomSource,
-    layers: &mut Vec<LayerPlay>,
-) -> Result<(), ResolveError> {
-    if path.iter().any(|ancestor| ancestor == key) {
-        return Err(ResolveError::DescriptorCycle(key.to_string()));
-    }
-    let descriptor = lookup_descriptor(&catalog.sounds, key)?;
-    if !evaluate(&descriptor.conditions, ctx)? {
-        return Ok(());
-    }
-    match descriptor.descriptor_type {
-        COMPOUND_DESCRIPTOR => {
-            path.push(key.to_string());
-            for child in &descriptor.children {
-                collect_layers(catalog, ctx, child, path, missing_files, rng, layers)?;
-            }
-            path.pop();
-            Ok(())
-        }
-        STANDARD_DESCRIPTOR_TYPE => {
-            layers.extend(one_shot_layer(
-                &catalog.sounds,
-                descriptor,
-                missing_files,
-                rng,
-            )?);
-            Ok(())
-        }
-        descriptor_type => Err(SoundError::UnsupportedDescriptor {
-            descriptor: key.to_string(),
-            descriptor_type,
-        }
-        .into()),
-    }
-}
-
-/// A sound any step of the default set can reach, and its files below the audio folder.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReachableSound {
-    pub descriptor: String,
-    pub file_keys: Vec<String>,
-}
-
 /// Every sound with files that any step of the default set can reach, whatever its conditions,
 /// ordered by descriptor key.
 pub fn reachable_sounds(catalog: &FootstepCatalog) -> Result<Vec<ReachableSound>, ResolveError> {
@@ -247,7 +197,7 @@ pub fn reachable_sounds(catalog: &FootstepCatalog) -> Result<Vec<ReachableSound>
         "footstep set",
         &catalog.default_footstep_set,
     )?;
-    let mut pending: Vec<&String> = Vec::new();
+    let mut player_sounds: Vec<&str> = Vec::new();
     for footstep in set.gaits.values().flatten() {
         let footstep = lookup(&catalog.footsteps, "footstep", footstep)?;
         let Some(data_set) = &footstep.impact_data_set else {
@@ -255,26 +205,11 @@ pub fn reachable_sounds(catalog: &FootstepCatalog) -> Result<Vec<ReachableSound>
         };
         for entry in &lookup(&catalog.impact_data_sets, "impact data set", data_set)?.entries {
             let impact = lookup(&catalog.impacts, "impact", &entry.impact)?;
-            pending.extend(impact.player_sound.iter());
+            player_sounds.extend(impact.player_sound.as_deref());
         }
     }
-    let mut seen = HashSet::new();
-    let mut sounds = BTreeMap::new();
-    while let Some(key) = pending.pop() {
-        if !seen.insert(key) {
-            continue;
-        }
-        let descriptor = lookup_descriptor(&catalog.sounds, key)?;
-        pending.extend(descriptor.children.iter());
-        if !descriptor.sound_files.is_empty() {
-            sounds.insert(key.clone(), descriptor_file_keys(descriptor)?);
-        }
-    }
-    Ok(sounds
-        .into_iter()
-        .map(|(descriptor, file_keys)| ReachableSound {
-            descriptor,
-            file_keys,
-        })
-        .collect())
+    Ok(sound_resolve::reachable_sounds(
+        &catalog.sounds,
+        player_sounds,
+    )?)
 }

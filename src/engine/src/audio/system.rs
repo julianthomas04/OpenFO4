@@ -9,11 +9,13 @@ use super::backend_errors::BackendErrorReporter;
 use super::conditions::GameTime;
 use super::error::AudioError;
 use super::footsteps::Footsteps;
+use super::loop_output::LoopOutput;
 use super::music::{MusicCommand, MusicDirector};
 use super::music_output::{MusicOutput, Playing, SoundSettings, open_music_file};
 use super::place::PlaceSnapshot;
 use super::settings::MenuMusicSettings;
-use super::sfx_output::{EffectSettings, SfxOutput};
+use super::sfx_output::SfxOutput;
+use super::weather::{WeatherAudio, WeatherAudioInput};
 use super::world_music::WorldMusic;
 use super::world_playback::WorldPlayback;
 use crate::assets::layout;
@@ -29,9 +31,12 @@ pub struct AudioFrame {
     pub time: GameTime,
     /// The player's place when it was polled this frame.
     pub place: Option<PlaceSnapshot>,
+    /// The weather the player is under; `None` where there is none, which leaves the weather
+    /// silent.
+    pub weather: Option<WeatherAudioInput>,
 }
 
-/// A frame without a place or time, for tests that only follow the phase.
+/// A frame without a place, time or weather, for tests that only follow the phase.
 #[cfg(any(test, feature = "test-support"))]
 impl From<Phase> for AudioFrame {
     fn from(phase: Phase) -> Self {
@@ -40,6 +45,7 @@ impl From<Phase> for AudioFrame {
             dt: Duration::ZERO,
             time: GameTime::at_hour(0.0),
             place: None,
+            weather: None,
         }
     }
 }
@@ -49,8 +55,10 @@ pub struct AudioSystem<B: AudioBackend = DefaultBackend> {
     manager: AudioManager<B>,
     output: MusicOutput,
     sfx: SfxOutput,
+    loops: LoopOutput,
     footsteps: Option<Footsteps>,
-    /// The phase of the latest frame; footsteps play only in a gameplay phase.
+    weather: Option<WeatherAudio>,
+    /// The phase of the latest frame; footsteps and weather play only in a gameplay phase.
     phase: Phase,
     menu: Option<Playing>,
     world: Option<WorldPlayback>,
@@ -96,11 +104,14 @@ impl<B: AudioBackend> AudioSystem<B> {
             .map_err(|error| AudioError::Device(B::describe_setup_error(&error)))?;
         let output = MusicOutput::new(&mut manager)?;
         let sfx = SfxOutput::new(&mut manager, audio_dir.clone())?;
+        let loops = LoopOutput::new(&mut manager, audio_dir.clone(), settings.fade)?;
         Ok(Self {
             manager,
             output,
             sfx,
+            loops,
             footsteps: None,
+            weather: None,
             phase: Phase::MainMenu,
             menu: None,
             world: None,
@@ -123,6 +134,11 @@ impl<B: AudioBackend> AudioSystem<B> {
         self.footsteps = Some(footsteps);
     }
 
+    /// Lets the frames' weather play as loops and thunder; replaces the weather sounds set before.
+    pub fn set_weather(&mut self, weather: WeatherAudio) {
+        self.weather = Some(weather);
+    }
+
     /// Plays the sounds of one footstep; `material` is the hash of the surface's material (see
     /// `audio::footsteps`). The step is dropped outside the gameplay phases (`Revealing` and
     /// `InGame`, where the world music plays too) and while no footsteps are set. An error is
@@ -132,25 +148,23 @@ impl<B: AudioBackend> AudioSystem<B> {
         event: FootstepEvent,
         material: Option<u32>,
     ) -> Result<(), AudioError> {
-        if !matches!(self.phase, Phase::Revealing | Phase::InGame) {
+        if !in_world(self.phase) {
             return Ok(());
         }
         let Some(footsteps) = &mut self.footsteps else {
             return Ok(());
         };
         for layer in footsteps.step(event, material)? {
-            let settings = EffectSettings {
-                playback_rate: layer.mix.playback_rate,
-                gain_db: layer.mix.gain_db,
-            };
-            self.sfx.play(&layer.file_key, settings)?;
+            self.sfx.play_layer(&layer)?;
         }
         Ok(())
     }
 
-    /// Applies what the game flow's phase and the player's place ask of the audio; call once per
-    /// frame. An error is fatal: a music file cannot be played or turned out damaged, or the
-    /// music data is unusable.
+    /// Applies what the game flow's phase, the player's place and the weather ask of the audio;
+    /// call once per frame. Weather sounds play in the gameplay phases only: in any other phase, or
+    /// without a weather, the loops fade out and the thunder on its way is dropped. An error is
+    /// fatal: a music or weather sound file cannot be played or turned out damaged, or the music or
+    /// weather sound data is unusable.
     pub fn sync(&mut self, frame: impl Into<AudioFrame>) -> Result<(), AudioError> {
         let frame = frame.into();
         self.clock += frame.dt;
@@ -168,7 +182,7 @@ impl<B: AudioBackend> AudioSystem<B> {
                 frame.place.as_ref(),
             )?;
         }
-        Ok(())
+        self.sync_weather(frame.weather.as_ref(), frame.time)
     }
 
     pub fn music_state(&self) -> Option<PlaybackState> {
@@ -203,6 +217,11 @@ impl<B: AudioBackend> AudioSystem<B> {
     #[cfg(test)]
     pub(super) fn decoded_sfx_count(&self) -> usize {
         self.sfx.decoded_count()
+    }
+
+    #[cfg(test)]
+    pub(super) fn playing_loop_files(&self) -> Vec<&str> {
+        self.loops.playing_files()
     }
 
     #[cfg(test)]
@@ -250,6 +269,23 @@ impl<B: AudioBackend> AudioSystem<B> {
         }
     }
 
+    fn sync_weather(
+        &mut self,
+        input: Option<&WeatherAudioInput>,
+        time: GameTime,
+    ) -> Result<(), AudioError> {
+        let Some(weather) = &mut self.weather else {
+            return Ok(());
+        };
+        let input = input.filter(|_| in_world(self.phase));
+        let play = weather.update(input, time, self.clock)?;
+        self.loops.follow(&play.loops)?;
+        for layer in &play.thunder {
+            self.sfx.play_layer(layer)?;
+        }
+        Ok(())
+    }
+
     fn check_music_streams(&mut self) -> Result<(), AudioError> {
         let world = self.world.iter_mut().flat_map(WorldPlayback::sounds_mut);
         self.output.check(self.menu.iter_mut().chain(world))
@@ -263,4 +299,9 @@ impl<B: AudioBackend> AudioSystem<B> {
             tracing::error!("{line}");
         }
     }
+}
+
+/// The phases the world plays in: its music, its footsteps and its weather.
+fn in_world(phase: Phase) -> bool {
+    matches!(phase, Phase::Revealing | Phase::InGame)
 }

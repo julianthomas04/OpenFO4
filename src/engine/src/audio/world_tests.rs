@@ -69,6 +69,7 @@ fn frame(phase: Phase, seconds: f32, hour: f32, worldspace: Option<&str>) -> Aud
         dt: Duration::from_secs_f32(seconds),
         time: GameTime::at_hour(hour),
         place: worldspace.map(exterior_place),
+        weather: None,
     }
 }
 

@@ -3380,6 +3380,7 @@ impl State {
                 GameTime::new(clock.hour(), clock.days_passed())
             },
             place,
+            weather: None,
         };
         match &mut self.audio {
             Some(audio) => audio.sync(frame),

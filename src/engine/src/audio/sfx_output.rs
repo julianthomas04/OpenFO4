@@ -1,14 +1,14 @@
 //! The kira sub-track of the sound effects: plain, non-spatial one-shots from memory.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
-use kira::sound::static_sound::StaticSoundData;
 use kira::track::{TrackBuilder, TrackHandle};
 use kira::{AudioManager, Decibels, PlaybackRate};
 
 use super::backend::AudioBackend;
+use super::decoded_files::DecodedFiles;
 use super::error::AudioError;
+use super::sound_resolve::LayerPlay;
 
 /// How one effect is played.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -19,9 +19,7 @@ pub struct EffectSettings {
 
 pub struct SfxOutput {
     track: TrackHandle,
-    audio_dir: PathBuf,
-    /// Decoded files by file key; a clone shares the samples.
-    decoded: HashMap<String, StaticSoundData>,
+    files: DecodedFiles,
 }
 
 impl SfxOutput {
@@ -33,8 +31,7 @@ impl SfxOutput {
             track: manager
                 .add_sub_track(TrackBuilder::new())
                 .map_err(AudioError::SfxTrack)?,
-            audio_dir,
-            decoded: HashMap::new(),
+            files: DecodedFiles::new(audio_dir),
         })
     }
 
@@ -42,25 +39,33 @@ impl SfxOutput {
     /// play of a file decodes it. A file that cannot be decoded or a track that cannot take
     /// another sound is an error.
     pub fn play(&mut self, file_key: &str, settings: EffectSettings) -> Result<(), AudioError> {
-        let path = self.audio_dir.join(file_key);
-        if !self.decoded.contains_key(file_key) {
-            let data = StaticSoundData::from_file(&path).map_err(|source| AudioError::SfxFile {
-                path: path.clone(),
-                source,
-            })?;
-            self.decoded.insert(file_key.to_string(), data);
-        }
-        let data = self.decoded[file_key]
+        let data = self
+            .files
+            .get(file_key)?
             .volume(Decibels(settings.gain_db))
             .playback_rate(PlaybackRate(settings.playback_rate));
         self.track
             .play(data)
             .map(drop)
-            .map_err(|source| AudioError::SfxPlayback { path, source })
+            .map_err(|source| AudioError::SfxPlayback {
+                path: self.files.path(file_key),
+                source,
+            })
+    }
+
+    /// Plays one resolved layer at its own pitch and level.
+    pub fn play_layer(&mut self, layer: &LayerPlay) -> Result<(), AudioError> {
+        self.play(
+            &layer.file_key,
+            EffectSettings {
+                playback_rate: layer.mix.playback_rate,
+                gain_db: layer.mix.gain_db,
+            },
+        )
     }
 
     #[cfg(test)]
     pub fn decoded_count(&self) -> usize {
-        self.decoded.len()
+        self.files.len()
     }
 }

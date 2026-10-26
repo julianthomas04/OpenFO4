@@ -235,6 +235,7 @@ const MUSIC_TABLES: &[(&str, &[&str])] = &[
     ),
 ];
 
+/// The footstep tables besides the sound ones.
 const FOOTSTEP_TABLES: &[(&str, &[&str])] = &[
     ("default_object_slots", &["manager", "slot", "target"]),
     ("footstep_sets", &["form_key", "editor_id"]),
@@ -257,6 +258,11 @@ const FOOTSTEP_TABLES: &[(&str, &[&str])] = &[
         &["form_key", "editor_id", "material_hash", "parent"],
     ),
     ("landscape_textures", &["form_key", "material_type"]),
+];
+
+/// The sound descriptors, their output models and the sound categories: what a sound that plays
+/// from a descriptor reads, footsteps and weather alike.
+const SOUND_TABLES: &[(&str, &[&str])] = &[
     (
         "sound_descriptors",
         &[
@@ -320,6 +326,11 @@ const FOOTSTEP_TABLES: &[(&str, &[&str])] = &[
 pub enum SchemaError {
     #[error("table `{table}` lacks the footstep columns {}; the database predates footstep extraction, re-run the installer", missing.join(", "))]
     FootstepColumnsMissing {
+        table: &'static str,
+        missing: Vec<&'static str>,
+    },
+    #[error("table `{table}` lacks the sound columns {}; the database predates sound extraction, re-run the installer", missing.join(", "))]
+    WeatherSoundColumnsMissing {
         table: &'static str,
         missing: Vec<&'static str>,
     },
@@ -671,13 +682,37 @@ pub fn require_music_tables(conn: &Connection) -> anyhow::Result<()> {
 
 /// Every table and column the footstep catalog reads; a missing table reads as all its columns missing.
 pub fn require_footstep_tables(conn: &Connection) -> anyhow::Result<()> {
-    for &(table, columns) in FOOTSTEP_TABLES {
+    match first_table_with_missing_columns(conn, FOOTSTEP_TABLES.iter().chain(SOUND_TABLES))? {
+        Some((table, missing)) => {
+            Err(SchemaError::FootstepColumnsMissing { table, missing }.into())
+        }
+        None => Ok(()),
+    }
+}
+
+/// Every table and column the weather sounds read; a missing table reads as all its columns
+/// missing. The footstep tables are not needed.
+pub fn require_weather_sound_tables(conn: &Connection) -> anyhow::Result<()> {
+    match first_table_with_missing_columns(conn, SOUND_TABLES)? {
+        Some((table, missing)) => {
+            Err(SchemaError::WeatherSoundColumnsMissing { table, missing }.into())
+        }
+        None => Ok(()),
+    }
+}
+
+/// The first of `tables` that lacks columns, with the columns it lacks.
+fn first_table_with_missing_columns<'a>(
+    conn: &Connection,
+    tables: impl IntoIterator<Item = &'a (&'static str, &'static [&'static str])>,
+) -> anyhow::Result<Option<(&'static str, Vec<&'static str>)>> {
+    for &(table, columns) in tables {
         let missing = missing_columns(conn, table, columns)?;
         if !missing.is_empty() {
-            return Err(SchemaError::FootstepColumnsMissing { table, missing }.into());
+            return Ok(Some((table, missing)));
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 fn missing_columns(

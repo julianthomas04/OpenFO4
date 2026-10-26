@@ -262,6 +262,9 @@ impl ConditionContext for Situation {
     fn has_silent_running_perk(&self) -> bool {
         self.silent_running
     }
+    fn is_in_interior(&self) -> bool {
+        false
+    }
 }
 
 mod compound_layers {

@@ -1,11 +1,15 @@
-//! Game audio: the menu and world music and the player footsteps; see `docs/engine/audio-and-video.md`.
+//! Game audio: the menu and world music, the player footsteps and the weather sounds; see
+//! `docs/engine/audio-and-video.md`.
 
 mod backend;
 mod backend_errors;
 pub mod conditions;
+mod decoded_files;
 mod error;
 mod file_probe;
 pub mod footsteps;
+mod loop_output;
+mod loop_plan;
 mod music;
 mod music_output;
 pub mod music_stack;
@@ -17,6 +21,7 @@ mod sfx_output;
 pub mod sound_mix;
 pub mod sound_resolve;
 mod system;
+pub mod weather;
 pub mod world_music;
 pub mod world_music_loader;
 mod world_playback;
@@ -34,4 +39,5 @@ pub use footsteps::{FootstepError, Footsteps};
 pub use music::{MusicCommand, MusicDirector};
 pub use settings::MenuMusicSettings;
 pub use system::{AudioFrame, AudioSystem};
+pub use weather::{WeatherAudio, WeatherAudioError, WeatherAudioInput};
 pub use world_playback::{PLACE_POLLS_PER_SECOND, PlacePoll};

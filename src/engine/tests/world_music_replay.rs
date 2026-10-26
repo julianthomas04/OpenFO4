@@ -135,6 +135,7 @@ impl Replay {
                 dt,
                 time: GameTime::at_hour(HOUR),
                 place,
+                weather: None,
             })
             .unwrap();
         render_buffer(&mut self.audio);

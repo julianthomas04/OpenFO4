@@ -8,7 +8,7 @@
 )]
 
 use openfo4::assets::db::DbClient;
-use openfo4::assets::db::schema::DbSchema;
+use openfo4::assets::db::schema::{DbSchema, SchemaError};
 use openfo4::assets::db::teleports::{DoorLocation, WalkInDoors};
 use openfo4::assets::db::water_placement::CellWaterHeight;
 use rusqlite::Connection;
@@ -3463,4 +3463,182 @@ fn a_numeric_game_setting_without_a_value_is_an_error_naming_it() {
         .get_game_setting_number("fSunXExtreme")
         .unwrap_err();
     assert!(format!("{error:#}").contains("fSunXExtreme"), "{error:#}");
+}
+
+// ---------------------------------------------------------------- weather sound catalog
+
+const WIND_BED: &str = "000A01:Test.esm";
+const THUNDER: &str = "000A02:Test.esm";
+const THUNDER_LAYER: &str = "000A03:Test.esm";
+const UNRELATED_SOUND: &str = "000A04:Test.esm";
+const SOUND_MODEL: &str = "000A10:Test.esm";
+const SOUND_CATEGORY: &str = "000A11:Test.esm";
+const STANDARD_SOUND: i64 = 0x1EEF_540A;
+const COMPOUND_SOUND: i64 = 0x5465_1A43;
+const LOOPING_BED: i64 = 0x0804;
+
+fn seed_sound(
+    conn: &Connection,
+    key: &str,
+    descriptor_type: i64,
+    looping_flags: i64,
+    file: Option<&str>,
+) {
+    insert(
+        conn,
+        "sound_descriptors",
+        &[
+            ("form_key", text(key)),
+            ("descriptor_type", int(descriptor_type)),
+            ("category", text(SOUND_CATEGORY)),
+            ("output_model", text(SOUND_MODEL)),
+            (
+                "sound_files",
+                text(&serde_json::json!(file.into_iter().collect::<Vec<_>>()).to_string()),
+            ),
+            ("freq_shift_pct", int(0)),
+            ("freq_variance_pct", int(0)),
+            ("priority", int(0)),
+            ("db_variance", int(0)),
+            ("static_attenuation_centidb", int(0)),
+            ("looping_flags", int(looping_flags)),
+        ],
+    );
+}
+
+/// A looping wind bed, a compound thunder with one layer, a sound no weather reaches, and the
+/// output model and category they share.
+fn seed_weather_sounds(conn: &Connection) {
+    insert(
+        conn,
+        "sound_categories",
+        &[
+            ("form_key", text(SOUND_CATEGORY)),
+            ("static_attenuation", real(0.5)),
+        ],
+    );
+    insert(
+        conn,
+        "sound_output_models",
+        &[
+            ("form_key", text(SOUND_MODEL)),
+            ("output_type", int(1)),
+            ("static_attenuation_db", real(2.0)),
+        ],
+    );
+    for speaker in ["L", "R"] {
+        insert(
+            conn,
+            "sound_output_channels",
+            &[
+                ("model", text(SOUND_MODEL)),
+                ("ord", int(0)),
+                ("speaker", text(speaker)),
+                ("percent", int(50)),
+            ],
+        );
+    }
+    seed_sound(
+        conn,
+        WIND_BED,
+        STANDARD_SOUND,
+        LOOPING_BED,
+        Some("Sound\\FX\\AMB\\wind_bed.wav"),
+    );
+    seed_sound(conn, THUNDER, COMPOUND_SOUND, 0, None);
+    seed_sound(
+        conn,
+        THUNDER_LAYER,
+        STANDARD_SOUND,
+        0,
+        Some("Sound\\FX\\AMB\\thunder.wav"),
+    );
+    seed_sound(
+        conn,
+        UNRELATED_SOUND,
+        STANDARD_SOUND,
+        0,
+        Some("Sound\\FX\\AMB\\other.wav"),
+    );
+    insert(
+        conn,
+        "sound_descriptor_children",
+        &[
+            ("descriptor", text(THUNDER)),
+            ("ord", int(0)),
+            ("child", text(THUNDER_LAYER)),
+        ],
+    );
+}
+
+fn weather_roots() -> [String; 2] {
+    [WIND_BED.to_string(), THUNDER.to_string()]
+}
+
+#[test]
+fn the_weather_sound_catalog_holds_the_sounds_below_the_roots_with_their_model_and_category() {
+    let conn = schema_connection();
+    seed_weather_sounds(&conn);
+
+    let catalog = client(conn)
+        .get_weather_sound_catalog(weather_roots())
+        .unwrap();
+
+    let mut keys: Vec<&str> = catalog.descriptors.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, [WIND_BED, THUNDER, THUNDER_LAYER]);
+    assert_eq!(catalog.descriptors[WIND_BED].looping_flags, 0x0804);
+    assert_eq!(catalog.descriptors[THUNDER].children, [THUNDER_LAYER]);
+    assert!(catalog.output_models.contains_key(SOUND_MODEL));
+    assert_eq!(
+        catalog.categories[SOUND_CATEGORY].static_multiplier,
+        Some(0.5)
+    );
+}
+
+#[test]
+fn the_weather_sound_catalog_does_not_need_the_footstep_tables() {
+    let conn = legacy_connection(&[("footstep_sets", "editor_id")]);
+    seed_weather_sounds(&conn);
+    let db = client(conn);
+
+    assert!(db.get_weather_sound_catalog(weather_roots()).is_ok());
+    assert!(db.get_footstep_catalog().is_err());
+}
+
+#[test]
+fn the_weather_sound_catalog_names_the_sound_column_an_older_installer_did_not_extract() {
+    let conn = legacy_connection(&[("sound_descriptors", "looping_flags")]);
+
+    let error = client(conn)
+        .get_weather_sound_catalog(weather_roots())
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            error.downcast_ref::<SchemaError>(),
+            Some(SchemaError::WeatherSoundColumnsMissing { table: "sound_descriptors", missing })
+                if missing == &["looping_flags"]
+        ),
+        "{error:#}"
+    );
+    assert!(
+        format!("{error:#}").contains("re-run the installer"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn a_weather_sound_root_the_database_does_not_know_is_an_error_naming_it() {
+    let conn = schema_connection();
+    seed_weather_sounds(&conn);
+
+    let error = client(conn)
+        .get_weather_sound_catalog(["000FFF:Test.esm".to_string()])
+        .unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("000FFF:Test.esm"),
+        "{error:#}"
+    );
 }
