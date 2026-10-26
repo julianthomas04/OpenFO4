@@ -140,6 +140,14 @@ impl WorldClock {
         self.minute_of_day
     }
 
+    /// The game hours since the day count began: the days passed times 24 plus the hour of the
+    /// day. It rises with the clock and without a break at midnight, but moves by the difference
+    /// when the hour is set.
+    pub fn total_hours(&self) -> f64 {
+        f64::from(self.days_passed) * f64::from(HOURS_PER_DAY)
+            + self.minute_of_day / MINUTES_PER_HOUR
+    }
+
     /// The calendar date and the whole minute of the day, as the Pip-Boy shows them.
     pub fn date(&self) -> GameClock {
         GameClock {
@@ -465,6 +473,30 @@ mod tests {
             clock.advance(bad);
             assert_eq!(clock, before, "{bad}");
         }
+    }
+
+    #[test]
+    fn the_total_hours_are_the_days_passed_and_the_hour_of_the_day() {
+        let clock = clock_at(2287, 10, 23, 11.5);
+        assert_eq!(clock.total_hours(), 24.0 + 11.5);
+    }
+
+    #[test]
+    fn the_total_hours_rise_without_a_break_across_midnight() {
+        let mut clock = clock_at(2287, 10, 23, 23.5);
+        let before = clock.total_hours();
+        clock.advance(90.0);
+        assert!((clock.total_hours() - (before + 0.5)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn setting_the_hour_moves_the_total_hours_by_the_difference() {
+        let mut clock = clock_at(2287, 10, 23, 11.0);
+        let before = clock.total_hours();
+        clock.set_hour(3.0).unwrap();
+        assert_eq!(clock.total_hours(), before - 8.0);
+        clock.set_hour(20.0).unwrap();
+        assert_eq!(clock.total_hours(), before + 9.0);
     }
 
     #[test]

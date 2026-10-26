@@ -15,6 +15,7 @@ use super::collision::CellColliderBatch;
 use super::pipboy::PipBoyAction;
 use super::ragdoll_tuning::RagdollSettings;
 use super::{CellGrid, EntityId};
+use crate::weather::WeatherId;
 
 pub enum SimCommand {
     /// Register a streamed cell's static colliders (terrain + objects). The
@@ -64,6 +65,9 @@ pub enum SimCommand {
     /// A change to the world clock; the sim rejects an invalid value with a warning and leaves
     /// the clock as it was.
     SetWorldClock(ClockEdit),
+    /// A change to the weather cycle; the sim rejects an invalid one with a warning and leaves
+    /// the cycle as it was.
+    SetWeather(WeatherEdit),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -73,6 +77,18 @@ pub enum ClockEdit {
     SetPaused(bool),
     /// Game minutes per real minute.
     SetTimeScale(f32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WeatherEdit {
+    /// Switches to the weather at once, ending any transition.
+    Force(WeatherId),
+    /// Starts the transition to the weather, as a roll would.
+    Transition(WeatherId),
+    /// How far the running transition has come, `0..=1`.
+    SetProgress(f32),
+    /// A strike of the current weather on the next frame, whether or not it has thunder.
+    TriggerLightning,
 }
 
 /// World pose for the kinematic body of one animated joint of a placed
