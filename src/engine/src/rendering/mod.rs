@@ -53,6 +53,7 @@ pub mod post;
 pub mod ragdoll_debug_panel;
 pub mod ragdoll_objects;
 mod ragdoll_sim_link;
+pub mod rain;
 pub mod readback_ring;
 pub mod refraction;
 pub mod render_pipelines;

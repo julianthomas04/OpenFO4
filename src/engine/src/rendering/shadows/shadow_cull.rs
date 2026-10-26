@@ -9,7 +9,6 @@ use crate::rendering::{
         BUCKET_OPAQUE_TWOSIDED, DRAW_BUCKET_COUNT, DRAW_STRIDE, max_draws_per_buffer,
         target_capacity,
     },
-    gpu_profiler::{GpuPass, GpuProfiler, SpanPart},
     shaders,
 };
 use crate::utils::env_flag;
@@ -447,7 +446,8 @@ impl ShadowCull {
     }
 
     /// Clears the counts unconditionally so a skipped dispatch never replays
-    /// last frame's draws.
+    /// last frame's draws. A cull dispatches at most once per submission: its
+    /// uniforms are written through the queue, ahead of every pass.
     pub fn dispatch(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -455,7 +455,7 @@ impl ShadowCull {
         views: &ShadowViewSet,
         object_count: u32,
         terrain_count: u32,
-        profiler: &GpuProfiler,
+        timestamp_writes: Option<wgpu::ComputePassTimestampWrites<'_>>,
     ) {
         encoder.clear_buffer(&self.draws.counts, 0, None);
         let uniforms = self.uniforms(views, object_count, terrain_count);
@@ -463,7 +463,7 @@ impl ShadowCull {
 
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("shadow_cull"),
-            timestamp_writes: profiler.compute_writes(GpuPass::ShadowCull, SpanPart::Whole),
+            timestamp_writes,
         });
         pass.set_bind_group(0, &self.bind_group, &[]);
         if object_count > 0 {

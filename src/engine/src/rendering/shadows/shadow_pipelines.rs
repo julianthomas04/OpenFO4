@@ -14,6 +14,12 @@ pub const INSTANCE_GROUP: u32 = 2;
 
 const VIEW_UNIFORM_SIZE: u64 = std::mem::size_of::<Mat4>() as u64;
 
+/// The view slot after those of the cascades and lamp views, for the one extra
+/// orthographic map. It has a slot of its own because every view is written
+/// through the queue, ahead of all passes of the submission.
+pub const ORTHO_MAP_VIEW_SLOT: usize = MAX_SHADOW_VIEWS;
+const VIEW_SLOTS: usize = ORTHO_MAP_VIEW_SLOT + 1;
+
 /// The caster pipelines of every shadow pass. They share one layout,
 /// `[material, view, instance]`, so the pass binds each group once; the view
 /// group selects a view slot by dynamic offset.
@@ -53,7 +59,7 @@ impl ShadowPipelines {
 
         let view_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("shadow_view_uniforms"),
-            size: view_stride * MAX_SHADOW_VIEWS as u64,
+            size: view_stride * VIEW_SLOTS as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
