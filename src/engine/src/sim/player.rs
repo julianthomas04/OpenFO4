@@ -577,12 +577,12 @@ mod tests {
 
     use super::*;
     use crate::sim::FIXED_DT;
-    use crate::sim::{SimWorld, WorldClock};
     use crate::sim::collision::{CellColliderBatch, ColShape, PartShape, TerrainCollision};
     use crate::sim::commands::SimCommand;
     use crate::sim::physics::test_support::{
         bake, box_shape, ground_batch, object_group, placement,
     };
+    use crate::sim::{SimWorld, WorldClock};
 
     const SPAWN_AT: Vec3 = Vec3::new(200.0, 3.0, -100.0);
     const STANDING_CENTER_HEIGHT: f32 = STANDING_CENTER_ABOVE_FEET;

@@ -27,9 +27,8 @@ fn clock_start_from(
             .with_context(|| format!("reading global {editor_id}"))?
             .with_context(|| format!("global {editor_id} is missing from the database"))
     };
-    let count = |editor_id: &str| -> anyhow::Result<u32> {
-        whole_number(editor_id, value(editor_id)?)
-    };
+    let count =
+        |editor_id: &str| -> anyhow::Result<u32> { whole_number(editor_id, value(editor_id)?) };
     let days_passed = floored_count(GAME_DAYS_PASSED, value(GAME_DAYS_PASSED)?)?;
     let years_since_base = count(GAME_YEAR)?;
     Ok(ClockStart {
