@@ -22,6 +22,17 @@ pub struct AutoExposureParams {
     pub auto: u32,
 }
 
+impl AutoExposureParams {
+    /// The same parameters with the eye adapting fully within one frame, as if it had converged.
+    #[must_use]
+    pub fn adapted_at_once(self) -> Self {
+        Self {
+            adaptation: 1.0,
+            ..self
+        }
+    }
+}
+
 /// Measures the log-average luminance of the HDR target on the GPU and adapts
 /// the exposure the tonemap reads towards it. `ExposureReadout` doubles as the
 /// layout of the state buffer, which starts zeroed: the first frame snaps.

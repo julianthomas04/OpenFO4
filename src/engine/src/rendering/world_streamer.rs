@@ -3866,6 +3866,16 @@ impl WorldStreamer {
         self.lod_pending_cells.len()
     }
 
+    /// Whether some cells are loaded and no cell of either ring is still loading or waiting to be
+    /// integrated.
+    pub(crate) fn fully_streamed(&self) -> bool {
+        !self.loaded.is_empty()
+            && self.pending_cells.is_empty()
+            && self.lod_pending_cells.is_empty()
+            && self.buffered_full.is_empty()
+            && self.buffered_lod.is_empty()
+    }
+
     /// (full, LOD) integration rates in cells/s, averaged over the last
     /// 0.5 s (see `SpawnRate`). `&mut` because reading prunes aged entries.
     pub(crate) fn spawn_rates(&mut self) -> (f32, f32) {

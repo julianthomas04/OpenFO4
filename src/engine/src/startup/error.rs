@@ -5,7 +5,9 @@ use crate::game_flow::spawn_locations::SpawnLocationError;
 use crate::rendering::menu::MenuError;
 use crate::rendering::pipboy::perk_grid::PerkGridError;
 use crate::rendering::pipboy::world_map_texture::WorldMapTextureError;
+use crate::rendering::scene_overrides::SceneOverrideError;
 use crate::rendering::shaders::startup::ShaderStartupError;
+use crate::rendering::shot::ShotConfigError;
 use crate::rendering::ui_fonts::UiFontError;
 use crate::rendering::version_overlay::VersionOverlayError;
 use crate::spawn_cell::SpawnCellError;
@@ -27,6 +29,10 @@ pub enum StartupError {
     Settings(#[from] IniError),
     #[error("spawn override: {0}")]
     SpawnOverride(#[from] SpawnCellError),
+    #[error("scene override: {0}")]
+    SceneOverride(#[from] SceneOverrideError),
+    #[error("screenshot mode: {0}")]
+    Shot(#[from] ShotConfigError),
     #[error("spawn locations: {0}")]
     SpawnLocations(#[from] SpawnLocationError),
     #[error("user interface fonts: {0}")]

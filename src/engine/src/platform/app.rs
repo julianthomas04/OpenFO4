@@ -6,6 +6,7 @@ use crate::rendering::State;
 use crate::rendering::boot::{BootContext, StartupInputs};
 use crate::rendering::fatal_runtime_error::FatalRuntimeError;
 use crate::rendering::pipboy_capture::CaptureConfig;
+use crate::rendering::shot::ShotConfig;
 use crate::startup::{BootState, CancelToken, StartupError, run_startup, spawn_worker};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -57,7 +58,7 @@ impl App {
             phase: None,
             asset_server: AssetServer::from_environment()?,
             start_mode: StartMode::from_env(),
-            capture_window_size: CaptureConfig::from_env()?.map(|capture| capture.window_size),
+            capture_window_size: capture_window_size()?,
             perf_log: crate::utils::env_flag("OPENFO4_PERF_LOG", false),
             startup_toasts,
             cancel_startup: CancelToken::default(),
@@ -166,6 +167,13 @@ impl App {
         }
         self.phase = Some(phase);
     }
+}
+
+/// The fixed window size of a screenshot mode; `None` keeps the borderless fullscreen window.
+fn capture_window_size() -> anyhow::Result<Option<PhysicalSize<u32>>> {
+    let pipboy = CaptureConfig::from_env()?.map(|capture| capture.window_size);
+    let shot = ShotConfig::from_env()?.map(|shot| shot.window_size);
+    Ok(pipboy.or(shot))
 }
 
 fn window_icon() -> anyhow::Result<Icon> {

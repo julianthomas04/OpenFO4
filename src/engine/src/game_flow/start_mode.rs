@@ -1,6 +1,7 @@
 //! Whether the game opens at the main menu or goes straight into the world.
 
 use crate::rendering::pipboy_capture::CAPTURE_DIR_ENV;
+use crate::rendering::shot::shot_requested;
 use crate::spawn_cell::{SPAWN_CELL_VAR, SPAWN_VAR};
 
 const SKIP_MENU_VAR: &str = "OPENFO4_SKIP_MENU";
@@ -27,7 +28,8 @@ impl StartMode {
             std::env::var_os(SPAWN_VAR).is_some(),
             std::env::var_os(SPAWN_CELL_VAR).is_some(),
             crate::utils::env_flag(SKIP_MENU_VAR, false)
-                || std::env::var_os(CAPTURE_DIR_ENV).is_some(),
+                || std::env::var_os(CAPTURE_DIR_ENV).is_some()
+                || shot_requested(),
         )
     }
 }

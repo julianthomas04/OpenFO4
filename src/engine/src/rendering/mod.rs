@@ -20,6 +20,7 @@ pub mod fatal_runtime_error;
 mod flow_input;
 pub mod foot_surface;
 pub mod fps;
+pub mod frame_capture;
 pub mod free_list;
 pub mod frustum;
 pub mod game_frame;
@@ -60,8 +61,10 @@ pub mod refraction;
 pub mod render_pipelines;
 pub(crate) mod row_pose;
 pub mod scene_copy;
+pub mod scene_overrides;
 pub mod shaders;
 pub mod shadows;
+pub mod shot;
 pub mod skeleton_overlay;
 pub mod skinning;
 mod startup_reads;
@@ -157,6 +160,7 @@ use crate::rendering::{
         world_pass_layout::{FEEDBACK_GROUP, WorldPassLayout},
     },
     scene_copy::SceneCopy,
+    scene_overrides::{SceneOverrides, SpawnLook},
     shadows::{
         ShadowRenderer, ShadowScene, ShadowState,
         lamps::{
@@ -183,6 +187,7 @@ use crate::rendering::{
     window_surface::WindowSurface,
     world_streamer::{LoadMode, StreamTargets, UploadBudget, WorldStreamer},
 };
+use crate::sim::commands::{ClockEdit, WeatherEdit};
 use crate::sim::pipboy::PipBoyAction;
 use crate::sim::{
     ClockFrame, DynamicPose, MaterialBuoyancy, PlayerInput, PlayerMovement, SimCommand, SimWorld,
@@ -696,6 +701,8 @@ pub struct State {
     pipboy_env: PipBoyEnv,
     /// The screenshot session when `OPENFO4_PIPBOY_CAPTURE` is set.
     capture: Option<PipBoyCapture>,
+    /// The single-screenshot session when `OPENFO4_SHOT` is set.
+    shot: Option<shot::ShotSession>,
     pipboy_was_open: bool,
     /// Whether the mouse was captured when the Pip-Boy opened, to restore on close.
     capture_before_pipboy: bool,
@@ -1181,7 +1188,8 @@ impl State {
 
         // Camera. Base FOV comes from the game INI cascade the installer
         // copies (step 2d), validated at startup.
-        let world_fov_beth = settings.world_fov_beth;
+        let overrides = SceneOverrides::from_env()?;
+        let world_fov_beth = overrides.world_fov.unwrap_or(settings.world_fov_beth);
         tracing::info!(
             "world FOV {world_fov_beth} ({:.1}° vertical)",
             beth_fov_to_vertical(world_fov_beth),
@@ -1203,6 +1211,11 @@ impl State {
             LocalLightSettings::new(settings.light_fade),
         );
         let weather = StartupWeather::load_or_report(&asset_server.db_path(), WORLDSPACE);
+        let forced_weather = overrides
+            .weather
+            .as_ref()
+            .map(|selector| selector.resolve(weather.as_ref().map(|weather| &weather.library)))
+            .transpose()?;
         let exterior_slots = match &weather {
             Some(weather) => Some(weather.library.initial_weather().slots.clone()),
             None => ExteriorWeatherSlots::load_or_report(&asset_server.db_path(), WORLDSPACE),
@@ -1488,7 +1501,8 @@ impl State {
             .map(|capture_config| PipBoyCapture::new(&capture_config))
             .transpose()
             .map_err(|error| StartupError::Pipboy(error.into()))?;
-        if capture.is_some() {
+        let shot = shot::ShotConfig::from_env()?.map(shot::ShotSession::new);
+        if capture.is_some() || shot.is_some() {
             config.usage |= wgpu::TextureUsages::COPY_SRC;
         }
         let fps_utils = FpsUtils::new(64);
@@ -1558,19 +1572,12 @@ impl State {
         );
         timer.mark("effects_and_grass")?;
 
-        // Dev override: OPENFO4_SPAWN_LOOK="yaw_deg,pitch_deg" aims the camera at
-        // launch (yaw 0 = +X/east, pitch -90 = straight down). The controller drives
-        // the look direction every frame in both walk and fly modes, so set it there;
-        // the first-frame camera.target is updated to match so frame 0 already aims.
-        let spawn_look = std::env::var("OPENFO4_SPAWN_LOOK").ok().and_then(|raw| {
-            let parsed = camera::parse_spawn_look(&raw);
-            if parsed.is_none() {
-                tracing::warn!(
-                    "OPENFO4_SPAWN_LOOK={raw:?} is not `yaw_deg,pitch_deg` with finite numbers; ignoring it"
-                );
-            }
-            parsed
-        });
+        // Dev override: OPENFO4_SPAWN_LOOK="yaw_deg,pitch_deg" (or OPENFO4_SPAWN_ANGLE as
+        // player.getangle prints it) aims the camera at launch (yaw 0 = +X/east, pitch -90 =
+        // straight down). The controller drives the look direction every frame in both walk
+        // and fly modes, so set it there; the first-frame camera.target is updated to match so
+        // frame 0 already aims.
+        let spawn_look = overrides.look.map(|SpawnLook { yaw, pitch }| (yaw, pitch));
         let spawn_target =
             spawn_cell.map(|target| ResolvedTarget::interior_spawn(target, spawn_look));
         // Dev override: OPENFO4_SPAWN="x,y,z" in Bethesda world units (the
@@ -1622,6 +1629,12 @@ impl State {
             .and_then(|db| crate::assets::world_clock_start::load_world_clock(&db))
             .map_err(StartupError::WorldClock)?;
         let mut sim = SimWorld::new(player_movement, world_clock);
+        if let Some(hour) = overrides.hour {
+            sim.apply(SimCommand::SetWorldClock(ClockEdit::SetHour(hour)));
+        }
+        if overrides.hour.is_some() || shot.is_some() {
+            sim.apply(SimCommand::SetWorldClock(ClockEdit::SetPaused(true)));
+        }
         let weather_library = weather.map(|StartupWeather { library, table }| {
             let seed = cycle_seed(std::env::var(WEATHER_SEED_VAR), seed_from_clock());
             tracing::info!(
@@ -1630,6 +1643,9 @@ impl State {
             sim.install_weather(table, seed);
             library
         });
+        if let Some(weather) = forced_weather {
+            sim.apply(SimCommand::SetWeather(WeatherEdit::Force(weather)));
+        }
         if let Some(table) = buoyancy_table {
             sim.set_material_buoyancy_table(std::sync::Arc::new(table));
         }
@@ -1842,6 +1858,7 @@ impl State {
             pipboy,
             pipboy_env,
             capture,
+            shot,
             pipboy_was_open: false,
             capture_before_pipboy: false,
             flow,
@@ -2521,10 +2538,12 @@ impl State {
         // pyramid above already consumed the depth buffer, so the HUD must not
         // touch it. Drawn before egui so the developer menu paints over the HUD.
         // The Pip-Boy replaces the HUD while it is open.
+        // A shot shows the world alone: no HUD, Pip-Boy, version line or developer UI.
+        let shows_interface = !self.shot_active();
         let pipboy_open = self.sim.pipboy_snapshot().model.open;
         self.pipboy.sync_open(pipboy_open);
         if pipboy_open {
-            if !skip.skips(DebugPass::PipBoy) {
+            if shows_interface && !skip.skips(DebugPass::PipBoy) {
                 let snapshot = self.sim.pipboy_snapshot();
                 self.pipboy.render(
                     &self.device,
@@ -2536,7 +2555,7 @@ impl State {
                     &snapshot,
                 );
             }
-        } else if !skip.skips(DebugPass::Hud) {
+        } else if shows_interface && !skip.skips(DebugPass::Hud) {
             self.hud.render(
                 &self.device,
                 &self.queue,
@@ -2566,7 +2585,9 @@ impl State {
             );
         }
 
-        self.render_version_overlay(&mut encoder, &view);
+        if shows_interface {
+            self.render_version_overlay(&mut encoder, &view);
+        }
 
         // Queued toasts must register before debug_ui.render so they paint
         // inside this frame's egui pass.
@@ -2599,7 +2620,7 @@ impl State {
 
         // Debug UI
         let egui_span = tracing::info_span!("egui").entered();
-        if !skip.skips(DebugPass::Egui) {
+        if shows_interface && !skip.skips(DebugPass::Egui) {
             self.debug_ui.render(
                 &self.window,
                 &self.device,
@@ -3143,6 +3164,7 @@ impl State {
         }
         self.memory_section_open = memory_section_open;
         let frame_capture = self.begin_frame_capture(&mut encoder, &output.texture);
+        let shot_capture = self.begin_shot_capture(&mut encoder, &output.texture);
         self.texture_feedback.encode_readback(
             &mut encoder,
             Instant::now(),
@@ -3161,6 +3183,7 @@ impl State {
             self.queue.submit(std::iter::once(command_buffer));
         }
         self.finish_frame_capture(frame_capture);
+        self.finish_shot_capture(shot_capture);
         let post_submit_span = tracing::info_span!("post_submit").entered();
         self.cull_stats.post_submit();
         self.texture_feedback.post_submit();
@@ -3784,8 +3807,13 @@ impl State {
         }
         let frame_uniform_write_span = tracing::info_span!("frame_uniform_write").entered();
         self.frame_binding.write(&self.queue, &frame_uniform);
-        self.post
-            .write_exposure_params(&self.queue, &self.lighting.exposure.gpu_params(dt));
+        let exposure = self.lighting.exposure.gpu_params(dt);
+        let exposure = if self.shot_active() {
+            exposure.adapted_at_once()
+        } else {
+            exposure
+        };
+        self.post.write_exposure_params(&self.queue, &exposure);
 
         drop(frame_uniform_write_span);
         let eye = self.camera.eye;
@@ -4052,6 +4080,7 @@ impl State {
             placed_lights: placed_lights_realloc,
         });
         drop(rebind_buffers_span);
+        self.drive_shot()?;
         Ok(())
     }
 

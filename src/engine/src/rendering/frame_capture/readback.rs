@@ -68,7 +68,7 @@ impl FrameReadback {
         let (width, height) = (texture.width(), texture.height());
         let bytes_per_row = padded_row_bytes(width);
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("pipboy_capture_readback"),
+            label: Some("frame_capture_readback"),
             size: u64::from(bytes_per_row) * u64::from(height),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
