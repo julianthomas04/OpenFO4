@@ -1,7 +1,7 @@
 use super::climate_times::ClimateTimes;
 use super::day_time::DayTime;
 use super::slot::TimeSlot;
-use super::unmeasured::{KEYFRAMES, Keyframe};
+use super::unmeasured::KEYFRAMES;
 use super::wrap::HOURS_PER_DAY;
 
 /// Where an hour sits between two neighbouring keyframes: `t` is 0 at `from`
@@ -43,21 +43,6 @@ pub fn slot_blend(time: DayTime, times: &ClimateTimes) -> SlotBlend {
         to: KEYFRAMES[to_index].slot,
         t,
     }
-}
-
-fn slot_daylight_weight(slot: TimeSlot) -> f32 {
-    KEYFRAMES
-        .iter()
-        .find(|keyframe| keyframe.slot == slot)
-        .map_or(0.0, Keyframe::daylight_weight)
-}
-
-/// 0 where the Night fog applies in full, 1 where the Day fog does: the blend of
-/// the two slots' daylight weights. Fog exists only for those two slots.
-pub fn fog_daylight_weight(blend: &SlotBlend) -> f32 {
-    let from = slot_daylight_weight(blend.from);
-    let to = slot_daylight_weight(blend.to);
-    from + (to - from) * blend.t
 }
 
 #[cfg(test)]
@@ -205,60 +190,6 @@ mod tests {
         assert!(blend.t > 0.99);
     }
 
-    #[test]
-    fn fog_weight_is_zero_at_night_and_one_at_day() {
-        let times = default_climate();
-        for hour in [21.0, 23.0, 0.0, 3.0, 5.0] {
-            assert_eq!(
-                fog_daylight_weight(&slot_blend(hour, &times)),
-                0.0,
-                "{hour}"
-            );
-        }
-        for hour in [9.0, 12.0, 17.0] {
-            assert_eq!(
-                fog_daylight_weight(&slot_blend(hour, &times)),
-                1.0,
-                "{hour}"
-            );
-        }
-    }
-
-    #[test]
-    fn fog_weight_follows_the_slot_position_in_each_window() {
-        let times = default_climate();
-        for (hour, weight) in [
-            (5.0, 0.0),
-            (5.5, 0.125),
-            (6.0, 0.25),
-            (7.0, 0.5),
-            (8.0, 0.75),
-            (9.0, 1.0),
-            (17.0, 1.0),
-            (18.0, 0.75),
-            (19.0, 0.5),
-            (20.0, 0.25),
-            (21.0, 0.0),
-        ] {
-            let actual = fog_daylight_weight(&slot_blend(hour, &times));
-            assert!((actual - weight).abs() < 1e-6, "{hour}: {actual}");
-        }
-    }
-
-    #[test]
-    fn fog_weight_rises_through_sunrise_and_falls_through_sunset() {
-        let times = default_climate();
-        let weight = |hour: f32| fog_daylight_weight(&slot_blend(hour, &times));
-        for step in 0..160 {
-            let hour = 5.0 + step as f32 * 0.025;
-            assert!(weight(hour + 0.025) >= weight(hour), "{hour}");
-        }
-        for step in 0..160 {
-            let hour = 17.0 + step as f32 * 0.025;
-            assert!(weight(hour + 0.025) <= weight(hour), "{hour}");
-        }
-    }
-
     fn valid_climate() -> impl Strategy<Value = ClimateTimes> {
         prop::collection::vec(0.0f32..24.0, 4).prop_filter_map(
             "windows at least half an hour wide and ordered",
@@ -281,18 +212,6 @@ mod tests {
         ) {
             let blend = slot_blend(hour, &times);
             prop_assert!((0.0..=1.0).contains(&blend.t), "{blend:?}");
-        }
-
-        #[test]
-        fn the_fog_weight_is_continuous_in_time(
-            hour in 0.0f32..23.99,
-            times in valid_climate(),
-        ) {
-            let step = 0.001;
-            let here = fog_daylight_weight(&slot_blend(hour, &times));
-            let there = fog_daylight_weight(&slot_blend(hour + step, &times));
-            prop_assert!((0.0..=1.0).contains(&here));
-            prop_assert!((here - there).abs() <= 0.01, "{here} -> {there} at {hour}");
         }
     }
 }

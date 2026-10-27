@@ -4,7 +4,8 @@ use super::ambient::AmbientCube;
 use super::cell_lighting::{CellLighting, DirectionalLight, ResolvedLighting, TemplateStatus};
 use super::environment::{Environment, InteriorLighting, NeutralReason};
 use super::exterior_weather::ExteriorWeather;
-use super::fog::Fog;
+use super::fog::measured::{cap_ramp_start, colour_factors};
+use super::fog::{Fog, FogTime, HeightBand};
 use super::state::LightingState;
 
 const SWATCH_SIZE: egui::Vec2 = egui::vec2(28.0, 14.0);
@@ -18,7 +19,8 @@ pub fn weather_section(ui: &mut egui::Ui, lighting: &mut LightingState) {
             match lighting.environment() {
                 Environment::Exterior => {
                     ui.label("exterior");
-                    weather_status(ui, lighting_weather);
+                    weather_status(ui, lighting_weather, lighting.fog_time());
+                    fog_rows(ui, &lighting.fog.fog(lighting.sky.horizon));
                 }
                 Environment::Interior { cell, lighting } => {
                     ui.label(format!("interior {cell}"));
@@ -33,7 +35,7 @@ pub fn weather_section(ui: &mut egui::Ui, lighting: &mut LightingState) {
         });
 }
 
-fn weather_status(ui: &mut egui::Ui, weather: Option<ExteriorWeather>) {
+fn weather_status(ui: &mut egui::Ui, weather: Option<ExteriorWeather>, fog_time: FogTime) {
     match weather {
         Some(weather) => {
             ui.label(format!(
@@ -42,9 +44,9 @@ fn weather_status(ui: &mut egui::Ui, weather: Option<ExteriorWeather>) {
                 weather.form_key
             ));
             match weather.fog {
-                Some(fog) => {
+                Some(_) => {
                     ui.label("fog source: weather");
-                    fog_rows(ui, &fog);
+                    fog_time_rows(ui, fog_time);
                 }
                 None => {
                     ui.colored_label(
@@ -128,6 +130,18 @@ fn directional_rows(ui: &mut egui::Ui, directional: Option<&DirectionalLight>) {
     }
 }
 
+fn fog_time_rows(ui: &mut egui::Ui, time: FogTime) {
+    ui.label(format!(
+        "fog night weight {:.3}, colour day weight {:.3}",
+        time.night_weight, time.day_colour_weight
+    ));
+    let factors = colour_factors(time.day_colour_weight);
+    ui.label(format!(
+        "fog colour factors near {:.3} near high {:.3} far {:.3} far high {:.3}",
+        factors.near, factors.near_high, factors.far, factors.far_high
+    ));
+}
+
 fn fog_rows(ui: &mut egui::Ui, fog: &Fog) {
     match fog {
         Fog::Disabled => {
@@ -135,24 +149,39 @@ fn fog_rows(ui: &mut egui::Ui, fog: &Fog) {
         }
         Fog::Enabled(params) => {
             ui.label(format!(
-                "fog near {:.1} far {:.1} power {:.2} max {:.2}",
-                params.near, params.far, params.power, params.max
+                "fog near {:.1} far {:.1} power {:.2} max {:.2} (ramp to full from {:.1})",
+                params.near,
+                params.far,
+                params.power,
+                params.max,
+                cap_ramp_start(params.far)
             ));
-            linear_row(ui, "fog near color", params.near_color);
-            linear_row(ui, "fog far color", params.far_color);
+            linear_row(ui, "fog near color", params.colors.near);
+            linear_row(ui, "fog far color", params.colors.far);
+            linear_row(ui, "fog near high color", params.colors.near_high);
+            linear_row(ui, "fog far high color", params.colors.far_high);
             let height = &params.height;
-            let (near_bottom, near_top) = height.near_band.span();
-            let (far_bottom, far_top) = height.far_band.span();
             ui.label(format!(
-                "fog height near {near_bottom:.1} to {near_top:.1} (weight {:.2}) far {far_bottom:.1} to {far_top:.1} (weight {:.2}) high density {:.2}",
-                height.near_band.weight,
-                height.far_band.weight,
+                "fog height near {} far {} high density {:.2}",
+                band_label(height.near),
+                band_label(height.far),
                 height.high_density_scale
             ));
-            linear_row(ui, "fog near high color", height.near_high_color);
-            linear_row(ui, "fog far high color", height.far_high_color);
+            linear_row(
+                ui,
+                &format!(
+                    "fog sunlight keeps {:.3} of the colour, adds",
+                    params.sunlight.kept
+                ),
+                params.sunlight.added,
+            );
         }
     }
+}
+
+fn band_label(band: HeightBand) -> String {
+    let (bottom, top) = band.span();
+    format!("{bottom:.1} to {top:.1} (weight {:.2})", band.weight)
 }
 
 fn linear_row(ui: &mut egui::Ui, label: &str, color: Vec3) {

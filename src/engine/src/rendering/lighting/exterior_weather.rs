@@ -5,13 +5,14 @@ use serde::Deserialize;
 
 use super::ambient::AmbientCube;
 use super::cell_lighting::{RawColor, bethesda_faces_to_engine_order};
-use super::fog::{HeightFogError, RawHeightFog};
+use super::fog::measured::BlendedFogColors;
+use super::fog::{FogColors, FogRange, HeightFogError, RawHeightFog};
 use super::time_of_day::{
     ClimateMoon, ClimateMoonError, ClimateSky, ClimateSkyError, ClimateSunTextures, ClimateTimes,
     ClimateTimesError, TimeSlot,
 };
 pub use super::weather_slots::{ExteriorWeather, ExteriorWeatherSlots, ImageSpaceHdr};
-use super::weather_slots::{FogColors, FogRange, SlotValues, WeatherFog};
+use super::weather_slots::{SlotFogColors, SlotValues, WeatherFog};
 use crate::assets::db::DbClient;
 use crate::assets::db::weather::WeatherRow;
 use crate::rendering::post::depth_of_field::ImageSpaceDepthOfField;
@@ -360,11 +361,19 @@ fn color_in_slot(
     group: &str,
     slot: TimeSlot,
 ) -> Result<Vec3, ExteriorWeatherError> {
+    raw_color_in_slot(weather, colors, group, slot).map(RawColor::linear)
+}
+
+fn raw_color_in_slot(
+    weather: &str,
+    colors: &ColorGroups,
+    group: &str,
+    slot: TimeSlot,
+) -> Result<RawColor, ExteriorWeatherError> {
     colors
         .get(group)
         .and_then(|slots| slots.get(slot.json_key()))
         .copied()
-        .map(RawColor::linear)
         .ok_or_else(|| missing_slot(weather, group, slot))
 }
 
@@ -384,13 +393,26 @@ fn load_fog(
         fog_range(weather, slot, raw)
     };
     let colors = TimeSlot::try_map_all(|slot| {
-        let near = color_in_slot(weather, colors, "FogNear", slot)?;
-        let far = color_in_slot(weather, colors, "FogFar", slot)?;
-        Ok::<_, ExteriorWeatherError>(FogColors {
-            near,
-            far,
-            near_high: high_color_in_slot(weather, colors, "FogNearHigh", slot, near)?,
-            far_high: high_color_in_slot(weather, colors, "FogFarHigh", slot, far)?,
+        let fog_color =
+            |group: &str| raw_color_in_slot(weather, colors, group, slot).map(RawColor::unit);
+        let near = fog_color("FogNear")?;
+        let far = fog_color("FogFar")?;
+        let high_color = |group: &str, low: Vec3| {
+            if colors.contains_key(group) {
+                fog_color(group)
+            } else {
+                Ok(low)
+            }
+        };
+        Ok::<_, ExteriorWeatherError>(SlotFogColors {
+            fog: BlendedFogColors::from_stored(FogColors {
+                near,
+                far,
+                near_high: high_color("FogNearHigh", near)?,
+                far_high: high_color("FogFarHigh", far)?,
+            }),
+            sunlight: raw_color_in_slot(weather, colors, "Sunlight", slot)
+                .map(RawColor::gamma_linear)?,
         })
     })?;
     Ok(WeatherFog {
@@ -398,22 +420,6 @@ fn load_fog(
         night: range_of(FOG_NIGHT_SLOT)?,
         colors,
     })
-}
-
-/// A height-fog colour group is absent from databases that predate its export; the fog then
-/// keeps its `low` colour at every height.
-fn high_color_in_slot(
-    weather: &str,
-    colors: &ColorGroups,
-    group: &str,
-    slot: TimeSlot,
-    low: Vec3,
-) -> Result<Vec3, ExteriorWeatherError> {
-    if colors.contains_key(group) {
-        color_in_slot(weather, colors, group, slot)
-    } else {
-        Ok(low)
-    }
 }
 
 /// `None` for the zero range that marks a slot without fog.
@@ -812,12 +818,12 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use TimeSlot::{Day, EarlySunrise, LateSunrise, Night, Sunrise};
+    use TimeSlot::{Day, LateSunrise, Night, Sunrise};
 
     type Corrupt = fn(&mut WeatherRow, String);
 
     use super::super::fog::test_support::assert_band;
-    use super::super::fog::{Fog, FogParams, HeightBand, HeightFog};
+    use super::super::fog::{ExteriorFog, Fog, FogTime, HeightBand, HeightBands};
     use super::super::time_of_day::SlotBlend;
     use super::fixtures::*;
 
@@ -854,15 +860,25 @@ mod tests {
 
     #[test]
     fn weather_fog_is_scaled_into_engine_units() {
-        let weather = day_weather(row());
-        let Some(Fog::Enabled(fog)) = weather.fog else {
-            panic!("fog should be enabled: {:?}", weather.fog);
-        };
-        assert!((fog.near - 10.0).abs() < 1e-4);
-        assert!((fog.far - 100.0).abs() < 1e-3);
-        assert_eq!((fog.power, fog.max), (1.5, 0.75));
-        assert_eq!(fog.near_color, Vec3::ZERO);
-        assert_eq!(fog.far_color, Vec3::ONE);
+        let fog = sampled_fog(&load(row()).unwrap(), at(Day));
+        let day = fog.day.expect("the day half has fog");
+        assert!((day.near - 10.0).abs() < 1e-4);
+        assert!((day.far - 100.0).abs() < 1e-3);
+        assert_eq!((day.power, day.max), (1.5, 0.75));
+        assert_eq!(fog.colors.linear().near, Vec3::ZERO);
+        assert_eq!(fog.colors.linear().far, Vec3::ONE);
+    }
+
+    #[test]
+    fn fog_colours_and_the_sunlight_decode_with_gamma_two_point_two() {
+        let mut row = row();
+        let mut colors: Value = serde_json::from_str(row.colors.as_deref().unwrap()).unwrap();
+        colors["FogNear"] = same_in_every_slot(&rgb(128, 128, 128));
+        colors["Sunlight"] = same_in_every_slot(&rgb(225, 225, 225));
+        row.colors = Some(colors.to_string());
+        let fog = sampled_fog(&load(row).unwrap(), at(Day));
+        assert!((fog.colors.linear().near.x - (128.0_f32 / 255.0).powf(2.2)).abs() < 1e-6);
+        assert!((fog.sunlight.x - (225.0_f32 / 255.0).powf(2.2)).abs() < 1e-6);
     }
 
     #[test]
@@ -893,7 +909,9 @@ mod tests {
         row.fog = Some(fog(0.0, 0.0).to_string());
         let slots = load(row).unwrap();
         for blend in [at(Day), at(Night), between(Night, Day, 0.5)] {
-            assert_eq!(slots.sample(blend).fog, Some(Fog::Disabled));
+            let fog = sampled_fog(&slots, blend);
+            assert_eq!((fog.day, fog.night), (None, None));
+            assert_eq!(fog.resolve(FogTime::DAY), Fog::Disabled);
         }
     }
 
@@ -1223,40 +1241,27 @@ mod tests {
         row
     }
 
-    fn sampled_fog(slots: &ExteriorWeatherSlots, blend: SlotBlend) -> FogParams {
-        match slots.sample(blend).fog {
-            Some(Fog::Enabled(params)) => params,
-            other => panic!("fog should be enabled: {other:?}"),
+    fn sampled_fog(slots: &ExteriorWeatherSlots, blend: SlotBlend) -> ExteriorFog {
+        slots
+            .sample(blend)
+            .fog
+            .expect("the weather carries fog data")
+    }
+
+    #[test]
+    fn both_fog_halves_reach_the_sample_whatever_the_slot() {
+        let slots = load(fog_with(&fog_slot(100.0, 1000.0), &fog_slot(300.0, 5000.0))).unwrap();
+        for blend in [at(Day), at(Night), between(Sunrise, LateSunrise, 0.3)] {
+            let fog = sampled_fog(&slots, blend);
+            assert!((fog.day.unwrap().near - 10.0).abs() < 1e-4);
+            assert!((fog.night.unwrap().near - 30.0).abs() < 1e-4);
         }
     }
 
     #[test]
-    fn fog_distances_blend_by_how_much_daylight_the_moment_has() {
-        let slots = load(fog_with(&fog_slot(100.0, 1000.0), &fog_slot(300.0, 5000.0))).unwrap();
-        let day = sampled_fog(&slots, at(Day));
-        let night = sampled_fog(&slots, at(Night));
-        assert!((day.far - 100.0).abs() < 1e-3);
-        assert!((night.far - 500.0).abs() < 1e-3);
-        let halfway = sampled_fog(&slots, between(Night, Day, 0.5));
-        assert!((halfway.near - f32::midpoint(day.near, night.near)).abs() < 1e-4);
-        assert!((halfway.far - 300.0).abs() < 1e-3);
-    }
-
-    #[test]
-    fn a_slot_between_night_and_day_blends_the_fog_by_its_own_daylight_weight() {
-        let slots = load(fog_with(&fog_slot(100.0, 1000.0), &fog_slot(300.0, 5000.0))).unwrap();
-        let night = sampled_fog(&slots, at(Night));
-        let day = sampled_fog(&slots, at(Day));
-        // EarlySunrise sits a quarter of the way from Night to Day.
-        let early = sampled_fog(&slots, at(EarlySunrise));
-        assert!((early.far - (night.far + (day.far - night.far) * 0.25)).abs() < 1e-3);
-        let start_of_blend = sampled_fog(&slots, between(Night, EarlySunrise, 0.0));
-        assert_eq!(start_of_blend.far, night.far);
-    }
-
-    #[test]
-    fn fog_colours_follow_the_slot_blend_not_the_daylight_weight() {
-        let mut colors = colors();
+    fn fog_colours_blend_as_stored_across_slots() {
+        let mut row = fog_with(&fog_slot(100.0, 1000.0), &fog_slot(300.0, 5000.0));
+        let mut colors: Value = serde_json::from_str(row.colors.as_deref().unwrap()).unwrap();
         colors["FogNear"] = per_slot(|slot| {
             if slot == Sunrise {
                 rgb(255, 255, 255)
@@ -1264,44 +1269,23 @@ mod tests {
                 rgb(0, 0, 0)
             }
         });
-        let mut row = row();
         row.colors = Some(colors.to_string());
         let slots = load(row).unwrap();
-        let at_sunrise = sampled_fog(&slots, at(Sunrise));
-        assert_eq!(at_sunrise.near_color, Vec3::ONE);
-        let past = sampled_fog(&slots, between(Sunrise, LateSunrise, 0.5));
-        assert!(past.near_color.abs_diff_eq(Vec3::splat(0.5), 1e-6));
-    }
-
-    #[test]
-    fn fog_that_is_off_by_day_and_on_by_night_snaps_at_half_the_daylight_weight() {
-        let slots = load(fog_with(&fog_slot(0.0, 0.0), &fog_slot(300.0, 5000.0))).unwrap();
-        assert_eq!(slots.sample(at(Day)).fog, Some(Fog::Disabled));
-        assert!(matches!(slots.sample(at(Night)).fog, Some(Fog::Enabled(_))));
-        // Daylight weight 0.4 is nearer to Night, 0.6 to Day.
-        let near_night = slots.sample(between(Night, Day, 0.4)).fog;
-        let near_day = slots.sample(between(Night, Day, 0.6)).fog;
-        let Some(Fog::Enabled(params)) = near_night else {
-            panic!("night fog should still apply: {near_night:?}");
-        };
-        assert!(
-            (params.far - 500.0).abs() < 1e-3,
-            "distances are not blended"
-        );
-        assert_eq!(near_day, Some(Fog::Disabled));
-    }
-
-    #[test]
-    fn fog_that_is_on_by_day_and_off_by_night_snaps_the_other_way() {
-        let slots = load(fog_with(&fog_slot(100.0, 1000.0), &fog_slot(0.0, 0.0))).unwrap();
         assert_eq!(
-            slots.sample(between(Night, Day, 0.4)).fog,
-            Some(Fog::Disabled)
+            sampled_fog(&slots, at(Sunrise)).colors.linear().near,
+            Vec3::ONE
         );
-        assert!(matches!(
-            slots.sample(between(Night, Day, 0.6)).fog,
-            Some(Fog::Enabled(_))
-        ));
+        let past = sampled_fog(&slots, between(Sunrise, LateSunrise, 0.5));
+        // Halfway between the stored black and white, decoded after the blend.
+        assert!((past.colors.linear().near.x - 0.5_f32.powf(2.2)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_half_without_fog_stays_without_it() {
+        let slots = load(fog_with(&fog_slot(0.0, 0.0), &fog_slot(300.0, 5000.0))).unwrap();
+        let fog = sampled_fog(&slots, at(Day));
+        assert_eq!(fog.day, None);
+        assert!(fog.night.is_some());
     }
 
     /// A fog slot with height fog: near band `near` and far band `far` as (mid, range).
@@ -1326,25 +1310,16 @@ mod tests {
         row
     }
 
+    fn day_half(fog: &ExteriorFog) -> FogRange {
+        fog.day.expect("the day half has fog")
+    }
+
     #[test]
     fn a_weather_without_height_fog_data_has_the_same_fog_at_every_height() {
         let fog = sampled_fog(&load(row()).unwrap(), at(Day));
-        assert_eq!(
-            fog.height,
-            HeightFog {
-                near_high_color: fog.near_color,
-                far_high_color: fog.far_color,
-                ..HeightFog::NONE
-            }
-        );
-        let flat = FogParams {
-            height: HeightFog::NONE,
-            ..fog
-        };
-        assert_eq!(
-            Fog::Enabled(fog).uniform_fields(),
-            Fog::Enabled(flat).uniform_fields()
-        );
+        assert_eq!(day_half(&fog).height, HeightBands::NONE);
+        assert_eq!(fog.colors.linear().near_high, fog.colors.linear().near);
+        assert_eq!(fog.colors.linear().far_high, fog.colors.linear().far);
     }
 
     #[test]
@@ -1354,22 +1329,28 @@ mod tests {
             &load(with_high_colors(fog_with(&slot, &slot))).unwrap(),
             at(Day),
         );
-        assert_band(fog.height.near_band, 50.0, 200.0);
-        assert_band(fog.height.far_band, 180.0, 1500.0);
-        assert_eq!(fog.height.high_density_scale, 0.95);
-        assert_eq!(fog.height.near_high_color, Vec3::X);
-        assert_eq!(fog.height.far_high_color, Vec3::Z);
+        let height = day_half(&fog).height;
+        assert_band(height.near, 50.0, 200.0);
+        assert_band(height.far, 180.0, 1500.0);
+        assert_eq!(height.high_density_scale, 0.95);
+        assert_eq!(fog.colors.linear().near_high, Vec3::X);
+        assert_eq!(fog.colors.linear().far_high, Vec3::Z);
     }
 
     #[test]
-    fn height_bands_and_density_blend_by_daylight_like_the_distances() {
+    fn height_bands_and_density_blend_by_the_night_weight_like_the_distances() {
         let day = height_fog_slot((500.0, 2000.0), (1000.0, 10_000.0), 1.0);
         let night = height_fog_slot((1500.0, 4000.0), (3000.0, 30_000.0), 0.5);
         let slots = load(fog_with(&day, &night)).unwrap();
-        let halfway = sampled_fog(&slots, between(Night, Day, 0.5)).height;
-        assert_band(halfway.near_band, 100.0, 300.0);
-        assert_band(halfway.far_band, 200.0, 2000.0);
-        assert_eq!(halfway.high_density_scale, 0.75);
+        let Fog::Enabled(halfway) = sampled_fog(&slots, at(Day)).resolve(FogTime {
+            night_weight: 0.5,
+            day_colour_weight: 1.0,
+        }) else {
+            panic!("both halves have fog");
+        };
+        assert_band(halfway.height.near, 100.0, 300.0);
+        assert_band(halfway.height.far, 200.0, 2000.0);
+        assert_eq!(halfway.height.high_density_scale, 0.75);
     }
 
     #[test]
@@ -1377,17 +1358,9 @@ mod tests {
         // Records from before height fog store zeros, a zero density scale included.
         let slot = height_fog_slot((0.0, 0.0), (0.0, 0.0), 0.0);
         let slots = load(with_high_colors(fog_with(&slot, &slot))).unwrap();
-        let fog = sampled_fog(&slots, at(Day));
-        assert_eq!(fog.height.near_band, HeightBand::UNSET);
-        assert_eq!(fog.height.far_band, HeightBand::UNSET);
-        let flat = FogParams {
-            height: HeightFog::NONE,
-            ..fog
-        };
-        assert_eq!(
-            Fog::Enabled(fog).uniform_fields(),
-            Fog::Enabled(flat).uniform_fields()
-        );
+        let height = day_half(&sampled_fog(&slots, at(Day))).height;
+        assert_eq!(height.near, HeightBand::UNSET);
+        assert_eq!(height.far, HeightBand::UNSET);
     }
 
     #[test]

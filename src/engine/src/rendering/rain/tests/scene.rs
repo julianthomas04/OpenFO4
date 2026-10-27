@@ -8,6 +8,9 @@ use glam::{Mat4, UVec2, Vec3, Vec4};
 
 use super::{EYE, GENERATION};
 use crate::rendering::gpu_test::{f16_bits_to_f32, read_mip};
+use crate::rendering::lighting::fog::{
+    Fog as LightingFog, FogColors, FogParams, FogUniformFields, HeightBands, SunlightTerm,
+};
 use crate::rendering::lighting::frame_binding::FrameBinding;
 use crate::rendering::lighting::frame_uniform::{FrameUniform, MAX_CASCADES};
 use crate::rendering::local_lights::buffers::ClusterBuffers;
@@ -54,6 +57,26 @@ pub(super) const NO_FOG: Fog = Fog {
     colour: Vec3::ZERO,
     opacity: 0.0,
 };
+
+/// Beyond every distance of the scene, so the fog never ramps to full fog.
+const FOG_FAR: f32 = 1.0e9;
+
+impl Fog {
+    /// Fog of `opacity` at every distance: a zero power puts the colour weight at 1 from the
+    /// first unit on, so the fog holds at its Max.
+    fn uniform_fields(self) -> FogUniformFields {
+        LightingFog::Enabled(FogParams {
+            colors: FogColors::uniform(self.colour),
+            near: 0.0,
+            far: FOG_FAR,
+            power: 0.0,
+            max: self.opacity,
+            height: HeightBands::NONE,
+            sunlight: SunlightTerm::NONE,
+        })
+        .uniform_fields()
+    }
+}
 
 /// A DDS file of `size` texels below `root`, each texel the `texel` of its (column, row).
 pub(super) fn write_texture(
@@ -181,15 +204,14 @@ impl Scene {
 
     fn frame_uniform(&self, look: Look, fog: Fog) -> FrameUniform {
         let view = Mat4::look_to_rh(look.eye, look.forward, Vec3::Y);
-        FrameUniform {
+        let mut frame = FrameUniform {
             view_proj: self.projection * view,
             camera_pos: look.eye.extend(1.0),
             camera_forward: look.forward.extend(0.0),
-            fog_near_color: fog.colour.extend(0.0),
-            fog_far_color: fog.colour.extend(1.0),
-            fog_params: Vec4::new(1.0, fog.opacity, 0.0, 0.0),
             ..FrameUniform::zeroed()
-        }
+        };
+        fog.uniform_fields().write_to(&mut frame);
+        frame
     }
 
     /// The pixels of a frame that works the rain of `input` out at `time` and draws it over a

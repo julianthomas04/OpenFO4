@@ -80,8 +80,10 @@ fn fog_section(ui: &mut egui::Ui, fog: &mut FogSettings) {
         ui.add(egui::Slider::new(&mut params.max, 0.0..=1.0).text("max"));
         ui.checkbox(&mut fog.link_to_horizon, "link colours to sky horizon");
         if !fog.link_to_horizon {
-            color_row(ui, "near color", &mut params.near_color);
-            color_row(ui, "far color", &mut params.far_color);
+            color_row(ui, "near color", &mut params.colors.near);
+            color_row(ui, "far color", &mut params.colors.far);
+            color_row(ui, "near high color", &mut params.colors.near_high);
+            color_row(ui, "far high color", &mut params.colors.far_high);
         }
     });
 }

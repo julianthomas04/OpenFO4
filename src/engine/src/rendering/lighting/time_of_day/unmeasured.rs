@@ -75,15 +75,6 @@ impl Keyframe {
         let (begin, end) = times.window(self.window);
         begin + (end - begin) * self.fraction
     }
-
-    /// How much daylight the slot stands for: 0 for night, 1 for full day, rising
-    /// with the fraction through sunrise and falling through sunset.
-    pub fn daylight_weight(&self) -> f32 {
-        match self.window {
-            ClimateWindow::Sunrise => self.fraction,
-            ClimateWindow::Sunset => 1.0 - self.fraction,
-        }
-    }
 }
 
 const fn keyframe(window: ClimateWindow, fraction: f32, slot: TimeSlot) -> Keyframe {
@@ -378,28 +369,6 @@ mod tests {
                     .windows(2)
                     .all(|pair| pair[0].fraction < pair[1].fraction)
             );
-        }
-    }
-
-    #[test]
-    fn daylight_weights_run_zero_to_one_across_sunrise_and_back_across_sunset() {
-        let weights: Vec<f32> = KEYFRAMES.iter().map(Keyframe::daylight_weight).collect();
-        assert_eq!(
-            weights,
-            [0.0, 0.25, 0.5, 0.75, 1.0, 1.0, 0.75, 0.5, 0.25, 0.0]
-        );
-    }
-
-    #[test]
-    fn a_slot_that_appears_twice_has_the_same_weight_both_times() {
-        for slot in [TimeSlot::Day, TimeSlot::Night] {
-            let weights: Vec<f32> = KEYFRAMES
-                .iter()
-                .filter(|k| k.slot == slot)
-                .map(Keyframe::daylight_weight)
-                .collect();
-            assert_eq!(weights.len(), 2, "{slot:?}");
-            assert_eq!(weights[0], weights[1], "{slot:?}");
         }
     }
 

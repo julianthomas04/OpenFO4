@@ -6,7 +6,7 @@ use super::ambient::{AmbientCube, EXTERIOR_AMBIENT_FILL};
 use super::cell_lighting::CellLighting;
 use super::environment::{Environment, InteriorLighting};
 use super::exterior_weather::{ExteriorWeather, ExteriorWeatherSlots, ImageSpaceHdr};
-use super::fog::{Fog, FogParams, HeightFog};
+use super::fog::{Fog, FogColors, FogParams, FogTime, HeightBands, SunlightTerm};
 use super::frame_uniform::{FrameUniform, wrapped_time};
 use super::interior_catalog::InteriorLightingCatalog;
 use super::lightning::tuning::{FLASH_AMBIENT_GAIN, FLASH_SKY_GAIN};
@@ -140,10 +140,7 @@ impl FogSettings {
     pub fn fog(&self, horizon: Vec3) -> Fog {
         let mut params = self.params;
         if self.link_to_horizon {
-            params.near_color = horizon;
-            params.far_color = horizon;
-            params.height.near_high_color = horizon;
-            params.height.far_high_color = horizon;
+            params.colors = FogColors::uniform(horizon);
         }
         Fog::Enabled(params)
     }
@@ -154,13 +151,13 @@ impl Default for FogSettings {
         let horizon = SkySettings::default().horizon;
         Self {
             params: FogParams {
-                near_color: horizon,
-                far_color: horizon,
+                colors: FogColors::uniform(horizon),
                 near: 200.0,
                 far: 12000.0,
                 power: 1.0,
                 max: 0.8,
-                height: HeightFog::NONE,
+                height: HeightBands::NONE,
+                sunlight: SunlightTerm::NONE,
             },
             link_to_horizon: true,
         }
@@ -330,6 +327,8 @@ pub struct LightingState {
     /// The light of the lightning flash: not a weather value, so setting the weather leaves it.
     lightning: Vec3,
     exterior_weather: Option<ExteriorWeather>,
+    /// How the time of day weighed the halves of the exterior weather's fog.
+    fog_time: FogTime,
     sky_clock: Option<SkyClock>,
     sky_moment: Option<SkyMoment>,
     sky_objects: Option<SkyObjects>,
@@ -357,6 +356,7 @@ impl LightingState {
             sun_override: false,
             lightning: Vec3::ZERO,
             exterior_weather: None,
+            fog_time: FogTime::DAY,
             sky_clock: None,
             sky_moment: None,
             sky_objects: None,
@@ -365,9 +365,9 @@ impl LightingState {
     }
 
     /// Takes the weather's sun and sky colours and its image space's light
-    /// scales and exposure as the new panel values, and its directional
-    /// ambient as the exterior ambient.
-    pub fn set_exterior_weather(&mut self, weather: ExteriorWeather) {
+    /// scales and exposure as the new panel values, its directional
+    /// ambient as the exterior ambient, and its fog as `fog_time` resolves it.
+    pub fn set_exterior_weather(&mut self, weather: ExteriorWeather, fog_time: FogTime) {
         self.sun.intensity = weather.hdr.sunlight_scale;
         self.sky.radiance_scale = weather.hdr.sky_scale;
         self.exposure.hdr = weather.hdr;
@@ -376,7 +376,7 @@ impl LightingState {
         self.sky.zenith = weather.sky_upper;
         self.sky.horizon = weather.horizon;
         self.sky.ground = weather.sky_lower;
-        match weather.fog {
+        match weather.fog.map(|fog| fog.resolve(fog_time)) {
             Some(Fog::Enabled(fog)) => {
                 self.fog.params = fog;
                 self.fog.link_to_horizon = false;
@@ -388,6 +388,7 @@ impl LightingState {
             }
             None => {}
         }
+        self.fog_time = fog_time;
         self.exterior_weather = Some(weather);
     }
 
@@ -395,7 +396,7 @@ impl LightingState {
     /// applies until the first [`Self::set_time_of_day`].
     pub fn set_exterior_sky(&mut self, slots: ExteriorWeatherSlots, game: SkyGameConfig) {
         let clock = SkyClock::new(slots, game);
-        self.set_exterior_weather(clock.initial_weather());
+        self.set_exterior_weather(clock.initial_weather(), FogTime::DAY);
         self.sky_clock = Some(clock);
     }
 
@@ -446,10 +447,11 @@ impl LightingState {
             None => clock.at(day_time),
         };
         self.sky_moment = Some(moment);
+        let fog_time = clock.fog_time(day_time);
         if self.sun_override {
             objects.sun_disc_direction = self.sun.direction_to_sun();
         } else {
-            self.set_exterior_weather(weather);
+            self.set_exterior_weather(weather, fog_time);
             self.sun.set_direction(moment.light.direction);
             self.sun.light_strength = moment.light.strength;
             self.sun.daylight = sun_alpha;
@@ -523,6 +525,11 @@ impl LightingState {
                 .as_ref()
                 .map_or(self.sun.disc_color, |weather| weather.sun_glare),
         }
+    }
+
+    /// How the time of day last weighed the halves of the exterior weather's fog.
+    pub fn fog_time(&self) -> FogTime {
+        self.fog_time
     }
 
     pub fn exterior_weather(&self) -> Option<&ExteriorWeather> {
@@ -774,7 +781,8 @@ mod tests {
     use super::super::ambient::AMBIENT_CUBE_FACES;
     use super::super::cell_lighting::{ResolvedLighting, TemplateStatus};
     use super::super::environment::NeutralReason;
-    use super::super::fog::HeightBand;
+    use super::super::fog::measured::BlendedFogColors;
+    use super::super::fog::{ExteriorFog, FogRange};
     use super::fixtures::lighting_state;
     use super::*;
 
@@ -995,7 +1003,7 @@ mod tests {
     ) -> LightingState {
         let mut state = lighting_state();
         if has_weather {
-            state.set_exterior_weather(weather());
+            state.set_exterior_weather(weather(), FogTime::DAY);
         }
         state.environment = environment;
         state.use_weather_ambient = use_weather_ambient;
@@ -1140,10 +1148,7 @@ mod tests {
         let Fog::Enabled(params) = settings.fog(radiance) else {
             panic!("exterior fog is always enabled");
         };
-        assert_eq!(params.near_color, radiance);
-        assert_eq!(params.far_color, radiance);
-        assert_eq!(params.height.near_high_color, radiance);
-        assert_eq!(params.height.far_high_color, radiance);
+        assert_eq!(params.colors, FogColors::uniform(radiance));
         assert_eq!(params.near, settings.params.near);
     }
 
@@ -1152,12 +1157,11 @@ mod tests {
         let settings = FogSettings {
             link_to_horizon: false,
             params: FogParams {
-                near_color: Vec3::new(0.3, 0.3, 0.3),
-                far_color: Vec3::new(0.5, 0.25, 0.125),
-                height: HeightFog {
-                    near_high_color: Vec3::splat(0.75),
-                    far_high_color: Vec3::splat(1.5),
-                    ..HeightFog::NONE
+                colors: FogColors {
+                    near: Vec3::new(0.3, 0.3, 0.3),
+                    far: Vec3::new(0.5, 0.25, 0.125),
+                    near_high: Vec3::splat(0.75),
+                    far_high: Vec3::splat(1.5),
                 },
                 ..FogSettings::default().params
             },
@@ -1897,22 +1901,46 @@ mod tests {
             assert_eq!(lit.w, unlit.w);
         }
 
-        fn weather_with_fog(fog: Fog) -> ExteriorWeather {
+        fn weather_with_fog(fog: ExteriorFog) -> ExteriorWeather {
             ExteriorWeather {
                 fog: Some(fog),
                 ..weather()
             }
         }
 
-        fn own_fog() -> FogParams {
-            FogParams {
-                near_color: Vec3::new(0.1, 0.2, 0.3),
-                far_color: Vec3::new(0.4, 0.5, 0.6),
+        fn own_range() -> FogRange {
+            FogRange {
                 near: 100.0,
                 far: 5000.0,
                 power: 1.5,
                 max: 0.7,
-                height: HeightFog::NONE,
+                height: HeightBands::NONE,
+            }
+        }
+
+        fn own_fog() -> ExteriorFog {
+            ExteriorFog {
+                colors: BlendedFogColors::from_stored(FogColors {
+                    near: Vec3::new(0.1, 0.2, 0.3),
+                    far: Vec3::new(0.4, 0.5, 0.6),
+                    near_high: Vec3::new(0.7, 0.6, 0.5),
+                    far_high: Vec3::new(0.2, 0.3, 0.4),
+                }),
+                sunlight: Vec3::splat(0.5),
+                day: Some(own_range()),
+                night: Some(FogRange {
+                    near: 300.0,
+                    far: 9000.0,
+                    ..own_range()
+                }),
+            }
+        }
+
+        fn without_fog() -> ExteriorFog {
+            ExteriorFog {
+                day: None,
+                night: None,
+                ..own_fog()
             }
         }
 
@@ -1947,21 +1975,21 @@ mod tests {
         #[test]
         fn a_flash_lifts_the_colours_of_a_fog_the_weather_brings_and_keeps_its_range() {
             let mut state = lighting_state();
-            state.set_exterior_weather(weather_with_fog(Fog::Enabled(own_fog())));
+            state.set_exterior_weather(weather_with_fog(own_fog()), FogTime::DAY);
             let unlit = frame_of(&state);
             let lit = frame_of(&with_flash(state));
             let lift = FLASH * FLASH_SKY_GAIN;
             assert_lifted(lit.fog_near_color, unlit.fog_near_color, lift);
             assert_lifted(lit.fog_far_color, unlit.fog_far_color, lift);
             assert_eq!(lit.fog_params, unlit.fog_params);
-            assert_eq!(lit.fog_near_color.w, own_fog().near);
-            assert_eq!(lit.fog_far_color.w, own_fog().far);
+            assert_eq!(lit.fog_near_color.w, own_range().near);
+            assert_eq!(lit.fog_far_color.w, own_range().far);
         }
 
         #[test]
         fn a_flash_does_not_switch_on_a_fog_the_weather_disables() {
             let mut state = lighting_state();
-            state.set_exterior_weather(weather_with_fog(Fog::Disabled));
+            state.set_exterior_weather(weather_with_fog(without_fog()), FogTime::DAY);
             let unlit = frame_of(&state);
             let lit = frame_of(&with_flash(state));
             assert_eq!(unlit.fog_params, Vec4::ZERO);
@@ -2066,13 +2094,13 @@ mod tests {
                 sky_upper: Vec3::new(0.7, 0.1, 0.2),
                 horizon: Vec3::new(0.3, 0.4, 0.5),
                 sky_lower: Vec3::new(0.05, 0.06, 0.07),
-                fog: Some(Fog::Enabled(own_fog())),
+                fog: Some(own_fog()),
                 ..weather()
             };
             let mut plain = exterior();
-            plain.set_exterior_weather(other.clone());
+            plain.set_exterior_weather(other.clone(), FogTime::DAY);
             let mut flashing = with_flash(exterior());
-            flashing.set_exterior_weather(other);
+            flashing.set_exterior_weather(other, FogTime::DAY);
             assert_eq!(flashing.lightning(), FLASH);
             let (lit, unlit) = (frame_of(&flashing), frame_of(&plain));
             let lift = FLASH * FLASH_SKY_GAIN;
@@ -2108,32 +2136,30 @@ mod tests {
         #[test]
         fn the_fog_of_a_weather_keeps_its_colours_whatever_the_sky_scale() {
             let mut state = exterior();
-            let fog = FogParams {
-                height: HeightFog {
-                    near_high_color: Vec3::new(0.7, 0.6, 0.5),
-                    far_high_color: Vec3::new(0.2, 0.3, 0.4),
-                    near_band: HeightBand::new(0.0, 100.0),
-                    far_band: HeightBand::new(0.0, 200.0),
-                    high_density_scale: 1.0,
-                },
-                ..own_fog()
-            };
-            state.set_exterior_weather(ExteriorWeather {
-                fog: Some(Fog::Enabled(fog)),
-                ..weather()
-            });
+            state.set_exterior_weather(weather_with_fog(own_fog()), FogTime::DAY);
             state.sky.radiance_scale = 2.4;
             let frame = frame_of(&state);
-            assert_eq!(frame.fog_near_color.truncate(), fog.near_color);
-            assert_eq!(frame.fog_far_color.truncate(), fog.far_color);
-            assert_eq!(
-                frame.fog_near_high_color.truncate(),
-                fog.height.near_high_color
-            );
-            assert_eq!(
-                frame.fog_far_high_color.truncate(),
-                fog.height.far_high_color
-            );
+            let Fog::Enabled(fog) = own_fog().resolve(FogTime::DAY) else {
+                panic!("the day half has fog");
+            };
+            assert_eq!(frame.fog_near_color.truncate(), fog.colors.near);
+            assert_eq!(frame.fog_far_color.truncate(), fog.colors.far);
+            assert_eq!(frame.fog_near_high_color.truncate(), fog.colors.near_high);
+            assert_eq!(frame.fog_far_high_color.truncate(), fog.colors.far_high);
+        }
+
+        #[test]
+        fn the_clock_resolves_the_weathers_fog_for_the_time_of_day() {
+            let mut state = exterior();
+            state.set_exterior_weather(weather_with_fog(own_fog()), FogTime::DAY);
+            let night = FogTime {
+                night_weight: 1.0,
+                day_colour_weight: 0.0,
+            };
+            state.set_exterior_weather(weather_with_fog(own_fog()), night);
+            assert_eq!(state.fog_time(), night);
+            assert_eq!(Fog::Enabled(state.fog.params), own_fog().resolve(night));
+            assert_eq!(state.fog.params.near, 300.0);
         }
 
         #[test]

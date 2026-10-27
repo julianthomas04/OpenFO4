@@ -499,7 +499,7 @@ mod tests {
         frame.fog_params = Vec4::new(2.0, 0.9, 0.95, 0.0);
         frame.fog_near_high_color = Vec4::new(0.3, 0.35, 0.4, 0.0);
         frame.fog_far_high_color = Vec4::new(0.45, 0.5, 0.6, 0.0);
-        frame.fog_heights = Vec4::new(-64.0, 1.0 / 128.0, 0.0, 0.0);
+        frame.fog_near_band = Vec4::new(1.0 / 128.0, 0.5, 1.0, 0.0);
         frame.flags = UVec4::new(0, 0, 13, 0);
         frame
     }

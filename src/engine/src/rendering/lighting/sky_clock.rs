@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use super::exterior_weather::ExteriorWeather;
 use super::exterior_weather::ExteriorWeatherSlots;
+use super::fog::FogTime;
 use super::time_of_day::unmeasured::sun_alpha;
 use super::time_of_day::{
     ClimateMoon, ClimateSunTextures, DayTime, MoonKind, MoonObject, SkyGameConfig, SkyMoment,
@@ -63,6 +64,11 @@ impl SkyClock {
     /// Which two slots the weather is blended from at `day_time`, and how far between them.
     pub fn slot_blend(&self, day_time: DayTime) -> SlotBlend {
         slot_blend(day_time, self.slots.climate_times())
+    }
+
+    /// How `day_time` weighs the halves of the fog.
+    pub fn fog_time(&self, day_time: DayTime) -> FogTime {
+        FogTime::at(day_time.hour(), self.slots.climate_times())
     }
 
     /// The sky at `day_time` with the clock's own weather.

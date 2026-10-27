@@ -12,14 +12,15 @@ struct FrameUniform {
     sky_zenith: vec4<f32>,
     sky_horizon: vec4<f32>,
     sky_ground: vec4<f32>,
+    // The fog, laid out and documented by `fog::FogUniformFields`.
     fog_near_color: vec4<f32>,
     fog_far_color: vec4<f32>,
-    // x: falloff power, y: maximum opacity, z: opacity scale at the top of the far height band.
-    fog_params: vec4<f32>,
     fog_near_high_color: vec4<f32>,
     fog_far_high_color: vec4<f32>,
-    // Bottom and reciprocal span of the near (xy) and far (zw) height bands.
-    fog_heights: vec4<f32>,
+    fog_params: vec4<f32>,
+    fog_near_band: vec4<f32>,
+    fog_far_band: vec4<f32>,
+    fog_sunlight: vec4<f32>,
     cascade_view_proj: array<mat4x4<f32>, 4>,
     cascade_spheres: array<vec4<f32>, 4>,
     shadow_params: vec4<f32>,

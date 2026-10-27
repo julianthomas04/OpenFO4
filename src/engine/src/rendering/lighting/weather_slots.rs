@@ -7,11 +7,11 @@ use glam::Vec3;
 use serde::Deserialize;
 
 use super::ambient::AmbientCube;
-use super::fog::{Fog, FogParams, HeightBands, HeightFog};
+use super::fog::measured::BlendedFogColors;
+use super::fog::{ExteriorFog, FogRange};
 use super::lerp::{Lerp, lerp_fields, snap_to_nearer};
 use super::time_of_day::{
     ClimateMoon, ClimateSky, ClimateSunTextures, ClimateTimes, SlotBlend, TimeSlot,
-    fog_daylight_weight,
 };
 use crate::rendering::post::depth_of_field::ImageSpaceDepthOfField;
 
@@ -98,65 +98,32 @@ lerp_fields!(SlotValues {
     depth_of_field,
 });
 
-/// A fog distance set in engine units, with the bands and density scale of its height fog.
+/// The colours of a weather's fog in one time slot; the sunlight is linear with gamma 2.2.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct FogRange {
-    pub(super) near: f32,
-    pub(super) far: f32,
-    pub(super) power: f32,
-    pub(super) max: f32,
-    pub(super) height: HeightBands,
+pub(super) struct SlotFogColors {
+    pub(super) fog: BlendedFogColors,
+    pub(super) sunlight: Vec3,
 }
 
-lerp_fields!(FogRange {
-    near,
-    far,
-    power,
-    max,
-    height
-});
+lerp_fields!(SlotFogColors { fog, sunlight });
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct FogColors {
-    pub(super) near: Vec3,
-    pub(super) far: Vec3,
-    pub(super) near_high: Vec3,
-    pub(super) far_high: Vec3,
-}
-
-lerp_fields!(FogColors {
-    near,
-    far,
-    near_high,
-    far_high
-});
-
-/// A weather's fog. The colours exist for every slot but the distances only for Day and
-/// Night, which the sample blends by how much daylight the moment has. `None` is a slot without fog.
+/// A weather's fog. The colours exist for every slot but the distances only for Day and Night,
+/// which the time of day weighs later. `None` is a half without fog.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct WeatherFog {
     pub(super) day: Option<FogRange>,
     pub(super) night: Option<FogRange>,
-    pub(super) colors: [FogColors; TimeSlot::COUNT],
+    pub(super) colors: [SlotFogColors; TimeSlot::COUNT],
 }
 
 impl WeatherFog {
-    /// A fog that is on at one end of the day and off at the other cannot be blended, so it
-    /// snaps at the midpoint of the daylight weight (to Night at exactly one half).
-    fn sample(&self, blend: SlotBlend) -> Fog {
+    fn sample(&self, blend: SlotBlend) -> ExteriorFog {
         let colors = self.colors[blend.from.index()].lerp(&self.colors[blend.to.index()], blend.t);
-        let range = self.night.lerp(&self.day, fog_daylight_weight(&blend));
-        match range {
-            Some(range) => Fog::Enabled(FogParams {
-                near_color: colors.near,
-                far_color: colors.far,
-                near: range.near,
-                far: range.far,
-                power: range.power,
-                max: range.max,
-                height: HeightFog::new(range.height, colors.near_high, colors.far_high),
-            }),
-            None => Fog::Disabled,
+        ExteriorFog {
+            colors: colors.fog,
+            sunlight: colors.sunlight,
+            day: self.day,
+            night: self.night,
         }
     }
 }
@@ -183,13 +150,14 @@ pub struct ExteriorWeather {
     /// The image space's depth of field and vignette: what the game's image-space manager
     /// holds for the depth of field effect. `None` when the database predates the export.
     pub depth_of_field: Option<ImageSpaceDepthOfField>,
-    /// `None` when the database carries no fog data for the weather;
-    /// `Fog::Disabled` when the weather explicitly has no fog.
-    pub fog: Option<Fog>,
+    /// `None` when the database carries no fog data for the weather. The time of day resolves
+    /// it into the fog that renders.
+    pub fog: Option<ExteriorFog>,
 }
 
 /// The blend of two weathers at one moment. The names have no midpoint, so they snap to the
-/// nearer weather (to `self` at exactly one half), as the fog and the depth of field mode do.
+/// nearer weather (to `self` at exactly one half), as a fog half without fog and the depth of
+/// field mode do.
 /// Naming every field keeps one added later from being left out.
 impl Lerp for ExteriorWeather {
     fn lerp(&self, other: &Self, t: f32) -> Self {
@@ -339,6 +307,7 @@ impl ExteriorWeatherSlots {
 )]
 mod tests {
     use super::*;
+    use crate::rendering::lighting::fog::{FogColors, HeightBands};
 
     /// A weather whose every value is linear in `level`, with a different slope per field, so a
     /// blend between two levels is the weather at the blended level.
@@ -368,15 +337,20 @@ mod tests {
                 vignette_radius: 14.0 * level,
                 vignette_strength: 15.0 * level,
             }),
-            fog: Some(Fog::Enabled(FogParams {
-                near_color: Vec3::splat(16.0 * level),
-                far_color: Vec3::splat(17.0 * level),
-                near: 18.0 * level,
-                far: 19.0 * level,
-                power: 20.0 * level,
-                max: 21.0 * level,
-                height: HeightFog::NONE,
-            })),
+            fog: Some(ExteriorFog {
+                colors: BlendedFogColors::from_stored(FogColors::uniform(Vec3::splat(
+                    16.0 * level,
+                ))),
+                sunlight: Vec3::splat(17.0 * level),
+                day: Some(FogRange {
+                    near: 18.0 * level,
+                    far: 19.0 * level,
+                    power: 20.0 * level,
+                    max: 21.0 * level,
+                    height: HeightBands::NONE,
+                }),
+                night: None,
+            }),
         }
     }
 
@@ -432,14 +406,16 @@ mod tests {
     }
 
     #[test]
-    fn a_fog_the_weathers_do_not_share_snaps_with_the_names_of_the_nearer_one() {
+    fn a_fog_half_the_weathers_do_not_share_snaps_with_the_names_of_the_nearer_one() {
         let foggy = weather("Foggy", 1.0);
+        let clear = weather("Clear", 0.0);
         let clear = ExteriorWeather {
-            fog: Some(Fog::Disabled),
-            ..weather("Clear", 0.0)
+            fog: clear.fog.map(|fog| ExteriorFog { day: None, ..fog }),
+            ..clear
         };
-        assert_eq!(foggy.lerp(&clear, 0.25).fog, foggy.fog);
-        assert_eq!(foggy.lerp(&clear, 0.75).fog, Some(Fog::Disabled));
+        let day_of = |weather: ExteriorWeather| weather.fog.and_then(|fog| fog.day);
+        assert_eq!(day_of(foggy.lerp(&clear, 0.25)), day_of(foggy.clone()));
+        assert_eq!(day_of(foggy.lerp(&clear, 0.75)), None);
     }
 
     #[test]

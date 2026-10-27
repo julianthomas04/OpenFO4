@@ -7,6 +7,7 @@
 use glam::{Mat4, Vec3, Vec4};
 
 use crate::bethesda_space::{UNITS_FROM_ENGINE, position_from_engine};
+use crate::rendering::lighting::fog::FogUniformFields;
 use crate::rendering::lighting::frame_uniform::FrameUniform;
 
 /// Register count of `cb12`.
@@ -96,31 +97,31 @@ struct FogRanges {
 }
 
 impl FogRanges {
-    fn of_frame(frame: &FrameUniform) -> Self {
-        let heights = frame.fog_heights;
+    fn of(fog: &FogUniformFields) -> Self {
         Self {
-            distance: Self::distance(
-                frame.fog_near_color.w * UNITS_FROM_ENGINE,
-                frame.fog_far_color.w * UNITS_FROM_ENGINE,
-            ),
-            near_height: Self::height_band(heights.x, heights.y),
-            far_height: Self::height_band(heights.z, heights.w),
+            distance: if fog.renders() {
+                (
+                    fog.near_color.w * UNITS_FROM_ENGINE,
+                    fog.far_color.w * UNITS_FROM_ENGINE,
+                )
+            } else {
+                UNSET_FOG_RANGE
+            },
+            near_height: Self::height_band(fog.near_band),
+            far_height: Self::height_band(fog.far_band),
         }
     }
 
-    fn distance(near: f32, far: f32) -> (f32, f32) {
-        if near == 0.0 && far == 0.0 {
-            UNSET_FOG_RANGE
-        } else {
-            (near, far)
-        }
-    }
-
-    /// A height band of the frame uniform (engine units); a band without a span is unset.
-    fn height_band(bottom: f32, inverse_span: f32) -> (f32, f32) {
-        if inverse_span > 0.0 {
-            let bottom = bottom * UNITS_FROM_ENGINE;
-            (bottom, bottom + UNITS_FROM_ENGINE / inverse_span)
+    /// A height band of the frame uniform (`share = z * saturate(height * x + y)`, engine units)
+    /// as the heights where its share leaves 0 and reaches 1. The registers have no room for
+    /// the band's weight, so a band of any weight counts as set.
+    fn height_band(band: Vec4) -> (f32, f32) {
+        let (scale, offset, weight) = (band.x, band.y, band.z);
+        if scale > 0.0 && weight > 0.0 {
+            (
+                -offset / scale * UNITS_FROM_ENGINE,
+                (1.0 - offset) / scale * UNITS_FROM_ENGINE,
+            )
         } else {
             UNSET_FOG_RANGE
         }
@@ -154,37 +155,53 @@ impl FogRanges {
 /// without fog is unknown.
 const DISABLED_FOG_HIGH_DENSITY_SCALE: f32 = 1.0;
 
-/// Fog registers `cb12[41..=46]` from the engine's parametric fog: the near colour and its high
-/// colour, the far colour and its high colour, and the range pairs. Inferred from the layout,
-/// as no public source documents it: `cb12[44].w` takes the high density scale.
+/// Fog registers `cb12[41..=46]` from the engine's fog: the near colour and its high colour, the
+/// far colour and its high colour, and the range pairs. Inferred from the layout, as no public
+/// source documents it: `cb12[44].w` takes the high density scale. The colours carry their
+/// time-of-day factors; the sunlight term and the ramp to full fog past Max have no register.
 fn write_fog(cb12: &mut [Vec4; CB12_LEN], frame: &FrameUniform) {
+    let fog = FogUniformFields::of_frame(frame);
+    let renders = fog.renders();
     // Disabled fog has power 0 and `pow(0, 0)` would be NaN; any positive
     // power keeps the zero factor of an unset range.
-    let power = if frame.fog_params.x > 0.0 {
-        frame.fog_params.x
+    let power = if renders && fog.params.x > 0.0 {
+        fog.params.x
     } else {
         1.0
     };
-    let max_opacity = frame.fog_params.y;
-    let high_density_scale = if max_opacity > 0.0 {
-        frame.fog_params.z
+    let high_density_scale = if renders {
+        fog.params.z
     } else {
         DISABLED_FOG_HIGH_DENSITY_SCALE
     };
 
-    let (distance_registers, height_registers) = FogRanges::of_frame(frame).registers();
+    let (distance_registers, height_registers) = FogRanges::of(&fog).registers();
     cb12[41] = distance_registers;
-    cb12[42] = frame.fog_near_color.truncate().extend(power);
-    cb12[43] = frame.fog_near_high_color.truncate().extend(max_opacity);
-    cb12[44] = frame.fog_far_color.truncate().extend(high_density_scale);
-    cb12[45] = frame.fog_far_high_color.truncate().extend(0.0);
+    cb12[42] = fog.near_color.truncate().extend(power);
+    cb12[43] = fog.near_high_color.truncate().extend(fog.params.y);
+    cb12[44] = fog.far_color.truncate().extend(high_density_scale);
+    cb12[45] = fog.far_high_color.truncate().extend(0.0);
     cb12[46] = height_registers;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rendering::lighting::fog::{Fog, FogParams, HeightBand, HeightFog};
+    use crate::rendering::lighting::fog::{
+        Fog, FogColors, FogParams, HeightBand, HeightBands, SunlightTerm,
+    };
+
+    fn fog_with(height: HeightBands) -> Fog {
+        Fog::Enabled(FogParams {
+            colors: FogColors::uniform(Vec3::ONE),
+            near: 150.0,
+            far: 25_000.0,
+            power: 0.25,
+            max: 0.85,
+            height,
+            sunlight: SunlightTerm::NONE,
+        })
+    }
 
     fn frame_fixture() -> FrameUniform {
         let mut frame: FrameUniform = bytemuck::Zeroable::zeroed();
@@ -229,38 +246,36 @@ mod tests {
     }
 
     #[test]
-    fn height_bands_reach_the_registers_from_mid_to_mid_plus_range_in_bethesda_units() {
-        let height = HeightFog {
-            near_band: HeightBand::new(50.0, 200.0),
-            far_band: HeightBand::new(180.0, 1500.0),
-            ..HeightFog::NONE
+    fn height_bands_reach_the_registers_from_mid_minus_to_mid_plus_range_in_bethesda_units() {
+        let height = HeightBands {
+            near: HeightBand::new(50.0, 200.0),
+            far: HeightBand::new(180.0, 1500.0),
+            high_density_scale: 1.0,
         };
-        let fields = Fog::Enabled(FogParams {
-            near_color: Vec3::ONE,
-            far_color: Vec3::ONE,
-            near: 150.0,
-            far: 25_000.0,
-            power: 0.25,
-            max: 0.85,
-            height,
-        })
-        .uniform_fields();
+        let fields = fog_with(height).uniform_fields();
         let mut frame = frame_fixture();
         fields.write_to(&mut frame);
         let cb12 = frame_cb12(&frame);
 
         let near_band = |height: f32| factor(cb12[41].y, cb12[41].w, height);
         let far_band = |height: f32| factor(cb12[46].y, cb12[46].w, height);
-        for (height, expected) in [(500.0, 0.0), (1500.0, 0.5), (2500.0, 1.0)] {
+        for (height, expected) in [(-1500.0, 0.0), (500.0, 0.5), (2500.0, 1.0)] {
             assert!(
                 (near_band(height) - expected).abs() < 1e-4,
                 "near at {height}"
             );
         }
-        for (height, expected) in [(1800.0, 0.0), (9300.0, 0.5), (16_800.0, 1.0)] {
+        for (height, expected) in [(-13_200.0, 0.0), (1800.0, 0.5), (16_800.0, 1.0)] {
             assert!(
                 (far_band(height) - expected).abs() < 1e-4,
                 "far at {height}"
+            );
+        }
+        for engine_height in [-100.0, 40.0, 900.0] {
+            let bethesda_height = engine_height * UNITS_FROM_ENGINE;
+            assert!(
+                (near_band(bethesda_height) - height.near.share(engine_height)).abs() < 1e-4,
+                "the registers and the engine fog agree at {engine_height}"
             );
         }
         assert_eq!((cb12[46].x, cb12[46].z), (cb12[41].y, cb12[41].w));
@@ -276,18 +291,10 @@ mod tests {
     #[test]
     fn enabled_fog_carries_its_own_high_density_scale() {
         let mut frame = frame_fixture();
-        Fog::Enabled(FogParams {
-            near_color: Vec3::ONE,
-            far_color: Vec3::ONE,
-            near: 150.0,
-            far: 25_000.0,
-            power: 1.0,
-            max: 0.85,
-            height: HeightFog {
-                far_band: HeightBand::new(180.0, 1500.0),
-                high_density_scale: 0.25,
-                ..HeightFog::NONE
-            },
+        fog_with(HeightBands {
+            far: HeightBand::new(180.0, 1500.0),
+            high_density_scale: 0.25,
+            ..HeightBands::NONE
         })
         .uniform_fields()
         .write_to(&mut frame);
