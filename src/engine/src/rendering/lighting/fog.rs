@@ -1,7 +1,6 @@
 use glam::{Vec3, Vec4};
 
 use super::frame_uniform::FrameUniform;
-use super::god_rays::InScatterUniformFields;
 use super::lerp::{Lerp, lerp_fields, snap_to_nearer};
 use crate::rendering::world_streamer::SCALE;
 
@@ -234,8 +233,7 @@ impl Lerp for Fog {
 }
 
 /// The `FrameUniform` fog fields, laid out as `fog_near_color`, `fog_far_color`, `fog_params`,
-/// `fog_near_high_color`, `fog_far_high_color`, `fog_heights` and the sun's in-scatter in
-/// `shaders/frame.wgsl`.
+/// `fog_near_high_color`, `fog_far_high_color` and `fog_heights` in `shaders/frame.wgsl`.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct FogUniformFields {
     /// rgb: colour, w: distance at which the fog starts.
@@ -250,7 +248,6 @@ pub struct FogUniformFields {
     pub far_high_color: Vec4,
     /// The bottom and inverse span of the near band (xy) and of the far band (zw).
     pub heights: Vec4,
-    pub in_scatter: InScatterUniformFields,
 }
 
 impl FogUniformFields {
@@ -262,14 +259,7 @@ impl FogUniformFields {
         near_high_color: Vec4::ZERO,
         far_high_color: Vec4::ZERO,
         heights: Vec4::ZERO,
-        in_scatter: InScatterUniformFields::NONE,
     };
-
-    /// These fields with the sun's in-scatter.
-    #[must_use]
-    pub fn with_in_scatter(self, in_scatter: InScatterUniformFields) -> Self {
-        Self { in_scatter, ..self }
-    }
 
     pub fn write_to(&self, frame: &mut FrameUniform) {
         frame.fog_near_color = self.near_color;
@@ -278,10 +268,6 @@ impl FogUniformFields {
         frame.fog_near_high_color = self.near_high_color;
         frame.fog_far_high_color = self.far_high_color;
         frame.fog_heights = self.heights;
-        frame.fog_sun_forward = self.in_scatter.forward;
-        frame.fog_sun_back = self.in_scatter.back;
-        frame.fog_sun_air = self.in_scatter.air;
-        frame.fog_to_sun = self.in_scatter.to_sun;
     }
 }
 
@@ -291,12 +277,6 @@ impl Fog {
     #[must_use]
     pub fn brightened(self, light: Vec3) -> Self {
         self.map_colors(|color| color + light)
-    }
-
-    /// The fog with all of its colours multiplied by `scale`.
-    #[must_use]
-    pub fn scaled(self, scale: f32) -> Self {
-        self.map_colors(|color| color * scale)
     }
 
     fn map_colors(self, color: impl Fn(Vec3) -> Vec3) -> Self {
@@ -343,7 +323,6 @@ impl Fog {
                         far_bottom,
                         far_inverse_span,
                     ),
-                    in_scatter: InScatterUniformFields::NONE,
                 }
             }
             Fog::Enabled(_) | Fog::Disabled => FogUniformFields::DISABLED,
@@ -584,16 +563,8 @@ mod tests {
     }
 
     #[test]
-    fn write_to_fills_every_fog_field_of_the_frame_uniform_with_the_in_scatter() {
-        let in_scatter = InScatterUniformFields {
-            forward: Vec4::splat(1.0),
-            back: Vec4::splat(2.0),
-            air: Vec4::splat(3.0),
-            to_sun: Vec4::splat(4.0),
-        };
-        let fields = with_height(height_fog())
-            .uniform_fields()
-            .with_in_scatter(in_scatter);
+    fn write_to_fills_every_fog_field_of_the_frame_uniform() {
+        let fields = with_height(height_fog()).uniform_fields();
         let mut frame: FrameUniform = bytemuck::Zeroable::zeroed();
         fields.write_to(&mut frame);
         assert_eq!(frame.fog_near_color, fields.near_color);
@@ -602,24 +573,6 @@ mod tests {
         assert_eq!(frame.fog_near_high_color, fields.near_high_color);
         assert_eq!(frame.fog_far_high_color, fields.far_high_color);
         assert_eq!(frame.fog_heights, fields.heights);
-        assert_eq!(frame.fog_sun_forward, in_scatter.forward);
-        assert_eq!(frame.fog_sun_back, in_scatter.back);
-        assert_eq!(frame.fog_sun_air, in_scatter.air);
-        assert_eq!(frame.fog_to_sun, in_scatter.to_sun);
-    }
-
-    #[test]
-    fn scaling_multiplies_every_colour_and_keeps_the_rest() {
-        let Fog::Enabled(scaled) = with_height(height_fog()).scaled(2.0) else {
-            panic!("scaled fog stays enabled");
-        };
-        assert_eq!(scaled.near_color, Vec3::new(0.2, 0.4, 0.6));
-        assert_eq!(scaled.far_color, Vec3::new(0.8, 1.0, 1.2));
-        assert_eq!(scaled.height.near_high_color, Vec3::new(1.4, 1.6, 1.8));
-        assert_eq!(scaled.height.far_high_color, Vec3::new(2.0, 2.2, 2.4));
-        assert_eq!(scaled.near, 10.0);
-        assert_eq!(scaled.height.far_band, height_fog().far_band);
-        assert_eq!(Fog::Disabled.scaled(2.0), Fog::Disabled);
     }
 
     #[test]

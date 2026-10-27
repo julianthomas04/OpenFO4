@@ -6,7 +6,6 @@ use serde::Deserialize;
 use super::ambient::AmbientCube;
 use super::cell_lighting::{RawColor, bethesda_faces_to_engine_order};
 use super::fog::{HeightFogError, RawHeightFog};
-use super::god_rays::{GodRaysData, NegativeGodRaysValue, SunInScatter};
 use super::time_of_day::{
     ClimateMoon, ClimateMoonError, ClimateSky, ClimateSkyError, ClimateSunTextures, ClimateTimes,
     ClimateTimesError, TimeSlot,
@@ -102,16 +101,6 @@ pub enum ExteriorWeatherError {
     ImageSpaceMalformed {
         image_space: String,
         source: serde_json::Error,
-    },
-    #[error("god rays {god_rays} has malformed data JSON: {source}")]
-    GodRaysMalformed {
-        god_rays: String,
-        source: serde_json::Error,
-    },
-    #[error("god rays {god_rays} has a {source}")]
-    InvalidGodRays {
-        god_rays: String,
-        source: NegativeGodRaysValue,
     },
     #[error("database query failed: {0}")]
     Query(#[from] rusqlite::Error),
@@ -276,14 +265,12 @@ impl ExteriorWeatherSlots {
             other => other.into(),
         })?;
         let image_spaces = load_image_spaces(db, &row)?;
-        let in_scatter = load_sun_in_scatter(db, &row)?;
-        Self::from_row(row, &image_spaces, &in_scatter, climate)
+        Self::from_row(row, &image_spaces, climate)
     }
 
     fn from_row(
         row: WeatherRow,
         image_spaces: &[ImageSpaceData; TimeSlot::COUNT],
-        in_scatter: &[SunInScatter; TimeSlot::COUNT],
         climate: &ClimateInfo,
     ) -> Result<Self, ExteriorWeatherError> {
         let WeatherRow {
@@ -293,7 +280,6 @@ impl ExteriorWeatherSlots {
             directional_ambient,
             image_spaces: _,
             fog,
-            god_rays: _,
         } = row;
         let colors: ColorGroups = parse_field(&form_key, "colors", colors.as_deref())?;
         let ambient: DirectionalAmbient = parse_field(
@@ -308,7 +294,6 @@ impl ExteriorWeatherSlots {
                 &colors,
                 &ambient,
                 image_spaces[slot.index()],
-                in_scatter[slot.index()],
             )
         })?;
         let fog = match load_fog(&form_key, fog, &colors) {
@@ -338,7 +323,6 @@ fn load_slot(
     colors: &ColorGroups,
     ambient: &DirectionalAmbient,
     image_space: ImageSpaceData,
-    sun_in_scatter: SunInScatter,
 ) -> Result<SlotValues, ExteriorWeatherError> {
     let group = |name: &str| color_in_slot(weather, colors, name, slot);
     let dalc = ambient
@@ -367,7 +351,6 @@ fn load_slot(
         ambient_specular: dalc.specular.linear(),
         hdr: image_space.hdr,
         depth_of_field: image_space.depth_of_field,
-        sun_in_scatter,
     })
 }
 
@@ -505,89 +488,6 @@ fn load_image_space(
         })?;
     serde_json::from_str(&data).map_err(|source| ExteriorWeatherError::ImageSpaceMalformed {
         image_space: image_space.to_string(),
-        source,
-    })
-}
-
-/// The in-scatter of each slot from the weather's god rays: none for a slot without a god rays
-/// record, and none, with a warning, where the database has no god rays for the weather or does
-/// not know a record. The schema warns once when the database predates the export.
-fn load_sun_in_scatter(
-    db: &DbClient,
-    row: &WeatherRow,
-) -> Result<[SunInScatter; TimeSlot::COUNT], ExteriorWeatherError> {
-    const NONE: [SunInScatter; TimeSlot::COUNT] = [SunInScatter::NONE; TimeSlot::COUNT];
-    if !db.schema().weather_god_rays_columns_present {
-        return Ok(NONE);
-    }
-    let Some(json) = row.god_rays.as_deref() else {
-        tracing::warn!(
-            "weather {} has no god rays; its fog has no sun in-scatter",
-            row.form_key
-        );
-        return Ok(NONE);
-    };
-    let keys = god_rays_per_slot(&row.form_key, json)?;
-    let mut records: HashMap<&str, Option<SunInScatter>> = HashMap::new();
-    for key in keys.iter().flatten() {
-        if !records.contains_key(key.as_str()) {
-            records.insert(key, load_god_rays(db, &row.form_key, key)?);
-        }
-    }
-    Ok(keys.each_ref().map(|key| {
-        key.as_deref()
-            .and_then(|key| records[key])
-            .unwrap_or(SunInScatter::NONE)
-    }))
-}
-
-/// The god rays record of each slot of a weather's `god_rays` JSON; `None` for a slot without
-/// one.
-fn god_rays_per_slot(
-    weather: &str,
-    json: &str,
-) -> Result<[Option<String>; TimeSlot::COUNT], ExteriorWeatherError> {
-    let slots: HashMap<String, Option<String>> = parse_json(weather, "god rays", json)?;
-    TimeSlot::try_map_all(|slot| {
-        slots
-            .get(slot.json_key())
-            .cloned()
-            .ok_or_else(|| missing_slot(weather, "god rays", slot))
-    })
-}
-
-/// `None`, with a warning, for a record the database does not know or has no data for.
-fn load_god_rays(
-    db: &DbClient,
-    weather: &str,
-    god_rays: &str,
-) -> Result<Option<SunInScatter>, ExteriorWeatherError> {
-    match db.get_god_rays_data(god_rays) {
-        Ok(Some(json)) => parse_god_rays(god_rays, &json).map(Some),
-        Ok(None) => {
-            tracing::warn!(
-                "god rays {god_rays} of weather {weather} has no data; those slots have no sun in-scatter"
-            );
-            Ok(None)
-        }
-        Err(rusqlite::Error::QueryReturnedNoRows) => {
-            tracing::warn!(
-                "weather {weather} names unknown god rays {god_rays}; those slots have no sun in-scatter"
-            );
-            Ok(None)
-        }
-        Err(other) => Err(other.into()),
-    }
-}
-
-fn parse_god_rays(god_rays: &str, json: &str) -> Result<SunInScatter, ExteriorWeatherError> {
-    let data: GodRaysData =
-        serde_json::from_str(json).map_err(|source| ExteriorWeatherError::GodRaysMalformed {
-            god_rays: god_rays.to_string(),
-            source,
-        })?;
-    SunInScatter::from_god_rays(&data).map_err(|source| ExteriorWeatherError::InvalidGodRays {
-        god_rays: god_rays.to_string(),
         source,
     })
 }
@@ -749,7 +649,6 @@ pub(crate) mod fixtures {
     use super::*;
 
     pub(crate) const FORM_KEY: &str = "0012AB:Fallout4.esm";
-    const NO_IN_SCATTER: [SunInScatter; TimeSlot::COUNT] = [SunInScatter::NONE; TimeSlot::COUNT];
     pub(super) const DEFAULT_CLIMATE_JSON: &str = r#"{"Weathers":[{"Weather":"0012AB:Fallout4.esm","Chance":51}],"SunriseBegin":"05:00:00","SunriseEnd":"09:00:00","SunsetBegin":"17:00:00","SunsetEnd":"21:00:00","MoonPhaseLength":4,"Moons":{"Masser":true,"Secunda":false},"ModelPath":"Sky\\Stars.nif"}"#;
 
     pub(in crate::rendering::lighting) fn rgb(r: u8, g: u8, b: u8) -> Value {
@@ -816,7 +715,6 @@ pub(crate) mod fixtures {
             directional_ambient: Some(directional_ambient(1.0).to_string()),
             image_spaces: Some(same_in_every_slot(&Value::Null).to_string()),
             fog: Some(fog(100.0, 1000.0).to_string()),
-            god_rays: None,
         }
     }
 
@@ -870,7 +768,7 @@ pub(crate) mod fixtures {
         row: WeatherRow,
         image_spaces: &[ImageSpaceData; TimeSlot::COUNT],
     ) -> Result<ExteriorWeatherSlots, ExteriorWeatherError> {
-        ExteriorWeatherSlots::from_row(row, image_spaces, &NO_IN_SCATTER, &climate())
+        ExteriorWeatherSlots::from_row(row, image_spaces, &climate())
     }
 
     pub(super) fn load(row: WeatherRow) -> Result<ExteriorWeatherSlots, ExteriorWeatherError> {
@@ -901,7 +799,7 @@ pub(crate) mod fixtures {
             })
         })
         .unwrap();
-        ExteriorWeatherSlots::from_row(row, &image_spaces, &NO_IN_SCATTER, &climate()).unwrap()
+        ExteriorWeatherSlots::from_row(row, &image_spaces, &climate()).unwrap()
     }
 }
 
@@ -1650,94 +1548,5 @@ mod tests {
         let json = format!("{{{IMAGE_SPACE_HDR}}}");
         let data: ImageSpaceData = serde_json::from_str(&json).unwrap();
         assert_eq!(data.depth_of_field, None);
-    }
-
-    const GOD_RAYS_JSON: &str = r#"{"back_color":[255,0,0],"forward_color":[0,255,0],"air_color":[0,0,255],"back_color_scale":2,"forward_color_scale":1,"air_color_scale":0.5,"intensity":4,"back_phase":0.25,"forward_phase":0.75}"#;
-
-    #[test]
-    fn the_god_rays_json_names_a_record_or_none_for_every_slot() {
-        let json = per_slot(|slot| match slot {
-            Day => json!("0000A1:Fallout4.esm"),
-            Sunrise => json!("0000A2:Fallout4.esm"),
-            _ => Value::Null,
-        })
-        .to_string();
-        let keys = god_rays_per_slot(FORM_KEY, &json).unwrap();
-        assert_eq!(keys[Day.index()].as_deref(), Some("0000A1:Fallout4.esm"));
-        assert_eq!(
-            keys[Sunrise.index()].as_deref(),
-            Some("0000A2:Fallout4.esm")
-        );
-        assert_eq!(keys[Night.index()], None);
-    }
-
-    #[test]
-    fn a_god_rays_json_without_a_slot_names_the_slot() {
-        let mut slots = per_slot(|_| Value::Null);
-        slots.as_object_mut().unwrap().remove("Night");
-        let error = god_rays_per_slot(FORM_KEY, &slots.to_string()).unwrap_err();
-        assert!(
-            matches!(&error, ExteriorWeatherError::MissingTimeSlot { entry, slot, .. } if entry == "god rays" && *slot == "Night"),
-            "{error:?}"
-        );
-    }
-
-    #[test]
-    fn malformed_god_rays_json_names_the_weather_and_field() {
-        let error = god_rays_per_slot(FORM_KEY, "[1, 2]").unwrap_err();
-        assert!(
-            matches!(&error, ExteriorWeatherError::Malformed { weather, field, .. } if weather == FORM_KEY && *field == "god rays"),
-            "{error:?}"
-        );
-    }
-
-    #[test]
-    fn a_god_rays_record_becomes_its_in_scatter() {
-        let in_scatter = parse_god_rays("0000A1:Fallout4.esm", GOD_RAYS_JSON).unwrap();
-        assert_eq!(in_scatter.forward, Vec3::new(0.0, 4.0, 0.0));
-        assert_eq!(in_scatter.back, Vec3::new(8.0, 0.0, 0.0));
-        assert_eq!(in_scatter.air, Vec3::new(0.0, 0.0, 2.0));
-        assert_eq!(
-            (in_scatter.forward_asymmetry, in_scatter.back_asymmetry),
-            (0.75, -0.25)
-        );
-    }
-
-    #[test]
-    fn malformed_god_rays_data_names_the_record() {
-        let error = parse_god_rays("0000A1:Fallout4.esm", r#"{"intensity":1}"#).unwrap_err();
-        assert!(
-            matches!(&error, ExteriorWeatherError::GodRaysMalformed { god_rays, .. } if god_rays == "0000A1:Fallout4.esm"),
-            "{error:?}"
-        );
-    }
-
-    #[test]
-    fn a_god_rays_record_with_a_negative_scale_names_the_record_and_field() {
-        let json = GOD_RAYS_JSON.replace(r#""back_color_scale":2"#, r#""back_color_scale":-2"#);
-        let error = parse_god_rays("0000A1:Fallout4.esm", &json).unwrap_err();
-        assert!(
-            matches!(&error, ExteriorWeatherError::InvalidGodRays { god_rays, source } if god_rays == "0000A1:Fallout4.esm" && source.field == "back colour scale"),
-            "{error:?}"
-        );
-    }
-
-    #[test]
-    fn the_in_scatter_blends_between_the_slots_like_the_other_slot_values() {
-        let rays = parse_god_rays("0000A1:Fallout4.esm", GOD_RAYS_JSON).unwrap();
-        let mut in_scatter = [SunInScatter::NONE; TimeSlot::COUNT];
-        in_scatter[Day.index()] = rays;
-        let slots = ExteriorWeatherSlots::from_row(
-            row(),
-            &[neutral_image_space(); TimeSlot::COUNT],
-            &in_scatter,
-            &climate(),
-        )
-        .unwrap();
-        assert_eq!(slots.sample(at(Day)).sun_in_scatter, rays);
-        assert_eq!(slots.sample(at(Night)).sun_in_scatter, SunInScatter::NONE);
-        let halfway = slots.sample(between(LateSunrise, Day, 0.5)).sun_in_scatter;
-        assert_eq!(halfway.forward, rays.forward * 0.5);
-        assert_eq!(halfway.forward_asymmetry, rays.forward_asymmetry * 0.5);
     }
 }

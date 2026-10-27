@@ -167,7 +167,6 @@ fn detect_reports_every_optional_group_present_on_the_real_schema() {
     assert!(schema.weather_fog_column_present);
     assert!(schema.weather_library_columns_present);
     assert!(schema.particle_material_data_column_present);
-    assert!(schema.weather_god_rays_columns_present);
     assert!(schema.cell_water_columns_present);
     assert!(schema.worldspace_water_columns_present);
     assert!(schema.activator_water_column_present);
@@ -1724,55 +1723,6 @@ fn weather_without_the_fog_column_reads_fog_as_none() {
     let db = client(conn);
     assert!(!db.schema().weather_fog_column_present);
     assert_eq!(db.get_weather("W").unwrap().fog, None);
-}
-
-#[test]
-fn weather_god_rays_and_their_record_data_read_back() {
-    let conn = schema_connection();
-    insert(
-        &conn,
-        "weather",
-        &[
-            ("form_key", text("W")),
-            ("god_rays", text("{\"Day\":\"G\"}")),
-        ],
-    );
-    insert(
-        &conn,
-        "god_rayses",
-        &[("form_key", text("G")), ("data", text("{\"intensity\":1}"))],
-    );
-    insert(&conn, "god_rayses", &[("form_key", text("Empty"))]);
-    let db = client(conn);
-    assert_eq!(
-        db.get_weather("W").unwrap().god_rays.as_deref(),
-        Some("{\"Day\":\"G\"}")
-    );
-    assert_eq!(
-        db.get_god_rays_data("G").unwrap().as_deref(),
-        Some("{\"intensity\":1}")
-    );
-    assert_eq!(db.get_god_rays_data("Empty").unwrap(), None);
-    assert!(matches!(
-        db.get_god_rays_data("nope"),
-        Err(rusqlite::Error::QueryReturnedNoRows)
-    ));
-}
-
-#[test]
-fn a_database_without_the_god_rays_data_reads_no_weather_god_rays() {
-    let conn = legacy_connection(&[("god_rayses", "data")]);
-    insert(
-        &conn,
-        "weather",
-        &[
-            ("form_key", text("W")),
-            ("god_rays", text("{\"Day\":\"G\"}")),
-        ],
-    );
-    let db = client(conn);
-    assert!(!db.schema().weather_god_rays_columns_present);
-    assert_eq!(db.get_weather("W").unwrap().god_rays, None);
 }
 
 #[test]

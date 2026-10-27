@@ -8,7 +8,6 @@ use super::environment::{Environment, InteriorLighting};
 use super::exterior_weather::{ExteriorWeather, ExteriorWeatherSlots, ImageSpaceHdr};
 use super::fog::{Fog, FogParams, HeightFog};
 use super::frame_uniform::{FrameUniform, wrapped_time};
-use super::god_rays::InScatterUniformFields;
 use super::interior_catalog::InteriorLightingCatalog;
 use super::lightning::tuning::{FLASH_AMBIENT_GAIN, FLASH_SKY_GAIN};
 use super::sky_clock::{ClockedSky, SkyClock};
@@ -104,7 +103,7 @@ pub struct SkySettings {
     pub horizon: Vec3,
     pub ground: Vec3,
     pub ambient_intensity: f32,
-    /// Multiplies the sky and fog radiance, not the ambient.
+    /// Multiplies the sky radiance, not the ambient and not the fog.
     pub radiance_scale: f32,
 }
 
@@ -138,9 +137,7 @@ pub struct FogSettings {
 }
 
 impl FogSettings {
-    /// The fog with its colours scaled like the sky's (`horizon` before that scale), so fogged
-    /// geometry reaches the horizon as bright as the sky there.
-    pub fn fog(&self, horizon: Vec3, radiance_scale: f32) -> Fog {
+    pub fn fog(&self, horizon: Vec3) -> Fog {
         let mut params = self.params;
         if self.link_to_horizon {
             params.near_color = horizon;
@@ -148,7 +145,7 @@ impl FogSettings {
             params.height.near_high_color = horizon;
             params.height.far_high_color = horizon;
         }
-        Fog::Enabled(params).scaled(radiance_scale)
+        Fog::Enabled(params)
     }
 }
 
@@ -273,8 +270,6 @@ struct SceneTerms {
     sky_horizon: Vec3,
     sky_ground: Vec3,
     fog: Fog,
-    /// The sun's in-scatter into `fog`.
-    in_scatter: InScatterUniformFields,
 }
 
 /// What the frame uniform needs beyond the lighting state itself.
@@ -672,11 +667,7 @@ impl LightingState {
             ),
             ..bytemuck::Zeroable::zeroed()
         };
-        scene
-            .fog
-            .uniform_fields()
-            .with_in_scatter(scene.in_scatter)
-            .write_to(&mut frame);
+        scene.fog.uniform_fields().write_to(&mut frame);
         frame
     }
 
@@ -689,7 +680,6 @@ impl LightingState {
                 sky_horizon: Vec3::ZERO,
                 sky_ground: Vec3::ZERO,
                 fog: Fog::Disabled,
-                in_scatter: InScatterUniformFields::NONE,
                 ..self.exterior_terms()
             },
             Shading::Cell(cell) => {
@@ -705,7 +695,6 @@ impl LightingState {
                     sky_horizon: Vec3::ZERO,
                     sky_ground: Vec3::ZERO,
                     fog: cell.fog,
-                    in_scatter: InScatterUniformFields::NONE,
                 }
             }
         }
@@ -733,25 +722,8 @@ impl LightingState {
             sky_zenith: self.sky.zenith * self.sky.radiance_scale + sky_flash,
             sky_horizon: self.sky.horizon * self.sky.radiance_scale + sky_flash,
             sky_ground: self.sky.ground * self.sky.radiance_scale + sky_flash,
-            fog: self
-                .fog
-                .fog(self.sky.horizon, self.sky.radiance_scale)
-                .brightened(sky_flash),
-            in_scatter: self.sun_in_scatter(),
+            fog: self.fog.fog(self.sky.horizon).brightened(sky_flash),
         }
-    }
-
-    /// The weather's in-scatter under the sun disc: its colour and HDR scale, faded by its alpha
-    /// so it is gone at night. The moon scatters nothing.
-    fn sun_in_scatter(&self) -> InScatterUniformFields {
-        self.exterior_weather
-            .as_ref()
-            .map_or(InScatterUniformFields::NONE, |weather| {
-                let sun_radiance = self.sun.color * self.sun.intensity * self.sun.daylight;
-                weather
-                    .sun_in_scatter
-                    .uniform_fields(sun_radiance, self.sun_disc_direction())
-            })
     }
 }
 
@@ -802,7 +774,7 @@ mod tests {
     use super::super::ambient::AMBIENT_CUBE_FACES;
     use super::super::cell_lighting::{ResolvedLighting, TemplateStatus};
     use super::super::environment::NeutralReason;
-    use super::super::god_rays::SunInScatter;
+    use super::super::fog::HeightBand;
     use super::fixtures::lighting_state;
     use super::*;
 
@@ -987,7 +959,6 @@ mod tests {
             hdr: ImageSpaceHdr::default(),
             depth_of_field: None,
             fog: None,
-            sun_in_scatter: SunInScatter::NONE,
         }
     }
 
@@ -1165,10 +1136,10 @@ mod tests {
     #[test]
     fn linked_fog_takes_the_horizon_radiance_for_every_colour() {
         let settings = FogSettings::default();
-        let Fog::Enabled(params) = settings.fog(Vec3::new(4.5, 4.0, 3.5), 2.0) else {
+        let radiance = Vec3::new(9.0, 8.0, 7.0);
+        let Fog::Enabled(params) = settings.fog(radiance) else {
             panic!("exterior fog is always enabled");
         };
-        let radiance = Vec3::new(9.0, 8.0, 7.0);
         assert_eq!(params.near_color, radiance);
         assert_eq!(params.far_color, radiance);
         assert_eq!(params.height.near_high_color, radiance);
@@ -1177,7 +1148,7 @@ mod tests {
     }
 
     #[test]
-    fn unlinked_fog_keeps_its_own_colours_scaled_like_the_sky() {
+    fn unlinked_fog_keeps_its_own_colours() {
         let settings = FogSettings {
             link_to_horizon: false,
             params: FogParams {
@@ -1191,14 +1162,10 @@ mod tests {
                 ..FogSettings::default().params
             },
         };
-        let Fog::Enabled(params) = settings.fog(Vec3::splat(9.0), 2.0) else {
+        let Fog::Enabled(params) = settings.fog(Vec3::splat(9.0)) else {
             panic!("exterior fog is always enabled");
         };
-        assert_eq!(params.near_color, Vec3::new(0.6, 0.6, 0.6));
-        assert_eq!(params.far_color, Vec3::new(1.0, 0.5, 0.25));
-        assert_eq!(params.height.near_high_color, Vec3::splat(1.5));
-        assert_eq!(params.height.far_high_color, Vec3::splat(3.0));
-        assert_eq!(params.far, settings.params.far);
+        assert_eq!(params, settings.params);
     }
 
     fn exposure(ev: f32, auto: bool, adapt_speed: f32) -> ExposureSettings {
@@ -2126,40 +2093,46 @@ mod tests {
         }
 
         #[test]
-        fn without_a_flash_the_sky_and_linked_fog_are_the_settings_times_the_radiance_scale() {
+        fn without_a_flash_the_sky_is_the_settings_times_the_radiance_scale_and_linked_fog_is_not()
+        {
             let mut state = exterior();
             state.sky.radiance_scale = 2.5;
             let frame = frame_of(&state);
             assert_eq!(frame.sky_zenith.truncate(), state.sky.zenith * 2.5);
             assert_eq!(frame.sky_horizon.truncate(), state.sky.horizon * 2.5);
             assert_eq!(frame.sky_ground.truncate(), state.sky.ground * 2.5);
-            assert_eq!(frame.fog_near_color.truncate(), state.sky.horizon * 2.5);
-            assert_eq!(frame.fog_far_color.truncate(), state.sky.horizon * 2.5);
+            assert_eq!(frame.fog_near_color.truncate(), state.sky.horizon);
+            assert_eq!(frame.fog_far_color.truncate(), state.sky.horizon);
         }
 
         #[test]
-        fn the_fog_of_a_weather_meets_the_sky_horizon_at_the_same_radiance_scale() {
+        fn the_fog_of_a_weather_keeps_its_colours_whatever_the_sky_scale() {
             let mut state = exterior();
-            let horizon = Vec3::new(0.4, 0.5, 0.6);
+            let fog = FogParams {
+                height: HeightFog {
+                    near_high_color: Vec3::new(0.7, 0.6, 0.5),
+                    far_high_color: Vec3::new(0.2, 0.3, 0.4),
+                    near_band: HeightBand::new(0.0, 100.0),
+                    far_band: HeightBand::new(0.0, 200.0),
+                    high_density_scale: 1.0,
+                },
+                ..own_fog()
+            };
             state.set_exterior_weather(ExteriorWeather {
-                horizon,
-                fog: Some(Fog::Enabled(FogParams {
-                    near_color: horizon,
-                    far_color: horizon,
-                    ..own_fog()
-                })),
+                fog: Some(Fog::Enabled(fog)),
                 ..weather()
             });
             state.sky.radiance_scale = 2.4;
             let frame = frame_of(&state);
-            assert_eq!(frame.fog_far_color.truncate(), frame.sky_horizon.truncate());
+            assert_eq!(frame.fog_near_color.truncate(), fog.near_color);
+            assert_eq!(frame.fog_far_color.truncate(), fog.far_color);
             assert_eq!(
-                frame.fog_near_color.truncate(),
-                frame.sky_horizon.truncate()
+                frame.fog_near_high_color.truncate(),
+                fog.height.near_high_color
             );
             assert_eq!(
                 frame.fog_far_high_color.truncate(),
-                frame.sky_horizon.truncate()
+                fog.height.far_high_color
             );
         }
 
@@ -2179,94 +2152,6 @@ mod tests {
             assert_lifted(peak.sky_zenith, unlit.sky_zenith, lift);
             let over = frame_after(FLASH_LENGTH_S, &[]);
             assert_eq!(bytes(&over), bytes(&unlit));
-        }
-    }
-
-    mod sun_in_scatter {
-        use super::*;
-
-        fn scattering() -> SunInScatter {
-            SunInScatter {
-                forward: Vec3::new(1.0, 2.0, 3.0),
-                back: Vec3::new(0.5, 0.25, 0.125),
-                air: Vec3::splat(0.1),
-                forward_asymmetry: 0.7,
-                back_asymmetry: -0.3,
-            }
-        }
-
-        fn exterior_with(in_scatter: SunInScatter) -> LightingState {
-            let mut state = lighting_state();
-            state.set_exterior_weather(ExteriorWeather {
-                sun_in_scatter: in_scatter,
-                ..weather()
-            });
-            state
-        }
-
-        fn in_scatter_of(frame: &FrameUniform) -> InScatterUniformFields {
-            InScatterUniformFields {
-                forward: frame.fog_sun_forward,
-                back: frame.fog_sun_back,
-                air: frame.fog_sun_air,
-                to_sun: frame.fog_to_sun,
-            }
-        }
-
-        fn assert_colourless(fields: InScatterUniformFields, row: &str) {
-            for colour in [fields.forward, fields.back, fields.air] {
-                assert_eq!(colour.truncate(), Vec3::ZERO, "{row}");
-            }
-        }
-
-        #[test]
-        fn the_weathers_in_scatter_takes_the_suns_colour_hdr_scale_alpha_and_direction() {
-            let mut state = exterior_with(scattering());
-            state.sun.color = Vec3::new(1.0, 0.5, 0.25);
-            state.sun.intensity = 4.0;
-            state.sun.daylight = 0.5;
-            let expected =
-                scattering().uniform_fields(Vec3::new(2.0, 1.0, 0.5), state.sun.direction_to_sun());
-            assert_eq!(in_scatter_of(&frame_of(&state)), expected);
-        }
-
-        #[test]
-        fn the_in_scatter_ignores_how_strongly_the_light_shines_which_may_be_the_moons() {
-            let mut state = exterior_with(scattering());
-            let full = in_scatter_of(&frame_of(&state));
-            state.sun.light_strength = 0.1;
-            assert_eq!(in_scatter_of(&frame_of(&state)), full);
-        }
-
-        #[test]
-        fn without_the_sun_the_fog_scatters_nothing() {
-            let mut state = exterior_with(scattering());
-            state.sun.daylight = 0.0;
-            assert_colourless(in_scatter_of(&frame_of(&state)), "night");
-        }
-
-        #[test]
-        fn a_weather_without_god_rays_or_no_weather_scatters_nothing() {
-            assert_colourless(
-                in_scatter_of(&frame_of(&exterior_with(SunInScatter::NONE))),
-                "weather without god rays",
-            );
-            assert_eq!(
-                in_scatter_of(&frame_of(&lighting_state())),
-                InScatterUniformFields::NONE
-            );
-        }
-
-        #[test]
-        fn interiors_shaded_without_the_exterior_terms_scatter_nothing() {
-            for lighting in [resolved_cell(), neutral()] {
-                let mut state = exterior_with(scattering());
-                state.environment = interior(lighting);
-                assert_eq!(
-                    in_scatter_of(&frame_of(&state)),
-                    InScatterUniformFields::NONE
-                );
-            }
         }
     }
 }

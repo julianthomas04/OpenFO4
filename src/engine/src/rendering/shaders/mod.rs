@@ -76,8 +76,6 @@ pub const SKY: ShaderSource = ShaderSource {
         include_str!("light_data.wgsl"),
         include_str!("frame.wgsl"),
         include_str!("fullscreen.wgsl"),
-        include_str!("fog.wgsl"),
-        include_str!("sky_fog.wgsl"),
         include_str!("sky.wgsl"),
     ),
 };
@@ -114,8 +112,6 @@ pub const SKY_CLOUDS: ShaderSource = ShaderSource {
     wgsl: concat!(
         include_str!("light_data.wgsl"),
         include_str!("frame.wgsl"),
-        include_str!("fog.wgsl"),
-        include_str!("sky_fog.wgsl"),
         include_str!("sky_clouds.wgsl"),
     ),
 };

@@ -20,13 +20,6 @@ struct FrameUniform {
     fog_far_high_color: vec4<f32>,
     // Bottom and reciprocal span of the near (xy) and far (zw) height bands.
     fog_heights: vec4<f32>,
-    // The sun's in-scatter into the fog: the forward and backward lobes' colours under the sun
-    // (rgb) with their Henyey-Greenstein asymmetry (w), the isotropic air colour, and the unit
-    // direction towards the sun disc (it never follows the moon).
-    fog_sun_forward: vec4<f32>,
-    fog_sun_back: vec4<f32>,
-    fog_sun_air: vec4<f32>,
-    fog_to_sun: vec4<f32>,
     cascade_view_proj: array<mat4x4<f32>, 4>,
     cascade_spheres: array<vec4<f32>, 4>,
     shadow_params: vec4<f32>,

@@ -12,12 +12,10 @@ use crate::rendering::gpu_test::test_device;
 use crate::rendering::lighting::ambient::AMBIENT_CUBE_FACES;
 use crate::rendering::lighting::fog::{Fog, FogUniformFields};
 use crate::rendering::lighting::frame_uniform::FrameUniform;
-use crate::rendering::lighting::god_rays::InScatterUniformFields;
 use crate::rendering::shaders::OBJECT;
 use crate::rendering::shadows::lamps::table::SHADOW_SLOT_NONE;
 
 const ENTRY_SOURCE: &str = include_str!("entry.wgsl");
-const SKY_FOG_SOURCE: &str = include_str!("../sky_fog.wgsl");
 const ENTRY_POINT: &str = "lighting_test_main";
 const MAX_SPECULAR_INTENSITY_OVERRIDE: &str = "MAX_SPECULAR_INTENSITY";
 const FRAME_GROUP: u32 = 1;
@@ -44,8 +42,7 @@ const KIND_EFFECT_LAYER: u32 = 15;
 const KIND_EFFECT_FACING: u32 = 16;
 const KIND_LIT_ENV_F0: u32 = 17;
 const KIND_FOG: u32 = 18;
-const KIND_SKY_FOG: u32 = 19;
-const KIND_APPLY_FOG: u32 = 20;
+const KIND_APPLY_FOG: u32 = 19;
 
 /// Mirrors `TestCase` in `entry.wgsl`.
 #[repr(C)]
@@ -398,15 +395,6 @@ impl Case {
         case
     }
 
-    /// The sky `radiance` in the unit `direction` under the fog (diffuse), and the sky's share of
-    /// the fog there (specular x).
-    pub fn sky_fog(radiance: Vec3, direction: Vec3) -> Self {
-        let mut case = Self::blank(KIND_SKY_FOG);
-        case.light_color = radiance.extend(0.0);
-        case.to_light = direction.extend(0.0);
-        case
-    }
-
     /// A surface of `color` at `world_pos` under the fog (diffuse).
     pub fn apply_fog(color: Vec3, world_pos: Vec3) -> Self {
         let mut case = Self::blank(KIND_APPLY_FOG);
@@ -425,7 +413,6 @@ pub struct Environment {
     /// Linear ambient colour of each cube face in the frame uniform's order.
     pub ambient_cube: [Vec3; AMBIENT_CUBE_FACES],
     pub camera: Vec3,
-    /// The fog with the sun's in-scatter.
     pub fog: FogUniformFields,
 }
 
@@ -445,18 +432,6 @@ impl Environment {
         Self {
             camera,
             fog: fog.uniform_fields(),
-            ..Self::default()
-        }
-    }
-
-    pub fn with_fog_and_in_scatter(
-        camera: Vec3,
-        fog: &Fog,
-        in_scatter: InScatterUniformFields,
-    ) -> Self {
-        Self {
-            camera,
-            fog: fog.uniform_fields().with_in_scatter(in_scatter),
             ..Self::default()
         }
     }
@@ -497,7 +472,7 @@ impl LightingHarness {
                 "the object shader needs device features the adapter lacks: {missing:?}"
             ));
         }
-        let source = format!("{}{SKY_FOG_SOURCE}{ENTRY_SOURCE}", OBJECT.wgsl());
+        let source = format!("{}{ENTRY_SOURCE}", OBJECT.wgsl());
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("lighting_test_shader"),
             source: wgpu::ShaderSource::Wgsl(source.into()),

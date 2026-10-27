@@ -35,8 +35,6 @@ const MATERIAL_SWAP_COLUMNS: &[&str] = &["material_name"];
 const WORLDSPACE_WEATHER_COLUMNS: &[&str] = &["climate"];
 const WEATHER_COLUMNS: &[&str] = &["directional_ambient"];
 const WEATHER_FOG_COLUMNS: &[&str] = &["fog"];
-const WEATHER_GOD_RAYS_COLUMNS: &[&str] = &["god_rays"];
-const GOD_RAYS_DATA_COLUMNS: &[&str] = &["data"];
 const WEATHER_LIBRARY_COLUMNS: &[&str] = &["clouds", "data"];
 const CLIMATE_VOLATILITY_COLUMNS: &[&str] = &["volatility"];
 const PARTICLE_GEOMETRY_COLUMNS: &[&str] = &["data", "particle_texture", "particle_material"];
@@ -79,9 +77,6 @@ const WORLDSPACE_MAP_IMAGE_COLUMNS: &[&str] = &["map_image"];
 pub const WEATHER_LIBRARY_TABLES_FIX: &str =
     "esm-only --tables weather,climates,shader_particle_geometries";
 
-/// The installer command that fills the weather god rays and their data.
-const GOD_RAYS_TABLES_FIX: &str = "esm-only --tables weather,god_rayses";
-
 /// The installer command that fills the Pip-Boy tables and columns.
 const PIPBOY_TABLES_FIX: &str =
     "esm-only --tables worldspaces,map_markers,perks,perk_chart,special_attributes";
@@ -116,8 +111,6 @@ pub enum ColumnGroup {
     WorldspaceWeather,
     Weather,
     WeatherFog,
-    WeatherGodRays,
-    GodRaysData,
     WeatherLibrary,
     ClimateVolatility,
     ParticleGeometry,
@@ -148,8 +141,6 @@ impl std::fmt::Display for ColumnGroup {
             Self::WorldspaceWeather => "worldspace weather",
             Self::Weather => "weather",
             Self::WeatherFog => "weather fog",
-            Self::WeatherGodRays => "weather god rays",
-            Self::GodRaysData => "god rays data",
             Self::WeatherLibrary => "weather library",
             Self::ClimateVolatility => "climate volatility",
             Self::ParticleGeometry => "particle geometry",
@@ -370,8 +361,6 @@ pub struct DbSchema {
     pub material_swap_name_column_present: bool,
     pub weather_columns_present: bool,
     pub weather_fog_column_present: bool,
-    /// The god rays of the weathers and the data of the god rays records, both or neither.
-    pub weather_god_rays_columns_present: bool,
     /// The weather clouds and data, the climate volatility and the particle geometry
     /// columns the weather library needs, all or none.
     pub weather_library_columns_present: bool,
@@ -436,17 +425,6 @@ impl DbSchema {
                 ColumnGroup::WeatherFog,
                 "weather",
                 WEATHER_FOG_COLUMNS,
-            )?,
-            weather_god_rays_columns_present: column_group_present(
-                conn,
-                ColumnGroup::WeatherGodRays,
-                "weather",
-                WEATHER_GOD_RAYS_COLUMNS,
-            )? & column_group_present(
-                conn,
-                ColumnGroup::GodRaysData,
-                "god_rayses",
-                GOD_RAYS_DATA_COLUMNS,
             )?,
             weather_library_columns_present: column_group_present(
                 conn,
@@ -586,11 +564,6 @@ impl DbSchema {
             {
                 tracing::warn!(
                     "water columns missing (database predates water extraction); cell and worldspace water planes and placed water meshes cannot name their water type"
-                );
-            }
-            if !self.weather_god_rays_columns_present {
-                tracing::warn!(
-                    "weather.god_rays / god_rayses.data columns missing (database predates the god rays export); exterior fog has no sun in-scatter. Fix: run the installer with `{GOD_RAYS_TABLES_FIX}`"
                 );
             }
             if !self.material_swap_name_column_present {

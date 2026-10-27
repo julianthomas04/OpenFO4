@@ -8,7 +8,6 @@ use serde::Deserialize;
 
 use super::ambient::AmbientCube;
 use super::fog::{Fog, FogParams, HeightBands, HeightFog};
-use super::god_rays::SunInScatter;
 use super::lerp::{Lerp, lerp_fields, snap_to_nearer};
 use super::time_of_day::{
     ClimateMoon, ClimateSky, ClimateSunTextures, ClimateTimes, SlotBlend, TimeSlot,
@@ -83,7 +82,6 @@ pub(super) struct SlotValues {
     pub(super) ambient_specular: Vec3,
     pub(super) hdr: ImageSpaceHdr,
     pub(super) depth_of_field: Option<ImageSpaceDepthOfField>,
-    pub(super) sun_in_scatter: SunInScatter,
 }
 
 lerp_fields!(SlotValues {
@@ -98,7 +96,6 @@ lerp_fields!(SlotValues {
     ambient_specular,
     hdr,
     depth_of_field,
-    sun_in_scatter,
 });
 
 /// A fog distance set in engine units, with the bands and density scale of its height fog.
@@ -189,9 +186,6 @@ pub struct ExteriorWeather {
     /// `None` when the database carries no fog data for the weather;
     /// `Fog::Disabled` when the weather explicitly has no fog.
     pub fog: Option<Fog>,
-    /// The sun's light the fog scatters towards the eye, from the weather's god rays;
-    /// [`SunInScatter::NONE`] where the weather has none.
-    pub sun_in_scatter: SunInScatter,
 }
 
 /// The blend of two weathers at one moment. The names have no midpoint, so they snap to the
@@ -215,7 +209,6 @@ impl Lerp for ExteriorWeather {
             hdr: Lerp::lerp(&self.hdr, &other.hdr, t),
             depth_of_field: Lerp::lerp(&self.depth_of_field, &other.depth_of_field, t),
             fog: Lerp::lerp(&self.fog, &other.fog, t),
-            sun_in_scatter: Lerp::lerp(&self.sun_in_scatter, &other.sun_in_scatter, t),
         }
     }
 }
@@ -319,7 +312,6 @@ impl ExteriorWeatherSlots {
             ambient_specular,
             hdr,
             depth_of_field,
-            sun_in_scatter,
         } = from.lerp(to, blend.t);
         ExteriorWeather {
             form_key: Arc::clone(&self.form_key),
@@ -336,7 +328,6 @@ impl ExteriorWeatherSlots {
             hdr,
             depth_of_field,
             fog: self.fog.as_ref().map(|fog| fog.sample(blend)),
-            sun_in_scatter,
         }
     }
 }
@@ -386,13 +377,6 @@ mod tests {
                 max: 21.0 * level,
                 height: HeightFog::NONE,
             })),
-            sun_in_scatter: SunInScatter {
-                forward: Vec3::splat(22.0 * level),
-                back: Vec3::splat(23.0 * level),
-                air: Vec3::splat(24.0 * level),
-                forward_asymmetry: 0.5 * level,
-                back_asymmetry: -0.25 * level,
-            },
         }
     }
 
