@@ -14,7 +14,7 @@ use crate::utils::warn_once;
 use crate::water_world::Immersion;
 
 /// The `w` of the fog colour register.
-const TINT_W: f32 = 1.0;
+const FOG_COLOUR_W: f32 = 1.0;
 
 /// What a WATR contributes to the fog: the underwater
 /// colour, `pow(byte / 255, 2.2)`, and the three distances. The amount is
@@ -41,7 +41,7 @@ impl UnderwaterFog {
     /// The weather's water multiplier is not applied: its reach under water is unmeasured.
     pub fn registers(&self) -> [Vec4; 2] {
         [
-            self.colour.extend(TINT_W),
+            self.colour.extend(FOG_COLOUR_W),
             Vec4::new(self.far, self.near, self.amount, 0.0),
         ]
     }

@@ -292,18 +292,14 @@ impl WaterSetting {
 pub struct WaterEnvironment {
     /// `cb1[2]` source: the current worldspace's water.
     pub far_field: FarField,
-    /// The water multiplier colour applied to `cb1[0..=2]`, `[6]`, `[7]` and the interior
-    /// `[3..=5]`: the weather's, else [`Self::NEUTRAL_TINT`]. The underwater colour that
-    /// replaces `cb1[0]` under water stays untinted.
+    /// The water multiplier colour applied to `cb1[0..=2]`, `[6]` and `[7]`: the weather's, else
+    /// [`Self::NEUTRAL_TINT`]. The reflection rows `[3..=5]` and the underwater colour that
+    /// replaces `cb1[0]` under water stay untinted.
     pub tint: Vec3,
 }
 
 impl WaterEnvironment {
     pub const NEUTRAL_TINT: Vec3 = Vec3::ONE;
-
-    pub fn new(far_field: FarField) -> Self {
-        Self::under(far_field, None)
-    }
 
     /// The environment under a weather's water multiplier; without one (an interior, or no
     /// weather loaded) the colours stay as the WATR gives them.
@@ -444,7 +440,7 @@ fn pixel_cb1(
     }
 
     let gradient = if interior {
-        [tinted(material.reflection_color.extend(0.0), tint); 3]
+        [material.reflection_color.extend(0.0); 3]
     } else {
         // Horizon, sky lower, sky upper; the frame's sky colours already carry the HDR sky scale.
         [frame.sky_horizon, frame.sky_ground, frame.sky_zenith]
@@ -554,7 +550,7 @@ mod tests {
     }
 
     fn exterior_cb1() -> [Vec4; PS_CB1_LEN] {
-        let environment = WaterEnvironment::new(other_water_far_field());
+        let environment = WaterEnvironment::under(other_water_far_field(), None);
         pixel_cb1(&ocean_material(), &frame_fixture(), &environment, false)
     }
 
@@ -629,7 +625,7 @@ mod tests {
 
     #[test]
     fn interior_far_field_is_black_with_reflectivity_one() {
-        let environment = WaterEnvironment::new(other_water_far_field());
+        let environment = WaterEnvironment::under(other_water_far_field(), None);
         let cb1 = pixel_cb1(&ocean_material(), &frame_fixture(), &environment, true);
         assert_eq!(cb1[2], Vec4::new(0.0, 0.0, 0.0, 1.0));
     }
@@ -683,10 +679,7 @@ mod tests {
     #[test]
     fn tint_multiplies_the_colour_rows_but_not_their_w() {
         let tint = Vec3::new(0.5, 2.0, 0.25);
-        let environment = WaterEnvironment {
-            tint,
-            ..WaterEnvironment::new(other_water_far_field())
-        };
+        let environment = WaterEnvironment::under(other_water_far_field(), Some(tint));
         let plain = exterior_cb1();
         let tinted_cb1 = pixel_cb1(&ocean_material(), &frame_fixture(), &environment, false);
         for row in [0, 1, 2, 6, 7] {
@@ -706,7 +699,7 @@ mod tests {
     fn camera_underwater_swaps_the_underwater_colour_into_cb1_0() {
         let mut frame = frame_fixture();
         frame.time_water.z = 1.0;
-        let environment = WaterEnvironment::new(other_water_far_field());
+        let environment = WaterEnvironment::under(other_water_far_field(), None);
         let cb1 = pixel_cb1(&ocean_material(), &frame, &environment, false);
         assert_close(cb1[0].truncate(), gamma([100, 110, 120]), "cb1[0].xyz");
         assert_eq!(cb1[0].w, 10000.0, "the sparkle power stays");
@@ -714,10 +707,7 @@ mod tests {
 
     #[test]
     fn exterior_sky_gradient_is_horizon_lower_upper_untinted() {
-        let environment = WaterEnvironment {
-            tint: Vec3::splat(0.5),
-            ..WaterEnvironment::new(other_water_far_field())
-        };
+        let environment = WaterEnvironment::under(other_water_far_field(), Some(Vec3::splat(0.5)));
         let frame = frame_fixture();
         let cb1 = pixel_cb1(&ocean_material(), &frame, &environment, false);
         assert_eq!(cb1[3], frame.sky_horizon.truncate().extend(0.0));
@@ -726,14 +716,11 @@ mod tests {
     }
 
     #[test]
-    fn interior_sky_gradient_is_the_tinted_reflection_colour_three_times() {
-        let tint = Vec3::new(0.5, 1.0, 2.0);
-        let environment = WaterEnvironment {
-            tint,
-            ..WaterEnvironment::new(other_water_far_field())
-        };
+    fn interior_sky_gradient_is_the_untinted_reflection_colour_three_times() {
+        let environment =
+            WaterEnvironment::under(other_water_far_field(), Some(Vec3::new(0.5, 1.0, 2.0)));
         let cb1 = pixel_cb1(&ocean_material(), &frame_fixture(), &environment, true);
-        let expected = gamma([50, 60, 70]) * tint;
+        let expected = gamma([50, 60, 70]);
         for (row, register) in cb1.iter().enumerate().take(6).skip(3) {
             assert_close(register.truncate(), expected, &format!("cb1[{row}]"));
             assert_eq!(register.w, 0.0);
@@ -1062,7 +1049,7 @@ mod tests {
         let frame = frame_fixture();
         let mut material = ocean_material();
         material.advance_scroll(5.0);
-        let environment = WaterEnvironment::new(material.far_field());
+        let environment = WaterEnvironment::under(material.far_field(), None);
         let draw = draw_constants(
             &material,
             &frame,
