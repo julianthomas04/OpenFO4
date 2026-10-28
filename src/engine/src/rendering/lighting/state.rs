@@ -734,7 +734,7 @@ impl LightingState {
             self.shading(),
             self.exterior_weather
                 .as_ref()
-                .map(|weather| weather.ambient_cube),
+                .map(|weather| weather.ambient.cube()),
             self.use_weather_ambient,
             &self.sky,
             self.lightning,
@@ -806,6 +806,7 @@ mod tests {
     use super::super::ambient::AMBIENT_CUBE_FACES;
     use super::super::cell_lighting::{ResolvedLighting, TemplateStatus};
     use super::super::environment::NeutralReason;
+    use super::super::exterior_weather::WeatherAmbient;
     use super::super::fog::measured::{BlendedFogColors, DAY_COLOUR_FACTORS};
     use super::super::fog::{ExteriorFog, FogRange};
     use super::super::tonemap_settings::ImageSpaceCinematic;
@@ -988,7 +989,10 @@ mod tests {
             sky_lower: Vec3::new(0.3, 0.2, 0.1),
             horizon: Vec3::new(0.6, 0.7, 0.8),
             stars: Vec3::ZERO,
-            ambient_cube: weather_cube(),
+            ambient: WeatherAmbient {
+                colors: weather_cube(),
+                scale: 1.0,
+            },
             ambient_specular: Vec3::ZERO,
             hdr: ImageSpaceHdr::default(),
             cinematic: ImageSpaceCinematic::NEUTRAL,
@@ -1635,10 +1639,10 @@ mod tests {
             at_hour(&mut state, 0, 13.0);
             manual_sun(&mut state);
             let exposure = state.exposure.hdr;
-            let ambient = state.exterior_weather().unwrap().ambient_cube;
+            let ambient = state.exterior_weather().unwrap().ambient;
             at_hour(&mut state, 0, 0.0);
             assert_eq!(state.exposure.hdr, exposure);
-            assert_eq!(state.exterior_weather().unwrap().ambient_cube, ambient);
+            assert_eq!(state.exterior_weather().unwrap().ambient, ambient);
         }
 
         #[test]

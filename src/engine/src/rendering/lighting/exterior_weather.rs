@@ -4,7 +4,7 @@ use glam::Vec3;
 use serde::Deserialize;
 
 use super::ambient::{AMBIENT_CUBE_FACES, AmbientCube};
-use super::cell_lighting::{RawColor, bethesda_faces_to_engine_order};
+use super::cell_lighting::{RawColor, StoredColourEncoding, bethesda_faces_to_engine_order};
 use super::fog::measured::{BlendedFogColors, slot_colour_factors, slot_day_weight};
 use super::fog::{FogColors, FogRange, HeightFogError, RawHeightFog};
 use super::time_of_day::{
@@ -12,9 +12,12 @@ use super::time_of_day::{
     ClimateTimesError, TimeSlot,
 };
 use super::tonemap_settings::ImageSpaceCinematic;
-pub use super::weather_slots::{ExteriorWeather, ExteriorWeatherSlots, ImageSpaceHdr};
 use super::weather_slots::{
-    SLOT_COLOUR_ENCODING, SlotFogColors, SlotValues, StoredSkyColors, WeatherFog,
+    AMBIENT_ENCODING, GLARE_AND_STARS_ENCODING, SKY_ENCODING, SUN_DISC_ENCODING, SUNLIGHT_ENCODING,
+    SlotFogColors, SlotValues, TINT_ENCODING, WeatherFog,
+};
+pub use super::weather_slots::{
+    ExteriorWeather, ExteriorWeatherSlots, ImageSpaceHdr, WeatherAmbient,
 };
 use crate::assets::db::DbClient;
 use crate::assets::db::weather::WeatherRow;
@@ -203,7 +206,7 @@ impl From<RawImageSpaceData> for ImageSpaceData {
                 brightness: raw.cinematic.brightness,
                 contrast: raw.cinematic.contrast,
                 tint_amount: raw.tint.amount,
-                tint_color: raw.tint.color.gamma_linear(),
+                tint_color: raw.tint.color.decoded(TINT_ENCODING),
             },
         }
     }
@@ -276,7 +279,7 @@ impl ExteriorWeatherSlots {
                     initial.sky_lower,
                     initial.horizon,
                     initial.stars,
-                    initial.ambient_cube.0,
+                    initial.ambient,
                     initial.ambient_specular,
                     initial
                         .fog
@@ -373,26 +376,28 @@ fn load_slot(
     ambient: &DirectionalAmbient,
     image_space: ImageSpaceData,
 ) -> Result<SlotValues, ExteriorWeatherError> {
-    let group = |name: &str| color_in_slot(weather, colors, name, slot);
-    let stored = |name: &str| raw_color_in_slot(weather, colors, name, slot).map(RawColor::unit);
+    let group = |name: &str, encoding: StoredColourEncoding| {
+        raw_color_in_slot(weather, colors, name, slot).map(|color| color.decoded(encoding))
+    };
     let dalc = ambient
         .get(slot.json_key())
         .ok_or_else(|| missing_slot(weather, "directional ambient", slot))?;
-    let ambient_cube = AmbientCube(
-        bethesda_faces_to_engine_order(faces_lit_by_weather_axes(dalc))
-            .map(|face| face.linear() * dalc.scale),
-    );
+    let ambient = WeatherAmbient {
+        colors: AmbientCube(
+            bethesda_faces_to_engine_order(faces_lit_by_weather_axes(dalc))
+                .map(|face| face.decoded(AMBIENT_ENCODING)),
+        ),
+        scale: dalc.scale,
+    };
     Ok(SlotValues {
-        sun_light: group("Sunlight")?,
-        sun_disc: raw_color_in_slot(weather, colors, "Sun", slot).map(RawColor::gamma_linear)?,
-        sun_glare: group("SunGlare")?,
-        sky: StoredSkyColors {
-            upper: stored("SkyUpper")?,
-            lower: stored("SkyLower")?,
-            horizon: stored("Horizon")?,
-        },
-        stars: group("Stars")?,
-        ambient_cube,
+        sun_light: group("Sunlight", SUNLIGHT_ENCODING)?,
+        sun_disc: group("Sun", SUN_DISC_ENCODING)?,
+        sun_glare: group("SunGlare", GLARE_AND_STARS_ENCODING)?,
+        sky_upper: group("SkyUpper", SKY_ENCODING)?,
+        sky_lower: group("SkyLower", SKY_ENCODING)?,
+        horizon: group("Horizon", SKY_ENCODING)?,
+        stars: group("Stars", GLARE_AND_STARS_ENCODING)?,
+        ambient,
         ambient_specular: dalc.specular.linear(),
         hdr: image_space.hdr,
         cinematic: image_space.cinematic,
@@ -411,15 +416,6 @@ fn faces_lit_by_weather_axes(dalc: &RawAmbientColors) -> [RawColor; AMBIENT_CUBE
         dalc.z_minus,
         dalc.z_plus,
     ]
-}
-
-fn color_in_slot(
-    weather: &str,
-    colors: &ColorGroups,
-    group: &str,
-    slot: TimeSlot,
-) -> Result<Vec3, ExteriorWeatherError> {
-    raw_color_in_slot(weather, colors, group, slot).map(|color| color.decoded(SLOT_COLOUR_ENCODING))
 }
 
 fn raw_color_in_slot(
@@ -986,7 +982,7 @@ mod tests {
         });
         let mut row = row();
         row.directional_ambient = Some(same_in_every_slot(&slot).to_string());
-        let cube = day_weather(row).ambient_cube.0;
+        let cube = day_weather(row).ambient.cube().0;
         // Engine faces +X (east), -X, +Y (up), -Y, +Z (south), -Z take the Bethesda colours of
         // the opposite axes: X-, X+, Z-, Z+, Y+ (north), Y-.
         let expected_bytes: [u8; 6] = [20, 10, 60, 50, 30, 40];
@@ -1182,15 +1178,17 @@ mod tests {
     }
 
     #[test]
-    fn a_blend_mixes_exactly_its_two_slots_in_linear_space() {
+    fn a_blend_mixes_exactly_its_two_slots_as_stored_bytes() {
         let slots = load(sunlight_by_slot()).unwrap();
         let weather = slots.sample(between(LateSunrise, Sunrise, 0.25));
-        let expected = sunlight_red(LateSunrise) * 0.75 + sunlight_red(Sunrise) * 0.25;
-        assert!((weather.sun_light.x - expected).abs() < 1e-6);
+        let stored_byte = f32::from(LateSunrise.index() as u8 * 30) * 0.75
+            + f32::from(Sunrise.index() as u8 * 30) * 0.25;
+        let expected = SUNLIGHT_ENCODING.decode(Vec3::new(stored_byte / 255.0, 0.0, 0.0));
+        assert!((weather.sun_light.x - expected.x).abs() < 1e-6);
     }
 
     #[test]
-    fn halfway_between_black_and_white_is_linear_one_half_not_the_encoded_mid_grey() {
+    fn halfway_between_black_and_white_is_the_stored_mid_grey_decoded() {
         let mut colors = colors();
         colors["Sun"] = per_slot(|slot| {
             if slot == Night {
@@ -1202,7 +1200,7 @@ mod tests {
         let mut row = row();
         row.colors = Some(colors.to_string());
         let weather = load(row).unwrap().sample(between(Night, Day, 0.5));
-        assert!((weather.sun_disc.x - 0.5).abs() < 1e-6);
+        assert!((weather.sun_disc.x - 0.5_f32.powf(2.2)).abs() < 1e-6);
     }
 
     #[test]
@@ -1223,9 +1221,10 @@ mod tests {
         row.colors = Some(colors.to_string());
         let weather = load(row).unwrap().sample(between(Night, Day, 0.5));
         let stored_half = 0.5_f32.powf(2.2);
+        let srgb_half = ((0.5 + 0.055) / 1.055_f32).powf(2.4);
         for (name, colour, expected) in [
-            ("sun light", weather.sun_light, 0.5),
-            ("sun disc", weather.sun_disc, 0.5),
+            ("sun light", weather.sun_light, srgb_half),
+            ("sun disc", weather.sun_disc, stored_half),
             ("sun glare", weather.sun_glare, 0.5),
             ("sky upper", weather.sky_upper, stored_half),
             ("sky lower", weather.sky_lower, stored_half),
@@ -1288,13 +1287,41 @@ mod tests {
         let day = slots.sample(at(Day));
         let night = slots.sample(at(Night));
         let halfway = slots.sample(between(Night, Day, 0.5));
-        assert!(night.ambient_cube.0.iter().all(|face| *face == Vec3::ZERO));
+        assert!(
+            night
+                .ambient
+                .cube()
+                .0
+                .iter()
+                .all(|face| *face == Vec3::ZERO)
+        );
         for face in 0..6 {
             assert!(
-                halfway.ambient_cube.0[face].abs_diff_eq(day.ambient_cube.0[face] * 0.5, 1e-6),
+                halfway.ambient.cube().0[face].abs_diff_eq(day.ambient.cube().0[face] * 0.5, 1e-6),
                 "face {face}"
             );
         }
+    }
+
+    #[test]
+    fn the_ambient_colours_blend_as_stored_bytes_and_their_scale_linearly() {
+        let mut ambient = directional_ambient(1.0);
+        let mut night = ambient_slot(0.5);
+        night["YPlus"] = rgb(0, 0, 0);
+        ambient["Night"] = night;
+        let mut row = row();
+        row.directional_ambient = Some(ambient.to_string());
+        let halfway = load(row).unwrap().sample(between(Night, Day, 0.5));
+        let srgb_half = ((0.5 + 0.055) / 1.055_f32).powf(2.4);
+        let lit = halfway
+            .ambient
+            .colors
+            .0
+            .iter()
+            .find(|face| face.x > 0.0)
+            .unwrap();
+        assert!(lit.abs_diff_eq(Vec3::splat(srgb_half), 1e-6), "{lit}");
+        assert!((halfway.ambient.scale - 0.75).abs() < 1e-6);
     }
 
     #[test]
@@ -1333,15 +1360,26 @@ mod tests {
         };
         let slots = slots_with(row(), &image_spaces).unwrap();
         let cinematic = slots.sample(between(Night, Day, 0.5)).cinematic;
+        let stored_half = 0.5_f32.powf(2.2);
         assert_eq!(
-            cinematic,
+            ImageSpaceCinematic {
+                tint_color: Vec3::ZERO,
+                ..cinematic
+            },
             ImageSpaceCinematic {
                 saturation: 0.5,
                 brightness: 1.5,
                 contrast: 0.75,
                 tint_amount: 0.5,
-                tint_color: Vec3::new(1.0, 0.5, 0.5),
+                tint_color: Vec3::ZERO,
             }
+        );
+        assert!(
+            cinematic
+                .tint_color
+                .abs_diff_eq(Vec3::new(1.0, stored_half, stored_half), 1e-6),
+            "the tint blends as stored: {}",
+            cinematic.tint_color
         );
     }
 

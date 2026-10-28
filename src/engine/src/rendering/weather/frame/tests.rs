@@ -9,7 +9,7 @@ use glam::Vec3;
 
 use super::fixtures::{A, B, DAY, DUSK, NIGHT, library, settled, transition, weather, with_sky};
 use super::*;
-use crate::rendering::lighting::cell_lighting::srgb_unit_to_linear;
+use crate::rendering::lighting::cell_lighting::DISPLAY_GAMMA;
 use crate::rendering::lighting::time_of_day::TimeSlot;
 use crate::rendering::weather::WeatherDef;
 use crate::rendering::weather::library::fixtures::library_of;
@@ -107,9 +107,10 @@ fn a_transition_starts_at_the_sky_of_the_weather_it_leaves_and_ends_at_that_of_t
     );
 }
 
-/// How far a channel from black has come when the stored colours are `progress` of the way.
+/// How far a sky channel from black has come when the stored colours are `progress` of the way:
+/// the sky decodes its stored colours with gamma 2.2.
 fn from_black(progress: f32) -> f32 {
-    srgb_unit_to_linear(progress)
+    progress.powf(DISPLAY_GAMMA)
 }
 
 #[test]

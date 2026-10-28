@@ -7,7 +7,7 @@ use glam::Vec3;
 use serde::Deserialize;
 
 use super::ambient::AmbientCube;
-use super::cell_lighting::{StoredColourEncoding, gamma_decode};
+use super::cell_lighting::StoredColourEncoding;
 use super::fog::measured::BlendedFogColors;
 use super::fog::{ExteriorFog, FogRange};
 use super::lerp::{Lerp, lerp_fields, lerp_stored, snap_to_nearer};
@@ -74,64 +74,50 @@ impl Default for ImageSpaceHdr {
     }
 }
 
-/// The sky's three colours as stored, each channel scaled to 0 to 1. The time slots blend them
-/// so, and [`Self::decoded`] turns the blend into light with gamma 2.2: the probe's sky slots
-/// fit a blend of the stored bytes better than one of linear light at every hour between two
-/// slots, and the sky's grey ladder decodes like gamma 2.2.
+/// How the loader decodes each stored colour of a slot. The time slots and a change of weather
+/// blend the sky, sun disc, sunlight, directional ambient and tint colours as stored and decode
+/// the blend once (see [`ExteriorWeather::cross_fade`]); the glare and star colours, whose blend
+/// is unmeasured, blend in linear light.
+pub(super) const SKY_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
+pub(super) const SUN_DISC_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
+pub(super) const SUNLIGHT_ENCODING: StoredColourEncoding = StoredColourEncoding::Srgb;
+pub(super) const AMBIENT_ENCODING: StoredColourEncoding = StoredColourEncoding::Srgb;
+pub(super) const TINT_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
+pub(super) const GLARE_AND_STARS_ENCODING: StoredColourEncoding = StoredColourEncoding::Srgb;
+
+/// A weather's directional ambient: its six colours as linear light, faces in engine order, and
+/// the scale they light with.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct StoredSkyColors {
-    pub(super) upper: Vec3,
-    pub(super) lower: Vec3,
-    pub(super) horizon: Vec3,
+pub struct WeatherAmbient {
+    pub colors: AmbientCube,
+    pub scale: f32,
 }
 
-lerp_fields!(StoredSkyColors {
-    upper,
-    lower,
-    horizon
-});
+lerp_fields!(WeatherAmbient { colors, scale });
 
-impl StoredSkyColors {
-    fn decoded(self) -> Self {
-        Self {
-            upper: gamma_decode(self.upper),
-            lower: gamma_decode(self.lower),
-            horizon: gamma_decode(self.horizon),
-        }
+impl WeatherAmbient {
+    /// The light of each face.
+    pub fn cube(&self) -> AmbientCube {
+        self.colors.scaled(self.scale)
     }
 }
 
-/// How the loader decodes the stored sky, sun, star and sunlight colours of a slot.
-pub(super) const SLOT_COLOUR_ENCODING: StoredColourEncoding = StoredColourEncoding::Srgb;
-
-/// The values of one weather at one time slot that exterior lighting uses, all linear but the
-/// sky colours, which stay as stored until the slots are blended.
+/// The values of one weather at one time slot that exterior lighting uses, all linear.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct SlotValues {
     pub(super) sun_light: Vec3,
     pub(super) sun_disc: Vec3,
     pub(super) sun_glare: Vec3,
-    pub(super) sky: StoredSkyColors,
+    pub(super) sky_upper: Vec3,
+    pub(super) sky_lower: Vec3,
+    pub(super) horizon: Vec3,
     pub(super) stars: Vec3,
-    pub(super) ambient_cube: AmbientCube,
+    pub(super) ambient: WeatherAmbient,
     pub(super) ambient_specular: Vec3,
     pub(super) hdr: ImageSpaceHdr,
     pub(super) cinematic: ImageSpaceCinematic,
     pub(super) depth_of_field: Option<ImageSpaceDepthOfField>,
 }
-
-lerp_fields!(SlotValues {
-    sun_light,
-    sun_disc,
-    sun_glare,
-    sky,
-    stars,
-    ambient_cube,
-    ambient_specular,
-    hdr,
-    cinematic,
-    depth_of_field,
-});
 
 /// The colours of a weather's fog in one time slot, with the slot's colour factors, and its
 /// sunlight as stored, 0 to 1. `day_weight` is 1 in the Day slot and 0 in every other.
@@ -185,7 +171,7 @@ pub struct ExteriorWeather {
     pub horizon: Vec3,
     /// The colour of the star layer; its luminance is the layer's opacity.
     pub stars: Vec3,
-    pub ambient_cube: AmbientCube,
+    pub ambient: WeatherAmbient,
     /// Extracted but not rendered yet.
     pub ambient_specular: Vec3,
     pub hdr: ImageSpaceHdr,
@@ -215,7 +201,7 @@ impl Lerp for ExteriorWeather {
             sky_lower: Lerp::lerp(&self.sky_lower, &other.sky_lower, t),
             horizon: Lerp::lerp(&self.horizon, &other.horizon, t),
             stars: Lerp::lerp(&self.stars, &other.stars, t),
-            ambient_cube: Lerp::lerp(&self.ambient_cube, &other.ambient_cube, t),
+            ambient: Lerp::lerp(&self.ambient, &other.ambient, t),
             ambient_specular: Lerp::lerp(&self.ambient_specular, &other.ambient_specular, t),
             hdr: Lerp::lerp(&self.hdr, &other.hdr, t),
             cinematic: Lerp::lerp(&self.cinematic, &other.cinematic, t),
@@ -226,18 +212,32 @@ impl Lerp for ExteriorWeather {
 }
 
 impl ExteriorWeather {
-    /// The frame `t` of the way through the change from this weather to `other`. The sky, the
-    /// sunlight and the fog colours change as the game measurably changes them: their stored
-    /// colours blend, re-encoded exactly as the loader decoded them; the fog colours and the fog's
-    /// sunlight are kept stored already. Every other value blends as [`Lerp`] blends it.
+    /// The weather `t` of the way from this one to `other`, between two time slots or through a
+    /// change of weather. The sky, sun disc, sunlight, directional ambient and tint colours blend
+    /// as the game measurably blends its weather colours: as stored, re-encoded exactly as the
+    /// loader decoded them, then decoded once; the fog colours and the fog's sunlight are kept
+    /// stored already. Every other value blends as [`Lerp`] blends it.
     #[must_use]
     pub fn cross_fade(&self, other: &Self, t: f32) -> Self {
-        let stored = |from, to| lerp_stored(from, to, t, SLOT_COLOUR_ENCODING);
+        let stored = |from, to, encoding| lerp_stored(from, to, t, encoding);
         let mut blend = self.lerp(other, t);
-        blend.sun_light = stored(self.sun_light, other.sun_light);
-        blend.sky_upper = stored(self.sky_upper, other.sky_upper);
-        blend.sky_lower = stored(self.sky_lower, other.sky_lower);
-        blend.horizon = stored(self.horizon, other.horizon);
+        blend.sun_light = stored(self.sun_light, other.sun_light, SUNLIGHT_ENCODING);
+        blend.sun_disc = stored(self.sun_disc, other.sun_disc, SUN_DISC_ENCODING);
+        blend.sky_upper = stored(self.sky_upper, other.sky_upper, SKY_ENCODING);
+        blend.sky_lower = stored(self.sky_lower, other.sky_lower, SKY_ENCODING);
+        blend.horizon = stored(self.horizon, other.horizon, SKY_ENCODING);
+        blend.ambient.colors = AmbientCube(std::array::from_fn(|face| {
+            stored(
+                self.ambient.colors.0[face],
+                other.ambient.colors.0[face],
+                AMBIENT_ENCODING,
+            )
+        }));
+        blend.cinematic.tint_color = stored(
+            self.cinematic.tint_color,
+            other.cinematic.tint_color,
+            TINT_ENCODING,
+        );
         blend
     }
 }
@@ -327,37 +327,45 @@ impl ExteriorWeatherSlots {
 
     /// The weather between two neighbouring slots, `blend.t` of the way from the first.
     pub fn sample(&self, blend: SlotBlend) -> ExteriorWeather {
-        let from = &self.slots[blend.from.index()];
-        let to = &self.slots[blend.to.index()];
+        let mut weather = self
+            .in_slot(blend.from)
+            .cross_fade(&self.in_slot(blend.to), blend.t);
+        weather.fog = self.fog.as_ref().map(|fog| fog.sample(blend));
+        weather
+    }
+
+    /// The weather in one slot, without its fog.
+    fn in_slot(&self, slot: TimeSlot) -> ExteriorWeather {
         let SlotValues {
             sun_light,
             sun_disc,
             sun_glare,
-            sky,
+            sky_upper,
+            sky_lower,
+            horizon,
             stars,
-            ambient_cube,
+            ambient,
             ambient_specular,
             hdr,
             cinematic,
             depth_of_field,
-        } = from.lerp(to, blend.t);
-        let sky = sky.decoded();
+        } = self.slots[slot.index()].clone();
         ExteriorWeather {
             form_key: Arc::clone(&self.form_key),
             editor_id: self.editor_id.clone(),
             sun_light,
             sun_disc,
             sun_glare,
-            sky_upper: sky.upper,
-            sky_lower: sky.lower,
-            horizon: sky.horizon,
+            sky_upper,
+            sky_lower,
+            horizon,
             stars,
-            ambient_cube,
+            ambient,
             ambient_specular,
             hdr,
             cinematic,
             depth_of_field,
-            fog: self.fog.as_ref().map(|fog| fog.sample(blend)),
+            fog: None,
         }
     }
 }
@@ -385,7 +393,10 @@ mod tests {
             sky_lower: Vec3::splat(5.0 * level),
             horizon: Vec3::splat(6.0 * level),
             stars: Vec3::splat(7.0 * level),
-            ambient_cube: AmbientCube(std::array::from_fn(|face| Vec3::splat(level + face as f32))),
+            ambient: WeatherAmbient {
+                colors: AmbientCube(std::array::from_fn(|face| Vec3::splat(level + face as f32))),
+                scale: 28.0 * level,
+            },
             ambient_specular: Vec3::splat(8.0 * level),
             hdr: ImageSpaceHdr {
                 sunlight_scale: 9.0 * level,
@@ -491,34 +502,49 @@ mod tests {
         assert_eq!(day_of(foggy.lerp(&clear, 0.75)), None);
     }
 
-    /// `weather` with the sky and the sunlight decoded from the stored grey `byte`, and the fog's
-    /// sunlight kept as stored.
+    /// `weather` with every stored-blended colour decoded from the stored grey `byte` as the
+    /// loader decodes it, and the fog's sunlight kept as stored.
     fn stored_grey(name: &str, byte: u8) -> ExteriorWeather {
         let stored = Vec3::splat(f32::from(byte) / 255.0);
-        let srgb = SLOT_COLOUR_ENCODING.decode(stored);
+        let base = weather(name, 0.0);
         let mut weather = ExteriorWeather {
-            sun_light: srgb,
-            sky_upper: srgb,
-            sky_lower: srgb,
-            horizon: srgb,
-            ..weather(name, 0.0)
+            sun_light: SUNLIGHT_ENCODING.decode(stored),
+            sun_disc: SUN_DISC_ENCODING.decode(stored),
+            sky_upper: SKY_ENCODING.decode(stored),
+            sky_lower: SKY_ENCODING.decode(stored),
+            horizon: SKY_ENCODING.decode(stored),
+            ambient: WeatherAmbient {
+                colors: AmbientCube([AMBIENT_ENCODING.decode(stored); 6]),
+                scale: 1.0,
+            },
+            cinematic: ImageSpaceCinematic {
+                tint_color: TINT_ENCODING.decode(stored),
+                ..base.cinematic
+            },
+            ..base
         };
         weather.fog.as_mut().unwrap().sunlight = stored;
         weather
     }
 
     #[test]
-    fn a_change_of_weather_brings_the_sky_and_sunlight_in_as_their_stored_bytes_blend() {
+    fn a_change_of_weather_brings_the_stored_colours_in_as_their_stored_bytes_blend() {
         let changed = stored_grey("Dark", 48).cross_fade(&stored_grey("Bright", 144), 0.25);
         // A quarter of the way from byte 48 to 144 is byte 72, decoded by hand.
-        let srgb_72 = ((72.0 / 255.0 + 0.055) / 1.055_f32).powf(2.4);
-        for value in [
-            changed.sun_light,
-            changed.sky_upper,
-            changed.sky_lower,
-            changed.horizon,
+        let srgb_72 = Vec3::splat(((72.0 / 255.0 + 0.055) / 1.055_f32).powf(2.4));
+        let gamma_72 = Vec3::splat((72.0 / 255.0_f32).powf(2.2));
+        for (name, value, expected) in [
+            ("sunlight", changed.sun_light, srgb_72),
+            ("sun disc", changed.sun_disc, gamma_72),
+            ("sky upper", changed.sky_upper, gamma_72),
+            ("sky lower", changed.sky_lower, gamma_72),
+            ("horizon", changed.horizon, gamma_72),
+            ("tint", changed.cinematic.tint_color, gamma_72),
         ] {
-            assert!(value.abs_diff_eq(Vec3::splat(srgb_72), 1e-6), "{value}");
+            assert!(value.abs_diff_eq(expected, 1e-6), "{name}: {value}");
+        }
+        for face in changed.ambient.colors.0 {
+            assert!(face.abs_diff_eq(srgb_72, 1e-6), "ambient: {face}");
         }
         let sunlight = changed.fog.unwrap().sunlight;
         assert!(
@@ -535,10 +561,18 @@ mod tests {
         assert_eq!(
             ExteriorWeather {
                 sun_light: blended.sun_light,
+                sun_disc: blended.sun_disc,
                 sky_upper: blended.sky_upper,
                 sky_lower: blended.sky_lower,
                 horizon: blended.horizon,
-                fog: blended.fog,
+                ambient: WeatherAmbient {
+                    colors: blended.ambient.colors,
+                    ..changed.ambient
+                },
+                cinematic: ImageSpaceCinematic {
+                    tint_color: blended.cinematic.tint_color,
+                    ..changed.cinematic
+                },
                 ..changed.clone()
             },
             blended

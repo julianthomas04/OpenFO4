@@ -93,11 +93,6 @@ impl RawColor {
     pub(super) fn unit(self) -> Vec3 {
         Vec3::new(f32::from(self.r), f32::from(self.g), f32::from(self.b)) / 255.0
     }
-
-    /// Decoded with gamma 2.2.
-    pub(super) fn gamma_linear(self) -> Vec3 {
-        self.decoded(StoredColourEncoding::Gamma22)
-    }
 }
 
 /// How a colour stored as 0 to 1 per channel becomes linear light, and back.

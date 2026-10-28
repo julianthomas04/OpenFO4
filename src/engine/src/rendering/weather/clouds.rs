@@ -5,7 +5,7 @@ use glam::Vec3;
 use serde::Deserialize;
 
 use super::error::WeatherLibraryError;
-use crate::rendering::lighting::cell_lighting::srgb_unit_to_linear;
+use crate::rendering::lighting::cell_lighting::StoredColourEncoding;
 use crate::rendering::lighting::exterior_weather::parse_json;
 use crate::rendering::lighting::lerp::{Lerp, lerp_fields};
 use crate::rendering::lighting::time_of_day::{SlotBlend, TimeSlot};
@@ -33,7 +33,7 @@ lerp_fields!(CloudSlotValues {
 
 impl CloudSlotValues {
     pub fn linear_color(&self) -> Vec3 {
-        Vec3::from_array(self.stored_color.to_array().map(srgb_unit_to_linear))
+        StoredColourEncoding::Srgb.decode(self.stored_color)
     }
 }
 
