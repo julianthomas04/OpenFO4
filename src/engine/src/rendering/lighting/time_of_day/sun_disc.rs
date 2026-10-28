@@ -1,16 +1,17 @@
 //! Where the sun disc stands, as the probe found it in the sky under two climates (`DefaultClimate`
 //! at 08:00 and 12:00; sunrise 03-05 / sunset 15-21 every hour from 05:00 to 18:00). In Bethesda
 //! axes (X east, Y north, Z up) the disc runs in straight lines around the viewer at the constant
-//! north-south offset `fSunYExtreme`: from `|fSunXExtreme|` due east on the horizon at the sunrise
-//! midpoint to `|fSunXExtreme|` overhead at solar noon, and on to `|fSunXExtreme|` due west on the
-//! horizon at the sunset midpoint, moving evenly in time over each leg ([`turn_from_noon`]).
+//! north-south offset `fSunYExtreme`: from `|fSunXExtreme|` east on the horizon at the sunrise
+//! midpoint to `|fSunXExtreme|` overhead at solar noon, and on to `|fSunXExtreme|` west on the
+//! horizon at the sunset midpoint, moving evenly in time over each leg ([`turn_from_noon`]). With
+//! the vanilla settings it meets the horizon at azimuth 118.4° and 241.6°, south of east and west.
 //!
 //! When the disc becomes visible was not measured: `sun_alpha` ramps around the twilight
 //! midpoints, where the disc meets the horizon, and the horizon fade hides it below.
 //!
 //! Below the horizon nothing was measured and nothing shows: over the night the disc runs the
-//! mirrored lines under the horizon, from due west through `|fSunXExtreme|` straight down at solar
-//! midnight to due east, which keeps the path continuous.
+//! mirrored lines under the horizon, from where it sets through `|fSunXExtreme|` straight down at
+//! solar midnight to where it rises, which keeps the path continuous.
 
 use std::f32::consts::FRAC_PI_2;
 
@@ -110,7 +111,7 @@ mod tests {
     }
 
     #[test]
-    fn the_disc_meets_the_horizon_due_east_and_west_at_the_twilight_midpoints() {
+    fn the_disc_meets_the_horizon_south_of_east_and_west_at_the_twilight_midpoints() {
         let times = second_climate();
         let settings = vanilla_settings();
         let east_of_south = 600.0_f32.atan2(325.0).to_degrees();

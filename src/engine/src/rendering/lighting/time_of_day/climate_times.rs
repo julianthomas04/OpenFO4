@@ -33,7 +33,8 @@ pub enum ClimateTimesError {
     #[error("sunrise ends at {sunrise_end} h, after sunset begins at {sunset_begin} h")]
     WindowsOverlap { sunrise_end: f32, sunset_begin: f32 },
     #[error(
-        "the night from sunset end at {sunset_end} h to sunrise begin at {sunrise_begin} h is          shorter than {MIN_NIGHT_HOURS} h, so the evening and morning Night keyframes would cross"
+        "the night from sunset end at {sunset_end} h to sunrise begin at {sunrise_begin} h is \
+         shorter than {MIN_NIGHT_HOURS} h, so the evening and morning Night keyframes would cross"
     )]
     NightTooShort { sunset_end: f32, sunrise_begin: f32 },
 }
@@ -345,8 +346,9 @@ mod tests {
     }
 
     #[test]
-    fn every_installed_climate_leaves_a_night_long_enough_for_the_keyframes() {
-        // The installed database's climates; the longest day, 04:00-22:00, leaves 6 h.
+    fn the_vanilla_windows_leave_a_night_long_enough_for_the_keyframes() {
+        // Sunrise begin and sunset end of the vanilla climates, which alone bound the night; the
+        // longest day, 04:00-22:00, leaves 6 h.
         for (begin, end) in [
             ("05:00:00", "21:00:00"),
             ("05:30:00", "20:30:00"),
@@ -372,6 +374,11 @@ mod tests {
                 })
             ),
             "{result:?}"
+        );
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "the night from sunset end at 22.1 h to sunrise begin at 2 h is shorter than 4 h, \
+             so the evening and morning Night keyframes would cross"
         );
     }
 

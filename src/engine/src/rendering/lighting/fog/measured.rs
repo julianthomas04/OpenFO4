@@ -3,9 +3,8 @@
 //! measurement changes one place.
 //!
 //! Measured: the colour factors of the Day slot and of every other slot, interior factors, the
-//! byte-space blend of the per-slot factors, the sunlight's share against its luminance, the
-//! night weight's ramp, where the normal branch's opacity has faded in after Near, and where the
-//! capped branch ramps to full fog.
+//! byte-space blend of the per-slot factors, the sunlight's share against its luminance, where the
+//! normal branch's opacity has faded in after Near, and where the capped branch ramps to full fog.
 //!
 //! Estimates:
 //! - [`DAY_COLOUR_FACTORS`]' high colours: near high is the sunlit value without the sunlight's

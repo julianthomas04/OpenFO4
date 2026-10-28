@@ -1,7 +1,7 @@
 //! When each time-of-day slot is pure, as the probe measured it on the fog and sky slot colours
 //! under two climates, `DefaultClimate` (sunrise 05:00-09:00, sunset 17:00-21:00) and one with
 //! sunrise 03:00-05:00 and sunset 15:00-21:00. `Day` holds from sunrise end to sunset begin, and
-//! the other slots step away from it, each window in steps of a quarter of its length plus
+//! the other slots step away from it, each window in four equal steps that split its length plus
 //! [`NIGHT_PADDING_HOURS`], so that `Night` lies that far outside the window: `LateSunrise`,
 //! `Sunrise`, `EarlySunrise` and `Night` back from sunrise end, `EarlySunset`, `Sunset`,
 //! `LateSunset` and `Night` forward from sunset begin. Neighbouring slots cross linearly between
@@ -122,7 +122,7 @@ mod tests {
     }
 
     #[test]
-    fn each_window_steps_a_quarter_of_its_length_plus_the_padding() {
+    fn each_window_splits_its_length_plus_the_padding_into_four_steps() {
         // Sunrise 03-05 steps (2 + 2) / 4 = 1 h, sunset 15-21 steps (6 + 2) / 4 = 2 h.
         assert_eq!(
             keyframe_hours(&second_climate()),
