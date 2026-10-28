@@ -78,11 +78,13 @@ mod tests {
         ),
         (
             [5.5, 8.0, 16.0, 20.5],
-            [2.0, 3.5, 5.0, 6.5, 8.0, 16.0, 17.5, 19.0, 20.5, 22.0],
+            [
+                3.5, 4.625, 5.75, 6.875, 8.0, 16.0, 17.625, 19.25, 20.875, 22.5,
+            ],
         ),
         (
             [4.0, 10.0, 16.0, 22.0],
-            [4.0, 5.5, 7.0, 8.5, 10.0, 16.0, 17.5, 19.0, 20.5, 22.0],
+            [2.0, 4.0, 6.0, 8.0, 10.0, 16.0, 18.0, 20.0, 22.0, 24.0],
         ),
     ];
 
@@ -95,7 +97,7 @@ mod tests {
         for (bounds, keyframe_hours) in VANILLA_CLIMATES {
             let times = climate(bounds);
             for (hour, (from, to)) in keyframe_hours.into_iter().zip(SLOTS_BY_KEYFRAME) {
-                let blend = slot_blend(hour, &times);
+                let blend = slot_blend(hour.rem_euclid(HOURS_PER_DAY), &times);
                 assert_eq!((blend.from, blend.to), (from, to), "{bounds:?} at {hour}");
                 assert_eq!(blend.t, 0.0, "{bounds:?} at {hour}");
             }
@@ -189,9 +191,9 @@ mod tests {
                 t: 0.5
             }
         );
-        let blend = slot_blend(22.5, &times);
+        let blend = slot_blend(23.5, &times);
         assert_eq!((blend.from, blend.to), (Night, EarlySunrise));
-        assert_eq!(blend.t, 1.0 / 3.0);
+        assert_eq!(blend.t, 0.4);
     }
 
     #[test]

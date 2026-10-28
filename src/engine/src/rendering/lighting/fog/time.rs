@@ -1,5 +1,4 @@
-use super::measured::NIGHT_FOG_RAMP_HOURS;
-use crate::rendering::lighting::time_of_day::ClimateTimes;
+use crate::rendering::lighting::time_of_day::{ClimateTimes, night_weight};
 
 /// How the time of day weighs the two halves of a weather's fog distances. The colours follow
 /// the time slots instead.
@@ -18,14 +17,6 @@ impl FogTime {
             night_weight: night_weight(hour, times),
         }
     }
-}
-
-/// Ramps from 0 at sunrise end back over [`NIGHT_FOG_RAMP_HOURS`] towards midnight, and from 0
-/// at sunset begin forward over as many.
-fn night_weight(hour: f32, times: &ClimateTimes) -> f32 {
-    let morning = (times.sunrise_end() - hour) / NIGHT_FOG_RAMP_HOURS;
-    let evening = (hour - times.sunset_begin()) / NIGHT_FOG_RAMP_HOURS;
-    morning.max(evening).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]

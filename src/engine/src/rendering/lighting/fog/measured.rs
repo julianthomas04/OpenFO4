@@ -140,9 +140,6 @@ pub fn sunlight_term(sunlight: Vec3, day_weight: f32) -> SunlightTerm {
     }
 }
 
-/// Hours over which the night weight of the fog distances ramps from 0 to 1.
-pub const NIGHT_FOG_RAMP_HOURS: f32 = 6.0;
-
 /// The share of Near..Far over which the normal branch's opacity fades in from Near, linearly in
 /// distance, whatever the power and the span.
 const ONSET_SHARE: f32 = 0.015;

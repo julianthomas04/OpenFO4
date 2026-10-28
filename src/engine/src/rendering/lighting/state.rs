@@ -1436,9 +1436,9 @@ mod tests {
         }
 
         #[test]
-        fn at_noon_the_disc_stands_twenty_degrees_above_the_light() {
+        fn at_midday_the_disc_stands_twenty_degrees_above_the_light_as_measured() {
             let mut state = state();
-            at_hour(&mut state, 0, 13.0);
+            at_hour(&mut state, 0, 12.0);
             let frame = frame_of(&state);
             let disc = state.sun_input().direction;
             let light = frame.to_sun.truncate();

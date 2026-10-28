@@ -4,10 +4,10 @@
 //!
 //! In Bethesda axes (X east, Y north, Z up) the light vector is
 //! `(EAST_REACH sin a, -(SOUTH_BASE + SOUTH_SWING |cos a|), UP_BASE + UP_SWING |cos a|)` with
-//! `a = 2 pi (solar noon - hour) / 24`. Its direction points towards the light, and its length,
-//! 1 at solar noon and at solar midnight, scales the weather's sunlight colour.
-
-use std::f32::consts::TAU;
+//! `a` the sky's turn before solar noon ([`turn_from_noon`]): due south at solar noon and solar
+//! midnight, furthest east at the sunrise midpoint and furthest west at the sunset midpoint. Its
+//! direction points towards the light, and its length, 1 at solar noon and at solar midnight,
+//! scales the weather's sunlight colour.
 
 use glam::Vec3;
 
@@ -15,7 +15,7 @@ use super::climate_times::ClimateTimes;
 use super::day_time::DayTime;
 use super::light::LightSource;
 use super::sky::SkyPosition;
-use super::wrap::HOURS_PER_DAY;
+use super::solar_turn::turn_from_noon;
 
 const EAST_REACH: f32 = 0.547;
 const SOUTH_BASE: f32 = 0.243;
@@ -23,13 +23,8 @@ const SOUTH_SWING: f32 = 0.558;
 const UP_BASE: f32 = 0.298;
 const UP_SWING: f32 = 0.301;
 
-/// The hour the light stands due south: halfway between the sunrise and sunset midpoints.
-pub fn solar_noon(times: &ClimateTimes) -> f32 {
-    f32::midpoint(times.sunrise_midpoint(), times.sunset_midpoint())
-}
-
 fn light_vector(hour: f32, times: &ClimateTimes) -> Vec3 {
-    let angle = TAU * (solar_noon(times) - hour) / HOURS_PER_DAY;
+    let angle = -turn_from_noon(hour, times);
     let swing = angle.cos().abs();
     Vec3::new(
         EAST_REACH * angle.sin(),
@@ -69,13 +64,6 @@ mod tests {
             (actual - expected).abs() <= tolerance,
             "{what}: expected {expected}, got {actual}"
         );
-    }
-
-    #[test]
-    fn solar_noon_is_halfway_between_the_twilight_midpoints() {
-        assert_close(solar_noon(&default_climate()), 13.0, 1e-6, "default");
-        let late = ClimateTimes::new(5.5, 8.0, 16.0, 20.5).unwrap();
-        assert_close(solar_noon(&late), 12.5, 1e-6, "other climate");
     }
 
     #[test]
@@ -151,9 +139,44 @@ mod tests {
     }
 
     #[test]
-    fn the_climate_moves_solar_noon() {
-        let times = ClimateTimes::new(5.5, 8.0, 16.0, 20.5).unwrap();
-        let light = light_source(at_hour(12.5), &times);
-        assert_close(position(light).azimuth_deg, 180.0, 1e-3, "azimuth");
+    fn the_light_matches_the_hours_measured_under_the_second_climate() {
+        // results_v13, "Which rule moves the directional light? (second climate)": the free fit
+        // per hour under sunrise 03-05 / sunset 15-21. The rule meets every hour within 9 degrees
+        // (rms 4.5); a steady 24 h or 28 h turn misses 17:00 or 22:00 and 00:00 by 11-16.
+        let times = ClimateTimes::new(3.0, 5.0, 15.0, 21.0).unwrap();
+        for (hour, elevation_deg, azimuth_deg, tolerance) in [
+            (0.0, 34.7, 167.1, 3.0),
+            (2.0, 30.6, 139.3, 5.0),
+            (4.0, 30.5, 121.9, 9.0),
+            (7.0, 30.4, 142.1, 5.0),
+            (9.0, 32.1, 161.1, 5.0),
+            (11.0, 41.2, 180.0, 5.0),
+            (13.0, 35.4, 199.0, 2.0),
+            (15.0, 34.6, 219.0, 4.0),
+            (17.0, 36.8, 231.0, 9.0),
+            (20.0, 35.2, 221.0, 4.0),
+            (22.0, 36.7, 192.3, 1.0),
+        ] {
+            let measured = SkyPosition {
+                azimuth_deg,
+                elevation_deg,
+            };
+            let light = light_source(at_hour(hour), &times);
+            let gap = light
+                .direction
+                .angle_between(measured.direction())
+                .to_degrees();
+            assert!(gap < tolerance, "{hour}: {gap} degrees");
+        }
+    }
+
+    #[test]
+    fn the_climate_moves_solar_noon_and_the_turning_points() {
+        let times = ClimateTimes::new(3.0, 5.0, 15.0, 21.0).unwrap();
+        let at = |hour| position(light_source(at_hour(hour), &times));
+        assert_close(at(11.0).azimuth_deg, 180.0, 1e-3, "solar noon");
+        assert_close(at(23.0).azimuth_deg, 180.0, 1e-3, "solar midnight");
+        assert_close(at(4.0).azimuth_deg, 114.0, 0.1, "sunrise midpoint");
+        assert_close(at(18.0).azimuth_deg, 246.0, 0.1, "sunset midpoint");
     }
 }
