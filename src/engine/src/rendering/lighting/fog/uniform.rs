@@ -1,6 +1,6 @@
 use glam::Vec4;
 
-use super::measured::cap_ramp_start;
+use super::measured::{cap_ramp_start, onset_end};
 use super::{Fog, HeightBand};
 use crate::rendering::lighting::frame_uniform::FrameUniform;
 
@@ -15,7 +15,8 @@ pub struct FogUniformFields {
     /// rgb: near colour at the top of the height bands, w: share of the normal branch's fog
     /// colour the sunlight leaves.
     pub near_high_color: Vec4,
-    /// rgb: far colour at the top of the height bands.
+    /// rgb: far colour at the top of the height bands, w: distance at which the normal branch's
+    /// opacity has faded in.
     pub far_high_color: Vec4,
     /// x: power, y: Max, z: high density scale, w: distance at which the fog capped at Max
     /// starts ramping to the fill.
@@ -79,7 +80,7 @@ impl Fog {
             near_color: colors.near.extend(fog.near),
             far_color: colors.far.extend(fog.far),
             near_high_color: colors.near_high.extend(fog.sunlight.kept),
-            far_high_color: colors.far_high.extend(0.0),
+            far_high_color: colors.far_high.extend(onset_end(fog.near, fog.far)),
             params: Vec4::new(
                 fog.power,
                 fog.max,
@@ -129,7 +130,12 @@ mod tests {
         assert_eq!(fields.near_color, Vec4::new(0.1, 0.2, 0.3, 10.0));
         assert_eq!(fields.far_color, Vec4::new(0.4, 0.5, 0.6, 100.0));
         assert_eq!(fields.near_high_color, Vec4::new(0.7, 0.8, 0.9, 0.9));
-        assert_eq!(fields.far_high_color, Vec4::new(1.0, 1.1, 1.2, 0.0));
+        assert_eq!(fields.far_high_color.truncate(), Vec3::new(1.0, 1.1, 1.2));
+        assert!(
+            (fields.far_high_color.w - 11.35).abs() < 1e-4,
+            "{}",
+            fields.far_high_color.w
+        );
         assert_eq!(fields.params.truncate(), Vec3::new(2.0, 0.5, 0.25));
         assert!(
             (fields.params.w - 78.94).abs() < 1e-4,

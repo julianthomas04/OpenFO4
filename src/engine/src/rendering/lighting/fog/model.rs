@@ -1,5 +1,6 @@
 //! The fog of one point, as `fog.wgsl` computes it. Below Max the colour weight `x = ramp^power`
-//! picks between the near and far colours and, scaled by the height density, is the opacity.
+//! picks between the near and far colours and, faded in linearly from Near over a share of
+//! Near..Far and scaled by the height density, is the opacity.
 //! From Max on the fog holds at Max and ramps towards the fill near Far; beyond Far it is the
 //! fill: the far colour at the density's opacity. One height share, lerped from the near band's
 //! to the far band's by `x`, turns both colours towards their high colours and scales the
@@ -7,7 +8,7 @@
 
 use glam::Vec3;
 
-use super::measured::cap_ramp_start;
+use super::measured::{cap_ramp_start, onset_end};
 use super::{Fog, FogParams};
 
 /// The shortest span a ramp divides by, as in `fog.wgsl`.
@@ -104,9 +105,10 @@ impl FogParams {
         let (near, far) = self.colors_at(share);
         let density = self.height.density(share);
         if x < self.max {
+            let onset = ramp(distance, self.near, onset_end(self.near, self.far));
             return FogBlend {
                 color: self.sunlight.apply(near.lerp(far, x)),
-                opacity: opacity(x, density),
+                opacity: opacity(x * onset, density),
             };
         }
         let cap = FogBlend {
@@ -190,6 +192,33 @@ pub(crate) mod probe {
         (2650.0, 0.612),
         (3050.0, 1.000),
     ];
+    /// `CommonwealthFoggy`'s day span and power with Near moved to 2500 (`edge_n2500_p014_f180k`).
+    pub(crate) const EDGE_FOGGY_SPAN: (f32, f32, f32, f32) = (2500.0, 181_950.0, 0.14, 1.0);
+    /// Distance and fog factor `f` in `EDGE_FOGGY_SPAN` at noon in sunlight: the fade-in after
+    /// Near, then `ramp^power`.
+    pub(crate) const EDGE_FOGGY_SPAN_NOON_FACTORS: [(f32, f32); 9] = [
+        (2556.0, 0.0045),
+        (2620.0, 0.0103),
+        (2730.0, 0.0218),
+        (2894.0, 0.0408),
+        (3129.0, 0.0700),
+        (3401.0, 0.1094),
+        (4705.0, 0.3053),
+        (6507.0, 0.4239),
+        (9000.0, 0.4671),
+    ];
+    /// The same at 01:00, where every colour takes one factor and `f` is the opacity times it.
+    pub(crate) const EDGE_FOGGY_SPAN_NIGHT_FACTORS: [(f32, f32); 9] = [
+        (2556.0, 0.0035),
+        (2620.0, 0.0079),
+        (2730.0, 0.0168),
+        (2894.0, 0.0301),
+        (3129.0, 0.0511),
+        (3401.0, 0.0771),
+        (4705.0, 0.2114),
+        (6507.0, 0.2818),
+        (9000.0, 0.2967),
+    ];
     /// Distance and the near and far colours' weights in `dist_base` at noon in sunlight.
     pub(crate) const DIST_BASE_COLOUR_WEIGHTS: [(f32, f32, f32); 3] = [
         (1778.0, 0.073, 0.044),
@@ -225,7 +254,7 @@ pub(crate) mod probe {
 
 #[cfg(test)]
 mod tests {
-    use super::super::measured::{DAY_COLOUR_FACTORS, cap_ramp_start};
+    use super::super::measured::{DAY_COLOUR_FACTORS, cap_ramp_start, onset_end};
     use super::super::{FogColors, HeightBand, HeightBands, SunlightTerm};
     use super::probe::*;
     use super::*;
@@ -255,6 +284,64 @@ mod tests {
     #[test]
     fn the_power_bends_the_ramp_as_measured() {
         assert_factors(&fog(grey(), DIST_P050, true), &DIST_P050_FACTORS, 0.015);
+    }
+
+    #[test]
+    fn the_opacity_fades_in_after_near_as_measured_by_day_and_night() {
+        assert_factors(
+            &fog(grey(), EDGE_FOGGY_SPAN, true),
+            &EDGE_FOGGY_SPAN_NOON_FACTORS,
+            0.006,
+        );
+        assert_factors(
+            &fog(grey(), EDGE_FOGGY_SPAN, false),
+            &EDGE_FOGGY_SPAN_NIGHT_FACTORS,
+            0.006,
+        );
+    }
+
+    #[test]
+    fn a_low_power_has_no_step_at_near() {
+        let fog = Fog::Enabled(fog(grey(), EDGE_FOGGY_SPAN, true));
+        // Distance, then x · o by hand: r = (d - 2500) / 179450, x = r^0.14, o = min(r / 0.015, 1).
+        for (distance, expected) in [
+            (2500.0, 0.0),
+            (2500.5, 0.000_031),
+            (2510.0, 0.000_943),
+            (2600.0, 0.013_014),
+            (3000.0, 0.081_515),
+            (4000.0, 0.285_205),
+            (5191.75, 0.555_460),
+            (9000.0, 0.628_428),
+        ] {
+            let opacity = fog.at(Vec3::ZERO, ahead(distance)).opacity;
+            assert!(
+                (opacity - expected).abs() < 2e-5,
+                "d {distance}: {opacity} against {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_fade_in_ends_at_its_share_of_near_to_far_and_leaves_the_colour_alone() {
+        let fog = plain_fog();
+        let end = onset_end(fog.near, fog.far);
+        assert!((end - 11.5).abs() < 1e-5, "{end}");
+        let opacity = |distance: f32| {
+            Fog::Enabled(fog)
+                .at(Vec3::ZERO, Vec3::new(0.0, 0.0, -distance))
+                .opacity
+        };
+        let half_way = fog.colour_weight(10.75);
+        assert!((opacity(10.75) - 0.5 * half_way).abs() < 1e-7);
+        assert!((opacity(end) - fog.colour_weight(end)).abs() < 1e-7);
+        let tinted = Fog::Enabled(FogParams {
+            colors: red_near_green_far(),
+            ..fog
+        });
+        let seen = tinted.at(Vec3::ZERO, Vec3::new(0.0, 0.0, -10.75)).color;
+        let x = fog.colour_weight(10.75);
+        assert!(seen.abs_diff_eq(Vec3::X.lerp(Vec3::Y, x), 1e-6), "{seen}");
     }
 
     #[test]

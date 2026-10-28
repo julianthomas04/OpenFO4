@@ -84,6 +84,36 @@ fn the_shader_reproduces_the_measured_power() {
 
 #[test]
 #[ignore = "needs a GPU adapter"]
+fn the_shader_fades_the_fog_in_after_near_as_measured() {
+    for (noon, measured) in [
+        (true, &probe::EDGE_FOGGY_SPAN_NOON_FACTORS),
+        (false, &probe::EDGE_FOGGY_SPAN_NIGHT_FACTORS),
+    ] {
+        assert_measured_factors(
+            &probe::fog(probe::grey(), probe::EDGE_FOGGY_SPAN, noon),
+            measured,
+            0.006,
+        );
+    }
+}
+
+#[test]
+#[ignore = "needs a GPU adapter"]
+fn the_shader_matches_the_model_through_the_fade_in() {
+    let fog = Fog::Enabled(probe::fog(
+        probe::red_near_green_far(),
+        probe::EDGE_FOGGY_SPAN,
+        true,
+    ));
+    let points: Vec<Vec3> = [2499.0, 2500.5, 2600.0, 4000.0, 5191.0, 5300.0]
+        .into_iter()
+        .map(ahead)
+        .collect();
+    assert_matches_the_model(Vec3::ZERO, &fog, &points);
+}
+
+#[test]
+#[ignore = "needs a GPU adapter"]
 fn the_shader_reproduces_the_measured_max_plateau_and_ramp_to_full_fog() {
     assert_measured_factors(
         &probe::fog(probe::grey(), probe::DIST_F3000_MAX050, true),

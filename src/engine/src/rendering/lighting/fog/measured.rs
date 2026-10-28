@@ -4,7 +4,8 @@
 //!
 //! Measured: the colour factors of the Day slot and of every other slot, interior factors, the
 //! byte-space blend of the per-slot factors, the sunlight's share against its luminance, the
-//! night weight's ramp, and where the capped branch ramps to full fog.
+//! night weight's ramp, where the normal branch's opacity has faded in after Near, and where the
+//! capped branch ramps to full fog.
 //!
 //! Estimates:
 //! - [`DAY_COLOUR_FACTORS`]' high colours: near high is the sunlit value without the sunlight's
@@ -141,6 +142,15 @@ pub fn sunlight_term(sunlight: Vec3, day_weight: f32) -> SunlightTerm {
 
 /// Hours over which the night weight of the fog distances ramps from 0 to 1.
 pub const NIGHT_FOG_RAMP_HOURS: f32 = 6.0;
+
+/// The share of Near..Far over which the normal branch's opacity fades in from Near, linearly in
+/// distance, whatever the power and the span.
+const ONSET_SHARE: f32 = 0.015;
+
+/// Where the normal branch's opacity has faded in: from here on the colour weight alone sets it.
+pub fn onset_end(near: f32, far: f32) -> f32 {
+    near + ONSET_SHARE * (far - near)
+}
 
 /// The share of Near..Far at which the capped fog starts ramping to full fog.
 const CAP_RAMP_START_SHARE: f32 = 0.766;

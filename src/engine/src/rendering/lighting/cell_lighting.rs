@@ -998,6 +998,21 @@ mod tests {
     }
 
     #[test]
+    fn cell_fog_fades_in_after_near_like_the_exterior_fog() {
+        let fog = fog_of(&resolved(json!({})).unwrap().lighting);
+        let opacity = |distance: f32| {
+            Fog::Enabled(fog)
+                .at(Vec3::ZERO, Vec3::new(0.0, 0.0, -distance))
+                .opacity
+        };
+        let span = fog.far - fog.near;
+        let half_way = fog.near + 0.0075 * span;
+        assert!((opacity(half_way) - 0.5 * fog.colour_weight(half_way)).abs() < 1e-6);
+        let faded_in = fog.near + 0.5 * span;
+        assert!((opacity(faded_in) - fog.colour_weight(faded_in)).abs() < 1e-6);
+    }
+
+    #[test]
     fn cell_fog_colours_decode_with_gamma_two_point_two() {
         let fog = fog_of(
             &resolved(json!({"FogFarColor": color(128, 128, 128)}))

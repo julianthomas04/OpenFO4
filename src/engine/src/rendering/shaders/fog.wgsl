@@ -52,8 +52,8 @@ fn fog_fill(height: f32) -> Fog {
     return Fog(color, fog_opacity(1.0, fog_density(share)));
 }
 
-// Normal below Max, held at Max and ramping towards the fill near Far from Max on, the fill
-// beyond Far.
+// Normal below Max (its opacity fading in after Near), held at Max and ramping towards the fill
+// near Far from Max on, the fill beyond Far.
 fn fog_at(world_pos: vec3<f32>) -> Fog {
     let far = frame.fog_far_color.w;
     if (far <= frame.fog_near_color.w) {
@@ -72,7 +72,8 @@ fn fog_at(world_pos: vec3<f32>) -> Fog {
     let max_opacity = frame.fog_params.y;
     if (x < max_opacity) {
         let color = mix(near_color, far_color, x) * frame.fog_near_high_color.w;
-        return Fog(color, fog_opacity(x, density));
+        let onset = fog_ramp(distance_to_camera, frame.fog_near_color.w, frame.fog_far_high_color.w);
+        return Fog(color, fog_opacity(x * onset, density));
     }
     let cap = Fog(mix(near_color, far_color, max_opacity), fog_opacity(max_opacity, density));
     return fog_towards(cap, fog_fill(height), fog_ramp(distance_to_camera, frame.fog_params.w, far));
