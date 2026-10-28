@@ -1183,7 +1183,11 @@ mod tests {
     }
 
     fn sunlight_red(slot: TimeSlot) -> f32 {
-        RawColor::linear(serde_json::from_value(rgb(slot.index() as u8 * 30, 0, 0)).unwrap()).x
+        RawColor::decoded(
+            serde_json::from_value(rgb(slot.index() as u8 * 30, 0, 0)).unwrap(),
+            SUNLIGHT_ENCODING,
+        )
+        .x
     }
 
     #[test]
@@ -1255,9 +1259,8 @@ mod tests {
         row.colors = Some(colors.to_string());
         let weather = load(row).unwrap().sample(between(Night, Day, 0.5));
         let stored_half = 0.5_f32.powf(2.2);
-        let srgb_half = ((0.5 + 0.055) / 1.055_f32).powf(2.4);
         for (name, colour, expected) in [
-            ("sun light", weather.sun_light, srgb_half),
+            ("sun light", weather.sun_light, stored_half),
             ("sun disc", weather.sun_disc, stored_half),
             ("sun glare", weather.sun_glare, 0.5),
             ("sky upper", weather.sky_upper, stored_half),

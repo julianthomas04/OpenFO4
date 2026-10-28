@@ -80,7 +80,7 @@ impl Default for ImageSpaceHdr {
 /// colours, whose blend is unmeasured, blend in linear light.
 pub(super) const SKY_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
 pub(super) const SUN_DISC_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
-pub(super) const SUNLIGHT_ENCODING: StoredColourEncoding = StoredColourEncoding::Srgb;
+pub(super) const SUNLIGHT_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
 pub(super) const AMBIENT_ENCODING: StoredColourEncoding = StoredColourEncoding::Srgb;
 pub(super) const TINT_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
 pub(super) const GLARE_AND_STARS_ENCODING: StoredColourEncoding = StoredColourEncoding::Srgb;
@@ -555,7 +555,7 @@ mod tests {
         let srgb_72 = Vec3::splat(((72.0 / 255.0 + 0.055) / 1.055_f32).powf(2.4));
         let gamma_72 = Vec3::splat((72.0 / 255.0_f32).powf(2.2));
         for (name, value, expected) in [
-            ("sunlight", changed.sun_light, srgb_72),
+            ("sunlight", changed.sun_light, gamma_72),
             ("sun disc", changed.sun_disc, gamma_72),
             ("sky upper", changed.sky_upper, gamma_72),
             ("sky lower", changed.sky_lower, gamma_72),

@@ -1313,15 +1313,8 @@ mod tests {
         const NIGHT_SUNLIGHT_SCALE: f32 = 0.5;
 
         fn colour(rgb8: (u8, u8, u8)) -> Vec3 {
-            let linear = |channel: u8| {
-                let encoded = f32::from(channel) / 255.0;
-                if encoded <= 0.04045 {
-                    encoded / 12.92
-                } else {
-                    ((encoded + 0.055) / 1.055).powf(2.4)
-                }
-            };
-            Vec3::new(linear(rgb8.0), linear(rgb8.1), linear(rgb8.2))
+            let stored = Vec3::new(f32::from(rgb8.0), f32::from(rgb8.1), f32::from(rgb8.2));
+            (stored / 255.0).powf(2.2)
         }
 
         fn assert_colour(actual: Vec3, rgb8: (u8, u8, u8)) {
