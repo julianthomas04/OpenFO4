@@ -100,6 +100,8 @@ impl RawColor {
 pub(crate) enum StoredColourEncoding {
     Srgb,
     Gamma22,
+    /// The stored value is itself the linear factor.
+    Linear,
 }
 
 impl StoredColourEncoding {
@@ -107,6 +109,7 @@ impl StoredColourEncoding {
         match self {
             Self::Srgb => Vec3::from_array(stored.to_array().map(srgb_unit_to_linear)),
             Self::Gamma22 => gamma_decode(stored),
+            Self::Linear => stored,
         }
     }
 
@@ -116,6 +119,7 @@ impl StoredColourEncoding {
         match self {
             Self::Srgb => Vec3::from_array(linear.to_array().map(linear_to_srgb_unit)),
             Self::Gamma22 => linear.powf(DISPLAY_GAMMA.recip()),
+            Self::Linear => linear,
         }
     }
 }

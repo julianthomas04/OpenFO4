@@ -177,7 +177,7 @@ use crate::rendering::{
     },
     texture::Texture,
     texture_streaming::{ResidencyPolicy, TextureFeedback, TextureResidency, demand::ScreenView},
-    water::{CameraWater, WaterStage, water_panel},
+    water::{CameraWater, WaterSetting, WaterStage, water_panel},
     weather::{
         StartupWeather, WeatherSync,
         panel::{WeatherPanelState, weather_panel},
@@ -3766,7 +3766,16 @@ impl State {
             &self.device,
             &self.queue,
             &frame_uniform,
-            self.streamer.in_interior(),
+            if self.streamer.in_interior() {
+                WaterSetting::Interior
+            } else {
+                WaterSetting::Exterior {
+                    water_multiplier: self
+                        .lighting
+                        .exterior_weather()
+                        .map(|weather| weather.water_multiplier),
+                }
+            },
         );
         drop(lighting_frame_span);
         let gpu_poll_span = tracing::info_span!("gpu_poll").entered();

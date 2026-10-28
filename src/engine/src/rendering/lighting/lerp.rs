@@ -136,7 +136,11 @@ mod tests {
     #[test]
     fn a_stored_blend_keeps_its_ends() {
         let (from, to) = (Vec3::new(0.0, 0.002, 0.3), Vec3::new(0.9, 0.5, 0.001));
-        for encoding in [StoredColourEncoding::Srgb, StoredColourEncoding::Gamma22] {
+        for encoding in [
+            StoredColourEncoding::Srgb,
+            StoredColourEncoding::Gamma22,
+            StoredColourEncoding::Linear,
+        ] {
             assert!(lerp_stored(from, to, 0.0, encoding).abs_diff_eq(from, 1e-6));
             assert!(lerp_stored(from, to, 1.0, encoding).abs_diff_eq(to, 1e-6));
         }

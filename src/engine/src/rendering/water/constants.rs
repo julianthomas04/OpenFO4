@@ -262,15 +262,39 @@ impl WaterMaterial {
     }
 }
 
+/// Where this frame's water is drawn: the one source of both the far-field water and the
+/// weather's water multiplier, so the two never disagree.
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum WaterSetting {
+    Interior,
+    /// `None` without a weather loaded.
+    Exterior {
+        water_multiplier: Option<Vec3>,
+    },
+}
+
+impl WaterSetting {
+    pub fn is_interior(self) -> bool {
+        matches!(self, Self::Interior)
+    }
+
+    /// Interiors have no weather, so no multiplier.
+    pub fn water_multiplier(self) -> Option<Vec3> {
+        match self {
+            Self::Interior => None,
+            Self::Exterior { water_multiplier } => water_multiplier,
+        }
+    }
+}
+
 /// Frame state the pixel `cb1` rows depend on besides the WATR.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct WaterEnvironment {
     /// `cb1[2]` source: the current worldspace's water.
     pub far_field: FarField,
     /// The water multiplier colour applied to `cb1[0..=2]`, `[6]`, `[7]` and the interior
-    /// `[3..=5]`. Which tint applies depends on a weather flag that the engine's
-    /// weather does not resolve yet, so callers pass [`Self::NEUTRAL_TINT`], the `(1, 1, 1)`
-    /// value for a clear flag.
+    /// `[3..=5]`: the weather's, else [`Self::NEUTRAL_TINT`]. The underwater colour that
+    /// replaces `cb1[0]` under water stays untinted.
     pub tint: Vec3,
 }
 
@@ -278,9 +302,15 @@ impl WaterEnvironment {
     pub const NEUTRAL_TINT: Vec3 = Vec3::ONE;
 
     pub fn new(far_field: FarField) -> Self {
+        Self::under(far_field, None)
+    }
+
+    /// The environment under a weather's water multiplier; without one (an interior, or no
+    /// weather loaded) the colours stay as the WATR gives them.
+    pub fn under(far_field: FarField, water_multiplier: Option<Vec3>) -> Self {
         Self {
             far_field,
-            tint: Self::NEUTRAL_TINT,
+            tint: water_multiplier.unwrap_or(Self::NEUTRAL_TINT),
         }
     }
 }
@@ -400,9 +430,6 @@ fn pixel_cb1(
     let tint = environment.tint;
     let mut cb1 = material.cb1;
 
-    if underwater {
-        cb1[0] = material.underwater_color.extend(cb1[0].w);
-    }
     let far_field = if interior {
         FarField::INTERIOR
     } else {
@@ -411,6 +438,9 @@ fn pixel_cb1(
     cb1[2] = far_field.deep_color.extend(far_field.reflectivity);
     for row in [0, 1, 2, 6, 7] {
         cb1[row] = tinted(cb1[row], tint);
+    }
+    if underwater {
+        cb1[0] = material.underwater_color.extend(cb1[0].w);
     }
 
     let gradient = if interior {
@@ -602,6 +632,52 @@ mod tests {
         let environment = WaterEnvironment::new(other_water_far_field());
         let cb1 = pixel_cb1(&ocean_material(), &frame_fixture(), &environment, true);
         assert_eq!(cb1[2], Vec4::new(0.0, 0.0, 0.0, 1.0));
+    }
+
+    #[test]
+    fn an_interior_setting_has_no_multiplier_and_an_exterior_one_carries_its_weathers() {
+        let multiplier = Some(Vec3::new(0.2, 0.4, 0.6));
+        assert!(WaterSetting::Interior.is_interior());
+        assert_eq!(WaterSetting::Interior.water_multiplier(), None);
+        let exterior = WaterSetting::Exterior {
+            water_multiplier: multiplier,
+        };
+        assert!(!exterior.is_interior());
+        assert_eq!(exterior.water_multiplier(), multiplier);
+    }
+
+    #[test]
+    fn without_a_weather_multiplier_the_tint_is_neutral() {
+        let without = WaterEnvironment::under(other_water_far_field(), None);
+        assert_eq!(without.tint, WaterEnvironment::NEUTRAL_TINT);
+    }
+
+    /// The multiplier bytes (51, 102, 255) are linear factors (0.2, 0.4, 1.0); the shallow
+    /// colour bytes (10, 20, 30) decode to `(10/255)^2.2`, `(20/255)^2.2`, `(30/255)^2.2` =
+    /// `(0.000_804_7, 0.003_697_2, 0.009_021_5)`.
+    #[test]
+    fn the_weathers_multiplier_scales_the_decoded_body_colour_by_its_stored_bytes() {
+        let multiplier = Vec3::new(51.0, 102.0, 255.0) / 255.0;
+        let environment = WaterEnvironment::under(other_water_far_field(), Some(multiplier));
+        let cb1 = pixel_cb1(&ocean_material(), &frame_fixture(), &environment, false);
+        let shallow = Vec3::new(0.000_804_7, 0.003_697_2, 0.009_021_5);
+        assert!(
+            cb1[0]
+                .truncate()
+                .abs_diff_eq(shallow * Vec3::new(0.2, 0.4, 1.0), 1e-7),
+            "{:?}",
+            cb1[0]
+        );
+    }
+
+    #[test]
+    fn the_underwater_colour_stays_untinted_under_a_weather_multiplier() {
+        let mut frame = frame_fixture();
+        frame.time_water.z = 1.0;
+        let environment =
+            WaterEnvironment::under(other_water_far_field(), Some(Vec3::new(0.2, 0.4, 0.6)));
+        let cb1 = pixel_cb1(&ocean_material(), &frame, &environment, false);
+        assert_close(cb1[0].truncate(), gamma([100, 110, 120]), "cb1[0].xyz");
     }
 
     #[test]

@@ -75,15 +75,17 @@ impl Default for ImageSpaceHdr {
 }
 
 /// How the loader decodes each stored colour of a slot. The time slots and a change of weather
-/// blend the sky, sun disc, sunlight, directional ambient and tint colours as stored and decode
-/// the blend once (see [`ExteriorWeather::cross_fade`]); the glare and star colours, whose blend
-/// is unmeasured, blend in linear light.
+/// blend the sky, sun disc, sunlight, directional ambient, tint and water multiplier colours as
+/// stored and decode the blend once (see [`ExteriorWeather::cross_fade`]); the glare and star
+/// colours, whose blend is unmeasured, blend in linear light.
 pub(super) const SKY_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
 pub(super) const SUN_DISC_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
 pub(super) const SUNLIGHT_ENCODING: StoredColourEncoding = StoredColourEncoding::Srgb;
 pub(super) const AMBIENT_ENCODING: StoredColourEncoding = StoredColourEncoding::Srgb;
 pub(super) const TINT_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
 pub(super) const GLARE_AND_STARS_ENCODING: StoredColourEncoding = StoredColourEncoding::Srgb;
+/// The water's light grows with the stored multiplier byte itself, not with its decoded light.
+pub(super) const WATER_MULTIPLIER_ENCODING: StoredColourEncoding = StoredColourEncoding::Linear;
 
 /// A weather's directional ambient: its six colours as linear light, faces in engine order, and
 /// the scale they light with.
@@ -114,6 +116,7 @@ pub(super) struct SlotValues {
     pub(super) stars: Vec3,
     pub(super) ambient: WeatherAmbient,
     pub(super) ambient_specular: Vec3,
+    pub(super) water_multiplier: Vec3,
     pub(super) hdr: ImageSpaceHdr,
     pub(super) cinematic: ImageSpaceCinematic,
     pub(super) depth_of_field: Option<ImageSpaceDepthOfField>,
@@ -174,6 +177,8 @@ pub struct ExteriorWeather {
     pub ambient: WeatherAmbient,
     /// Extracted but not rendered yet.
     pub ambient_specular: Vec3,
+    /// What the water's body colours are multiplied by.
+    pub water_multiplier: Vec3,
     pub hdr: ImageSpaceHdr,
     pub cinematic: ImageSpaceCinematic,
     /// The image space's depth of field and vignette: what the game's image-space manager
@@ -203,6 +208,7 @@ impl Lerp for ExteriorWeather {
             stars: Lerp::lerp(&self.stars, &other.stars, t),
             ambient: Lerp::lerp(&self.ambient, &other.ambient, t),
             ambient_specular: Lerp::lerp(&self.ambient_specular, &other.ambient_specular, t),
+            water_multiplier: Lerp::lerp(&self.water_multiplier, &other.water_multiplier, t),
             hdr: Lerp::lerp(&self.hdr, &other.hdr, t),
             cinematic: Lerp::lerp(&self.cinematic, &other.cinematic, t),
             depth_of_field: Lerp::lerp(&self.depth_of_field, &other.depth_of_field, t),
@@ -213,10 +219,10 @@ impl Lerp for ExteriorWeather {
 
 impl ExteriorWeather {
     /// The weather `t` of the way from this one to `other`, between two time slots or through a
-    /// change of weather. The sky, sun disc, sunlight, directional ambient and tint colours blend
-    /// as the game measurably blends its weather colours: as stored, re-encoded exactly as the
-    /// loader decoded them, then decoded once; the fog colours and the fog's sunlight are kept
-    /// stored already. Every other value blends as [`Lerp`] blends it.
+    /// change of weather. The sky, sun disc, sunlight, directional ambient, tint and water
+    /// multiplier colours blend as the game measurably blends its weather colours: as stored,
+    /// re-encoded exactly as the loader decoded them, then decoded once; the fog colours and the
+    /// fog's sunlight are kept stored already. Every other value blends as [`Lerp`] blends it.
     #[must_use]
     pub fn cross_fade(&self, other: &Self, t: f32) -> Self {
         let stored = |from, to, encoding| lerp_stored(from, to, t, encoding);
@@ -237,6 +243,11 @@ impl ExteriorWeather {
             self.cinematic.tint_color,
             other.cinematic.tint_color,
             TINT_ENCODING,
+        );
+        blend.water_multiplier = stored(
+            self.water_multiplier,
+            other.water_multiplier,
+            WATER_MULTIPLIER_ENCODING,
         );
         blend
     }
@@ -346,6 +357,7 @@ impl ExteriorWeatherSlots {
             stars,
             ambient,
             ambient_specular,
+            water_multiplier,
             hdr,
             cinematic,
             depth_of_field,
@@ -362,6 +374,7 @@ impl ExteriorWeatherSlots {
             stars,
             ambient,
             ambient_specular,
+            water_multiplier,
             hdr,
             cinematic,
             depth_of_field,
@@ -398,6 +411,7 @@ mod tests {
                 scale: 28.0 * level,
             },
             ambient_specular: Vec3::splat(8.0 * level),
+            water_multiplier: Vec3::splat(29.0 * level),
             hdr: ImageSpaceHdr {
                 sunlight_scale: 9.0 * level,
                 sky_scale: 10.0 * level,
@@ -517,6 +531,7 @@ mod tests {
                 colors: AmbientCube([AMBIENT_ENCODING.decode(stored); 6]),
                 scale: 1.0,
             },
+            water_multiplier: WATER_MULTIPLIER_ENCODING.decode(stored),
             cinematic: ImageSpaceCinematic {
                 tint_color: TINT_ENCODING.decode(stored),
                 ..base.cinematic
@@ -540,6 +555,11 @@ mod tests {
             ("sky lower", changed.sky_lower, gamma_72),
             ("horizon", changed.horizon, gamma_72),
             ("tint", changed.cinematic.tint_color, gamma_72),
+            (
+                "water multiplier",
+                changed.water_multiplier,
+                Vec3::splat(72.0 / 255.0),
+            ),
         ] {
             assert!(value.abs_diff_eq(expected, 1e-6), "{name}: {value}");
         }
@@ -565,6 +585,7 @@ mod tests {
                 sky_upper: blended.sky_upper,
                 sky_lower: blended.sky_lower,
                 horizon: blended.horizon,
+                water_multiplier: blended.water_multiplier,
                 ambient: WeatherAmbient {
                     colors: blended.ambient.colors,
                     ..changed.ambient

@@ -68,7 +68,15 @@ fn rgb() -> Json {
 
 fn colors() -> Json {
     let groups = [
-        "Sunlight", "Sun", "SunGlare", "SkyUpper", "SkyLower", "Horizon", "Stars", "FogNear",
+        "Sunlight",
+        "Sun",
+        "SunGlare",
+        "SkyUpper",
+        "SkyLower",
+        "Horizon",
+        "Stars",
+        "WaterMultiplier",
+        "FogNear",
         "FogFar",
     ];
     groups

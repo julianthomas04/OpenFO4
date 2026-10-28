@@ -14,7 +14,7 @@ use super::time_of_day::{
 use super::tonemap_settings::ImageSpaceCinematic;
 use super::weather_slots::{
     AMBIENT_ENCODING, GLARE_AND_STARS_ENCODING, SKY_ENCODING, SUN_DISC_ENCODING, SUNLIGHT_ENCODING,
-    SlotFogColors, SlotValues, TINT_ENCODING, WeatherFog,
+    SlotFogColors, SlotValues, TINT_ENCODING, WATER_MULTIPLIER_ENCODING, WeatherFog,
 };
 pub use super::weather_slots::{
     ExteriorWeather, ExteriorWeatherSlots, ImageSpaceHdr, WeatherAmbient,
@@ -399,6 +399,7 @@ fn load_slot(
         stars: group("Stars", GLARE_AND_STARS_ENCODING)?,
         ambient,
         ambient_specular: dalc.specular.linear(),
+        water_multiplier: group("WaterMultiplier", WATER_MULTIPLIER_ENCODING)?,
         hdr: image_space.hdr,
         cinematic: image_space.cinematic,
         depth_of_field: image_space.depth_of_field,
@@ -770,6 +771,7 @@ pub(crate) mod fixtures {
             "SkyLower": group(rgb(255, 255, 0)),
             "Horizon": group(rgb(0, 255, 255)),
             "Stars": group(rgb(255, 0, 255)),
+            "WaterMultiplier": group(rgb(51, 102, 255)),
             "FogNear": group(rgb(0, 0, 0)),
             "FogFar": group(rgb(255, 255, 255)),
         })
@@ -942,6 +944,7 @@ mod tests {
         assert_eq!(weather.sky_lower, Vec3::new(1.0, 1.0, 0.0));
         assert_eq!(weather.horizon, Vec3::new(0.0, 1.0, 1.0));
         assert_eq!(weather.stars, Vec3::new(1.0, 0.0, 1.0));
+        assert_eq!(weather.water_multiplier, Vec3::new(0.2, 0.4, 1.0));
         assert_eq!(&*weather.form_key, FORM_KEY);
         assert_eq!(weather.editor_id.as_deref(), Some("CommonwealthClear"));
     }
@@ -1098,6 +1101,18 @@ mod tests {
     }
 
     #[test]
+    fn a_missing_water_multiplier_group_is_a_missing_slot_error() {
+        let mut broken = colors();
+        broken.as_object_mut().unwrap().remove("WaterMultiplier");
+        let mut row = row();
+        row.colors = Some(broken.to_string());
+        assert!(matches!(
+            load(row),
+            Err(ExteriorWeatherError::MissingTimeSlot { entry, .. }) if entry == "WaterMultiplier"
+        ));
+    }
+
+    #[test]
     fn a_missing_stars_group_is_a_missing_slot_error() {
         let mut broken = colors();
         broken.as_object_mut().unwrap().remove("Stars");
@@ -1207,7 +1222,14 @@ mod tests {
     fn every_colour_group_is_blended() {
         let mut colors = colors();
         for group in [
-            "Sunlight", "Sun", "SunGlare", "SkyUpper", "SkyLower", "Horizon", "Stars",
+            "Sunlight",
+            "Sun",
+            "SunGlare",
+            "SkyUpper",
+            "SkyLower",
+            "Horizon",
+            "Stars",
+            "WaterMultiplier",
         ] {
             colors[group] = per_slot(|slot| {
                 if slot == Night {
@@ -1230,6 +1252,7 @@ mod tests {
             ("sky lower", weather.sky_lower, stored_half),
             ("horizon", weather.horizon, stored_half),
             ("stars", weather.stars, 0.5),
+            ("water multiplier", weather.water_multiplier, 0.5),
         ] {
             assert!(
                 colour.abs_diff_eq(Vec3::splat(expected), 1e-6),

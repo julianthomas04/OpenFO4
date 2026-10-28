@@ -8,7 +8,7 @@ use super::{
     config::WaterConfig,
     constants::{
         DRAW_CONSTANTS_STRIDE, FarField, GeometryInputs, WaterDrawConstants, WaterEnvironment,
-        WaterFrameConstants, WaterMaterial, draw_constants, frame_constants,
+        WaterFrameConstants, WaterMaterial, WaterSetting, draw_constants, frame_constants,
     },
     debug_output::{DebugSelection, DrawPipeline, WaterDebugOutput},
     displacement::{
@@ -429,7 +429,11 @@ impl WaterStage {
     /// The `cb1[2]` source for a surface of `surface_water`: the worldspace
     /// water, else `DefaultWater`. Only when neither is in the table does the
     /// surface's own water stand in, which is reported.
-    fn environment_for(&self, surface_water: usize) -> WaterEnvironment {
+    fn environment_for(
+        &self,
+        surface_water: usize,
+        water_multiplier: Option<Vec3>,
+    ) -> WaterEnvironment {
         let far_field: FarField = self
             .worldspace_water
             .or_else(|| self.waters.index_of(DEFAULT_WATER_FORM_KEY))
@@ -444,7 +448,7 @@ impl WaterStage {
                 },
                 |index| self.waters.entries[index].material.far_field(),
             );
-        WaterEnvironment::new(far_field)
+        WaterEnvironment::under(far_field, water_multiplier)
     }
 
     /// Selects what the draws show instead of their shading (`None` for the normal shading),
@@ -581,9 +585,7 @@ impl WaterStage {
         let dof = underwater_override_dof(self.camera_water.immersion, entry.depth_of_field)?;
         Some(UnderwaterOverride {
             dof,
-            fog: entry
-                .underwater_fog
-                .registers(WaterEnvironment::NEUTRAL_TINT),
+            fog: entry.underwater_fog.registers(),
         })
     }
 
@@ -597,16 +599,17 @@ impl WaterStage {
         })
     }
 
-    /// Culls and sorts this frame's surfaces and writes their constants. A
-    /// camera under water draws every surface with the underwater shader (LOD
-    /// water has no underwater variant and keeps its own).
+    /// Culls and sorts this frame's surfaces and writes their constants for `setting`. A
+    /// camera under water draws every surface with the underwater shader (LOD water has no
+    /// underwater variant and keeps its own).
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         frame: &FrameUniform,
-        interior: bool,
+        setting: WaterSetting,
     ) {
+        let interior = setting.is_interior();
         self.draws.clear();
         self.constants_scratch.clear();
         self.tally = DrawTally::default();
@@ -697,7 +700,7 @@ impl WaterStage {
                     },
                 );
             }
-            let environment = self.environment_for(surface.water);
+            let environment = self.environment_for(surface.water, setting.water_multiplier());
             let geometry = GeometryInputs {
                 world: surface.world,
                 view_projection: frame.view_proj,

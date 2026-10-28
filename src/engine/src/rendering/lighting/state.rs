@@ -994,6 +994,7 @@ mod tests {
                 scale: 1.0,
             },
             ambient_specular: Vec3::ZERO,
+            water_multiplier: Vec3::new(0.2, 0.4, 0.6),
             hdr: ImageSpaceHdr::default(),
             cinematic: ImageSpaceCinematic::NEUTRAL,
             depth_of_field: None,
