@@ -59,21 +59,17 @@ impl FogColors {
     }
 }
 
-/// What the sunlight does to the fog colour short of full fog: `color * kept + added`.
+/// What the sunlight does to the normal branch's fog colour: it keeps `kept` of it.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct SunlightTerm {
     pub kept: f32,
-    pub added: Vec3,
 }
 
 impl SunlightTerm {
-    pub const NONE: Self = Self {
-        kept: 1.0,
-        added: Vec3::ZERO,
-    };
+    pub const NONE: Self = Self { kept: 1.0 };
 
     pub fn apply(self, color: Vec3) -> Vec3 {
-        color * self.kept + self.added
+        color * self.kept
     }
 }
 
@@ -147,10 +143,7 @@ mod tests {
                 far: HeightBand::new(50.0, 25.0),
                 high_density_scale: 0.5,
             },
-            sunlight: SunlightTerm {
-                kept: 0.9,
-                added: Vec3::splat(0.01),
-            },
+            sunlight: SunlightTerm { kept: 0.9 },
         }
     }
 
@@ -187,12 +180,9 @@ mod tests {
     }
 
     #[test]
-    fn the_sunlight_term_keeps_a_share_of_the_colour_and_adds_its_light() {
-        let term = SunlightTerm {
-            kept: 0.5,
-            added: Vec3::splat(0.25),
-        };
-        assert_eq!(term.apply(Vec3::ONE), Vec3::splat(0.75));
+    fn the_sunlight_term_keeps_a_share_of_the_colour() {
+        let term = SunlightTerm { kept: 0.5 };
+        assert_eq!(term.apply(Vec3::ONE), Vec3::splat(0.5));
         assert_eq!(SunlightTerm::NONE.apply(Vec3::ONE), Vec3::ONE);
     }
 

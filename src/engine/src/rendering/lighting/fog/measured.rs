@@ -2,30 +2,28 @@
 //! the measurements leave open. Every estimate is a named constant or function here, so a later
 //! measurement changes one place.
 //!
-//! Measured: the colour factors by day without sunlight and at night, the sunlight term at noon,
-//! the colour day weight's crossover hours, and the ramp of the capped branch towards full fog.
+//! Measured: the colour factors of the Day slot and of every other slot, interior factors, the
+//! byte-space blend of the per-slot factors, the sunlight's share against its luminance, the
+//! night weight's ramp, and where the capped branch ramps to full fog.
 //!
 //! Estimates:
-//! - [`NIGHT_FOG_RAMP_HOURS`]: where the night weight of the distances reaches 1 (no samples
-//!   between 20:00 and 06:00).
-//! - [`sunlight_term`]: that the term scales linearly with the sunlight colour and with the
-//!   colour day weight (only noon with black or (225, 225, 225) sunlight was measured).
-//! - [`cap_ramp_start`]: that the ramp to full fog starts at a share of Far, not of Near..Far.
-//! - [`DAY_COLOUR_FACTORS`]' high colours: the sunlit values without the sunlight term. The fill
-//!   beyond Far above the height bands takes the far high colour with its factor (0.55 by day),
-//!   as the normal branch does; the fill of a point above the bands was never measured.
-//! - [`INTERIOR_COLOUR_FACTORS`]: interiors were not measured at all.
-//! - [`BlendedFogColors`]: that time slots and weathers blend the stored fog colour bytes, which
-//!   are decoded only afterwards (every slot of the measured weathers was the same).
+//! - [`DAY_COLOUR_FACTORS`]' high colours: near high is the sunlit value without the sunlight's
+//!   share; far high is the fill's (the sunlit normal branch reads 5 % lower).
+//! - [`sunlight_term`]: that the share fades with the Day slot's weight (it was measured in the
+//!   Day slot only).
+//! - [`BlendedFogColors`]: that the colours themselves blend as stored bytes, as their factors
+//!   measurably do (the colour patterns fit bytes better than linear light, but neither exactly).
 
 use glam::Vec3;
 
 use super::{FogColors, SunlightTerm};
-use crate::rendering::lighting::cell_lighting::gamma_decode;
-use crate::rendering::lighting::lerp::{Lerp, lerp_fields};
+use crate::rendering::lighting::cell_lighting::{DISPLAY_GAMMA, gamma_decode, luminance};
+use crate::rendering::lighting::lerp::Lerp;
+use crate::rendering::lighting::time_of_day::TimeSlot;
 
-/// The fog colours as time slots and weathers blend them: as stored, scaled to 0 to 1, and
-/// decoded with gamma 2.2 by [`Self::linear`] only once every blend is done.
+/// The fog colours as time slots and weathers blend them: as stored, scaled to 0 to 1 and by
+/// their colour factors, and decoded with gamma 2.2 by [`Self::linear`] only once every blend is
+/// done.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct BlendedFogColors(FogColors);
 
@@ -36,9 +34,16 @@ impl Lerp for BlendedFogColors {
 }
 
 impl BlendedFogColors {
-    /// From the stored colours, each channel scaled to 0 to 1.
-    pub fn from_stored(stored: FogColors) -> Self {
-        Self(stored)
+    /// From the stored colours, each channel scaled to 0 to 1, with `factors` applied so that
+    /// [`Self::linear`] returns each decoded colour times its factor.
+    pub fn from_stored(stored: FogColors, factors: ColourFactors) -> Self {
+        let encoded = |factor: f32| factor.powf(DISPLAY_GAMMA.recip());
+        Self(FogColors {
+            near: stored.near * encoded(factors.near),
+            far: stored.far * encoded(factors.far),
+            near_high: stored.near_high * encoded(factors.near_high),
+            far_high: stored.far_high * encoded(factors.far_high),
+        })
     }
 
     pub fn linear(self) -> FogColors {
@@ -56,14 +61,10 @@ pub struct ColourFactors {
     pub far_high: f32,
 }
 
-lerp_fields!(ColourFactors {
-    near,
-    near_high,
-    far,
-    far_high
-});
-
 impl ColourFactors {
+    #[cfg(test)]
+    pub const UNSCALED: Self = Self::uniform(1.0);
+
     const fn uniform(factor: f32) -> Self {
         Self {
             near: factor,
@@ -83,48 +84,71 @@ impl ColourFactors {
     }
 }
 
-/// Every colour at night, the high ones included.
-pub const NIGHT_COLOUR_FACTORS: ColourFactors = ColourFactors::uniform(0.48);
+/// Every colour, the high ones included, of every slot but Day (night and the sunrise and sunset
+/// slots alike) and of interiors.
+pub const NON_DAY_COLOUR_FACTORS: ColourFactors = ColourFactors::uniform(0.48);
 
-/// By day without the sunlight term. The far factor is also the fill beyond Far and the capped
-/// branch's.
+/// The Day slot's, without the sunlight's share. They hold in every branch: the far factor is
+/// also the fill's beyond Far, the far high one the fill's above the height bands.
 pub const DAY_COLOUR_FACTORS: ColourFactors = ColourFactors {
     near: 0.47,
-    near_high: 0.47,
+    near_high: 0.46,
     far: 1.0,
-    far_high: 0.55,
+    far_high: 0.58,
 };
 
-/// Interiors have no sunlight and no time of day; they start from the day factors.
-pub const INTERIOR_COLOUR_FACTORS: ColourFactors = DAY_COLOUR_FACTORS;
+/// Interiors take the factors every slot but Day takes outside.
+pub const INTERIOR_COLOUR_FACTORS: ColourFactors = NON_DAY_COLOUR_FACTORS;
 
-pub fn colour_factors(day_colour_weight: f32) -> ColourFactors {
-    NIGHT_COLOUR_FACTORS.lerp(&DAY_COLOUR_FACTORS, day_colour_weight)
+/// The Day slot's weight in a blend of slots: 1 for Day, 0 for every other slot.
+pub fn slot_day_weight(slot: TimeSlot) -> f32 {
+    if slot == TimeSlot::Day { 1.0 } else { 0.0 }
 }
 
-/// The share of the normal branch's fog colour the sunlight replaces at noon.
-const SUNLIGHT_SHARE: f32 = 0.08;
-/// What one unit of linear sunlight adds to the normal branch's fog colour at noon.
-const SUNLIGHT_GAIN: f32 = 0.004;
+/// The factors of `slot`'s colours.
+pub fn slot_colour_factors(slot: TimeSlot) -> ColourFactors {
+    if slot == TimeSlot::Day {
+        DAY_COLOUR_FACTORS
+    } else {
+        NON_DAY_COLOUR_FACTORS
+    }
+}
 
-pub fn sunlight_term(sunlight: Vec3, day_colour_weight: f32) -> SunlightTerm {
+/// The factors a colour stored alike in every slot shows once the slots are blended with the Day
+/// slot at `day_weight`: its decoded colour divided by its decoded stored colour.
+pub fn blended_colour_factors(day_weight: f32) -> ColourFactors {
+    let white = FogColors::uniform(Vec3::ONE);
+    let other = BlendedFogColors::from_stored(white, NON_DAY_COLOUR_FACTORS);
+    let day = BlendedFogColors::from_stored(white, DAY_COLOUR_FACTORS);
+    let factors = other.lerp(&day, day_weight).linear();
+    ColourFactors {
+        near: factors.near.x,
+        near_high: factors.near_high.x,
+        far: factors.far.x,
+        far_high: factors.far_high.x,
+    }
+}
+
+/// The share of the normal branch's fog colour that one unit of sunlight luminance takes away.
+const SUNLIGHT_SHARE_PER_LUMINANCE: f32 = 0.102;
+
+/// `sunlight` is linear (decoded with gamma 2.2); `day_weight` is the Day slot's weight.
+pub fn sunlight_term(sunlight: Vec3, day_weight: f32) -> SunlightTerm {
     SunlightTerm {
-        kept: 1.0 - SUNLIGHT_SHARE * day_colour_weight,
-        added: sunlight * (SUNLIGHT_GAIN * day_colour_weight),
+        kept: 1.0 - SUNLIGHT_SHARE_PER_LUMINANCE * luminance(sunlight) * day_weight,
     }
 }
 
 /// Hours over which the night weight of the fog distances ramps from 0 to 1.
 pub const NIGHT_FOG_RAMP_HOURS: f32 = 6.0;
 
-/// The share of Far at which the capped fog starts ramping to full fog. Open estimate: where `x`
-/// reaches Max only past this distance, the fog jumps up the ramp as the capped branch takes over
-/// (19 of 82 vanilla fog halves with Max below 1, for example `GoodneighborWeatherBase` at night
-/// by 0.06 at 4600 units). Whether the vanilla ramp avoids that jump is unmeasured.
-const CAP_RAMP_START_SHARE_OF_FAR: f32 = 0.8;
+/// The share of Near..Far at which the capped fog starts ramping to full fog.
+const CAP_RAMP_START_SHARE: f32 = 0.766;
 
-pub fn cap_ramp_start(far: f32) -> f32 {
-    CAP_RAMP_START_SHARE_OF_FAR * far
+/// Where `x` reaches Max only past this distance, the fog jumps up the ramp as the capped branch
+/// takes over; whether the vanilla ramp avoids that jump is unmeasured.
+pub fn cap_ramp_start(near: f32, far: f32) -> f32 {
+    near + CAP_RAMP_START_SHARE * (far - near)
 }
 
 #[cfg(test)]
@@ -132,41 +156,124 @@ pub fn cap_ramp_start(far: f32) -> f32 {
 mod tests {
     use super::*;
 
+    fn decoded_grey(byte: f32) -> Vec3 {
+        Vec3::splat((byte / 255.0).powf(2.2))
+    }
+
     #[test]
-    fn the_colour_factors_are_the_night_ones_at_night_and_the_day_ones_by_day() {
-        assert_eq!(colour_factors(0.0), NIGHT_COLOUR_FACTORS);
-        assert_eq!(colour_factors(1.0), DAY_COLOUR_FACTORS);
-        assert!((colour_factors(0.5).far - 0.74).abs() < 1e-6);
+    fn the_day_slot_takes_the_day_factors_and_every_other_slot_the_non_day_ones() {
+        for slot in TimeSlot::ALL {
+            let (factors, day_weight) = if slot == TimeSlot::Day {
+                (DAY_COLOUR_FACTORS, 1.0)
+            } else {
+                (NON_DAY_COLOUR_FACTORS, 0.0)
+            };
+            assert_eq!(slot_colour_factors(slot), factors, "{slot:?}");
+            assert_eq!(slot_day_weight(slot), day_weight, "{slot:?}");
+        }
+    }
+
+    #[test]
+    fn the_blended_factors_are_the_slots_own_at_the_ends() {
+        for (day_weight, factors) in [(0.0, NON_DAY_COLOUR_FACTORS), (1.0, DAY_COLOUR_FACTORS)] {
+            let blended = blended_colour_factors(day_weight);
+            for (actual, expected) in [
+                (blended.near, factors.near),
+                (blended.near_high, factors.near_high),
+                (blended.far, factors.far),
+                (blended.far_high, factors.far_high),
+            ] {
+                assert!((actual - expected).abs() < 1e-6, "{day_weight}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_fill_factor_follows_the_measured_fade_of_the_day_slot() {
+        // Hour, Day slot weight under DefaultClimate, measured fill factor (`slots_h*`).
+        for (hour, day_weight, measured) in [
+            (7.5, 0.0, 0.482),
+            (8.0, 1.0 / 3.0, 0.636),
+            (8.5, 2.0 / 3.0, 0.805),
+            (17.5, 2.0 / 3.0, 0.805),
+            (18.0, 1.0 / 3.0, 0.628),
+            (18.5, 0.0, 0.482),
+        ] {
+            let fill = blended_colour_factors(day_weight).far;
+            assert!((fill - measured).abs() < 0.006, "{hour}: {fill}");
+        }
     }
 
     #[test]
     fn the_sunlit_noon_factors_are_the_measured_ones() {
-        let sunlight = Vec3::splat((225.0_f32 / 255.0).powf(2.2));
-        let sun = sunlight_term(sunlight, 1.0);
-        let sunlit = |factor: f32| factor * sun.kept;
-        assert!((sunlit(DAY_COLOUR_FACTORS.near) - 0.435).abs() < 0.01);
-        assert!((sunlit(DAY_COLOUR_FACTORS.far) - 0.907).abs() < 0.015);
-        assert!((sunlit(DAY_COLOUR_FACTORS.far_high) - 0.51).abs() < 0.01);
-        assert!((sun.added.x - 0.0030).abs() < 2e-4);
+        // Sunlight grey byte, then the near and far factors measured at noon.
+        for (byte, near, far) in [
+            (0.0, 0.470, 0.993),
+            (112.0, 0.468, 0.967),
+            (225.0, 0.435, 0.907),
+            (255.0, 0.423, 0.896),
+        ] {
+            let kept = sunlight_term(decoded_grey(byte), 1.0).kept;
+            assert!(
+                (DAY_COLOUR_FACTORS.near * kept - near).abs() < 0.007,
+                "{byte}"
+            );
+            assert!(
+                (DAY_COLOUR_FACTORS.far * kept - far).abs() < 0.017,
+                "{byte}"
+            );
+        }
     }
 
     #[test]
-    fn there_is_no_sunlight_term_at_night() {
+    fn coloured_sunlight_takes_its_share_by_its_luminance() {
+        let orange = Vec3::new(
+            1.0,
+            (160.0_f32 / 255.0).powf(2.2),
+            (64.0_f32 / 255.0).powf(2.2),
+        );
+        let kept = sunlight_term(orange, 1.0).kept;
+        assert!(
+            (DAY_COLOUR_FACTORS.far * kept - 0.942).abs() < 0.011,
+            "{kept}"
+        );
+    }
+
+    #[test]
+    fn there_is_no_sunlight_term_without_the_day_slot() {
         assert_eq!(sunlight_term(Vec3::ONE, 0.0), SunlightTerm::NONE);
     }
 
     #[test]
     fn blended_colours_blend_as_stored_and_decode_afterwards() {
-        let black = BlendedFogColors::from_stored(FogColors::uniform(Vec3::ZERO));
-        let white = BlendedFogColors::from_stored(FogColors::uniform(Vec3::ONE));
+        let black =
+            BlendedFogColors::from_stored(FogColors::uniform(Vec3::ZERO), ColourFactors::UNSCALED);
+        let white =
+            BlendedFogColors::from_stored(FogColors::uniform(Vec3::ONE), ColourFactors::UNSCALED);
         let halfway = black.lerp(&white, 0.5).linear();
         assert!((halfway.far.x - 0.5_f32.powf(2.2)).abs() < 1e-6);
         assert_eq!(white.linear(), FogColors::uniform(Vec3::ONE));
     }
 
     #[test]
-    fn the_capped_fog_ramps_over_the_last_fifth_before_far() {
-        assert_eq!(cap_ramp_start(3000.0), 2400.0);
+    fn each_decoded_colour_carries_its_own_factor() {
+        let stored = FogColors::uniform(Vec3::splat(0.6));
+        let decoded = BlendedFogColors::from_stored(stored, DAY_COLOUR_FACTORS).linear();
+        let plain = gamma_decode(Vec3::splat(0.6));
+        for (actual, factor) in [
+            (decoded.near, DAY_COLOUR_FACTORS.near),
+            (decoded.near_high, DAY_COLOUR_FACTORS.near_high),
+            (decoded.far, DAY_COLOUR_FACTORS.far),
+            (decoded.far_high, DAY_COLOUR_FACTORS.far_high),
+        ] {
+            assert!(actual.abs_diff_eq(plain * factor, 1e-6), "{actual}");
+        }
+    }
+
+    #[test]
+    fn the_capped_fog_ramps_over_the_last_quarter_of_near_to_far() {
+        assert!((cap_ramp_start(2400.0, 3400.0) - 3166.0).abs() < 1e-3);
+        assert!((cap_ramp_start(0.0, 1000.0) - 766.0).abs() < 1e-3);
     }
 
     #[test]
@@ -181,8 +288,8 @@ mod tests {
         for (actual, expected) in [
             (scaled.near, 0.47),
             (scaled.far, 2.0),
-            (scaled.near_high, 1.41),
-            (scaled.far_high, 2.2),
+            (scaled.near_high, 1.38),
+            (scaled.far_high, 2.32),
         ] {
             assert!(actual.abs_diff_eq(Vec3::splat(expected), 1e-6), "{actual}");
         }

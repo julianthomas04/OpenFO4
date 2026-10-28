@@ -20,7 +20,6 @@ struct FrameUniform {
     fog_params: vec4<f32>,
     fog_near_band: vec4<f32>,
     fog_far_band: vec4<f32>,
-    fog_sunlight: vec4<f32>,
     cascade_view_proj: array<mat4x4<f32>, 4>,
     cascade_spheres: array<vec4<f32>, 4>,
     shadow_params: vec4<f32>,

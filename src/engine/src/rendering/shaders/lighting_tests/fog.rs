@@ -188,10 +188,7 @@ fn height_fog() -> Fog {
             far: HeightBand::new(50.0, 25.0),
             high_density_scale: 0.5,
         },
-        sunlight: SunlightTerm {
-            kept: 0.8,
-            added: Vec3::new(0.05, 0.1, 0.15),
-        },
+        sunlight: SunlightTerm { kept: 0.8 },
     })
 }
 
@@ -246,10 +243,7 @@ fn edge_fog(power: f32, max: f32, height: HeightBands) -> Fog {
         power,
         max,
         height,
-        sunlight: SunlightTerm {
-            kept: 0.8,
-            added: Vec3::splat(0.05),
-        },
+        sunlight: SunlightTerm { kept: 0.8 },
     })
 }
 

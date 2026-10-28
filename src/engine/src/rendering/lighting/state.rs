@@ -781,7 +781,7 @@ mod tests {
     use super::super::ambient::AMBIENT_CUBE_FACES;
     use super::super::cell_lighting::{ResolvedLighting, TemplateStatus};
     use super::super::environment::NeutralReason;
-    use super::super::fog::measured::BlendedFogColors;
+    use super::super::fog::measured::{BlendedFogColors, DAY_COLOUR_FACTORS};
     use super::super::fog::{ExteriorFog, FogRange};
     use super::fixtures::lighting_state;
     use super::*;
@@ -1920,13 +1920,17 @@ mod tests {
 
         fn own_fog() -> ExteriorFog {
             ExteriorFog {
-                colors: BlendedFogColors::from_stored(FogColors {
-                    near: Vec3::new(0.1, 0.2, 0.3),
-                    far: Vec3::new(0.4, 0.5, 0.6),
-                    near_high: Vec3::new(0.7, 0.6, 0.5),
-                    far_high: Vec3::new(0.2, 0.3, 0.4),
-                }),
+                colors: BlendedFogColors::from_stored(
+                    FogColors {
+                        near: Vec3::new(0.1, 0.2, 0.3),
+                        far: Vec3::new(0.4, 0.5, 0.6),
+                        near_high: Vec3::new(0.7, 0.6, 0.5),
+                        far_high: Vec3::new(0.2, 0.3, 0.4),
+                    },
+                    DAY_COLOUR_FACTORS,
+                ),
                 sunlight: Vec3::splat(0.5),
+                day_weight: 1.0,
                 day: Some(own_range()),
                 night: Some(FogRange {
                     near: 300.0,
@@ -2152,10 +2156,7 @@ mod tests {
         fn the_clock_resolves_the_weathers_fog_for_the_time_of_day() {
             let mut state = exterior();
             state.set_exterior_weather(weather_with_fog(own_fog()), FogTime::DAY);
-            let night = FogTime {
-                night_weight: 1.0,
-                day_colour_weight: 0.0,
-            };
+            let night = FogTime { night_weight: 1.0 };
             state.set_exterior_weather(weather_with_fog(own_fog()), night);
             assert_eq!(state.fog_time(), night);
             assert_eq!(Fog::Enabled(state.fog.params), own_fog().resolve(night));
