@@ -174,7 +174,7 @@ mod tests {
     use glam::Vec3;
 
     use super::*;
-    use crate::rendering::lighting::cell_lighting::srgb8_to_linear;
+    use crate::rendering::lighting::cell_lighting::gamma_decode;
     use crate::rendering::lighting::exterior_weather::fixtures::slots_with_sky;
     use crate::rendering::lighting::lightning::tuning;
     use crate::rendering::lighting::state::fixtures::{
@@ -200,8 +200,9 @@ mod tests {
         move |slot| if slot == TimeSlot::Night { night } else { day }
     }
 
+    /// A sky colour as the weather decodes it.
     fn linear((red, green, blue): Rgb) -> Vec3 {
-        srgb8_to_linear([red, green, blue])
+        gamma_decode(Vec3::new(red.into(), green.into(), blue.into()) / 255.0)
     }
 
     /// The weathers `A` and `B`; `A` is green by day and dark green by night.

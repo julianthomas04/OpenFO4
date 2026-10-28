@@ -7,6 +7,7 @@ mod climate_sky;
 mod climate_times;
 mod day_time;
 mod game_config;
+mod keyframes;
 mod light;
 mod moment;
 mod moon;
