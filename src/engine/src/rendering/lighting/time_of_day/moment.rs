@@ -6,7 +6,9 @@ use super::light::LightSource;
 use super::moon::{MoonError, MoonKind, MoonPhase, moon_phase, moon_visibility};
 use super::sky::{SkyGameSettings, SkyPosition};
 use super::stars::{StarRotation, star_rotation};
-use super::unmeasured::{light_source, moon_position, sun_position};
+use super::sun_disc::sun_position;
+use super::sun_light::light_source;
+use super::unmeasured::moon_position;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ClimateMoonError {
@@ -87,7 +89,7 @@ impl SkyMoment {
             blend: slot_blend(time, times),
             sun,
             moon,
-            light: light_source(sun, moon.map(|moon| moon.position), settings),
+            light: light_source(time, times),
             star_rotation: star_rotation(time, settings),
         }
     }
@@ -234,48 +236,38 @@ mod tests {
     }
 
     #[test]
-    fn at_noon_the_sun_is_the_light_and_the_blend_holds_day() {
+    fn at_noon_the_blend_holds_day_and_the_light_is_not_the_disc() {
         let moment = moment(0, 12.0, Some(&masser()));
         assert_eq!(
             (moment.blend.from, moment.blend.to),
             (TimeSlot::Day, TimeSlot::Day)
         );
-        assert!(moment.sun.elevation_deg > 20.0);
-        assert_eq!(
-            (moment.light.from_moon_weight, moment.light.strength),
-            (0.0, 1.0)
-        );
-        assert!(
-            moment
-                .light
-                .direction
-                .abs_diff_eq(moment.sun.direction(), 1e-6)
-        );
+        assert!(moment.sun.elevation_deg > 50.0);
+        let gap = moment
+            .light
+            .direction
+            .angle_between(moment.sun.direction())
+            .to_degrees();
+        assert!((15.0..25.0).contains(&gap), "{gap}");
     }
 
     #[test]
-    fn at_midnight_a_full_moon_is_the_light() {
-        let moment = moment(0, 0.0, Some(&masser()));
-        let moon = moment.moon.expect("the climate has a moon");
-        assert_eq!(moon.phase, MoonPhase::Full);
-        assert_eq!(moon.visibility, 1.0);
-        assert_eq!(
-            (moment.light.from_moon_weight, moment.light.strength),
-            (1.0, 1.0)
-        );
-        assert!(
-            moment
-                .light
-                .direction
-                .abs_diff_eq(moon.position.direction(), 1e-6)
-        );
+    fn the_light_is_the_same_with_or_without_a_moon() {
+        for hour in [0.0, 6.0, 12.0, 21.0] {
+            assert_eq!(
+                moment(0, hour, Some(&masser())).light,
+                moment(0, hour, None).light,
+                "{hour}"
+            );
+        }
     }
 
     #[test]
-    fn at_midnight_without_a_moon_nothing_lights_the_world() {
+    fn at_midnight_the_disc_is_down_but_the_light_still_shines_from_the_south() {
         let moment = moment(0, 0.0, None);
-        assert!(moment.moon.is_none());
-        assert_eq!(moment.light.strength, 0.0);
+        assert!(moment.sun.elevation_deg < 0.0);
+        assert!(moment.light.strength > 0.95);
+        assert!(moment.light.direction.y > 0.5 && moment.light.direction.z > 0.7);
     }
 
     #[test]

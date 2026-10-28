@@ -33,8 +33,8 @@ const ADAPTATION_REFERENCE_FPS: f32 = 30.0;
 const EXPOSURE_CALIBRATION: f32 = 0.38;
 
 /// The exterior's one directional light and the sun disc the sky paints. With the clock in
-/// charge the direction and strength are those of the body that currently lights the ground (the
-/// moon at night); the disc is always the sun's.
+/// charge the direction and strength are the measured light's, which is never the disc's: it
+/// stays up day and night.
 #[derive(Debug, Copy, Clone)]
 pub struct SunSettings {
     /// 0 = north (engine -Z), increasing clockwise towards +X (east).
@@ -43,7 +43,8 @@ pub struct SunSettings {
     pub color: Vec3,
     pub disc_color: Vec3,
     pub intensity: f32,
-    /// 0 to 1, multiplies the direct light: how far the lighting body has risen.
+    /// 0 to 1, multiplies the direct light: the clock's light strength, or the manual sun's
+    /// fade with its elevation.
     pub light_strength: f32,
     /// 0 to 1, multiplies the sun disc: the sun's alpha around sunrise and sunset.
     pub daylight: f32,
@@ -401,7 +402,7 @@ impl LightingState {
     }
 
     /// Moves the exterior to `day_time`: samples the weather, places the sun, moon and stars,
-    /// and lights the world with whichever body is up. Interior shading has no sky, so it clears
+    /// and lights the world with the clock's light. Interior shading has no sky, so it clears
     /// the sky readouts. The readouts update either way, but with [`Self::sun_override`] on the
     /// sun, sky, fog and exposure keep their panel values. Whenever the clock does not drive the
     /// sun (overridden, or no [`Self::set_exterior_sky`] yet) the panel's sun fades with its
@@ -940,7 +941,7 @@ mod tests {
     }
 
     fn fill(cube: AmbientCube) -> AmbientCube {
-        AmbientCube(cube.0.map(|face| face * 1.5))
+        AmbientCube(cube.0.map(|face| face * EXTERIOR_AMBIENT_FILL))
     }
 
     fn weather_cube() -> AmbientCube {
@@ -1327,29 +1328,31 @@ mod tests {
             let moment = state.sky_moment().unwrap();
             assert!(
                 sun.direction_to_sun()
-                    .abs_diff_eq(moment.sun.direction(), 1e-4)
+                    .abs_diff_eq(moment.light.direction, 1e-4)
             );
             assert!(
                 sun.illuminance()
-                    .abs_diff_eq(colour(DAY_SUNLIGHT) * 2.0, 1e-6),
+                    .abs_diff_eq(colour(DAY_SUNLIGHT) * 2.0, 1e-5),
                 "colour times the light scale times the strength"
             );
         }
 
         #[test]
-        fn at_night_a_full_moon_lights_with_the_night_sunlight_colour() {
+        fn at_solar_midnight_the_light_shines_from_the_south_with_the_night_sunlight_colour() {
             let mut state = state();
-            at_hour(&mut state, 0, 0.0);
-            let moon = state.sky_objects().unwrap().moon.unwrap();
+            at_hour(&mut state, 0, 1.0);
             let sun = state.sun;
-            assert_eq!(moon.phase, MoonPhase::Full);
-            assert!(sun.direction_to_sun().abs_diff_eq(moon.direction, 1e-4));
+            assert!(
+                (sun.azimuth_deg - 180.0).abs() < 1e-3,
+                "{}",
+                sun.azimuth_deg
+            );
             assert!(sun.elevation_deg > 20.0, "{}", sun.elevation_deg);
             assert_colour(sun.color, NIGHT_SUNLIGHT);
-            assert_eq!(sun.light_strength, 1.0);
+            assert!((sun.light_strength - 1.0).abs() < 1e-6);
             assert!(
                 sun.illuminance()
-                    .abs_diff_eq(colour(NIGHT_SUNLIGHT) * NIGHT_SUNLIGHT_SCALE, 1e-6),
+                    .abs_diff_eq(colour(NIGHT_SUNLIGHT) * NIGHT_SUNLIGHT_SCALE, 1e-5),
             );
         }
 
@@ -1361,22 +1364,21 @@ mod tests {
             let sun_direction = state.sky_moment().unwrap().sun.direction();
             assert!(sun_direction.y < 0.0);
             assert!(state.sun_input().direction.abs_diff_eq(sun_direction, 1e-5));
-            assert!(frame.to_sun.truncate().y > 0.0, "the light is the moon");
+            assert!(frame.to_sun.truncate().y > 0.0, "the light stays up");
             assert_eq!(frame.daylight.x, 0.0);
             assert_eq!(state.sun_input().alpha, 0.0);
         }
 
         #[test]
-        fn at_noon_the_disc_and_the_light_share_the_suns_direction() {
+        fn at_noon_the_disc_stands_twenty_degrees_above_the_light() {
             let mut state = state();
             at_hour(&mut state, 0, 13.0);
             let frame = frame_of(&state);
-            assert!(
-                state
-                    .sun_input()
-                    .direction
-                    .abs_diff_eq(frame.to_sun.truncate(), 1e-4)
-            );
+            let disc = state.sun_input().direction;
+            let light = frame.to_sun.truncate();
+            let gap = disc.angle_between(light).to_degrees();
+            assert!((19.0..22.0).contains(&gap), "{gap}");
+            assert!(disc.y > light.y);
             assert_eq!(frame.daylight.x, 1.0);
         }
 
@@ -1448,13 +1450,15 @@ mod tests {
         }
 
         #[test]
-        fn a_climate_without_a_moon_has_no_moon_object_and_a_dark_night() {
-            let mut state = exterior_state(without_moon(slots()));
+        fn a_climate_without_a_moon_has_no_moon_object_and_the_same_night_light() {
+            let mut moonless = exterior_state(without_moon(slots()));
+            let mut state = state();
+            at_hour(&mut moonless, 0, 0.0);
             at_hour(&mut state, 0, 0.0);
-            assert!(state.sky_objects().unwrap().moon.is_none());
-            assert!(state.sky_moment().unwrap().moon.is_none());
-            assert_eq!(state.sun.light_strength, 0.0);
-            assert_eq!(state.sun.illuminance(), Vec3::ZERO);
+            assert!(moonless.sky_objects().unwrap().moon.is_none());
+            assert!(moonless.sky_moment().unwrap().moon.is_none());
+            assert_eq!(moonless.sun.illuminance(), state.sun.illuminance());
+            assert!(moonless.sun.illuminance().max_element() > 0.0);
         }
 
         #[test]
@@ -1509,39 +1513,18 @@ mod tests {
         }
 
         #[test]
-        fn shadows_follow_the_moon_at_night() {
-            let mut state = state();
-            state.shadows.settings.enabled = true;
-            at_hour(&mut state, 0, 0.0);
-            assert_eq!(state.shadow_status(), ShadowStatus::Active);
-            let moon = state.sky_objects().unwrap().moon.unwrap();
-            let cascades = state
-                .shadow_cascades(&test_camera(), 0)
-                .expect("the moon casts shadows");
-            assert!(cascades.to_sun.abs_diff_eq(moon.direction, 1e-4));
-        }
-
-        #[test]
-        fn shadows_follow_the_sun_by_day() {
-            let mut state = state();
-            state.shadows.settings.enabled = true;
-            at_hour(&mut state, 0, 13.0);
-            let cascades = state.shadow_cascades(&test_camera(), 0).unwrap();
-            let sun = state.sky_moment().unwrap().sun.direction();
-            assert!(cascades.to_sun.abs_diff_eq(sun, 1e-4));
-        }
-
-        #[test]
-        fn shadows_switch_off_only_when_neither_body_gives_light() {
-            let mut state = exterior_state(without_moon(slots()));
-            state.shadows.settings.enabled = true;
-            at_hour(&mut state, 0, 0.0);
-            assert_eq!(state.shadow_status(), ShadowStatus::NoDirectLight);
-            assert!(state.shadow_cascades(&test_camera(), 0).is_none());
-            // 07:15 puts the sun about 2 degrees up: weak, but still a light.
-            at_hour(&mut state, 0, 7.25);
-            assert!(state.sun.light_strength > 0.0 && state.sun.light_strength < 1.0);
-            assert_eq!(state.shadow_status(), ShadowStatus::Active);
+        fn shadows_follow_the_light_day_and_night_with_or_without_a_moon() {
+            for slots in [slots(), without_moon(slots())] {
+                let mut state = exterior_state(slots);
+                state.shadows.settings.enabled = true;
+                for hour in [0.0, 7.25, 13.0, 20.0] {
+                    at_hour(&mut state, 0, hour);
+                    assert_eq!(state.shadow_status(), ShadowStatus::Active, "{hour}");
+                    let cascades = state.shadow_cascades(&test_camera(), 0).unwrap();
+                    let light = state.sky_moment().unwrap().light.direction;
+                    assert!(cascades.to_sun.abs_diff_eq(light, 1e-4), "{hour}");
+                }
+            }
         }
 
         #[test]
@@ -1659,7 +1642,8 @@ mod tests {
             at_hour(&mut state, 0, 13.0);
             assert_colour(state.sun.color, DAY_SUNLIGHT);
             assert_eq!(state.sun.intensity, 2.0);
-            assert!(state.sun.elevation_deg > 20.0 && state.sun.elevation_deg < 32.0);
+            let light = state.sky_moment().unwrap().light.direction;
+            assert!(state.sun.direction_to_sun().abs_diff_eq(light, 1e-4));
         }
 
         #[test]

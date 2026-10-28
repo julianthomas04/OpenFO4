@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use glam::Vec3;
 use serde::Deserialize;
 
-use super::ambient::AmbientCube;
+use super::ambient::{AMBIENT_CUBE_FACES, AmbientCube};
 use super::cell_lighting::{RawColor, bethesda_faces_to_engine_order};
 use super::fog::measured::BlendedFogColors;
 use super::fog::{FogColors, FogRange, HeightFogError, RawHeightFog};
@@ -330,15 +330,8 @@ fn load_slot(
         .get(slot.json_key())
         .ok_or_else(|| missing_slot(weather, "directional ambient", slot))?;
     let ambient_cube = AmbientCube(
-        bethesda_faces_to_engine_order([
-            dalc.x_plus,
-            dalc.x_minus,
-            dalc.y_plus,
-            dalc.y_minus,
-            dalc.z_plus,
-            dalc.z_minus,
-        ])
-        .map(|face| face.linear() * dalc.scale),
+        bethesda_faces_to_engine_order(faces_lit_by_weather_axes(dalc))
+            .map(|face| face.linear() * dalc.scale),
     );
     Ok(SlotValues {
         sun_light: group("Sunlight")?,
@@ -353,6 +346,19 @@ fn load_slot(
         hdr: image_space.hdr,
         depth_of_field: image_space.depth_of_field,
     })
+}
+
+/// A weather's directional ambient colour lights the surfaces that face away from its axis, so
+/// each goes to the opposite face, in Bethesda order +X, -X, +Y, -Y, +Z, -Z.
+fn faces_lit_by_weather_axes(dalc: &RawAmbientColors) -> [RawColor; AMBIENT_CUBE_FACES] {
+    [
+        dalc.x_minus,
+        dalc.x_plus,
+        dalc.y_minus,
+        dalc.y_plus,
+        dalc.z_minus,
+        dalc.z_plus,
+    ]
 }
 
 fn color_in_slot(
@@ -882,15 +888,25 @@ mod tests {
     }
 
     #[test]
-    fn the_ambient_cube_follows_engine_axis_order_and_the_weather_scale() {
+    fn each_ambient_colour_lights_the_face_opposite_its_axis_with_the_weather_scale() {
+        let face = |r: u8| rgb(r, 0, 0);
+        let slot = serde_json::json!({
+            "XPlus": face(10), "XMinus": face(20),
+            "YPlus": face(30), "YMinus": face(40),
+            "ZPlus": face(50), "ZMinus": face(60),
+            "Specular": rgb(0, 0, 0),
+            "Scale": 0.5,
+        });
         let mut row = row();
-        row.directional_ambient = Some(directional_ambient(0.5).to_string());
+        row.directional_ambient = Some(same_in_every_slot(&slot).to_string());
         let cube = day_weather(row).ambient_cube.0;
-        // Bethesda +Y (forward) is the engine -Z face, the last one.
-        let nonzero: Vec<usize> = (0..6).filter(|i| cube[*i] != Vec3::ZERO).collect();
-        assert_eq!(nonzero, vec![5]);
-        let unscaled = day_weather(self::row()).ambient_cube.0[5];
-        assert!(cube[5].x < unscaled.x);
+        // Engine faces +X (east), -X, +Y (up), -Y, +Z (south), -Z take the Bethesda colours of
+        // the opposite axes: X-, X+, Z-, Z+, Y+ (north), Y-.
+        let expected_bytes: [u8; 6] = [20, 10, 60, 50, 30, 40];
+        for (index, (face, byte)) in cube.iter().zip(expected_bytes).enumerate() {
+            let expected = super::super::cell_lighting::srgb8_to_linear([byte, 0, 0]) * 0.5;
+            assert!(face.abs_diff_eq(expected, 1e-7), "face {index}: {face}");
+        }
     }
 
     #[test]
