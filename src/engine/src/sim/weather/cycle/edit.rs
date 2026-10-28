@@ -161,16 +161,26 @@ mod tests {
         let mut run = calm_run(&[]);
         run.hours(3.0);
         run.edit(WeatherEdit::Transition(C));
-        assert_eq!(run.place(), (C, Some(A), 0.0, 9.5625));
+        assert_eq!(run.place(), (C, Some(A), 0.0, 9.0));
     }
 
     #[test]
     fn a_transition_during_a_transition_leaves_the_weather_it_had_reached() {
         let mut run = calm_run(&[50]);
         run.hours(8.0);
-        run.hours(0.78125);
+        run.hours(0.5);
         run.edit(WeatherEdit::Transition(C));
-        assert_eq!(run.place(), (C, Some(B), 0.0, 9.5625));
+        assert_eq!(run.place(), (C, Some(B), 0.0, 9.0));
+    }
+
+    #[test]
+    fn a_transition_to_a_weather_whose_transition_byte_is_0_settles_at_once() {
+        let mut weathers = vec![calm(); 3];
+        weathers[2].trans_delta_raw = 0;
+        let mut run = Run::new(table(0, weathers, &[1, 1, 1]), &[], &[]);
+        run.hours(3.0);
+        run.edit(WeatherEdit::Transition(C));
+        assert_eq!(run.place(), (C, None, 1.0, 8.0));
     }
 
     #[test]
@@ -206,10 +216,10 @@ mod tests {
     fn setting_the_progress_moves_the_end_of_the_transition_and_the_next_roll_with_it() {
         let mut run = calm_run(&[]);
         run.edit(WeatherEdit::Transition(B));
-        assert_eq!(run.snapshot().hours_to_next_roll, 9.5625);
+        assert_eq!(run.snapshot().hours_to_next_roll, 9.0);
         run.edit(WeatherEdit::SetProgress(0.5));
-        assert_eq!(run.snapshot().hours_to_next_roll, 8.78125);
-        run.hours(0.78125);
+        assert_eq!(run.snapshot().hours_to_next_roll, 8.5);
+        run.hours(0.5);
         assert_eq!(run.place(), (B, None, 1.0, 8.0));
     }
 

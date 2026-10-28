@@ -12,7 +12,9 @@ use super::time_of_day::{
     ClimateTimesError, TimeSlot,
 };
 pub use super::weather_slots::{ExteriorWeather, ExteriorWeatherSlots, ImageSpaceHdr};
-use super::weather_slots::{SlotFogColors, SlotValues, WeatherFog};
+use super::weather_slots::{
+    FOG_SUNLIGHT_ENCODING, SLOT_COLOUR_ENCODING, SlotFogColors, SlotValues, WeatherFog,
+};
 use crate::assets::db::DbClient;
 use crate::assets::db::weather::WeatherRow;
 use crate::rendering::post::depth_of_field::ImageSpaceDepthOfField;
@@ -361,7 +363,7 @@ fn color_in_slot(
     group: &str,
     slot: TimeSlot,
 ) -> Result<Vec3, ExteriorWeatherError> {
-    raw_color_in_slot(weather, colors, group, slot).map(RawColor::linear)
+    raw_color_in_slot(weather, colors, group, slot).map(|color| color.decoded(SLOT_COLOUR_ENCODING))
 }
 
 fn raw_color_in_slot(
@@ -412,7 +414,7 @@ fn load_fog(
                 far_high: high_color("FogFarHigh", far)?,
             }),
             sunlight: raw_color_in_slot(weather, colors, "Sunlight", slot)
-                .map(RawColor::gamma_linear)?,
+                .map(|color| color.decoded(FOG_SUNLIGHT_ENCODING))?,
         })
     })?;
     Ok(WeatherFog {

@@ -7,9 +7,10 @@ use glam::Vec3;
 use serde::Deserialize;
 
 use super::ambient::AmbientCube;
+use super::cell_lighting::StoredColourEncoding;
 use super::fog::measured::BlendedFogColors;
 use super::fog::{ExteriorFog, FogRange};
-use super::lerp::{Lerp, lerp_fields, snap_to_nearer};
+use super::lerp::{Lerp, lerp_fields, lerp_stored, snap_to_nearer};
 use super::time_of_day::{
     ClimateMoon, ClimateSky, ClimateSunTextures, ClimateTimes, SlotBlend, TimeSlot,
 };
@@ -67,6 +68,11 @@ impl Default for ImageSpaceHdr {
         }
     }
 }
+
+/// How the loader decodes the stored sky, sun, star and sunlight colours of a slot.
+pub(super) const SLOT_COLOUR_ENCODING: StoredColourEncoding = StoredColourEncoding::Srgb;
+/// How the loader decodes the stored sunlight colour the fog uses.
+pub(super) const FOG_SUNLIGHT_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
 
 /// The values of one weather at one time slot that exterior lighting uses, all linear.
 #[derive(Debug, Clone, PartialEq)]
@@ -178,6 +184,26 @@ impl Lerp for ExteriorWeather {
             depth_of_field: Lerp::lerp(&self.depth_of_field, &other.depth_of_field, t),
             fog: Lerp::lerp(&self.fog, &other.fog, t),
         }
+    }
+}
+
+impl ExteriorWeather {
+    /// The frame `t` of the way through the change from this weather to `other`. The sky, the
+    /// sunlight and the fog colours change as the game measurably changes them: their stored
+    /// colours blend, re-encoded exactly as the loader decoded them; the fog colours are kept
+    /// stored already. Every other value blends as [`Lerp`] blends it.
+    #[must_use]
+    pub fn cross_fade(&self, other: &Self, t: f32) -> Self {
+        let stored = |from, to| lerp_stored(from, to, t, SLOT_COLOUR_ENCODING);
+        let mut blend = self.lerp(other, t);
+        blend.sun_light = stored(self.sun_light, other.sun_light);
+        blend.sky_upper = stored(self.sky_upper, other.sky_upper);
+        blend.sky_lower = stored(self.sky_lower, other.sky_lower);
+        blend.horizon = stored(self.horizon, other.horizon);
+        if let (Some(fog), Some(from), Some(to)) = (&mut blend.fog, &self.fog, &other.fog) {
+            fog.sunlight = lerp_stored(from.sunlight, to.sunlight, t, FOG_SUNLIGHT_ENCODING);
+        }
+        blend
     }
 }
 
@@ -416,6 +442,71 @@ mod tests {
         let day_of = |weather: ExteriorWeather| weather.fog.and_then(|fog| fog.day);
         assert_eq!(day_of(foggy.lerp(&clear, 0.25)), day_of(foggy.clone()));
         assert_eq!(day_of(foggy.lerp(&clear, 0.75)), None);
+    }
+
+    /// `weather` with the sky and the sunlight decoded from the stored grey `byte`.
+    fn stored_grey(name: &str, byte: u8) -> ExteriorWeather {
+        let srgb = SLOT_COLOUR_ENCODING.decode(Vec3::splat(f32::from(byte) / 255.0));
+        let gamma = FOG_SUNLIGHT_ENCODING.decode(Vec3::splat(f32::from(byte) / 255.0));
+        let mut weather = ExteriorWeather {
+            sun_light: srgb,
+            sky_upper: srgb,
+            sky_lower: srgb,
+            horizon: srgb,
+            ..weather(name, 0.0)
+        };
+        weather.fog.as_mut().unwrap().sunlight = gamma;
+        weather
+    }
+
+    #[test]
+    fn a_change_of_weather_brings_the_sky_and_sunlight_in_as_their_stored_bytes_blend() {
+        let changed = stored_grey("Dark", 48).cross_fade(&stored_grey("Bright", 144), 0.25);
+        // A quarter of the way from byte 48 to 144 is byte 72, decoded by hand.
+        let srgb_72 = ((72.0 / 255.0 + 0.055) / 1.055_f32).powf(2.4);
+        let gamma_72 = (72.0 / 255.0_f32).powf(2.2);
+        for value in [
+            changed.sun_light,
+            changed.sky_upper,
+            changed.sky_lower,
+            changed.horizon,
+        ] {
+            assert!(value.abs_diff_eq(Vec3::splat(srgb_72), 1e-6), "{value}");
+        }
+        let sunlight = changed.fog.unwrap().sunlight;
+        assert!(
+            sunlight.abs_diff_eq(Vec3::splat(gamma_72), 1e-6),
+            "{sunlight}"
+        );
+    }
+
+    #[test]
+    fn a_change_of_weather_blends_the_other_values_as_a_blend_does() {
+        let (dark, bright) = (weather("Dark", 0.0), weather("Bright", 1.0));
+        let changed = dark.cross_fade(&bright, 0.25);
+        let blended = dark.lerp(&bright, 0.25);
+        assert_eq!(
+            ExteriorWeather {
+                sun_light: blended.sun_light,
+                sky_upper: blended.sky_upper,
+                sky_lower: blended.sky_lower,
+                horizon: blended.horizon,
+                fog: blended.fog,
+                ..changed.clone()
+            },
+            blended
+        );
+        assert_eq!(changed.fog.unwrap().colors, blended.fog.unwrap().colors);
+    }
+
+    #[test]
+    fn a_change_of_weather_starts_at_the_first_weather_and_ends_at_the_second() {
+        let (dim, bright) = (weather("Dim", 0.5), weather("Bright", 1.0));
+        let start = dim.cross_fade(&bright, 0.0);
+        let end = dim.cross_fade(&bright, 1.0);
+        assert!(start.sky_upper.abs_diff_eq(dim.sky_upper, 1e-5));
+        assert!(end.sky_upper.abs_diff_eq(bright.sky_upper, 1e-5));
+        assert_eq!(&*end.form_key, "Bright");
     }
 
     #[test]

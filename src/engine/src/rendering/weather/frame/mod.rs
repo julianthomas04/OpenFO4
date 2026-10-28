@@ -51,8 +51,8 @@ pub struct WeatherFrame {
 impl WeatherFrame {
     /// The frame of the weather `snapshot` at the time of day `time` stands for. A settled
     /// weather is sampled as it is, so the sky is what the weather alone makes of the time of
-    /// day. During a transition both weathers are sampled at the same time of day and blended by
-    /// how far the transition has come.
+    /// day. During a transition both weathers are sampled at the same time of day and cross-faded
+    /// by how far the transition has come.
     pub fn blend(
         library: &WeatherLibrary,
         snapshot: &WeatherSnapshot<'_>,
@@ -71,7 +71,10 @@ impl WeatherFrame {
             })
             .collect::<Result<_, WeatherFrameError>>()?;
         Ok(Self {
-            sky: sides.blend(|weather| weather.slots.sample(time)),
+            sky: sides.blend_by(
+                |weather| weather.slots.sample(time),
+                ExteriorWeather::cross_fade,
+            ),
             cloud_layers: cloud_layers(&sides, time),
             precipitation: precipitation(&sides),
             thunder_intensity: thunder_intensity(&sides),

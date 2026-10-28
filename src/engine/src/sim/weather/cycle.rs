@@ -191,16 +191,23 @@ impl<R: RandomSource> WeatherCycle<R> {
         }
     }
 
-    /// Leaves the current weather for `to` at `start` hours on the clock.
+    /// Leaves the current weather for `to` at `start` hours on the clock; a weather whose
+    /// transition takes no time settles at once.
     fn begin_transition(&mut self, to: TableWeather, start: f64) {
-        let transition = Transition {
-            from: self.current,
-            start,
-            duration: transition_hours(to.traits().trans_delta_raw),
-        };
-        self.current = to;
-        self.transition = Some(transition);
-        self.schedule_roll_after(transition.end());
+        let duration = transition_hours(to.traits().trans_delta_raw);
+        let from = std::mem::replace(&mut self.current, to);
+        if duration > 0.0 {
+            let transition = Transition {
+                from,
+                start,
+                duration,
+            };
+            self.transition = Some(transition);
+            self.schedule_roll_after(transition.end());
+        } else {
+            self.transition = None;
+            self.schedule_roll_after(start);
+        }
     }
 
     /// Schedules the next roll one interval of the current weather after `settled_at`, the hours on
@@ -289,14 +296,14 @@ mod tests {
     fn a_roll_that_picks_another_weather_starts_the_transition_to_it_at_zero_progress() {
         let mut run = calm_run(&[50]);
         run.hours(8.0);
-        assert_eq!(run.place(), (B, Some(A), 0.0, 9.5625));
+        assert_eq!(run.place(), (B, Some(A), 0.0, 9.0));
     }
 
     #[test]
     fn a_step_that_overshoots_a_roll_counts_the_overshoot_into_the_transition() {
         let mut run = calm_run(&[50]);
         run.hours(8.5);
-        assert_same_place(run.place(), (B, Some(A), 0.32, 9.0625));
+        assert_same_place(run.place(), (B, Some(A), 0.5, 8.5));
     }
 
     #[test]
@@ -323,17 +330,17 @@ mod tests {
         weathers[1].volatility_mult = 2.0;
         let mut run = Run::new(table(0, weathers, &[1, 1]), &[1], &[]);
         run.hours(8.0);
-        assert_eq!(run.place(), (B, Some(A), 0.0, 5.5625));
+        assert_eq!(run.place(), (B, Some(A), 0.0, 5.0));
     }
 
     #[test]
     fn a_transition_advances_with_the_hours_and_settles_at_its_end() {
         let mut run = calm_run(&[50]);
         run.hours(8.0);
-        run.hours(0.78125);
+        run.hours(0.5);
         assert_eq!(run.snapshot().progress, 0.5);
         assert_eq!(run.snapshot().previous, Some(A));
-        run.hours(0.78125);
+        run.hours(0.5);
         assert_eq!(run.place(), (B, None, 1.0, 8.0));
     }
 
@@ -342,46 +349,47 @@ mod tests {
         let mut run = calm_run(&[50]);
         run.hours(8.0);
         run.hours(5.0);
-        assert_eq!(run.place(), (B, None, 1.0, 4.5625));
+        assert_eq!(run.place(), (B, None, 1.0, 4.0));
     }
 
     #[test]
     fn the_incoming_weather_sets_the_length_of_the_transition() {
         let mut weathers = vec![calm(); 3];
         weathers[1].trans_delta_raw = 125;
-        weathers[2].trans_delta_raw = 0;
-        let mut run = Run::new(table(0, weathers, &[1, 1, 1]), &[1, 2], &[]);
+        let mut run = Run::new(table(0, weathers, &[1, 1, 1]), &[1], &[]);
         run.jump_to(8.0);
-        run.jump_to(9.5);
+        run.jump_to(8.625);
         assert_eq!((run.snapshot().current, run.snapshot().progress), (B, 0.5));
-        run.jump_to(11.0);
-        assert_eq!(run.snapshot().previous, None);
-        run.jump_to(19.0);
-        assert_eq!(
-            (run.snapshot().current, run.snapshot().previous),
-            (C, Some(B))
-        );
-        run.jump_to(19.25);
-        assert_eq!(run.snapshot().previous, None);
+        run.jump_to(9.25);
+        assert_eq!(run.place(), (B, None, 1.0, 8.0));
+    }
+
+    #[test]
+    fn a_weather_whose_transition_byte_is_0_settles_at_once() {
+        let mut weathers = vec![calm(); 3];
+        weathers[2].trans_delta_raw = 0;
+        let mut run = Run::new(table(0, weathers, &[1, 1, 1]), &[2], &[]);
+        run.jump_to(8.0);
+        assert_eq!(run.place(), (C, None, 1.0, 8.0));
     }
 
     #[test]
     fn the_roll_interval_counts_from_the_moment_the_weather_settles() {
-        // A roll interval of 0.5 h, shorter than the 3 h that a transition takes.
+        // A roll interval of 0.5 h, shorter than the 2 h that a transition takes.
         let mut weathers = vec![calm(); 3];
         for traits in &mut weathers {
             traits.volatility_mult = 4.0;
-            traits.trans_delta_raw = 125;
+            traits.trans_delta_raw = 200;
         }
         let mut run = Run::new(table(255, weathers, &[1, 1, 1]), &[1, 2], &[]);
         run.jump_to(0.5);
-        assert_eq!(run.place(), (B, Some(A), 0.0, 3.5));
-        run.jump_to(3.5);
+        assert_eq!(run.place(), (B, Some(A), 0.0, 2.5));
+        run.jump_to(2.5);
         assert_eq!(run.place(), (B, None, 1.0, 0.5));
-        run.jump_to(3.9);
+        run.jump_to(2.9);
         assert_eq!(run.snapshot().previous, None);
         assert_eq!(run.snapshot().current, B);
-        run.jump_to(4.0);
+        run.jump_to(3.0);
         assert_eq!(
             (run.snapshot().current, run.snapshot().previous),
             (C, Some(B))
@@ -413,11 +421,11 @@ mod tests {
     fn a_clock_that_went_back_during_a_transition_keeps_its_progress() {
         let mut run = calm_run(&[50]);
         run.hours(8.0);
-        run.hours(0.78125);
+        run.hours(0.5);
         let before = run.place();
         run.jump_to(3.0);
         assert_same_place(run.place(), before);
-        run.hours(0.78125);
+        run.hours(0.5);
         assert_eq!(run.snapshot().previous, None);
     }
 
@@ -460,10 +468,10 @@ mod tests {
             }
             run.place()
         };
-        let in_one_step = place_after(1, 17.0);
+        let in_one_step = place_after(1, 16.0);
         assert_eq!(in_one_step.0, B);
-        assert_same_place(place_after(17, 1.0), in_one_step);
-        assert_same_place(place_after(1700, 0.01), in_one_step);
+        assert_same_place(place_after(16, 1.0), in_one_step);
+        assert_same_place(place_after(1600, 0.01), in_one_step);
     }
 
     #[test]
@@ -475,9 +483,9 @@ mod tests {
         }
         let (current, previous, progress, hours_to_next_roll) = run.place();
         assert_eq!((current, previous), (B, Some(A)));
-        assert!((progress - 0.32).abs() < 1e-5, "{progress}");
+        assert!((progress - 0.5).abs() < 1e-5, "{progress}");
         assert!(
-            (hours_to_next_roll - 9.0625).abs() < 1e-5,
+            (hours_to_next_roll - 8.5).abs() < 1e-5,
             "{hours_to_next_roll}"
         );
     }
@@ -563,7 +571,7 @@ mod tests {
     fn the_sides_of_a_transition_are_the_incoming_and_the_outgoing_weather() {
         let mut run = calm_run(&[50]);
         run.hours(8.0);
-        run.hours(0.78125);
+        run.hours(0.5);
         let sides: Vec<_> = run.snapshot().sides().collect();
         assert_eq!(
             sides,

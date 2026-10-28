@@ -4,8 +4,7 @@
 use glam::FloatExt;
 
 use super::tuning::{
-    BASE_ROLL_INTERVAL_HOURS, MAX_TRANSITION_HOURS, MIN_TRANSITION_HOURS,
-    MOST_VOLATILE_INTERVAL_FRACTION, TRANSITION_BYTE_PER_HOUR,
+    BASE_ROLL_INTERVAL_HOURS, MOST_VOLATILE_INTERVAL_FRACTION, TRANSITION_BYTE_PER_HOUR,
 };
 use crate::random::RandomSource;
 use crate::weather::{TableWeather, WeatherRollTable};
@@ -19,10 +18,10 @@ pub(super) fn roll_interval_hours(climate_volatility: u8, volatility_mult: f32) 
     BASE_ROLL_INTERVAL_HOURS * fraction / f64::from(volatility_mult)
 }
 
-/// Game hours a transition to a weather with the transition byte `trans_delta_raw` takes.
+/// Game hours a transition to a weather with the transition byte `trans_delta_raw` takes; 0 for a
+/// weather that comes at once.
 pub(super) fn transition_hours(trans_delta_raw: u8) -> f64 {
-    (f64::from(trans_delta_raw) / TRANSITION_BYTE_PER_HOUR)
-        .clamp(MIN_TRANSITION_HOURS, MAX_TRANSITION_HOURS)
+    f64::from(trans_delta_raw) / TRANSITION_BYTE_PER_HOUR
 }
 
 /// A weather drawn by the chances of the climate. The current weather is among the candidates, so
@@ -84,12 +83,10 @@ mod tests {
     }
 
     #[test]
-    fn a_transition_takes_the_byte_over_sixteen_hours_within_its_limits() {
-        let hours: Vec<f64> = [0, 4, 16, 25, 48, 125, 255]
-            .into_iter()
-            .map(transition_hours)
-            .collect();
-        assert_eq!(hours, [0.25, 0.25, 1.0, 1.5625, 3.0, 3.0, 3.0]);
+    fn a_transition_takes_the_byte_over_a_hundred_hours() {
+        for (byte, hours) in [(0, 0.0), (25, 0.25), (100, 1.0), (125, 1.25), (255, 2.55)] {
+            assert_close(transition_hours(byte), hours);
+        }
     }
 
     fn commonwealth() -> WeatherRollTable {

@@ -5,7 +5,7 @@ use glam::Vec3;
 use serde::Deserialize;
 
 use super::error::WeatherLibraryError;
-use crate::rendering::lighting::cell_lighting::srgb8_to_linear;
+use crate::rendering::lighting::cell_lighting::srgb_unit_to_linear;
 use crate::rendering::lighting::exterior_weather::parse_json;
 use crate::rendering::lighting::lerp::{Lerp, lerp_fields};
 use crate::rendering::lighting::time_of_day::{SlotBlend, TimeSlot};
@@ -16,7 +16,9 @@ pub const CLOUD_LAYER_COUNT: usize = 32;
 /// What one cloud layer looks like in one time slot.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CloudSlotValues {
-    pub color: Vec3,
+    /// The sRGB colour as stored, each channel 0..1. The time slots and the weathers blend the
+    /// stored colours, as the game measurably does.
+    pub stored_color: Vec3,
     /// The alpha channel of the colour, 0..1.
     pub color_alpha: f32,
     /// The layer's opacity, 0..1.
@@ -24,10 +26,16 @@ pub struct CloudSlotValues {
 }
 
 lerp_fields!(CloudSlotValues {
-    color,
+    stored_color,
     color_alpha,
     alpha
 });
+
+impl CloudSlotValues {
+    pub fn linear_color(&self) -> Vec3 {
+        Vec3::from_array(self.stored_color.to_array().map(srgb_unit_to_linear))
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CloudLayer {
@@ -141,7 +149,7 @@ fn parse_layer(
                 .get(slot.json_key())
                 .ok_or_else(|| missing("alphas", slot))?;
             Ok::<_, WeatherLibraryError>(CloudSlotValues {
-                color: srgb8_to_linear([r, g, b]),
+                stored_color: Vec3::new(f32::from(r), f32::from(g), f32::from(b)) / 255.0,
                 color_alpha: f32::from(a) / 255.0,
                 alpha,
             })
@@ -250,10 +258,11 @@ mod tests {
     }
 
     #[test]
-    fn slot_colours_are_linear_and_alphas_are_unit_values() {
+    fn slot_colours_are_kept_as_stored_and_alphas_are_unit_values() {
         let clouds = parse(&clouds()).unwrap();
         let values = clouds.layers[0].at(TimeSlot::Night).unwrap();
-        assert_eq!(values.color, Vec3::new(1.0, 0.0, 0.0));
+        assert_eq!(values.stored_color, Vec3::new(1.0, 0.0, 0.0));
+        assert_eq!(values.linear_color(), Vec3::new(1.0, 0.0, 0.0));
         assert!((values.color_alpha - 128.0 / 255.0).abs() < 1e-6);
         assert_eq!(values.alpha, 0.5);
     }
@@ -264,10 +273,11 @@ mod tests {
         value["layers"][0]["colors"]["Day"] = json!([128, 64, 200, 51]);
         let clouds = parse(&value).unwrap();
         let values = clouds.layers[0].at(TimeSlot::Day).unwrap();
+        let linear = values.linear_color();
         for (channel, expected) in [
-            (values.color.x, 0.215_860_5),
-            (values.color.y, 0.051_269_46),
-            (values.color.z, 0.577_580_4),
+            (linear.x, 0.215_860_5),
+            (linear.y, 0.051_269_46),
+            (linear.z, 0.577_580_4),
         ] {
             assert!((channel - expected).abs() < 1e-6, "{channel} vs {expected}");
         }
@@ -288,6 +298,25 @@ mod tests {
             t: 0.5,
         };
         assert_eq!(clouds.layers[0].sample(blend).unwrap().alpha, 0.75);
+    }
+
+    #[test]
+    fn sampling_blends_the_stored_colours_of_both_slots() {
+        let mut value = clouds();
+        value["layers"][0]["colors"]["Day"] = json!([48, 48, 48, 0]);
+        value["layers"][0]["colors"]["Night"] = json!([144, 144, 144, 0]);
+        let clouds = parse(&value).unwrap();
+        let blend = SlotBlend {
+            from: TimeSlot::Day,
+            to: TimeSlot::Night,
+            t: 0.5,
+        };
+        let values = clouds.layers[0].sample(blend).unwrap();
+        assert!(
+            values
+                .stored_color
+                .abs_diff_eq(Vec3::splat(96.0 / 255.0), 1e-6)
+        );
     }
 
     #[test]

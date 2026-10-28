@@ -1561,7 +1561,7 @@ mod tests {
             let weather = sim.weather_snapshot().unwrap();
             assert_eq!((weather.current, weather.previous), (B, Some(A)));
             let hours_into_transition = 1500.0 * 20.0 / 3600.0 - 8.0;
-            assert_close(weather.progress, hours_into_transition / 1.5625, 1e-3);
+            assert_close(weather.progress, hours_into_transition, 1e-3);
         }
 
         #[test]

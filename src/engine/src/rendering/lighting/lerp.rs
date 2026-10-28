@@ -1,6 +1,7 @@
 use glam::Vec3;
 
 use super::ambient::AmbientCube;
+use super::cell_lighting::StoredColourEncoding;
 
 /// Linear interpolation of a value that has a meaningful midpoint: `t` 0 gives `self`, 1 gives
 /// `other`. Colours are blended in the linear space they are stored in.
@@ -46,6 +47,12 @@ impl Lerp for AmbientCube {
     fn lerp(&self, other: &Self, t: f32) -> Self {
         Self(self.0.lerp(&other.0, t))
     }
+}
+
+/// Two linear colours blended as the game blends weather colours: as the stored 0 to 1 values
+/// they were decoded from with `encoding`, and decoded again.
+pub(crate) fn lerp_stored(from: Vec3, to: Vec3, t: f32, encoding: StoredColourEncoding) -> Vec3 {
+    encoding.decode(encoding.encode(from).lerp(encoding.encode(to), t))
 }
 
 /// The end a value that has no midpoint snaps to: `from` up to and including exactly one half of
@@ -96,6 +103,43 @@ mod tests {
             Lerp::lerp(&Vec3::ZERO, &Vec3::splat(4.0), 0.5),
             Vec3::splat(2.0)
         );
+    }
+
+    /// Bytes 48 and 144 halfway are byte 96; each decoded by hand.
+    #[test]
+    fn a_stored_blend_of_srgb_colours_lands_on_the_blended_byte() {
+        let byte_48 = ((48.0 / 255.0 + 0.055) / 1.055_f32).powf(2.4);
+        let byte_96 = ((96.0 / 255.0 + 0.055) / 1.055_f32).powf(2.4);
+        let byte_144 = ((144.0 / 255.0 + 0.055) / 1.055_f32).powf(2.4);
+        let halfway = lerp_stored(
+            Vec3::splat(byte_48),
+            Vec3::splat(byte_144),
+            0.5,
+            StoredColourEncoding::Srgb,
+        );
+        assert!(halfway.abs_diff_eq(Vec3::splat(byte_96), 1e-6), "{halfway}");
+    }
+
+    #[test]
+    fn a_stored_blend_of_gamma_colours_lands_on_the_blended_byte() {
+        let byte = |value: f32| (value / 255.0).powf(2.2);
+        let quarter = lerp_stored(
+            Vec3::new(byte(0.0), byte(200.0), byte(40.0)),
+            Vec3::new(byte(100.0), byte(0.0), byte(40.0)),
+            0.25,
+            StoredColourEncoding::Gamma22,
+        );
+        let expected = Vec3::new(byte(25.0), byte(150.0), byte(40.0));
+        assert!(quarter.abs_diff_eq(expected, 1e-6), "{quarter}");
+    }
+
+    #[test]
+    fn a_stored_blend_keeps_its_ends() {
+        let (from, to) = (Vec3::new(0.0, 0.002, 0.3), Vec3::new(0.9, 0.5, 0.001));
+        for encoding in [StoredColourEncoding::Srgb, StoredColourEncoding::Gamma22] {
+            assert!(lerp_stored(from, to, 0.0, encoding).abs_diff_eq(from, 1e-6));
+            assert!(lerp_stored(from, to, 1.0, encoding).abs_diff_eq(to, 1e-6));
+        }
     }
 
     #[test]
