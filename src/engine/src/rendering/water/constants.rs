@@ -698,7 +698,7 @@ mod tests {
         let mut frame = frame_fixture();
         frame.daylight.x = 0.25;
         assert_eq!(frame_constants(&frame).cb0[2].w, 0.25);
-        // At night the moon is the light: the direction follows it, the daylight stays 0.
+        // At night the light still shines from above: the direction follows it, the daylight stays 0.
         frame.to_sun = Vec4::new(0.0, 0.5, 0.0, 0.99);
         frame.daylight.x = 0.0;
         let cb0 = frame_constants(&frame).cb0;

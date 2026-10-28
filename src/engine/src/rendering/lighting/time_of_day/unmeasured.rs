@@ -1,26 +1,19 @@
 //! The rules no game data or public source pins down. Each is a hypothesis to be
 //! replaced by in-game measurement; nothing outside this module encodes them.
 //!
-//! - Sunrise and sunset: the sun rises and sets at the twilight window midpoints (the rule the
-//!   water daylight factor uses).
-//! - Sun arc: a circle through due east and due west whose plane tilts so the noon
-//!   sun stands due south at `atan2(|fSunYExtreme|, |fSunXExtreme|)` elevation; it
-//!   rises at the sunrise midpoint, sets at the sunset midpoint and keeps going below the horizon.
-//! - Moon path: the same circle; on day 0 the moon is in [`MOON_PHASE_AT_DAY_ZERO`] and
-//!   its distance behind the sun is that phase's share of the cycle, growing by one
-//!   cycle in `8 * phase_length` days (a full moon rises at the sunset midpoint).
+//! - Moon path: a circle through due east and due west whose plane tilts so its highest point
+//!   stands due south at `atan2(|fSunYExtreme|, |fSunXExtreme|)` elevation. On day 0 the moon
+//!   is in [`MOON_PHASE_AT_DAY_ZERO`], and its distance behind a body that rises on that circle
+//!   at the sunrise midpoint and sets at the sunset midpoint is that phase's share of the cycle,
+//!   growing by one cycle in `8 * phase_length` days (a full moon rises at the sunset midpoint).
 //! - Stars: one revolution per `fStarsRotateDays`, in the same sense as the sun, starting
 //!   at [`STAR_ANGLE_AT_DAY_ZERO_RAD`]; their opacity is the luminance of the weather Stars colour, taken as linear.
 //! - Moon size: [`MOON_SIZE_UNITS_PER_DEGREE`] size units make one degree of the moon's apparent diameter.
 //! - Star horizon fade: the stars fade in over the first [`STAR_HORIZON_FADE_SINE`] of the sine of elevation.
 //! - Night sky brightness: the moon texture is shown at [`MOON_RADIANCE`] and the star layer at
 //!   [`STAR_RADIANCE`] times the sky radiance scale.
-//! - Light: the sun lights the ground over [`SUN_LIGHT_FADE_DEG`] of elevation, the moon over
-//!   `fMasserAngleFadeStart..End` (ignoring phase); the moon only takes over as the sun fades:
-//!   the direction turns from the sun's to the moon's along the shorter arc (through the upper
-//!   hemisphere when the two are opposite) as the moon's weight times `1 - sun weight` grows,
-//!   and the stronger weight is the strength. Colour and
-//!   intensity come from the weather slots.
+//! - Manual sun: with the lighting override on, the panel's sun lights the ground over
+//!   [`SUN_LIGHT_FADE_DEG`] of elevation.
 //! - Sun alpha: `fSunAlphaTransTime` is a number of hours; the sun's alpha ramps linearly over
 //!   that long, centred on the midpoint of each twilight window (see [`sun_alpha`]).
 //! - Sun glare size: `fSunGlareSize` (glare sprite) is in the moon's unit,
@@ -37,17 +30,16 @@
 
 use std::f32::consts::PI;
 
-use glam::{Quat, Vec3};
+use glam::Vec3;
 
 use super::climate_times::ClimateTimes;
 use super::day_time::DayTime;
-use super::light::LightSource;
-use super::moon::{MoonError, MoonPhase, cycle_days, moon_visibility};
+use super::moon::{MoonError, MoonPhase, cycle_days};
 use super::sky::{SkyGameSettings, SkyPosition, linear_fade};
 use super::wrap::{HOURS_PER_DAY, wrap_hours};
 use crate::rendering::lighting::cell_lighting::luminance;
 
-/// Elevations (start, end) in degrees over which the sun direct light fades in.
+/// Elevations (start, end) in degrees over which the manual sun's direct light fades in.
 pub const SUN_LIGHT_FADE_DEG: (f32, f32) = (0.0, 5.0);
 
 /// The moon phase on day 0, which also fixes where it stands relative to the sun then.
@@ -60,7 +52,8 @@ pub const STAR_ROTATION_SENSE: f64 = -1.0;
 /// The star dome turn at day 0, 00:00.
 pub const STAR_ANGLE_AT_DAY_ZERO_RAD: f32 = 0.0;
 
-/// Elevation of the noon sun, from the horizontal reach and the southward offset of the extremes.
+/// Elevation of the moon path's highest point, from the horizontal reach and the southward offset
+/// of the sun extremes.
 fn noon_elevation_rad(settings: &SkyGameSettings) -> f32 {
     settings
         .sun_y_extreme()
@@ -88,16 +81,6 @@ fn orbit_position(hour: f32, rise_hour: f32, up_hours: f32, noon_elevation: f32)
         -angle.sin() * noon_elevation.cos(),
         angle.sin() * noon_elevation.sin(),
     ))
-}
-
-pub fn sun_position(
-    time: DayTime,
-    times: &ClimateTimes,
-    settings: &SkyGameSettings,
-) -> SkyPosition {
-    let rise = times.sunrise_midpoint();
-    let up_hours = times.sunset_midpoint() - rise;
-    orbit_position(time.hour(), rise, up_hours, noon_elevation_rad(settings))
 }
 
 /// The moon lag behind the sun grows continuously with the clock, so its apparent
@@ -133,55 +116,6 @@ pub fn star_alpha(stars_colour_linear: Vec3) -> f32 {
 pub fn sun_light_weight(elevation_deg: f32) -> f32 {
     let (fade_start, fade_end) = SUN_LIGHT_FADE_DEG;
     linear_fade(elevation_deg, fade_start, fade_end)
-}
-
-/// Geometry of the exterior one directional light. The direction turns from the sun's to
-/// the moon's as `from_moon_weight` goes from 0 to 1, so it never snaps while the light is strong.
-/// While neither body lights the ground the light keeps the sun's direction.
-pub fn light_source(
-    sun: SkyPosition,
-    moon: Option<SkyPosition>,
-    settings: &SkyGameSettings,
-) -> LightSource {
-    let sun_weight = sun_light_weight(sun.elevation_deg);
-    let moon_weight = moon.map_or(0.0, |moon| moon_visibility(moon.elevation_deg, settings));
-    let moon_share = moon_weight * (1.0 - sun_weight);
-    let total = sun_weight + moon_share;
-    let from_moon_weight = if total > 0.0 { moon_share / total } else { 0.0 };
-    let direction = match moon {
-        Some(moon) => turn_towards(sun.direction(), moon.direction(), from_moon_weight),
-        None => sun.direction(),
-    };
-    LightSource {
-        direction,
-        from_moon_weight,
-        strength: sun_weight.max(moon_weight),
-    }
-}
-
-/// Directions this close to opposite have no unique shorter arc.
-const OPPOSITE_COS: f32 = -0.9999;
-
-/// The unit direction `t` of the way along the shorter arc from `from` to `to`. For opposite
-/// directions the arc passes over the zenith (the upper hemisphere), so the choice is
-/// deterministic and keeps the light above the ground.
-fn turn_towards(from: Vec3, to: Vec3, t: f32) -> Vec3 {
-    let cos = from.dot(to).clamp(-1.0, 1.0);
-    if cos > OPPOSITE_COS {
-        let angle = cos.acos();
-        if angle < f32::EPSILON {
-            return from;
-        }
-        let along = (from * ((1.0 - t) * angle).sin() + to * (t * angle).sin()) / angle.sin();
-        return along.normalize();
-    }
-    let axis = from
-        .cross(Vec3::Y)
-        .try_normalize()
-        .unwrap_or_else(|| from.cross(Vec3::X).normalize());
-    let quarter = Quat::from_axis_angle(axis, PI / 2.0) * from;
-    let turn = if quarter.y >= 0.0 { PI } else { -PI };
-    (Quat::from_axis_angle(axis, turn * t) * from).normalize()
 }
 
 /// The sun's alpha at `hour`: 0 while it is down, ramping linearly to 1 over `trans_time` hours
@@ -257,19 +191,10 @@ pub const CLOUD_HORIZON_HAZE_SINE: f32 = 0.15;
     reason = "expected values are exact binary fractions of an hour"
 )]
 mod tests {
-    use super::super::test_support::{
-        at, at_hour, default_climate, goodneighbor_climate, vanilla_settings,
-    };
-    use proptest::prelude::*;
-
+    use super::super::test_support::{at, default_climate, goodneighbor_climate, vanilla_settings};
     use super::*;
-    use crate::rendering::lighting::state::SunSettings;
 
     const NOON_ELEVATION_DEG: f32 = 28.4;
-
-    fn sun_position(hour: f32, times: &ClimateTimes, settings: &SkyGameSettings) -> SkyPosition {
-        super::sun_position(at_hour(hour), times, settings)
-    }
 
     fn moon_position(
         hour: f32,
@@ -298,156 +223,6 @@ mod tests {
             a.direction().angle_between(b.direction()).to_degrees() < 0.05,
             "{what}: {a:?} vs {b:?}"
         );
-    }
-
-    #[test]
-    fn the_noon_sun_stands_due_south_at_the_extremes_elevation() {
-        let position = sun_position(13.0, &default_climate(), &vanilla_settings());
-        assert_close(position.azimuth_deg, 180.0, 0.01, "azimuth");
-        assert_close(
-            position.elevation_deg,
-            NOON_ELEVATION_DEG,
-            0.05,
-            "elevation",
-        );
-    }
-
-    #[test]
-    fn the_sun_rises_in_the_east_and_sets_in_the_west_at_the_window_midpoints() {
-        let times = default_climate();
-        let settings = vanilla_settings();
-        let rise = sun_position(7.0, &times, &settings);
-        assert_close(rise.elevation_deg, 0.0, 1e-3, "rise elevation");
-        assert_close(rise.azimuth_deg, 90.0, 0.01, "rise azimuth");
-        let set = sun_position(19.0, &times, &settings);
-        assert_close(set.elevation_deg, 0.0, 1e-3, "set elevation");
-        assert_close(set.azimuth_deg, 270.0, 0.01, "set azimuth");
-    }
-
-    #[test]
-    fn the_sun_is_up_exactly_between_rise_and_set_for_every_vanilla_climate() {
-        let settings = vanilla_settings();
-        for (times, rise, set) in [
-            (default_climate(), 7.0, 19.0),
-            (
-                ClimateTimes::new(5.5, 8.0, 16.0, 20.5).unwrap(),
-                6.75,
-                18.25,
-            ),
-            (ClimateTimes::new(4.0, 10.0, 16.0, 22.0).unwrap(), 7.0, 19.0),
-        ] {
-            for step in 0..96 {
-                let hour = step as f32 * 0.25 + 0.125;
-                let elevation = sun_position(hour, &times, &settings).elevation_deg;
-                if hour > rise && hour < set {
-                    assert!(elevation > 0.0, "hour {hour}: {elevation}");
-                } else {
-                    assert!(elevation < 0.0, "hour {hour}: {elevation}");
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn the_sun_arc_is_symmetric_about_solar_noon() {
-        let times = ClimateTimes::new(5.5, 8.0, 16.0, 20.5).unwrap();
-        let settings = vanilla_settings();
-        let noon = f32::midpoint(times.sunrise_midpoint(), times.sunset_midpoint());
-        for offset in [0.5, 2.0, 5.0, 5.49, 8.0, 11.0] {
-            let before = sun_position(noon - offset, &times, &settings);
-            let after = sun_position(noon + offset, &times, &settings);
-            assert_close(before.elevation_deg, after.elevation_deg, 1e-3, "elevation");
-            assert_close(
-                angular_gap(before.azimuth_deg, 360.0 - after.azimuth_deg),
-                0.0,
-                1e-2,
-                "azimuth mirrors across south",
-            );
-        }
-    }
-
-    #[test]
-    fn the_sun_is_highest_at_solar_noon() {
-        let times = default_climate();
-        let settings = vanilla_settings();
-        let noon = sun_position(13.0, &times, &settings).elevation_deg;
-        for step in 0..240 {
-            let hour = step as f32 * 0.1;
-            assert!(sun_position(hour, &times, &settings).elevation_deg <= noon + 1e-3);
-        }
-    }
-
-    #[test]
-    fn the_sun_is_due_north_below_the_horizon_at_solar_midnight() {
-        let position = sun_position(1.0, &default_climate(), &vanilla_settings());
-        assert_close(position.azimuth_deg, 0.0, 0.01, "azimuth");
-        assert_close(
-            position.elevation_deg,
-            -NOON_ELEVATION_DEG,
-            0.05,
-            "elevation",
-        );
-    }
-
-    #[test]
-    fn the_sun_path_is_continuous_across_midnight_and_the_same_every_day() {
-        let times = default_climate();
-        let settings = vanilla_settings();
-        assert_same_place(
-            super::sun_position(at(3, 23.9999), &times, &settings),
-            super::sun_position(at(4, 0.0), &times, &settings),
-            "midnight",
-        );
-        for hour in [0.0, 3.3, 7.0, 12.5, 23.9] {
-            assert_same_place(
-                super::sun_position(at(0, hour), &times, &settings),
-                super::sun_position(at(40, hour), &times, &settings),
-                "forty days later",
-            );
-        }
-    }
-
-    #[test]
-    fn the_sun_moves_smoothly_through_the_day() {
-        let times = default_climate();
-        let settings = vanilla_settings();
-        let mut previous = sun_position(0.0, &times, &settings);
-        for step in 1..2400 {
-            let current = sun_position(step as f32 * 0.01, &times, &settings);
-            let moved = previous
-                .direction()
-                .angle_between(current.direction())
-                .to_degrees();
-            assert!(moved < 0.5, "step {step}: {moved} degrees");
-            previous = current;
-        }
-    }
-
-    #[test]
-    fn the_sun_direction_is_a_unit_vector_in_the_sun_settings_convention() {
-        let times = default_climate();
-        let settings = vanilla_settings();
-        for step in 0..48 {
-            let position = sun_position(step as f32 * 0.5, &times, &settings);
-            let direction = position.direction();
-            assert_close(direction.length(), 1.0, 1e-5, "length");
-            let sun = SunSettings {
-                azimuth_deg: position.azimuth_deg,
-                elevation_deg: position.elevation_deg,
-                ..SunSettings::default()
-            };
-            assert!(direction.abs_diff_eq(sun.direction_to_sun(), 1e-5));
-            assert_eq!(direction.y > 0.0, position.elevation_deg > 0.0);
-        }
-    }
-
-    #[test]
-    fn a_flat_extreme_puts_the_sun_on_the_horizon_all_day() {
-        let settings =
-            SkyGameSettings::new(600.0, 0.0, 1.0027, Vec3::new(-0.09, 0.35, 1.0), 5.0, 10.0)
-                .unwrap();
-        let position = sun_position(13.0, &default_climate(), &settings);
-        assert_close(position.elevation_deg, 0.0, 1e-3, "elevation");
     }
 
     #[test]
@@ -511,17 +286,25 @@ mod tests {
     }
 
     #[test]
-    fn half_a_cycle_after_the_first_sunset_the_moon_sits_where_the_sun_is() {
+    fn half_a_cycle_after_the_first_sunset_the_moon_runs_where_a_body_rising_at_sunrise_would() {
         let times = default_climate();
         let settings = vanilla_settings();
+        let day_body = |hour: f32| {
+            orbit_position(
+                hour,
+                times.sunrise_midpoint(),
+                times.sunset_midpoint() - times.sunrise_midpoint(),
+                noon_elevation_rad(&settings),
+            )
+        };
         assert_same_place(
             moon_position(19.0, 16, 4, &times, &settings).unwrap(),
-            sun_position(19.0, &times, &settings),
+            day_body(19.0),
             "new moon at sunset",
         );
         for hour in [0.0, 7.0, 13.0, 22.5] {
             let moon = moon_position(hour, 16, 4, &times, &settings).unwrap();
-            let sun = sun_position(hour, &times, &settings);
+            let sun = day_body(hour);
             let gap = moon.direction().angle_between(sun.direction()).to_degrees();
             assert!(gap < 10.0, "hour {hour}: {gap} degrees apart");
         }
@@ -597,19 +380,6 @@ mod tests {
     }
 
     #[test]
-    fn in_goodneighbors_climate_the_sun_is_up_for_eleven_and_a_half_hours() {
-        let times = goodneighbor_climate();
-        let settings = vanilla_settings();
-        let up = (0..2400)
-            .filter(|step| {
-                super::sun_position(at_hour(*step as f32 * 0.01), &times, &settings).elevation_deg
-                    > 0.0
-            })
-            .count();
-        assert!((up as f32 * 0.01 - 11.5).abs() < 0.02, "{up}");
-    }
-
-    #[test]
     fn the_start_phase_decides_where_the_moon_stands_on_day_zero() {
         // MOON_PHASE_AT_DAY_ZERO is Full: the moon is opposite the sun at sunset.
         assert_eq!(MOON_PHASE_AT_DAY_ZERO, MoonPhase::Full);
@@ -630,141 +400,6 @@ mod tests {
         let colour = Vec3::new(0.5, 0.25, 0.125);
         assert_eq!(star_alpha(colour), luminance(colour));
         assert!(luminance(colour) < 0.5, "the colour must not be capped");
-    }
-
-    fn at_sky(elevation_deg: f32, azimuth_deg: f32) -> SkyPosition {
-        SkyPosition {
-            azimuth_deg,
-            elevation_deg,
-        }
-    }
-
-    fn light(sun_elevation: f32, moon_elevation: f32) -> LightSource {
-        light_source(
-            at_sky(sun_elevation, 90.0),
-            Some(at_sky(moon_elevation, 270.0)),
-            &vanilla_settings(),
-        )
-    }
-
-    #[test]
-    fn a_high_sun_is_the_whole_light_even_with_the_moon_up() {
-        for moon_elevation in [-30.0, 20.0, 60.0] {
-            let source = light(40.0, moon_elevation);
-            assert_eq!(source.strength, 1.0);
-            assert!(
-                source
-                    .direction
-                    .abs_diff_eq(at_sky(40.0, 90.0).direction(), 1e-6)
-            );
-        }
-        assert_eq!(light(40.0, -30.0).from_moon_weight, 0.0);
-    }
-
-    #[test]
-    fn a_high_moon_after_dark_is_the_whole_light() {
-        let source = light(-30.0, 40.0);
-        assert_eq!(source.from_moon_weight, 1.0);
-        assert_eq!(source.strength, 1.0);
-        assert!(
-            source
-                .direction
-                .abs_diff_eq(at_sky(40.0, 270.0).direction(), 1e-6)
-        );
-    }
-
-    #[test]
-    fn with_neither_body_up_the_strength_is_zero() {
-        for (sun, moon) in [(-10.0, 2.0), (-30.0, -30.0), (0.0, 5.0)] {
-            assert_eq!(light(sun, moon).strength, 0.0, "{sun} {moon}");
-        }
-    }
-
-    fn angle(a: Vec3, b: Vec3) -> f32 {
-        a.dot(b).clamp(-1.0, 1.0).acos()
-    }
-
-    #[test]
-    fn partial_weights_turn_the_direction_along_the_arc_by_the_moons_share() {
-        // Sun weight 0.5, moon weight 0.5: the moon's share is 0.25 of 0.75, a third.
-        let source = light(2.5, 7.5);
-        assert!((source.from_moon_weight - 1.0 / 3.0).abs() < 1e-6);
-        assert_eq!(source.strength, 0.5);
-        let sun = at_sky(2.5, 90.0).direction();
-        let moon = at_sky(7.5, 270.0).direction();
-        let total = angle(sun, moon);
-        assert!((angle(sun, source.direction) - total / 3.0).abs() < 1e-4);
-        assert!((angle(source.direction, moon) - total * 2.0 / 3.0).abs() < 1e-4);
-    }
-
-    #[test]
-    fn a_fully_up_sun_leaves_the_moon_no_share_of_the_direction() {
-        let source = light(30.0, 60.0);
-        assert_eq!(source.from_moon_weight, 0.0);
-    }
-
-    #[test]
-    fn the_moon_has_the_whole_direction_once_the_sun_gives_no_light() {
-        let source = light(0.0, 7.6);
-        assert_eq!(source.from_moon_weight, 1.0);
-        assert!(
-            source
-                .direction
-                .abs_diff_eq(at_sky(7.6, 270.0).direction(), 1e-5)
-        );
-    }
-
-    #[test]
-    fn opposite_directions_turn_over_the_zenith_not_through_the_ground() {
-        for from in [Vec3::X, Vec3::Z, -Vec3::X, Vec3::new(0.6, 0.0, 0.8)] {
-            let to = -from;
-            assert!(turn_towards(from, to, 0.0).abs_diff_eq(from, 1e-5));
-            assert!(turn_towards(from, to, 1.0).abs_diff_eq(to, 1e-5));
-            for step in 1..10 {
-                let turned = turn_towards(from, to, step as f32 / 10.0);
-                assert!((turned.length() - 1.0).abs() < 1e-5);
-                assert!(turned.y >= -1e-5, "{from} at {step}: {turned}");
-            }
-        }
-    }
-
-    #[test]
-    fn straight_up_to_straight_down_still_has_a_defined_path() {
-        let turned = turn_towards(Vec3::Y, -Vec3::Y, 0.5);
-        assert!((turned.length() - 1.0).abs() < 1e-5);
-        assert!(turned.y.abs() < 1e-5);
-    }
-
-    #[test]
-    fn turning_between_equal_directions_returns_them() {
-        assert!(turn_towards(Vec3::X, Vec3::X, 0.7).abs_diff_eq(Vec3::X, 1e-6));
-    }
-
-    #[test]
-    fn the_direction_never_jumps_while_the_light_is_strong_over_the_whole_moon_cycle() {
-        for (name, times) in [
-            ("DefaultClimate", default_climate()),
-            ("Goodneighbor", goodneighbor_climate()),
-        ] {
-            let settings = vanilla_settings();
-            let mut previous: Option<LightSource> = None;
-            let steps_per_day = 2400;
-            for step in 0..32 * steps_per_day {
-                let time = at(step / steps_per_day, (step % steps_per_day) as f32 * 0.01);
-                let source = light_source(
-                    super::sun_position(time, &times, &settings),
-                    Some(super::moon_position(time, 4, &times, &settings).unwrap()),
-                    &settings,
-                );
-                if let Some(before) = previous.filter(|before| before.strength >= 0.5)
-                    && source.strength >= 0.5
-                {
-                    let turn = angle(before.direction, source.direction).to_degrees();
-                    assert!(turn < 15.0, "{name} step {step}: {turn} degrees");
-                }
-                previous = Some(source);
-            }
-        }
     }
 
     #[test]
@@ -794,107 +429,6 @@ mod tests {
     }
 
     #[test]
-    fn the_sun_fades_in_over_its_elevation_band() {
-        let (start, end) = SUN_LIGHT_FADE_DEG;
-        assert_eq!(light(start, -30.0).strength, 0.0);
-        assert!((light(f32::midpoint(start, end), -30.0).strength - 0.5).abs() < 1e-6);
-        assert_eq!(light(end, -30.0).strength, 1.0);
-    }
-
-    #[test]
-    fn a_rising_moon_fades_in_over_the_game_fade_angles() {
-        assert_eq!(light(-30.0, 5.0).strength, 0.0);
-        assert!((light(-30.0, 7.5).strength - 0.5).abs() < 1e-6);
-        assert_eq!(light(-30.0, 10.0).strength, 1.0);
-    }
-
-    #[test]
-    fn a_high_full_moon_through_dawn_never_dims_the_light() {
-        let mut previous = light(-10.0, 40.0);
-        for step in 1..=300 {
-            let sun_elevation = -10.0 + step as f32 * 0.1;
-            let current = light(sun_elevation, 40.0);
-            assert_eq!(current.strength, 1.0, "sun at {sun_elevation}");
-            assert!(
-                (current.from_moon_weight - previous.from_moon_weight).abs() < 0.05,
-                "colour weight jumps at sun elevation {sun_elevation}"
-            );
-            previous = current;
-        }
-        assert_eq!(previous.from_moon_weight, 0.0);
-    }
-
-    #[test]
-    fn the_strength_is_continuous_while_the_sun_rises_against_any_moon_elevation() {
-        for moon_elevation in [-20.0, 3.0, 7.0, 15.0, 60.0] {
-            let mut previous = light(-10.0, moon_elevation).strength;
-            for step in 1..=300 {
-                let sun_elevation = -10.0 + step as f32 * 0.1;
-                let strength = light(sun_elevation, moon_elevation).strength;
-                assert!(
-                    (strength - previous).abs() < 0.03,
-                    "moon {moon_elevation}, sun {sun_elevation}"
-                );
-                previous = strength;
-            }
-        }
-    }
-
-    #[test]
-    fn over_a_full_moon_day_the_light_is_the_sun_by_day_and_the_moon_by_night() {
-        let times = default_climate();
-        let settings = vanilla_settings();
-        let source = |hour: f32| {
-            light_source(
-                super::sun_position(at_hour(hour), &times, &settings),
-                Some(super::moon_position(at_hour(hour), 4, &times, &settings).unwrap()),
-                &settings,
-            )
-        };
-        for hour in [10.0, 13.0, 16.0] {
-            let source = source(hour);
-            assert_eq!(
-                (source.from_moon_weight, source.strength),
-                (0.0, 1.0),
-                "{hour}"
-            );
-        }
-        for hour in [22.0, 0.0, 2.0] {
-            let source = source(hour);
-            assert_eq!(
-                (source.from_moon_weight, source.strength),
-                (1.0, 1.0),
-                "{hour}"
-            );
-        }
-    }
-
-    #[test]
-    fn while_both_bodies_are_down_the_light_keeps_the_sun_direction() {
-        let source = light(-20.0, -20.0);
-        assert_eq!((source.from_moon_weight, source.strength), (0.0, 0.0));
-        assert!(
-            source
-                .direction
-                .abs_diff_eq(at_sky(-20.0, 90.0).direction(), 1e-6)
-        );
-    }
-
-    #[test]
-    fn without_a_moon_the_sun_is_the_only_light() {
-        let settings = vanilla_settings();
-        let by_day = light_source(at_sky(40.0, 90.0), None, &settings);
-        assert_eq!((by_day.from_moon_weight, by_day.strength), (0.0, 1.0));
-        assert!(
-            by_day
-                .direction
-                .abs_diff_eq(at_sky(40.0, 90.0).direction(), 1e-6)
-        );
-        let by_night = light_source(at_sky(-30.0, 90.0), None, &settings);
-        assert_eq!(by_night.strength, 0.0);
-    }
-
-    #[test]
     fn the_sun_light_weight_fades_in_over_the_first_degrees_of_elevation() {
         let (start, end) = SUN_LIGHT_FADE_DEG;
         assert_eq!(sun_light_weight(start - 1.0), 0.0);
@@ -902,24 +436,5 @@ mod tests {
         assert!((sun_light_weight(f32::midpoint(start, end)) - 0.5).abs() < 1e-6);
         assert_eq!(sun_light_weight(end), 1.0);
         assert_eq!(sun_light_weight(90.0), 1.0);
-    }
-
-    proptest! {
-        #[test]
-        fn the_light_is_always_a_unit_direction_with_weights_in_range(
-            sun_elevation in -90.0f32..90.0,
-            moon_elevation in -90.0f32..90.0,
-            sun_azimuth in 0.0f32..360.0,
-            moon_azimuth in 0.0f32..360.0,
-        ) {
-            let source = light_source(
-                at_sky(sun_elevation, sun_azimuth),
-                Some(at_sky(moon_elevation, moon_azimuth)),
-                &vanilla_settings(),
-            );
-            prop_assert!((source.direction.length() - 1.0).abs() < 1e-5);
-            prop_assert!((0.0..=1.0).contains(&source.from_moon_weight));
-            prop_assert!((0.0..=1.0).contains(&source.strength));
-        }
     }
 }

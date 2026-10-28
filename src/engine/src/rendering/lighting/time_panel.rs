@@ -436,7 +436,6 @@ mod tests {
             moon,
             light: LightSource {
                 direction: sun.direction(),
-                from_moon_weight: 0.0,
                 strength: 1.0,
             },
             star_rotation: StarRotation {

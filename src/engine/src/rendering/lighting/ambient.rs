@@ -2,10 +2,11 @@ use glam::{Vec3, Vec4};
 
 pub const AMBIENT_CUBE_FACES: usize = 6;
 
-/// Fill calibration of the exterior ambient (+0.58 stop): the six linear face
-/// colours of the cube used for exterior shading are multiplied by it before
-/// upload. An engine tuning value, independent of where the cube comes from.
-pub const EXTERIOR_AMBIENT_FILL: f32 = 1.5;
+/// The exterior ambient's strength against the sun: the six linear face colours of the cube used
+/// for exterior shading are multiplied by it before upload. A directional ambient of one colour
+/// lights a surface 0.93 times as much as a sunlight of that colour falling square on it at solar
+/// noon, whatever the hour.
+pub const EXTERIOR_AMBIENT_FILL: f32 = 0.93;
 
 /// The six directional ambient colours, linear, faces in engine order
 /// +X, -X, +Y, -Y, +Z, -Z.
