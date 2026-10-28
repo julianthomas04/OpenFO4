@@ -130,13 +130,6 @@ impl ClimateTimes {
         self.sunset_end
     }
 
-    pub fn window(&self, window: ClimateWindow) -> (f32, f32) {
-        match window {
-            ClimateWindow::Sunrise => (self.sunrise_begin, self.sunrise_end),
-            ClimateWindow::Sunset => (self.sunset_begin, self.sunset_end),
-        }
-    }
-
     pub fn sunrise_midpoint(&self) -> f32 {
         f32::midpoint(self.sunrise_begin, self.sunrise_end)
     }
@@ -243,8 +236,6 @@ mod tests {
         let times = times_of(DEFAULT_CLIMATE_JSON);
         assert_eq!(times.sunrise_midpoint(), 7.0);
         assert_eq!(times.sunset_midpoint(), 19.0);
-        assert_eq!(times.window(ClimateWindow::Sunrise), (5.0, 9.0));
-        assert_eq!(times.window(ClimateWindow::Sunset), (17.0, 21.0));
     }
 
     #[test]

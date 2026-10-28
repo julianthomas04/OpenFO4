@@ -11,6 +11,7 @@ use super::frame_uniform::{FrameUniform, wrapped_time};
 use super::interior_catalog::InteriorLightingCatalog;
 use super::lightning::tuning::{FLASH_AMBIENT_GAIN, FLASH_SKY_GAIN};
 use super::sky_clock::{ClockedSky, SkyClock};
+use super::sky_measured::SKY_BRIGHTNESS;
 use super::time_of_day::{
     DayTime, MoonKind, SkyGameConfig, SkyMoment, SkyObjects, SlotBlend, sun_light_weight,
 };
@@ -114,6 +115,17 @@ impl SkySettings {
             [self.zenith, self.horizon, self.ground].map(|color| color * self.ambient_intensity);
         AmbientCube([horizon, horizon, zenith, ground, horizon, horizon])
     }
+
+    /// The light the sky shows for one of its colours.
+    pub fn radiance(&self, color: Vec3) -> Vec3 {
+        color * SKY_BRIGHTNESS * self.radiance_scale
+    }
+
+    /// The colour fog linked to the horizon takes: the horizon as the sky shows it at radiance
+    /// scale 1.
+    pub fn linked_fog_color(&self) -> Vec3 {
+        self.horizon * SKY_BRIGHTNESS
+    }
 }
 
 impl Default for SkySettings {
@@ -128,8 +140,8 @@ impl Default for SkySettings {
     }
 }
 
-/// Exterior fog. While linked, every fog colour follows the sky horizon, so
-/// distant geometry fades into the sky's horizon band.
+/// Exterior fog. While linked, every fog colour follows the sky horizon as the sky shows it at
+/// radiance scale 1, so distant geometry fades into the sky's horizon band.
 #[derive(Debug, Copy, Clone)]
 pub struct FogSettings {
     pub params: FogParams,
@@ -726,10 +738,13 @@ impl LightingState {
             daylight: self.sun.daylight,
             sun_illuminance: self.sun.illuminance(),
             sunlight_scale: self.sun.intensity,
-            sky_zenith: self.sky.zenith * self.sky.radiance_scale + sky_flash,
-            sky_horizon: self.sky.horizon * self.sky.radiance_scale + sky_flash,
-            sky_ground: self.sky.ground * self.sky.radiance_scale + sky_flash,
-            fog: self.fog.fog(self.sky.horizon).brightened(sky_flash),
+            sky_zenith: self.sky.radiance(self.sky.zenith) + sky_flash,
+            sky_horizon: self.sky.radiance(self.sky.horizon) + sky_flash,
+            sky_ground: self.sky.radiance(self.sky.ground) + sky_flash,
+            fog: self
+                .fog
+                .fog(self.sky.linked_fog_color())
+                .brightened(sky_flash),
         }
     }
 }
@@ -1404,7 +1419,7 @@ mod tests {
         #[test]
         fn the_readouts_name_the_slot_blend_and_the_moon_phase() {
             let mut state = state();
-            at_hour(&mut state, 0, 6.5);
+            at_hour(&mut state, 0, 5.25);
             let moment = state.sky_moment().unwrap();
             assert_eq!(
                 (moment.blend.from, moment.blend.to),
@@ -1412,7 +1427,7 @@ mod tests {
             );
             assert!((moment.blend.t - 0.5).abs() < 1e-5);
             assert_eq!(moment.moon.unwrap().phase, MoonPhase::Full);
-            at_hour(&mut state, 4, 6.5);
+            at_hour(&mut state, 4, 5.25);
             assert_eq!(
                 state.sky_moment().unwrap().moon.unwrap().phase,
                 MoonPhase::ThreeWan
@@ -1439,9 +1454,9 @@ mod tests {
             at_hour(&mut state, 0, 13.0);
             assert_eq!(state.sky_objects().unwrap().star_alpha, 0.0);
             // Halfway between Night and Day the Stars colour is half way too, in linear space.
-            at_hour(&mut state, 0, 5.0);
+            at_hour(&mut state, 0, 2.5);
             let before_dawn = state.sky_objects().unwrap().star_alpha;
-            at_hour(&mut state, 0, 5.5);
+            at_hour(&mut state, 0, 3.75);
             let at_dawn = state.sky_objects().unwrap().star_alpha;
             assert_eq!(before_dawn, 1.0);
             assert!(at_dawn < before_dawn && at_dawn > 0.0, "{at_dawn}");
@@ -1601,7 +1616,7 @@ mod tests {
         fn the_readouts_keep_following_the_clock_under_the_override() {
             let mut state = state();
             manual_sun(&mut state);
-            at_hour(&mut state, 0, 6.5);
+            at_hour(&mut state, 0, 5.25);
             let moment = *state.sky_moment().unwrap();
             assert_eq!(moment.blend.from, TimeSlot::EarlySunrise);
             let objects = state.sky_objects().unwrap();
@@ -2130,11 +2145,26 @@ mod tests {
             let mut state = exterior();
             state.sky.radiance_scale = 2.5;
             let frame = frame_of(&state);
-            assert_eq!(frame.sky_zenith.truncate(), state.sky.zenith * 2.5);
-            assert_eq!(frame.sky_horizon.truncate(), state.sky.horizon * 2.5);
-            assert_eq!(frame.sky_ground.truncate(), state.sky.ground * 2.5);
-            assert_eq!(frame.fog_near_color.truncate(), state.sky.horizon);
-            assert_eq!(frame.fog_far_color.truncate(), state.sky.horizon);
+            assert_eq!(
+                frame.sky_zenith.truncate(),
+                state.sky.zenith * SKY_BRIGHTNESS * 2.5
+            );
+            assert_eq!(
+                frame.sky_horizon.truncate(),
+                state.sky.horizon * SKY_BRIGHTNESS * 2.5
+            );
+            assert_eq!(
+                frame.sky_ground.truncate(),
+                state.sky.ground * SKY_BRIGHTNESS * 2.5
+            );
+            assert_eq!(
+                frame.fog_near_color.truncate(),
+                state.sky.horizon * SKY_BRIGHTNESS
+            );
+            assert_eq!(
+                frame.fog_far_color.truncate(),
+                state.sky.horizon * SKY_BRIGHTNESS
+            );
         }
 
         #[test]

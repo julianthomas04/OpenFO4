@@ -12,7 +12,7 @@ use super::time_of_day::{
     ClimateTimesError, TimeSlot,
 };
 pub use super::weather_slots::{ExteriorWeather, ExteriorWeatherSlots, ImageSpaceHdr};
-use super::weather_slots::{SlotFogColors, SlotValues, WeatherFog};
+use super::weather_slots::{SlotFogColors, SlotValues, StoredSkyColors, WeatherFog};
 use crate::assets::db::DbClient;
 use crate::assets::db::weather::WeatherRow;
 use crate::rendering::post::depth_of_field::ImageSpaceDepthOfField;
@@ -326,6 +326,7 @@ fn load_slot(
     image_space: ImageSpaceData,
 ) -> Result<SlotValues, ExteriorWeatherError> {
     let group = |name: &str| color_in_slot(weather, colors, name, slot);
+    let stored = |name: &str| raw_color_in_slot(weather, colors, name, slot).map(RawColor::unit);
     let dalc = ambient
         .get(slot.json_key())
         .ok_or_else(|| missing_slot(weather, "directional ambient", slot))?;
@@ -342,11 +343,13 @@ fn load_slot(
     );
     Ok(SlotValues {
         sun_light: group("Sunlight")?,
-        sun_disc: group("Sun")?,
+        sun_disc: raw_color_in_slot(weather, colors, "Sun", slot).map(RawColor::gamma_linear)?,
         sun_glare: group("SunGlare")?,
-        sky_upper: group("SkyUpper")?,
-        sky_lower: group("SkyLower")?,
-        horizon: group("Horizon")?,
+        sky: StoredSkyColors {
+            upper: stored("SkyUpper")?,
+            lower: stored("SkyLower")?,
+            horizon: stored("Horizon")?,
+        },
         stars: group("Stars")?,
         ambient_cube,
         ambient_specular: dalc.specular.linear(),
@@ -1124,20 +1127,60 @@ mod tests {
         let mut row = row();
         row.colors = Some(colors.to_string());
         let weather = load(row).unwrap().sample(between(Night, Day, 0.5));
-        for (name, colour) in [
-            ("sun light", weather.sun_light),
-            ("sun disc", weather.sun_disc),
-            ("sun glare", weather.sun_glare),
-            ("sky upper", weather.sky_upper),
-            ("sky lower", weather.sky_lower),
-            ("horizon", weather.horizon),
-            ("stars", weather.stars),
+        let stored_half = 0.5_f32.powf(2.2);
+        for (name, colour, expected) in [
+            ("sun light", weather.sun_light, 0.5),
+            ("sun disc", weather.sun_disc, 0.5),
+            ("sun glare", weather.sun_glare, 0.5),
+            ("sky upper", weather.sky_upper, stored_half),
+            ("sky lower", weather.sky_lower, stored_half),
+            ("horizon", weather.horizon, stored_half),
+            ("stars", weather.stars, 0.5),
         ] {
             assert!(
-                colour.abs_diff_eq(Vec3::splat(0.5), 1e-6),
+                colour.abs_diff_eq(Vec3::splat(expected), 1e-6),
                 "{name}: {colour}"
             );
         }
+    }
+
+    #[test]
+    fn the_sky_colours_blend_as_stored_and_decode_with_gamma_two_point_two() {
+        let mut colors = colors();
+        for group in ["SkyUpper", "SkyLower", "Horizon"] {
+            colors[group] = per_slot(|slot| match slot {
+                Sunrise => rgb(48, 48, 48),
+                _ => rgb(144, 144, 144),
+            });
+        }
+        let mut row = row();
+        row.colors = Some(colors.to_string());
+        let slots = load(row).unwrap();
+        let pure = slots.sample(between(Sunrise, LateSunrise, 0.0));
+        assert!((pure.sky_upper.x - (48.0_f32 / 255.0).powf(2.2)).abs() < 1e-6);
+        let blended = slots.sample(between(Sunrise, LateSunrise, 0.25));
+        let stored = (0.75 * 48.0 + 0.25 * 144.0) / 255.0;
+        for colour in [blended.sky_upper, blended.sky_lower, blended.horizon] {
+            assert!(
+                colour.abs_diff_eq(Vec3::splat(f32::powf(stored, 2.2)), 1e-6),
+                "{colour}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_sun_disc_decodes_with_gamma_two_point_two() {
+        let mut colors = colors();
+        colors["Sun"] = per_slot(|_| rgb(16, 48, 255));
+        let mut row = row();
+        row.colors = Some(colors.to_string());
+        let weather = load(row).unwrap().sample(between(Day, Day, 0.0));
+        let expected = Vec3::new(16.0, 48.0, 255.0).map(|byte| (byte / 255.0).powf(2.2));
+        assert!(
+            weather.sun_disc.abs_diff_eq(expected, 1e-6),
+            "{}",
+            weather.sun_disc
+        );
     }
 
     #[test]

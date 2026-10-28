@@ -17,6 +17,8 @@ mod clouds_tests;
 mod layer;
 mod moon;
 mod quad;
+#[cfg(test)]
+mod sky_gradient_tests;
 mod stars;
 mod sun;
 #[cfg(test)]

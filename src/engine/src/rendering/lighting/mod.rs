@@ -10,6 +10,7 @@ pub mod interior_catalog;
 pub mod lerp;
 pub mod lightning;
 pub mod sky_clock;
+pub mod sky_measured;
 pub mod state;
 pub mod time_of_day;
 pub mod time_panel;

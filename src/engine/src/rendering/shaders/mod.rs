@@ -76,6 +76,7 @@ pub const SKY: ShaderSource = ShaderSource {
         include_str!("light_data.wgsl"),
         include_str!("frame.wgsl"),
         include_str!("fullscreen.wgsl"),
+        include_str!("sky_gradient.wgsl"),
         include_str!("sky.wgsl"),
     ),
 };

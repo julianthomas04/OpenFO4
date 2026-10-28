@@ -7,6 +7,7 @@ use glam::Vec3;
 use serde::Deserialize;
 
 use super::ambient::AmbientCube;
+use super::cell_lighting::gamma_decode;
 use super::fog::measured::BlendedFogColors;
 use super::fog::{ExteriorFog, FogRange};
 use super::lerp::{Lerp, lerp_fields, snap_to_nearer};
@@ -68,15 +69,41 @@ impl Default for ImageSpaceHdr {
     }
 }
 
-/// The values of one weather at one time slot that exterior lighting uses, all linear.
+/// The sky's three colours as stored, each channel scaled to 0 to 1. The time slots blend them
+/// so, and [`Self::decoded`] turns the blend into light with gamma 2.2: the probe's sky slots
+/// fit a blend of the stored bytes better than one of linear light at every hour between two
+/// slots, and the sky's grey ladder decodes like gamma 2.2.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct StoredSkyColors {
+    pub(super) upper: Vec3,
+    pub(super) lower: Vec3,
+    pub(super) horizon: Vec3,
+}
+
+lerp_fields!(StoredSkyColors {
+    upper,
+    lower,
+    horizon
+});
+
+impl StoredSkyColors {
+    fn decoded(self) -> Self {
+        Self {
+            upper: gamma_decode(self.upper),
+            lower: gamma_decode(self.lower),
+            horizon: gamma_decode(self.horizon),
+        }
+    }
+}
+
+/// The values of one weather at one time slot that exterior lighting uses, all linear but the
+/// sky colours, which stay as stored until the slots are blended.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct SlotValues {
     pub(super) sun_light: Vec3,
     pub(super) sun_disc: Vec3,
     pub(super) sun_glare: Vec3,
-    pub(super) sky_upper: Vec3,
-    pub(super) sky_lower: Vec3,
-    pub(super) horizon: Vec3,
+    pub(super) sky: StoredSkyColors,
     pub(super) stars: Vec3,
     pub(super) ambient_cube: AmbientCube,
     pub(super) ambient_specular: Vec3,
@@ -88,9 +115,7 @@ lerp_fields!(SlotValues {
     sun_light,
     sun_disc,
     sun_glare,
-    sky_upper,
-    sky_lower,
-    horizon,
+    sky,
     stars,
     ambient_cube,
     ambient_specular,
@@ -279,24 +304,23 @@ impl ExteriorWeatherSlots {
             sun_light,
             sun_disc,
             sun_glare,
-            sky_upper,
-            sky_lower,
-            horizon,
+            sky,
             stars,
             ambient_cube,
             ambient_specular,
             hdr,
             depth_of_field,
         } = from.lerp(to, blend.t);
+        let sky = sky.decoded();
         ExteriorWeather {
             form_key: Arc::clone(&self.form_key),
             editor_id: self.editor_id.clone(),
             sun_light,
             sun_disc,
             sun_glare,
-            sky_upper,
-            sky_lower,
-            horizon,
+            sky_upper: sky.upper,
+            sky_lower: sky.lower,
+            horizon: sky.horizon,
             stars,
             ambient_cube,
             ambient_specular,

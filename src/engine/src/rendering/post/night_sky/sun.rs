@@ -8,8 +8,9 @@ use super::assets::{AssetState, SkyAssetError, report};
 use super::layer::{self, LAYER_GROUP, LayerPipeline, WorldGroupLayouts};
 use super::quad::quad_basis;
 use crate::assets::ini::{GameIni, IniError, IniKey};
+use crate::rendering::lighting::sky_measured::{SUN_DISC_BRIGHTNESS, sun_disc_edge_deg};
 use crate::rendering::lighting::time_of_day::unmeasured::{
-    SUN_DISC_RADIANCE, SUN_GLARE_RADIANCE, SUN_HORIZON_FADE_SINE, sun_sprite_edge_deg,
+    SUN_GLARE_RADIANCE, SUN_HORIZON_FADE_SINE, sun_glare_edge_deg,
 };
 use crate::rendering::shaders;
 use crate::utils::finite_or_zero;
@@ -121,17 +122,25 @@ impl SunUniforms {
     /// `radiance_scale` is the sky radiance scale the sky colours are multiplied by.
     pub(super) fn new(sun: &SunInput, sizes: SunSizes, radiance_scale: f32) -> Self {
         let scale = finite_or_zero(radiance_scale).max(0.0);
-        let sprite = |size: f32, color: Vec3, brightness: f32| {
+        let sprite = |edge_deg: f32, color: Vec3, brightness: f32| {
             SunUniform::new(
                 sun.direction,
-                sun_sprite_edge_deg(size),
+                edge_deg,
                 sun.alpha,
                 color * (scale * brightness),
             )
         };
         Self {
-            disc: sprite(sizes.base, sun.disc_color, SUN_DISC_RADIANCE),
-            glare: sprite(sizes.glare, sun.glare_color, SUN_GLARE_RADIANCE),
+            disc: sprite(
+                sun_disc_edge_deg(sizes.base),
+                sun.disc_color,
+                SUN_DISC_BRIGHTNESS,
+            ),
+            glare: sprite(
+                sun_glare_edge_deg(sizes.glare),
+                sun.glare_color,
+                SUN_GLARE_RADIANCE,
+            ),
         }
     }
 }

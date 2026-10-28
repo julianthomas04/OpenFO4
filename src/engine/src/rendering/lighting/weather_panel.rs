@@ -20,7 +20,7 @@ pub fn weather_section(ui: &mut egui::Ui, lighting: &mut LightingState) {
                 Environment::Exterior => {
                     ui.label("exterior");
                     weather_status(ui, lighting_weather, lighting.fog_time());
-                    fog_rows(ui, &lighting.fog.fog(lighting.sky.horizon));
+                    fog_rows(ui, &lighting.fog.fog(lighting.sky.linked_fog_color()));
                 }
                 Environment::Interior { cell, lighting } => {
                     ui.label(format!("interior {cell}"));

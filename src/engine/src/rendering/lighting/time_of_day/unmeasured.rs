@@ -1,8 +1,8 @@
 //! The rules no game data or public source pins down. Each is a hypothesis to be
 //! replaced by in-game measurement; nothing outside this module encodes them.
 //!
-//! - Slot keyframes: each twilight window is split in quarters, and the sun rises and
-//!   sets at the window midpoints (the rule the water daylight factor uses).
+//! - Sunrise and sunset: the sun rises and sets at the twilight window midpoints (the rule the
+//!   water daylight factor uses).
 //! - Sun arc: a circle through due east and due west whose plane tilts so the noon
 //!   sun stands due south at `atan2(|fSunYExtreme|, |fSunXExtreme|)` elevation; it
 //!   rises at the sunrise midpoint, sets at the sunset midpoint and keeps going below the horizon.
@@ -23,13 +23,13 @@
 //!   intensity come from the weather slots.
 //! - Sun alpha: `fSunAlphaTransTime` is a number of hours; the sun's alpha ramps linearly over
 //!   that long, centred on the midpoint of each twilight window (see [`sun_alpha`]).
-//! - Sun size: `fSunBaseSize` (disc sprite) and `fSunGlareSize` (glare sprite) are in the
-//!   moon's unit, [`SUN_SIZE_UNITS_PER_DEGREE`] per degree of the sprite's quad edge. The
-//!   edge, not the visible disc: the sun texture's opaque core is a small part of it.
-//! - Sun brightness: the disc sprite shows at [`SUN_DISC_RADIANCE`] and the glare sprite at
-//!   [`SUN_GLARE_RADIANCE`] times the weather's Sun and `SunGlare` colours and the sky radiance
-//!   scale; both are cut at the horizon over [`SUN_HORIZON_FADE_SINE`]. `fSunMinimumGlareScale`
-//!   and the weather's own glare byte (not exported yet) are not applied.
+//! - Sun glare size: `fSunGlareSize` (glare sprite) is in the moon's unit,
+//!   [`SUN_GLARE_SIZE_UNITS_PER_DEGREE`] per degree of the sprite's quad edge.
+//! - Sun glare brightness: the glare sprite shows at [`SUN_GLARE_RADIANCE`] times the weather's
+//!   `SunGlare` colour and the sky radiance scale. The probe saw no glare at all with the Sun
+//!   colour black and `SunGlare` grey 96 or 192. Both sun sprites are cut at the horizon over
+//!   [`SUN_HORIZON_FADE_SINE`], and both take the sky radiance scale. `fSunMinimumGlareScale` and
+//!   the weather's own glare byte (not exported yet) are not applied.
 //! - Clouds: a layer scrolls [`CLOUD_SCROLL_SCALE`] texture widths per second for each unit of
 //!   its weather's layer speed, and blends into the sky's horizon colour over the first
 //!   [`CLOUD_HORIZON_HAZE_SINE`] of the sine of elevation. Colours and alphas are the weather's,
@@ -39,12 +39,11 @@ use std::f32::consts::PI;
 
 use glam::{Quat, Vec3};
 
-use super::climate_times::{ClimateTimes, ClimateWindow};
+use super::climate_times::ClimateTimes;
 use super::day_time::DayTime;
 use super::light::LightSource;
 use super::moon::{MoonError, MoonPhase, cycle_days, moon_visibility};
 use super::sky::{SkyGameSettings, SkyPosition, linear_fade};
-use super::slot::TimeSlot;
 use super::wrap::{HOURS_PER_DAY, wrap_hours};
 use crate::rendering::lighting::cell_lighting::luminance;
 
@@ -60,46 +59,6 @@ pub const STAR_ROTATION_SENSE: f64 = -1.0;
 
 /// The star dome turn at day 0, 00:00.
 pub const STAR_ANGLE_AT_DAY_ZERO_RAD: f32 = 0.0;
-
-/// A point on the day timeline: a position inside one of the climate windows.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Keyframe {
-    pub window: ClimateWindow,
-    /// 0 at the window begin, 1 at its end.
-    pub fraction: f32,
-    pub slot: TimeSlot,
-}
-
-impl Keyframe {
-    pub fn hour(&self, times: &ClimateTimes) -> f32 {
-        let (begin, end) = times.window(self.window);
-        begin + (end - begin) * self.fraction
-    }
-}
-
-const fn keyframe(window: ClimateWindow, fraction: f32, slot: TimeSlot) -> Keyframe {
-    Keyframe {
-        window,
-        fraction,
-        slot,
-    }
-}
-
-/// The day keyframes in time order. The span from the last one back to the
-/// first wraps over midnight; `Day` holds between sunrise end and sunset begin,
-/// `Night` between sunset end and the next sunrise begin.
-pub const KEYFRAMES: [Keyframe; 10] = [
-    keyframe(ClimateWindow::Sunrise, 0.0, TimeSlot::Night),
-    keyframe(ClimateWindow::Sunrise, 0.25, TimeSlot::EarlySunrise),
-    keyframe(ClimateWindow::Sunrise, 0.5, TimeSlot::Sunrise),
-    keyframe(ClimateWindow::Sunrise, 0.75, TimeSlot::LateSunrise),
-    keyframe(ClimateWindow::Sunrise, 1.0, TimeSlot::Day),
-    keyframe(ClimateWindow::Sunset, 0.0, TimeSlot::Day),
-    keyframe(ClimateWindow::Sunset, 0.25, TimeSlot::EarlySunset),
-    keyframe(ClimateWindow::Sunset, 0.5, TimeSlot::Sunset),
-    keyframe(ClimateWindow::Sunset, 0.75, TimeSlot::LateSunset),
-    keyframe(ClimateWindow::Sunset, 1.0, TimeSlot::Night),
-];
 
 /// Elevation of the noon sun, from the horizontal reach and the southward offset of the extremes.
 fn noon_elevation_rad(settings: &SkyGameSettings) -> f32 {
@@ -265,29 +224,19 @@ pub fn moon_angular_diameter_deg(size: f32) -> f32 {
     size / MOON_SIZE_UNITS_PER_DEGREE
 }
 
-/// How many `fSunBaseSize` / `fSunGlareSize` units make one degree of the edge of the sun's
-/// sprite. Hypothesis: the sun's settings share the moon's unit, so vanilla sizes of 425 and 600
-/// give a 14.2 and a 20 degree quad. That is not the visible disc: the vanilla `Sun_d` texture
-/// is opaque (alpha above 0.9) only in a core 3% of the edge across, 0.4 degrees, about the
-/// size of the real sun; it is half transparent 10% across (1.4 degrees) and fades out softly
-/// towards the edge. A unit of its own is not needed to make that plausible, and the sizes
-/// cannot be degrees of the whole sprite (425 degrees), so the moon's unit is the working guess.
-pub const SUN_SIZE_UNITS_PER_DEGREE: f32 = MOON_SIZE_UNITS_PER_DEGREE;
+/// How many `fSunGlareSize` units make one degree of the edge of the sun's glare sprite.
+/// Hypothesis: the moon's unit, so the vanilla 600 gives a 20 degree quad.
+pub const SUN_GLARE_SIZE_UNITS_PER_DEGREE: f32 = MOON_SIZE_UNITS_PER_DEGREE;
 
 /// The sine of the elevation at which the sun sprites are fully faded in; they fade from 0 at the horizon.
 pub const SUN_HORIZON_FADE_SINE: f32 = 0.02;
 
-/// Radiance of a fully opaque, white sun disc texel at sky radiance scale 1: bright enough to
-/// saturate the core, low enough that the soft rim of the texture fades instead of
-/// saturating into a blob several degrees wide (60 did).
-pub const SUN_DISC_RADIANCE: f32 = 15.0;
-
 /// Radiance of a fully opaque, white sun glare texel at sky radiance scale 1.
 pub const SUN_GLARE_RADIANCE: f32 = 2.0;
 
-/// The edge in degrees of the sprite of a sun setting `size`.
-pub fn sun_sprite_edge_deg(size: f32) -> f32 {
-    size / SUN_SIZE_UNITS_PER_DEGREE
+/// The edge in degrees of the glare sprite of a sun glare size `size`.
+pub fn sun_glare_edge_deg(size: f32) -> f32 {
+    size / SUN_GLARE_SIZE_UNITS_PER_DEGREE
 }
 
 /// How many texture widths a cloud layer scrolls per second for each unit of its weather's
@@ -348,37 +297,6 @@ mod tests {
         assert!(
             a.direction().angle_between(b.direction()).to_degrees() < 0.05,
             "{what}: {a:?} vs {b:?}"
-        );
-    }
-
-    #[test]
-    fn the_keyframe_table_covers_every_slot_and_alternates_windows_in_order() {
-        for slot in TimeSlot::ALL {
-            assert!(KEYFRAMES.iter().any(|k| k.slot == slot), "{slot:?}");
-        }
-        let (sunrise, sunset) = KEYFRAMES.split_at(5);
-        for (window, frames) in [
-            (ClimateWindow::Sunrise, sunrise),
-            (ClimateWindow::Sunset, sunset),
-        ] {
-            assert!(frames.iter().all(|k| k.window == window));
-            assert_eq!(frames[0].fraction, 0.0);
-            assert_eq!(frames[4].fraction, 1.0);
-            assert!(
-                frames
-                    .windows(2)
-                    .all(|pair| pair[0].fraction < pair[1].fraction)
-            );
-        }
-    }
-
-    #[test]
-    fn keyframe_hours_follow_the_window_fractions() {
-        let times = default_climate();
-        let hours: Vec<f32> = KEYFRAMES.iter().map(|k| k.hour(&times)).collect();
-        assert_eq!(
-            hours,
-            [5.0, 6.0, 7.0, 8.0, 9.0, 17.0, 18.0, 19.0, 20.0, 21.0]
         );
     }
 

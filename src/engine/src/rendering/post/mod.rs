@@ -10,6 +10,8 @@ mod dof_test_support;
 pub mod hdr_target;
 pub mod night_sky;
 pub mod sky;
+#[cfg(test)]
+mod sky_tests;
 pub mod tonemap;
 
 use crate::rendering::{

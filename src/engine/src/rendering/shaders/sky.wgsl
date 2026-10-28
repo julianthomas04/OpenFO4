@@ -1,3 +1,4 @@
+// Below the horizon (not measured) the horizon colour turns into SkyLower.
 const GROUND_BLEND_SINE = 0.15;
 
 struct SkyVertexOutput {
@@ -21,7 +22,8 @@ fn view_ray(ndc: vec2<f32>) -> vec3<f32> {
 }
 
 fn sky_gradient(sine_elevation: f32) -> vec3<f32> {
-    let above = mix(frame.sky_horizon.rgb, frame.sky_zenith.rgb, sqrt(max(sine_elevation, 0.0)));
+    let weights = sky_gradient_weights(sine_elevation);
+    let above = weights.x * frame.sky_zenith.rgb + weights.y * frame.sky_ground.rgb + weights.z * frame.sky_horizon.rgb;
     let below = mix(frame.sky_horizon.rgb, frame.sky_ground.rgb, smoothstep(0.0, GROUND_BLEND_SINE, -sine_elevation));
     return select(below, above, sine_elevation >= 0.0);
 }
