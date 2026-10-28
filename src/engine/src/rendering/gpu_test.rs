@@ -15,11 +15,19 @@ use std::sync::OnceLock;
 
 use glam::UVec2;
 
+use bytemuck::Zeroable;
+
 use crate::rendering::{
     cube_array::CUBE_SLOTS,
     device::{REQUIRED_FEATURES, STORAGE_BUFFERS_PER_STAGE},
     gpu_driven::MAX_TEXTURES,
     instance,
+    lighting::frame_binding::FrameBinding,
+    lighting::frame_uniform::{FrameUniform, MAX_CASCADES},
+    local_lights::buffers::ClusterBuffers,
+    shadows::lamps::atlas_texture::LampAtlasTexture,
+    shadows::settings::{ShadowConfig, ShadowFilter},
+    shadows::shadow_maps::ShadowMaps,
     water::displacement::REQUIRED_FORMAT_FEATURES,
 };
 
@@ -97,6 +105,28 @@ fn create_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
     };
     pollster::block_on(adapter.request_device(&descriptor))
         .map_err(|error| format!("no device: {error}"))
+}
+
+/// A frame binding with a zeroed uniform and the smallest shadow and light resources, for the
+/// passes that read the frame uniform alone.
+pub fn frame_binding(device: &wgpu::Device) -> FrameBinding {
+    let config = ShadowConfig {
+        resolution: 4,
+        distance: 100.0,
+        cascade_count: 1,
+        split_blend: 0.0,
+        filter: ShadowFilter::SingleTap,
+        bias_scale: 1.0,
+        cascade_min_texels: [0.0; MAX_CASCADES],
+        skip_alpha_in_last_cascade: false,
+    };
+    FrameBinding::new(
+        device,
+        &FrameUniform::zeroed(),
+        &ShadowMaps::new(device, &config),
+        LampAtlasTexture::new(device, 4).view(),
+        &ClusterBuffers::new(device),
+    )
 }
 
 /// The extent of a single-layer 2D texture of `size`.

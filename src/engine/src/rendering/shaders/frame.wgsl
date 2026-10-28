@@ -33,8 +33,12 @@ struct FrameUniform {
     cluster_grid: vec4<u32>,
     // x: first slice far depth, y: cluster far depth, z: log2 scale, w: log2 bias.
     cluster_z: vec4<f32>,
-    // x: tonemap operator, y: white point, z: saturation.
+    // x: tonemap operator, y: the image space's TonemapE.
     tonemap: vec4<f32>,
+    // x: saturation, y: brightness, z: contrast, w: tint amount.
+    cinematic: vec4<f32>,
+    // rgb: linear tint colour.
+    tint: vec4<f32>,
     // x: texture feedback on, y: frame index, z: pixel sample mask,
     // w: iTexMipMapSkip.
     texture_feedback: vec4<u32>,

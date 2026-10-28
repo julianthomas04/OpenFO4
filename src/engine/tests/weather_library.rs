@@ -171,10 +171,15 @@ fn seeded(climate_weathers: &Json) -> Connection {
             (
                 "data",
                 text(
-                    &json!({"Hdr": {
-                        "EyeAdaptSpeed": 3.0, "SunlightScale": 1.0, "SkyScale": 1.0,
-                        "MiddleGray": 0.18, "AutoExposureMin": 1.6, "AutoExposureMax": 3.25,
-                    }})
+                    &json!({
+                        "Hdr": {
+                            "EyeAdaptSpeed": 3.0, "SunlightScale": 1.0, "SkyScale": 1.0,
+                            "MiddleGray": 0.18, "AutoExposureMin": 1.6, "AutoExposureMax": 3.25,
+                            "TonemapE": 0.02,
+                        },
+                        "Cinematic": {"Saturation": 1.0, "Brightness": 1.0, "Contrast": 1.0},
+                        "Tint": {"Amount": 0.0, "Color": {"R": 255, "G": 168, "B": 21}},
+                    })
                     .to_string(),
                 ),
             ),

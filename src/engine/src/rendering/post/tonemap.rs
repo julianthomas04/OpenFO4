@@ -184,6 +184,9 @@ impl TonemapPass {
 }
 
 #[cfg(test)]
+mod gpu_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use wgpu::TextureFormat;

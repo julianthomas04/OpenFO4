@@ -30,8 +30,12 @@ use crate::rendering::water::CameraWater;
 const SUN_ANGULAR_RADIUS_DEG: f32 = 0.266;
 /// The Creation Kit states the eye adaptation speed per frame at 30 fps.
 const ADAPTATION_REFERENCE_FPS: f32 = 30.0;
-/// Compensates for the unproven AutoExposureMin/Max semantics; calibrated against the vanilla reference screenshot.
-const EXPOSURE_CALIBRATION: f32 = 0.38;
+/// The automatic exposure settles at this share of the middle grey over the mean luminance of
+/// the picture, within the image space's limits.
+const AUTO_EXPOSURE_KEY: f32 = 0.5;
+/// Towards a darker picture the adapted luminance falls by at most this much per second in natural
+/// log, whatever the image space's eye adapt speed.
+const DARKENING_LOG_RATE: f32 = 0.8;
 
 /// The exterior's one directional light and the sun disc the sky paints. With the clock in
 /// charge the direction and strength are the measured light's, which is never the disc's: it
@@ -211,10 +215,11 @@ impl ExposureSettings {
         AutoExposureParams {
             adaptation: 1.0
                 - (-self.hdr.eye_adapt_speed / 100.0 * dt * ADAPTATION_REFERENCE_FPS).exp(),
-            middle_gray: self.hdr.middle_gray,
+            darkening: (-DARKENING_LOG_RATE * dt).exp(),
+            target_luminance: AUTO_EXPOSURE_KEY * self.hdr.middle_gray,
             min: self.hdr.auto_exposure_min,
             max: self.hdr.auto_exposure_max,
-            ev_scale: self.ev.exp2() * EXPOSURE_CALIBRATION,
+            ev_scale: self.ev.exp2(),
             auto: u32::from(self.auto),
         }
     }
@@ -384,6 +389,7 @@ impl LightingState {
         self.sun.intensity = weather.hdr.sunlight_scale;
         self.sky.radiance_scale = weather.hdr.sky_scale;
         self.exposure.hdr = weather.hdr;
+        self.tonemap.cinematic = weather.cinematic;
         self.sun.color = weather.sun_light;
         self.sun.disc_color = weather.sun_disc;
         self.sky.zenith = weather.sky_upper;
@@ -643,6 +649,7 @@ impl LightingState {
         let viewport = viewport.max(UVec2::ONE).as_vec2();
         let scene = self.scene_terms();
         let shadow = self.shadows.uniform_fields(cascades);
+        let tonemap = self.tonemap.uniform(self.exposure.hdr.tonemap_e);
 
         let mut frame = FrameUniform {
             view_proj,
@@ -677,7 +684,9 @@ impl LightingState {
             ),
             cluster_grid: cluster_grid(&self.local_lights),
             cluster_z: ClusterDepth::for_settings(&self.local_lights).uniform(),
-            tonemap: self.tonemap.uniform(),
+            tonemap: tonemap.tonemap,
+            cinematic: tonemap.cinematic,
+            tint: tonemap.tint,
             texture_feedback,
             time_water: Vec4::new(
                 wrapped_time(elapsed_seconds),
@@ -799,6 +808,7 @@ mod tests {
     use super::super::environment::NeutralReason;
     use super::super::fog::measured::{BlendedFogColors, DAY_COLOUR_FACTORS};
     use super::super::fog::{ExteriorFog, FogRange};
+    use super::super::tonemap_settings::ImageSpaceCinematic;
     use super::fixtures::lighting_state;
     use super::*;
 
@@ -981,6 +991,7 @@ mod tests {
             ambient_cube: weather_cube(),
             ambient_specular: Vec3::ZERO,
             hdr: ImageSpaceHdr::default(),
+            cinematic: ImageSpaceCinematic::NEUTRAL,
             depth_of_field: None,
             fog: None,
         }
@@ -1224,7 +1235,31 @@ mod tests {
 
     #[test]
     fn no_time_passed_means_no_adaptation() {
-        assert_eq!(exposure(0.0, true, 3.0).gpu_params(0.0).adaptation, 0.0);
+        let params = exposure(0.0, true, 3.0).gpu_params(0.0);
+        assert_eq!((params.adaptation, params.darkening), (0.0, 1.0));
+    }
+
+    #[test]
+    fn darkening_falls_at_its_log_rate_whatever_the_eye_adapt_speed() {
+        let slow = exposure(0.0, true, 1.0).gpu_params(0.5).darkening;
+        let fast = exposure(0.0, true, 5.0).gpu_params(0.5).darkening;
+        assert_eq!(slow, fast);
+        assert!((slow - (-0.4_f32).exp()).abs() < 1e-6, "{slow}");
+    }
+
+    #[test]
+    fn darkening_is_frame_rate_independent() {
+        let once = exposure(0.0, true, 3.0).gpu_params(1.0 / 30.0).darkening;
+        let half = exposure(0.0, true, 3.0).gpu_params(1.0 / 60.0).darkening;
+        assert!((half * half - once).abs() < 1e-6);
+    }
+
+    #[test]
+    fn adapting_at_once_also_darkens_at_once() {
+        let params = exposure(0.0, true, 3.0)
+            .gpu_params(1.0 / 60.0)
+            .adapted_at_once();
+        assert_eq!((params.adaptation, params.darkening), (1.0, 0.0));
     }
 
     #[test]
@@ -1241,7 +1276,18 @@ mod tests {
         let on = exposure(0.0, true, 3.0).gpu_params(0.0);
         let off = exposure(0.0, false, 3.0).gpu_params(0.0);
         assert_eq!((on.auto, off.auto), (1, 0));
-        assert_eq!((on.min, on.max, on.middle_gray), (1.0, 4.0, 0.18));
+        assert_eq!((on.min, on.max), (1.0, 4.0));
+    }
+
+    #[test]
+    fn the_auto_exposure_targets_its_key_share_of_the_middle_grey() {
+        let params = exposure(0.0, true, 3.0).gpu_params(0.0);
+        assert!((params.target_luminance - AUTO_EXPOSURE_KEY * 0.18).abs() < 1e-7);
+    }
+
+    #[test]
+    fn without_an_ev_offset_the_exposure_is_the_image_space_exposure() {
+        assert_eq!(exposure(0.0, true, 3.0).gpu_params(0.0).ev_scale, 1.0);
     }
 
     mod time_of_day {

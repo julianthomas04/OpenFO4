@@ -11,6 +11,7 @@ use super::time_of_day::{
     ClimateMoon, ClimateMoonError, ClimateSky, ClimateSkyError, ClimateSunTextures, ClimateTimes,
     ClimateTimesError, TimeSlot,
 };
+use super::tonemap_settings::ImageSpaceCinematic;
 pub use super::weather_slots::{ExteriorWeather, ExteriorWeatherSlots, ImageSpaceHdr};
 use super::weather_slots::{SlotFogColors, SlotValues, StoredSkyColors, WeatherFog};
 use crate::assets::db::DbClient;
@@ -98,6 +99,11 @@ pub enum ExteriorWeatherError {
         climate: String,
         source: serde_json::Error,
     },
+    #[error("image space {image_space} lacks {}; the database predates the image space tone and cinematic export, re-run the installer", missing.join(", "))]
+    ImageSpaceFieldsMissing {
+        image_space: String,
+        missing: Vec<&'static str>,
+    },
     #[error("image space {image_space} has malformed data JSON: {source}")]
     ImageSpaceMalformed {
         image_space: String,
@@ -154,11 +160,51 @@ struct RawFog {
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(from = "RawImageSpaceData")]
 struct ImageSpaceData {
-    #[serde(rename = "DepthOfField")]
     depth_of_field: Option<ImageSpaceDepthOfField>,
-    #[serde(rename = "Hdr")]
     hdr: ImageSpaceHdr,
+    cinematic: ImageSpaceCinematic,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct RawImageSpaceData {
+    depth_of_field: Option<ImageSpaceDepthOfField>,
+    hdr: ImageSpaceHdr,
+    cinematic: RawCinematic,
+    tint: RawTint,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct RawCinematic {
+    saturation: f32,
+    brightness: f32,
+    contrast: f32,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct RawTint {
+    amount: f32,
+    color: RawColor,
+}
+
+impl From<RawImageSpaceData> for ImageSpaceData {
+    fn from(raw: RawImageSpaceData) -> Self {
+        Self {
+            depth_of_field: raw.depth_of_field,
+            hdr: raw.hdr,
+            cinematic: ImageSpaceCinematic {
+                saturation: raw.cinematic.saturation,
+                brightness: raw.cinematic.brightness,
+                contrast: raw.cinematic.contrast,
+                tint_amount: raw.tint.amount,
+                tint_color: raw.tint.color.gamma_linear(),
+            },
+        }
+    }
 }
 
 type ColorGroups = HashMap<String, HashMap<String, RawColor>>;
@@ -347,6 +393,7 @@ fn load_slot(
         ambient_cube,
         ambient_specular: dalc.specular.linear(),
         hdr: image_space.hdr,
+        cinematic: image_space.cinematic,
         depth_of_field: image_space.depth_of_field,
     })
 }
@@ -504,10 +551,38 @@ fn load_image_space(
         .ok_or_else(|| ExteriorWeatherError::ImageSpaceWithoutData {
             image_space: image_space.to_string(),
         })?;
-    serde_json::from_str(&data).map_err(|source| ExteriorWeatherError::ImageSpaceMalformed {
+    parse_image_space(image_space, &data)
+}
+
+/// The image space fields the tone curve and the cinematic stage read, which older installers
+/// did not export.
+const TONE_AND_CINEMATIC_FIELDS: [&[&str]; 3] = [&["Hdr", "TonemapE"], &["Cinematic"], &["Tint"]];
+
+fn parse_image_space(
+    image_space: &str,
+    data: &str,
+) -> Result<ImageSpaceData, ExteriorWeatherError> {
+    let malformed = |source| ExteriorWeatherError::ImageSpaceMalformed {
         image_space: image_space.to_string(),
         source,
-    })
+    };
+    let value: serde_json::Value = serde_json::from_str(data).map_err(malformed)?;
+    let missing: Vec<&'static str> = TONE_AND_CINEMATIC_FIELDS
+        .iter()
+        .filter(|path| {
+            path.iter()
+                .try_fold(&value, |node, key| node.get(key))
+                .is_none()
+        })
+        .map(|path| *path.last().expect("every path names a field"))
+        .collect();
+    if !missing.is_empty() {
+        return Err(ExteriorWeatherError::ImageSpaceFieldsMissing {
+            image_space: image_space.to_string(),
+            missing,
+        });
+    }
+    serde_json::from_value(value).map_err(malformed)
 }
 
 /// The climate of `worldspace`, with a warning when it predates the moon export.
@@ -739,6 +814,7 @@ pub(crate) mod fixtures {
     pub(super) fn neutral_image_space() -> ImageSpaceData {
         ImageSpaceData {
             hdr: ImageSpaceHdr::default(),
+            cinematic: ImageSpaceCinematic::NEUTRAL,
             depth_of_field: None,
         }
     }
@@ -813,6 +889,7 @@ pub(crate) mod fixtures {
         let image_spaces = TimeSlot::try_map_all(|slot| {
             Ok::<_, ExteriorWeatherError>(ImageSpaceData {
                 hdr: hdr(slot),
+                cinematic: ImageSpaceCinematic::NEUTRAL,
                 depth_of_field: None,
             })
         })
@@ -1228,6 +1305,7 @@ mod tests {
             middle_gray: 0.1,
             auto_exposure_min: 0.2,
             auto_exposure_max: 2.0,
+            tonemap_e: 0.04,
         };
         let slots = slots_with(row(), &image_spaces).unwrap();
         let hdr = slots.sample(between(Night, Day, 0.5)).hdr;
@@ -1238,6 +1316,31 @@ mod tests {
         assert!((hdr.middle_gray - f32::midpoint(0.1, day.middle_gray)).abs() < 1e-6);
         assert!((hdr.auto_exposure_min - f32::midpoint(0.2, day.auto_exposure_min)).abs() < 1e-6);
         assert!((hdr.auto_exposure_max - f32::midpoint(2.0, day.auto_exposure_max)).abs() < 1e-6);
+        assert!((hdr.tonemap_e - f32::midpoint(0.04, day.tonemap_e)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_image_space_cinematic_fields_and_tint_are_blended() {
+        let mut image_spaces = [neutral_image_space(); TimeSlot::COUNT];
+        image_spaces[Night.index()].cinematic = ImageSpaceCinematic {
+            saturation: 0.0,
+            brightness: 2.0,
+            contrast: 0.5,
+            tint_amount: 1.0,
+            tint_color: Vec3::new(1.0, 0.0, 0.0),
+        };
+        let slots = slots_with(row(), &image_spaces).unwrap();
+        let cinematic = slots.sample(between(Night, Day, 0.5)).cinematic;
+        assert_eq!(
+            cinematic,
+            ImageSpaceCinematic {
+                saturation: 0.5,
+                brightness: 1.5,
+                contrast: 0.75,
+                tint_amount: 0.5,
+                tint_color: Vec3::new(1.0, 0.5, 0.5),
+            }
+        );
     }
 
     fn depth_of_field(strength: f32, mode: u32) -> ImageSpaceDepthOfField {
@@ -1583,7 +1686,64 @@ mod tests {
         assert_eq!(slots.moon().unwrap().phase_length(), 4);
     }
 
-    const IMAGE_SPACE_HDR: &str = r#""Hdr":{"EyeAdaptSpeed":3.0,"SunlightScale":1.0,"SkyScale":1.0,"MiddleGray":0.18,"AutoExposureMin":1.6,"AutoExposureMax":3.25}"#;
+    const IMAGE_SPACE_HDR: &str = r#""Hdr":{"EyeAdaptSpeed":3.0,"TonemapE":0.02,"SunlightScale":1.0,"SkyScale":1.0,"MiddleGray":0.18,"AutoExposureMin":1.6,"AutoExposureMax":3.25},"Cinematic":{"Saturation":1.1,"Brightness":0.9,"Contrast":1.2},"Tint":{"Amount":0.2,"Color":{"R":255,"G":128,"B":0}}"#;
+
+    #[test]
+    fn an_image_space_row_carries_its_cinematic_fields_and_its_tint_in_linear_light() {
+        let json = format!("{{{IMAGE_SPACE_HDR}}}");
+        let data: ImageSpaceData = serde_json::from_str(&json).unwrap();
+        assert_eq!(data.hdr.tonemap_e, 0.02);
+        let cinematic = data.cinematic;
+        assert_eq!(
+            (
+                cinematic.saturation,
+                cinematic.brightness,
+                cinematic.contrast
+            ),
+            (1.1, 0.9, 1.2)
+        );
+        assert_eq!(cinematic.tint_amount, 0.2);
+        let half_byte = (128.0_f32 / 255.0).powf(2.2);
+        assert!(
+            cinematic
+                .tint_color
+                .abs_diff_eq(Vec3::new(1.0, half_byte, 0.0), 1e-6)
+        );
+    }
+
+    #[test]
+    fn an_image_space_row_from_before_the_tone_and_cinematic_export_asks_for_a_reinstall() {
+        let json = r#"{"Hdr":{"EyeAdaptSpeed":3.0,"SunlightScale":1.0,"SkyScale":1.0,"MiddleGray":0.18,"AutoExposureMin":1.6,"AutoExposureMax":3.25}}"#;
+        let error = parse_image_space("OldIS", json).unwrap_err();
+        assert!(matches!(
+            &error,
+            ExteriorWeatherError::ImageSpaceFieldsMissing { image_space, missing }
+                if image_space == "OldIS" && *missing == ["TonemapE", "Cinematic", "Tint"]
+        ));
+        assert!(
+            error.to_string().contains("re-run the installer"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_image_space_row_with_a_mistyped_field_is_malformed() {
+        let json = format!("{{{IMAGE_SPACE_HDR}}}")
+            .replace(r#""Saturation":1.1"#, r#""Saturation":"high""#);
+        assert!(matches!(
+            parse_image_space("BadIS", &json),
+            Err(ExteriorWeatherError::ImageSpaceMalformed { .. })
+        ));
+    }
+
+    #[test]
+    fn a_complete_image_space_row_parses() {
+        let json = format!("{{{IMAGE_SPACE_HDR}}}");
+        assert_eq!(
+            parse_image_space("IS", &json).unwrap().cinematic.contrast,
+            1.2
+        );
+    }
 
     #[test]
     fn an_image_space_row_carries_its_depth_of_field_and_vignette() {

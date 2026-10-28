@@ -14,6 +14,7 @@ use super::lerp::{Lerp, lerp_fields, snap_to_nearer};
 use super::time_of_day::{
     ClimateMoon, ClimateSky, ClimateSunTextures, ClimateTimes, SlotBlend, TimeSlot,
 };
+use super::tonemap_settings::ImageSpaceCinematic;
 use crate::rendering::post::depth_of_field::ImageSpaceDepthOfField;
 
 /// The slot the menu background and the first frames are lit with.
@@ -30,6 +31,8 @@ pub struct ImageSpaceHdr {
     pub middle_gray: f32,
     pub auto_exposure_min: f32,
     pub auto_exposure_max: f32,
+    /// The toe numerator of the filmic tone curve.
+    pub tonemap_e: f32,
 }
 
 lerp_fields!(ImageSpaceHdr {
@@ -39,6 +42,7 @@ lerp_fields!(ImageSpaceHdr {
     middle_gray,
     auto_exposure_min,
     auto_exposure_max,
+    tonemap_e,
 });
 
 /// The mode is a bit field, so it snaps to the nearer end instead of blending.
@@ -65,6 +69,7 @@ impl Default for ImageSpaceHdr {
             middle_gray: 0.18,
             auto_exposure_min: 1.6,
             auto_exposure_max: 3.25,
+            tonemap_e: 0.02,
         }
     }
 }
@@ -108,6 +113,7 @@ pub(super) struct SlotValues {
     pub(super) ambient_cube: AmbientCube,
     pub(super) ambient_specular: Vec3,
     pub(super) hdr: ImageSpaceHdr,
+    pub(super) cinematic: ImageSpaceCinematic,
     pub(super) depth_of_field: Option<ImageSpaceDepthOfField>,
 }
 
@@ -120,6 +126,7 @@ lerp_fields!(SlotValues {
     ambient_cube,
     ambient_specular,
     hdr,
+    cinematic,
     depth_of_field,
 });
 
@@ -179,6 +186,7 @@ pub struct ExteriorWeather {
     /// Extracted but not rendered yet.
     pub ambient_specular: Vec3,
     pub hdr: ImageSpaceHdr,
+    pub cinematic: ImageSpaceCinematic,
     /// The image space's depth of field and vignette: what the game's image-space manager
     /// holds for the depth of field effect. `None` when the database predates the export.
     pub depth_of_field: Option<ImageSpaceDepthOfField>,
@@ -207,6 +215,7 @@ impl Lerp for ExteriorWeather {
             ambient_cube: Lerp::lerp(&self.ambient_cube, &other.ambient_cube, t),
             ambient_specular: Lerp::lerp(&self.ambient_specular, &other.ambient_specular, t),
             hdr: Lerp::lerp(&self.hdr, &other.hdr, t),
+            cinematic: Lerp::lerp(&self.cinematic, &other.cinematic, t),
             depth_of_field: Lerp::lerp(&self.depth_of_field, &other.depth_of_field, t),
             fog: Lerp::lerp(&self.fog, &other.fog, t),
         }
@@ -309,6 +318,7 @@ impl ExteriorWeatherSlots {
             ambient_cube,
             ambient_specular,
             hdr,
+            cinematic,
             depth_of_field,
         } = from.lerp(to, blend.t);
         let sky = sky.decoded();
@@ -325,6 +335,7 @@ impl ExteriorWeatherSlots {
             ambient_cube,
             ambient_specular,
             hdr,
+            cinematic,
             depth_of_field,
             fog: self.fog.as_ref().map(|fog| fog.sample(blend)),
         }
@@ -359,7 +370,15 @@ mod tests {
             hdr: ImageSpaceHdr {
                 sunlight_scale: 9.0 * level,
                 sky_scale: 10.0 * level,
+                tonemap_e: 22.0 * level,
                 ..ImageSpaceHdr::default()
+            },
+            cinematic: ImageSpaceCinematic {
+                saturation: 23.0 * level,
+                brightness: 24.0 * level,
+                contrast: 25.0 * level,
+                tint_amount: 26.0 * level,
+                tint_color: Vec3::splat(27.0 * level),
             },
             depth_of_field: Some(ImageSpaceDepthOfField {
                 strength: 11.0 * level,
