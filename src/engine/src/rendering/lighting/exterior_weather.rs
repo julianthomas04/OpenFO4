@@ -1398,7 +1398,6 @@ mod tests {
         };
         let slots = slots_with(row(), &image_spaces).unwrap();
         let cinematic = slots.sample(between(Night, Day, 0.5)).cinematic;
-        let stored_half = 0.5_f32.powf(2.2);
         assert_eq!(
             ImageSpaceCinematic {
                 tint_color: Vec3::ZERO,
@@ -1415,8 +1414,8 @@ mod tests {
         assert!(
             cinematic
                 .tint_color
-                .abs_diff_eq(Vec3::new(1.0, stored_half, stored_half), 1e-6),
-            "the tint blends as stored: {}",
+                .abs_diff_eq(Vec3::new(1.0, 0.0, 0.0), 1e-6),
+            "half the amount of the tint colour alone: {}",
             cinematic.tint_color
         );
     }

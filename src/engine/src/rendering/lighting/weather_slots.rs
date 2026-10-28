@@ -75,9 +75,10 @@ impl Default for ImageSpaceHdr {
 }
 
 /// How the loader decodes each stored colour of a slot. The time slots and a change of weather
-/// blend the sky, sun disc, sunlight, directional ambient, tint and water multiplier colours as
-/// stored and decode the blend once (see [`ExteriorWeather::cross_fade`]); the glare and star
-/// colours, whose blend is unmeasured, blend in linear light.
+/// blend the sky, sun disc, sunlight, directional ambient and water multiplier colours as stored
+/// and decode the blend once, and the tint as its amount times its decoded colour (see
+/// [`ExteriorWeather::cross_fade`]); the glare and star colours, whose blend is unmeasured, blend
+/// in linear light.
 pub(super) const SKY_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
 pub(super) const SUN_DISC_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
 pub(super) const SUNLIGHT_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
@@ -222,10 +223,11 @@ impl Lerp for ExteriorWeather {
 
 impl ExteriorWeather {
     /// The weather `t` of the way from this one to `other`, between two time slots or through a
-    /// change of weather. The sky, sun disc, sunlight, directional ambient, tint and water
-    /// multiplier colours blend as the game measurably blends its weather colours: as stored,
-    /// re-encoded exactly as the loader decoded them, then decoded once; the fog colours and the
-    /// fog's sunlight are kept stored already. Every other value blends as [`Lerp`] blends it.
+    /// change of weather. The sky, sun disc, sunlight, directional ambient and water multiplier
+    /// colours blend as the game measurably blends its weather colours: as stored, re-encoded
+    /// exactly as the loader decoded them, then decoded once; the fog colours and the fog's
+    /// sunlight are kept stored already. The tint blends as measured through a change of weather:
+    /// see [`blended_tint_colour`]. Every other value blends as [`Lerp`] blends it.
     #[must_use]
     pub fn cross_fade(&self, other: &Self, t: f32) -> Self {
         let stored = |from, to, encoding| lerp_stored(from, to, t, encoding);
@@ -242,11 +244,7 @@ impl ExteriorWeather {
                 AMBIENT_ENCODING,
             )
         }));
-        blend.cinematic.tint_color = stored(
-            self.cinematic.tint_color,
-            other.cinematic.tint_color,
-            TINT_ENCODING,
-        );
+        blend.cinematic.tint_color = blended_tint_colour(&self.cinematic, &other.cinematic, t);
         blend.water_multiplier = stored(
             self.water_multiplier,
             other.water_multiplier,
@@ -254,6 +252,17 @@ impl ExteriorWeather {
         );
         blend
     }
+}
+
+/// The tint colour that, at the blended tint amount, tints the picture by the blend of each
+/// side's amount times its decoded colour, as the game blends the tint of one weather into the
+/// next. Without any tint amount the colour has no effect and blends linearly.
+fn blended_tint_colour(from: &ImageSpaceCinematic, to: &ImageSpaceCinematic, t: f32) -> Vec3 {
+    let amount = from.tint_amount + (to.tint_amount - from.tint_amount) * t;
+    if amount.abs() < f32::EPSILON {
+        return from.tint_color.lerp(to.tint_color, t);
+    }
+    (from.tint_color * from.tint_amount).lerp(to.tint_color * to.tint_amount, t) / amount
 }
 
 /// One weather with the values of all eight time slots, loaded once, and the climate around
@@ -538,10 +547,6 @@ mod tests {
                 scale: 1.0,
             },
             water_multiplier: WATER_MULTIPLIER_ENCODING.decode(stored),
-            cinematic: ImageSpaceCinematic {
-                tint_color: TINT_ENCODING.decode(stored),
-                ..base.cinematic
-            },
             ..base
         };
         weather.fog.as_mut().unwrap().sunlight = stored;
@@ -559,7 +564,6 @@ mod tests {
             ("sky upper", changed.sky_upper, gamma_72),
             ("sky lower", changed.sky_lower, gamma_72),
             ("horizon", changed.horizon, gamma_72),
-            ("tint", changed.cinematic.tint_color, gamma_72),
             (
                 "water multiplier",
                 changed.water_multiplier,
@@ -575,6 +579,57 @@ mod tests {
         assert!(
             sunlight.abs_diff_eq(Vec3::splat(72.0 / 255.0), 1e-6),
             "{sunlight}"
+        );
+    }
+
+    fn tinted(name: &str, amount: f32, rgb8: [u8; 3]) -> ExteriorWeather {
+        let base = weather(name, 0.0);
+        ExteriorWeather {
+            cinematic: ImageSpaceCinematic {
+                tint_amount: amount,
+                tint_color: TINT_ENCODING.decode(Vec3::from_array(rgb8.map(f32::from)) / 255.0),
+                ..base.cinematic
+            },
+            ..base
+        }
+    }
+
+    /// What the tint does to a grey picture, per channel: `1 - amount + amount * colour`.
+    fn grey_multiplier(cinematic: &ImageSpaceCinematic) -> Vec3 {
+        Vec3::splat(1.0 - cinematic.tint_amount) + cinematic.tint_color * cinematic.tint_amount
+    }
+
+    #[test]
+    fn a_change_of_weather_moves_the_tints_effect_on_grey_linearly() {
+        let (red, blue) = (
+            tinted("Red", 1.0, [255, 0, 0]),
+            tinted("Blue", 0.5, [0, 0, 255]),
+        );
+        let (start, end) = (
+            grey_multiplier(&red.cinematic),
+            grey_multiplier(&blue.cinematic),
+        );
+        for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let changed = red.cross_fade(&blue, t).cinematic;
+            assert!((changed.tint_amount - (1.0 - 0.5 * t)).abs() < 1e-6, "{t}");
+            let multiplier = grey_multiplier(&changed);
+            assert!(
+                multiplier.abs_diff_eq(start.lerp(end, t), 1e-6),
+                "{t}: {multiplier}"
+            );
+        }
+    }
+
+    #[test]
+    fn without_any_tint_the_tint_colour_blends_linearly() {
+        let (red, blue) = (
+            tinted("Red", 0.0, [255, 0, 0]),
+            tinted("Blue", 0.0, [0, 0, 255]),
+        );
+        let colour = red.cross_fade(&blue, 0.25).cinematic.tint_color;
+        assert!(
+            colour.abs_diff_eq(Vec3::new(0.75, 0.0, 0.25), 1e-6),
+            "{colour}"
         );
     }
 
