@@ -34,9 +34,10 @@ pub struct CloudLayerDraw {
     /// The texture as the database stores its path below the textures folder
     /// (`Sky\CloudsLower01_d.dds`); the case does not matter.
     pub texture: Arc<str>,
-    /// The layer's colour at this time of day, linear: the weather colour as the sky colours are.
+    /// The layer's colour at this time of day, linear, decoded from the blended stored colour.
     pub color: Vec3,
-    /// 0 to 1: the layer's alpha at this time of day times the weight of its weather.
+    /// 0 to 1: the layer's alpha at this time of day; while the weather changes, blended into the
+    /// other weather's or weighted by the share of its own (see the weather frame).
     pub alpha: f32,
     /// The layer's X and Y speed from the weather, which is at most 0.1 either way.
     pub scroll_speed: Vec2,

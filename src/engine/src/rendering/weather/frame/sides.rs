@@ -56,17 +56,25 @@ impl<'a> Sides<'a> {
         iter::once(&self.incoming).chain(&self.outgoing)
     }
 
-    /// The weathers in the order they are drawn over one another, the one that goes out first.
-    pub fn back_to_front(&self) -> impl Iterator<Item = &Side<'a>> {
-        self.outgoing.iter().chain(iter::once(&self.incoming))
-    }
-
     /// What `value` makes of each weather, blended by the progress of the transition: the value
     /// of the weather being left at its start and that of the weather it comes to at its end.
     pub fn blend<T: Lerp>(&self, value: impl Fn(&WeatherDef) -> T) -> T {
+        self.blend_by(value, T::lerp)
+    }
+
+    /// Like [`Self::blend`], with `mix` blending the value of the weather being left into that of
+    /// the weather it comes to.
+    pub fn blend_by<T>(
+        &self,
+        value: impl Fn(&WeatherDef) -> T,
+        mix: impl Fn(&T, &T, f32) -> T,
+    ) -> T {
         match &self.outgoing {
-            Some(outgoing) => value(outgoing.weather)
-                .lerp(&value(self.incoming.weather), self.incoming.role.weight()),
+            Some(outgoing) => mix(
+                &value(outgoing.weather),
+                &value(self.incoming.weather),
+                self.incoming.role.weight(),
+            ),
             None => value(self.incoming.weather),
         }
     }
@@ -143,18 +151,6 @@ mod tests {
             let ours: Vec<_> = sides.iter().map(|side| (side.id, side.role)).collect();
             assert_eq!(ours, snapshot.sides().collect::<Vec<_>>());
         }
-    }
-
-    #[test]
-    fn the_weathers_are_drawn_over_one_another_from_the_one_that_goes_out_to_the_one_that_comes_in()
-    {
-        let library = library();
-        let sides = Sides::of(&library, &transition(B, A, 0.5)).unwrap();
-        let drawn: Vec<WeatherId> = sides.back_to_front().map(|side| side.id).collect();
-        assert_eq!(drawn, [A, B]);
-        let settled = Sides::of(&library, &settled(B)).unwrap();
-        let drawn: Vec<WeatherId> = settled.back_to_front().map(|side| side.id).collect();
-        assert_eq!(drawn, [B]);
     }
 
     #[test]

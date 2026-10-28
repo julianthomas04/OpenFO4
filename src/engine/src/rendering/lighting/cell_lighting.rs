@@ -82,7 +82,11 @@ impl RawColor {
     }
 
     pub(super) fn linear(self) -> Vec3 {
-        srgb8_to_linear([self.r, self.g, self.b])
+        self.decoded(StoredColourEncoding::Srgb)
+    }
+
+    pub(super) fn decoded(self, encoding: StoredColourEncoding) -> Vec3 {
+        encoding.decode(self.unit())
     }
 
     /// Each channel as stored, scaled to 0 to 1.
@@ -92,7 +96,32 @@ impl RawColor {
 
     /// Decoded with gamma 2.2.
     pub(super) fn gamma_linear(self) -> Vec3 {
-        gamma_decode(self.unit())
+        self.decoded(StoredColourEncoding::Gamma22)
+    }
+}
+
+/// How a colour stored as 0 to 1 per channel becomes linear light, and back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StoredColourEncoding {
+    Srgb,
+    Gamma22,
+}
+
+impl StoredColourEncoding {
+    pub(crate) fn decode(self, stored: Vec3) -> Vec3 {
+        match self {
+            Self::Srgb => Vec3::from_array(stored.to_array().map(srgb_unit_to_linear)),
+            Self::Gamma22 => gamma_decode(stored),
+        }
+    }
+
+    /// The exact inverse of [`Self::decode`]; negative channels are 0.
+    pub(crate) fn encode(self, linear: Vec3) -> Vec3 {
+        let linear = linear.max(Vec3::ZERO);
+        match self {
+            Self::Srgb => Vec3::from_array(linear.to_array().map(linear_to_srgb_unit)),
+            Self::Gamma22 => linear.powf(DISPLAY_GAMMA.recip()),
+        }
     }
 }
 
@@ -104,11 +133,23 @@ pub(crate) fn gamma_decode(encoded: Vec3) -> Vec3 {
 }
 
 pub(crate) fn srgb_to_linear(channel: u8) -> f32 {
-    let encoded = f32::from(channel) / 255.0;
+    srgb_unit_to_linear(f32::from(channel) / 255.0)
+}
+
+/// One sRGB channel stored as 0 to 1, as linear light.
+pub(crate) fn srgb_unit_to_linear(encoded: f32) -> f32 {
     if encoded <= 0.04045 {
         encoded / 12.92
     } else {
         ((encoded + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_to_srgb_unit(linear: f32) -> f32 {
+    if linear <= 0.003_130_8 {
+        linear * 12.92
+    } else {
+        1.055 * linear.powf(2.4_f32.recip()) - 0.055
     }
 }
 

@@ -9,6 +9,7 @@ use glam::Vec3;
 
 use super::fixtures::{A, B, DAY, DUSK, NIGHT, library, settled, transition, weather, with_sky};
 use super::*;
+use crate::rendering::lighting::cell_lighting::srgb_unit_to_linear;
 use crate::rendering::lighting::time_of_day::TimeSlot;
 use crate::rendering::weather::WeatherDef;
 use crate::rendering::weather::library::fixtures::library_of;
@@ -106,18 +107,24 @@ fn a_transition_starts_at_the_sky_of_the_weather_it_leaves_and_ends_at_that_of_t
     );
 }
 
+/// How far a channel from black has come when the stored colours are `progress` of the way.
+fn from_black(progress: f32) -> f32 {
+    srgb_unit_to_linear(progress)
+}
+
 #[test]
-fn during_a_transition_the_sky_is_blended_by_how_far_it_has_come() {
+fn during_a_transition_the_sky_is_blended_by_how_far_it_has_come_in_its_stored_colours() {
     let sky = blend(&green_and_white(), &transition(B, A, 0.25), DAY).sky;
-    close(sky.sky_upper, Vec3::new(0.25, 1.0, 0.25));
+    let red_and_blue = from_black(0.25);
+    close(sky.sky_upper, Vec3::new(red_and_blue, 1.0, red_and_blue));
 }
 
 #[test]
 fn both_weathers_are_sampled_at_the_time_of_day_before_they_are_blended() {
     let library = green_and_white();
     let sky = |time| blend(&library, &transition(B, A, 0.5), time).sky.sky_upper;
-    close(sky(DAY), Vec3::new(0.5, 1.0, 0.5));
-    close(sky(NIGHT), Vec3::new(0.0, 0.0, 0.5));
+    close(sky(DAY), Vec3::new(from_black(0.5), 1.0, from_black(0.5)));
+    close(sky(NIGHT), Vec3::new(0.0, 0.0, from_black(0.5)));
 }
 
 #[test]

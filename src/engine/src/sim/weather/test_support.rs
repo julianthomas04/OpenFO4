@@ -64,11 +64,11 @@ impl RandomSource for ScriptedRandom {
     }
 }
 
-/// A weather that takes 1.5625 h to arrive (transition byte 25), has no volatility multiplier and
+/// A weather that takes 1 h to arrive (transition byte 100), has no volatility multiplier and
 /// no thunder.
 pub(crate) fn calm() -> WeatherRollTraits {
     WeatherRollTraits {
-        trans_delta_raw: 25,
+        trans_delta_raw: 100,
         volatility_mult: 1.0,
         lightning: LightningParams {
             fade: FadeRange {
@@ -115,7 +115,7 @@ pub(crate) fn table(
 }
 
 /// A climate that changes its weather often, with two storms and a calm weather of equal chances:
-/// a roll every 2 h, and 1.5625 h to arrive at any of the weathers.
+/// a roll every 2 h, and 1 h to arrive at any of the weathers.
 pub(crate) fn busy_climate() -> WeatherRollTable {
     table(255, vec![stormy(), calm(), stormy()], &[1, 1, 1])
 }
@@ -199,7 +199,7 @@ pub(super) fn assert_same_place(actual: Place, expected: Place) {
 
 /// Three calm weathers of the chances 50, 30 and 20 in a climate without volatility: a roll after a
 /// weather has stayed for 8 h, and the tickets 0..50, 50..80 and 80..100 pick A, B and C. Each takes
-/// 1.5625 h to arrive.
+/// 1 h to arrive.
 pub(super) fn calm_run(rolls: &[usize]) -> Run {
     Run::new(table(0, vec![calm(); 3], &[50, 30, 20]), rolls, &[])
 }

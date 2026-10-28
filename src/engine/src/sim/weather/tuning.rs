@@ -1,7 +1,7 @@
 //! The numbers behind the weather cycle. The game data fixes only part of the picture: the chances
-//! of a climate, its volatility byte and each weather's transition and thunder bytes. How those
-//! bytes become hours and seconds is our own heuristic. It lives here so it can be retuned against
-//! observations of the original.
+//! of a climate, its volatility byte and each weather's transition and thunder bytes. How the
+//! transition byte becomes hours is measured; how the others become hours and seconds is our own
+//! heuristic. It lives here so it can be retuned against observations of the original.
 
 /// Game hours a settled weather stays before the next roll in a climate without volatility, while
 /// a weather with a volatility multiplier of 1 is current. The interval counts from the moment the
@@ -11,10 +11,9 @@ pub(super) const BASE_ROLL_INTERVAL_HOURS: f64 = 8.0;
 /// The share of the base interval that is left in a climate with the highest volatility byte.
 pub(super) const MOST_VOLATILE_INTERVAL_FRACTION: f64 = 0.25;
 
-/// Units of a weather's transition byte per game hour of transition.
-pub(super) const TRANSITION_BYTE_PER_HOUR: f64 = 16.0;
-pub(super) const MIN_TRANSITION_HOURS: f64 = 0.25;
-pub(super) const MAX_TRANSITION_HOURS: f64 = 3.0;
+/// Units of a weather's transition byte per game hour of transition, measured in the original:
+/// a transition takes the byte over 100 game hours at any time scale.
+pub(super) const TRANSITION_BYTE_PER_HOUR: f64 = 100.0;
 
 /// The frequency byte of the rarest lightning, and the real seconds between its strikes.
 pub(super) const RAREST_STRIKE_BYTE: u8 = 255;
