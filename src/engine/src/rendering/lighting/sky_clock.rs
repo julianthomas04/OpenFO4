@@ -9,7 +9,7 @@ use super::fog::FogTime;
 use super::time_of_day::unmeasured::sun_alpha;
 use super::time_of_day::{
     ClimateMoon, ClimateSunTextures, DayTime, MoonKind, MoonObject, SkyGameConfig, SkyMoment,
-    SkyObjects, SlotBlend, slot_blend, star_alpha,
+    SkyObjects, SlotBlend, TimeSlot, slot_blend, star_alpha,
 };
 
 /// Everything the clock makes of one moment, for the weather it drives.
@@ -103,7 +103,8 @@ impl SkyClock {
             sun_disc_direction: moment.sun.direction(),
             moon: moment.moon.map(MoonObject::from),
             star_rotation: moment.star_rotation,
-            star_alpha: star_alpha(weather.stars),
+            // The game shows the stars by the Night slot's share of the blend (measured).
+            star_alpha: star_alpha(weather.stars) * moment.blend.weight_of(TimeSlot::Night),
             sky_model_path: self.model_path.clone(),
             sun_textures: self.sun_textures.clone(),
         };
@@ -181,7 +182,7 @@ mod tests {
     #[test]
     fn a_given_weather_replaces_the_clocks_own_and_the_rest_of_the_sky_stays() {
         let clock = clock(ClimateSunTextures::default());
-        let time = DayTime::clamped(0, 12.0);
+        let time = DayTime::clamped(0, 0.0);
         let own = clock.at(time);
         assert!(
             own.objects.star_alpha > 0.0,
@@ -207,5 +208,21 @@ mod tests {
             sky.objects.sun_disc_direction,
             own.objects.sun_disc_direction
         );
+    }
+
+    #[test]
+    fn the_stars_show_by_the_night_slots_share_of_the_blend() {
+        let clock = clock(ClimateSunTextures::default());
+        for hour in [0.0, 6.0, 12.0, 19.0, 21.0, 22.5] {
+            let sky = clock.at(DayTime::clamped(0, hour));
+            let night = sky.moment.blend.weight_of(TimeSlot::Night);
+            assert!(star_alpha(sky.weather.stars) > 0.0, "{hour}");
+            assert_eq!(
+                sky.objects.star_alpha,
+                star_alpha(sky.weather.stars) * night,
+                "{hour}"
+            );
+        }
+        assert_eq!(clock.at(DayTime::clamped(0, 12.0)).objects.star_alpha, 0.0);
     }
 }

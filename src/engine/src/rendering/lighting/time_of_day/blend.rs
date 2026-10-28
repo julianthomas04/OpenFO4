@@ -13,6 +13,15 @@ pub struct SlotBlend {
     pub t: f32,
 }
 
+impl SlotBlend {
+    /// The share `slot` takes in the blend: `1 - t` as `from`, `t` as `to`, 0 for any other slot.
+    pub fn weight_of(&self, slot: TimeSlot) -> f32 {
+        let from = if self.from == slot { 1.0 - self.t } else { 0.0 };
+        let to = if self.to == slot { self.t } else { 0.0 };
+        from + to
+    }
+}
+
 /// The slots surrounding a moment of the day. The timeline is a ring: after the
 /// last keyframe it continues into the first of the next day.
 pub fn slot_blend(time: DayTime, times: &ClimateTimes) -> SlotBlend {
@@ -56,6 +65,24 @@ mod tests {
 
     fn slot_blend(hour: f32, times: &ClimateTimes) -> SlotBlend {
         super::slot_blend(at_hour(hour), times)
+    }
+
+    #[test]
+    fn a_slot_weighs_one_minus_t_as_from_t_as_to_and_nothing_otherwise() {
+        let blend = SlotBlend {
+            from: LateSunset,
+            to: Night,
+            t: 0.25,
+        };
+        assert_eq!(blend.weight_of(LateSunset), 0.75);
+        assert_eq!(blend.weight_of(Night), 0.25);
+        assert_eq!(blend.weight_of(Day), 0.0);
+        let held = SlotBlend {
+            from: Night,
+            to: Night,
+            t: 0.25,
+        };
+        assert_eq!(held.weight_of(Night), 1.0);
     }
 
     const SLOTS_BY_KEYFRAME: [(TimeSlot, TimeSlot); 10] = [

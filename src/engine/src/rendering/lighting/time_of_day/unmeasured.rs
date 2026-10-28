@@ -7,7 +7,9 @@
 //!   at the sunrise midpoint and sets at the sunset midpoint is that phase's share of the cycle,
 //!   growing by one cycle in `8 * phase_length` days (a full moon rises at the sunset midpoint).
 //! - Stars: one revolution per `fStarsRotateDays`, in the same sense as the sun, starting
-//!   at [`STAR_ANGLE_AT_DAY_ZERO_RAD`]; their opacity is the luminance of the weather Stars colour, taken as linear.
+//!   at [`STAR_ANGLE_AT_DAY_ZERO_RAD`]; besides the Night slot's share of the blend, their opacity is the
+//!   luminance of the blended weather Stars colour, taken as linear. The probe gave every slot one colour, so
+//!   which slot's colour counts when they differ is not measured.
 //! - Moon size: [`MOON_SIZE_UNITS_PER_DEGREE`] size units make one degree of the moon's apparent diameter.
 //! - Star horizon fade: the stars fade in over the first [`STAR_HORIZON_FADE_SINE`] of the sine of elevation.
 //! - Moon brightness: the moon texture is shown at [`MOON_RADIANCE`] times the sky radiance
