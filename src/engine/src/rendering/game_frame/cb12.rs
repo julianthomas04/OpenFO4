@@ -158,7 +158,8 @@ const DISABLED_FOG_HIGH_DENSITY_SCALE: f32 = 1.0;
 /// Fog registers `cb12[41..=46]` from the engine's fog: the near colour and its high colour, the
 /// far colour and its high colour, and the range pairs. Inferred from the layout, as no public
 /// source documents it: `cb12[44].w` takes the high density scale. The colours carry their
-/// time-of-day factors; the sunlight term and the ramp to full fog past Max have no register.
+/// time-of-day factors; the sunlight term, the fade-in after Near and the ramp to full fog past
+/// Max have no register.
 fn write_fog(cb12: &mut [Vec4; CB12_LEN], frame: &FrameUniform) {
     let fog = FogUniformFields::of_frame(frame);
     let renders = fog.renders();
