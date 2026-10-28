@@ -153,7 +153,7 @@ pub(crate) mod probe {
             max,
             height: HeightBands::NONE,
             sunlight: if noon {
-                sunlight_term(Vec3::splat(NOON_SUNLIGHT), 1.0)
+                sunlight_term(Vec3::splat(NOON_SUNLIGHT))
             } else {
                 SunlightTerm::NONE
             },

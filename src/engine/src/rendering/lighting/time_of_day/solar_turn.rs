@@ -18,9 +18,16 @@ pub fn solar_noon(times: &ClimateTimes) -> f32 {
 /// The turn from solar noon in radians: negative before it, positive after it, a quarter circle
 /// at the twilight midpoints and a half circle at solar midnight, halfway through the night.
 pub fn turn_from_noon(hour: f32, times: &ClimateTimes) -> f32 {
+    turn_with_longer_day_legs(hour, times, 0.0)
+}
+
+/// [`turn_from_noon`] with each day quarter `extension` hours longer, at the night's expense: the
+/// quarter circles end `extension` hours before the sunrise midpoint and after the sunset one.
+pub fn turn_with_longer_day_legs(hour: f32, times: &ClimateTimes, extension: f32) -> f32 {
     let half_day = HOURS_PER_DAY / 2.0;
     let offset = wrap_hours(hour - solar_noon(times) + half_day) - half_day;
-    let day_leg = (times.sunset_midpoint() - times.sunrise_midpoint()) / 2.0;
+    let day_leg = ((times.sunset_midpoint() - times.sunrise_midpoint()) / 2.0 + extension)
+        .clamp(f32::EPSILON, half_day);
     let night_leg = half_day - day_leg;
     let turn = if offset.abs() <= day_leg {
         FRAC_PI_2 * offset.abs() / day_leg
@@ -80,6 +87,36 @@ mod tests {
             let gap = (turn - steady).rem_euclid(TAU);
             assert!(gap.min(TAU - gap) < 1e-4, "{hour}: {turn} vs {steady}");
         }
+    }
+
+    #[test]
+    fn longer_day_legs_move_the_quarter_turns_outwards_and_keep_noon_and_midnight() {
+        let times = second_climate();
+        for (hour, expected) in [
+            (11.0, 0.0),
+            (3.9, -FRAC_PI_2),
+            (18.1, FRAC_PI_2),
+            (7.45, -FRAC_PI_2 / 2.0),
+        ] {
+            assert_close(
+                turn_with_longer_day_legs(hour, &times, 0.1),
+                expected,
+                &format!("{hour}"),
+            );
+        }
+        assert_close(
+            turn_with_longer_day_legs(23.0, &times, 0.1).abs(),
+            PI,
+            "solar midnight",
+        );
+    }
+
+    #[test]
+    fn day_legs_cannot_grow_past_half_a_day() {
+        let times = second_climate();
+        let turn = turn_with_longer_day_legs(23.0, &times, 30.0);
+        assert!(turn.is_finite(), "{turn}");
+        assert_close(turn.abs(), FRAC_PI_2, "half a day per leg leaves no night");
     }
 
     #[test]

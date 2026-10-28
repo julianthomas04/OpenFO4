@@ -6,8 +6,9 @@ use wgpu::util::DeviceExt;
 
 use super::assets::{AssetState, SkyAssetError, StarGeometry, report};
 use super::layer::{self, LAYER_GROUP, LayerPipeline, WorldGroupLayouts};
+use crate::rendering::lighting::sky_measured::STAR_BRIGHTNESS;
 use crate::rendering::lighting::time_of_day::StarRotation;
-use crate::rendering::lighting::time_of_day::unmeasured::{STAR_HORIZON_FADE_SINE, STAR_RADIANCE};
+use crate::rendering::lighting::time_of_day::unmeasured::STAR_HORIZON_FADE_SINE;
 use crate::rendering::shaders;
 use crate::rendering::vertex::Vertex;
 use crate::utils::finite_or_zero;
@@ -35,7 +36,7 @@ impl StarUniform {
             rotation: Mat4::from_quat(turn).to_cols_array_2d(),
             params: [
                 finite_or_zero(alpha).clamp(0.0, 1.0),
-                finite_or_zero(radiance_scale).max(0.0) * STAR_RADIANCE,
+                finite_or_zero(radiance_scale).max(0.0) * STAR_BRIGHTNESS,
                 STAR_HORIZON_FADE_SINE,
                 0.0,
             ],

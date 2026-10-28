@@ -30,7 +30,7 @@ pub struct ExteriorFog {
     pub colors: BlendedFogColors,
     /// The weather's sunlight colour as stored, 0 to 1, blended like the fog colours.
     pub sunlight: Vec3,
-    /// The Day slot's weight among the blended slots.
+    /// The Day slot's weight among the blended slots, for the weather panel.
     pub day_weight: f32,
     pub day: Option<FogRange>,
     pub night: Option<FogRange>,
@@ -57,7 +57,7 @@ impl ExteriorFog {
                 power: range.power,
                 max: range.max,
                 height: range.height,
-                sunlight: sunlight_term(gamma_decode(self.sunlight), self.day_weight),
+                sunlight: sunlight_term(gamma_decode(self.sunlight)),
             }),
             None => Fog::Disabled,
         }
@@ -112,18 +112,22 @@ mod tests {
         assert_eq!(resolved.far, 1000.0);
         assert_eq!(resolved.colors, fog().colors.linear());
         let sunlight = Vec3::splat(0.5_f32.powf(2.2));
-        assert_eq!(resolved.sunlight, sunlight_term(sunlight, 1.0));
+        assert_eq!(resolved.sunlight, sunlight_term(sunlight));
     }
 
     #[test]
-    fn without_the_day_slot_the_sunlight_leaves_the_colour_alone() {
-        let night = ExteriorFog {
+    fn outside_the_day_slot_the_sunlight_still_takes_its_share() {
+        let twilight = ExteriorFog {
             day_weight: 0.0,
             ..fog()
         };
-        let resolved = enabled(night.resolve(FogTime { night_weight: 1.0 }));
+        let resolved = enabled(twilight.resolve(FogTime { night_weight: 1.0 }));
         assert_eq!(resolved.near, 200.0);
-        assert_eq!(resolved.sunlight, SunlightTerm::NONE);
+        assert_eq!(
+            resolved.sunlight,
+            enabled(fog().resolve(FogTime::DAY)).sunlight
+        );
+        assert_ne!(resolved.sunlight, SunlightTerm::NONE);
     }
 
     #[test]

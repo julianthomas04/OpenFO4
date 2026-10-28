@@ -251,8 +251,9 @@ impl NightSky {
     }
 
     /// Readies the clouds of this frame, which cover the stars, the moon and the sun wherever
-    /// they are opaque. `radiance_scale` is the sky radiance scale the sky colours are multiplied
-    /// by and `dt` the world seconds since the last call, which the layers scroll by. The cloud
+    /// they are opaque. `colour_scale` is what the sky colours are multiplied by, which the cloud
+    /// colours take too, and `dt` the world seconds since the last call, which the layers scroll
+    /// by. The cloud
     /// model loads when the first layer shows; the textures load the first time a layer shows
     /// them, on the calling thread. Without a call, or with no layers, no clouds are drawn.
     pub fn update_clouds(
@@ -260,13 +261,13 @@ impl NightSky {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         input: &CloudsInput<'_>,
-        radiance_scale: f32,
+        colour_scale: f32,
         dt: f32,
     ) {
         self.load_cloud_model_for(device, input);
         let asset_root = &self.asset_root;
         self.clouds
-            .update(device, queue, input, radiance_scale, dt, |path| {
+            .update(device, queue, input, colour_scale, dt, |path| {
                 load_texture(device, queue, asset_root, &named_texture_key(path))
             });
     }

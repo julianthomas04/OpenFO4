@@ -122,15 +122,10 @@ pub(super) struct CloudUniform {
 }
 
 impl CloudUniform {
-    /// `radiance_scale` is the sky radiance scale the sky colours are multiplied by.
-    pub(super) fn new(
-        layer: &CloudLayerDraw,
-        offset: Vec2,
-        flash: f32,
-        radiance_scale: f32,
-    ) -> Self {
+    /// `colour_scale` is what the sky colours are multiplied by: the cloud colours take it too.
+    pub(super) fn new(layer: &CloudLayerDraw, offset: Vec2, flash: f32, colour_scale: f32) -> Self {
         let brightness =
-            finite_or_zero(radiance_scale).max(0.0) * (1.0 + finite_or_zero(flash).max(0.0));
+            finite_or_zero(colour_scale).max(0.0) * (1.0 + finite_or_zero(flash).max(0.0));
         let [red, green, blue] = layer
             .color
             .to_array()
@@ -321,14 +316,13 @@ impl CloudLayer {
 
     /// Scrolls the layers on by `dt` world seconds and readies this frame's draws. `load_texture`
     /// loads the texture a layer names the first time that layer shows; a layer whose texture
-    /// fails to load is not drawn. `radiance_scale` is the sky radiance scale the sky colours
-    /// are multiplied by.
+    /// fails to load is not drawn. `colour_scale` is what the sky colours are multiplied by.
     pub(super) fn update(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         input: &CloudsInput<'_>,
-        radiance_scale: f32,
+        colour_scale: f32,
         dt: f32,
         mut load_texture: impl FnMut(&str) -> Result<wgpu::TextureView, SkyAssetError>,
     ) {
@@ -351,7 +345,7 @@ impl CloudLayer {
                 layer,
                 self.scroll.offset(layer.layer),
                 input.flash,
-                radiance_scale,
+                colour_scale,
             );
             let bind_group = self.slots.fill(
                 device,

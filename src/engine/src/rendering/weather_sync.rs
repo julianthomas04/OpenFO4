@@ -34,7 +34,7 @@ impl State {
                 &self.device,
                 &self.queue,
                 &step.clouds,
-                radiance_scale,
+                self.lighting.sky.colour_scale(),
                 world_dt,
             );
         }

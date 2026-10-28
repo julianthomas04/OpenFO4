@@ -11,6 +11,12 @@ pub const SKY_BRIGHTNESS: f32 = 0.489;
 /// brightest disc pixel adds `0.49 x (byte / 255)^2.2` at Sun bytes 16 and 48 alike, unclipped.
 pub const SUN_DISC_BRIGHTNESS: f32 = 0.49;
 
+/// The light of a fully opaque star texel for the weather Stars colour, on the same scale: the
+/// probe's stars at Stars 255 add a mean of 0.558 times the star texture's mean decoded texel
+/// over the sky they cover (0.39 to 0.71 by which part of the texture shows). That spans the
+/// sky's own factor, which the clouds (0.473 against 0.470) and the sun disc (0.49) take too.
+pub const STAR_BRIGHTNESS: f32 = SKY_BRIGHTNESS;
+
 /// How many `fSunBaseSize` units make one degree of the edge of the sun disc sprite. The
 /// vanilla disc (425 units) shows its half-peak light over a disc of radius 1.92 and 2.18 degrees
 /// in two poses, and the vanilla `Sun_d` texture's colour times alpha is above half its peak over

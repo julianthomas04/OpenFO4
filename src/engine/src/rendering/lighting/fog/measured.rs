@@ -3,14 +3,13 @@
 //! measurement changes one place.
 //!
 //! Measured: the colour factors of the Day slot and of every other slot, interior factors, the
-//! byte-space blend of the per-slot factors, the sunlight's share against its luminance, where the
-//! normal branch's opacity has faded in after Near, and where the capped branch ramps to full fog.
+//! byte-space blend of the per-slot factors, the sunlight's share against its luminance in every
+//! slot, where the normal branch's opacity has faded in after Near, and where the capped branch
+//! ramps to full fog.
 //!
 //! Estimates:
 //! - [`DAY_COLOUR_FACTORS`]' high colours: near high is the sunlit value without the sunlight's
 //!   share; far high is the fill's (the sunlit normal branch reads 5 % lower).
-//! - [`sunlight_term`]: that the share fades with the Day slot's weight (it was measured in the
-//!   Day slot only).
 //! - [`BlendedFogColors`]: that the colours themselves blend as stored bytes, as their factors
 //!   measurably do (the colour patterns fit bytes better than linear light, but neither exactly).
 
@@ -129,13 +128,16 @@ pub fn blended_colour_factors(day_weight: f32) -> ColourFactors {
     }
 }
 
-/// The share of the normal branch's fog colour that one unit of sunlight luminance takes away.
+/// The share of the normal branch's fog colour that one unit of sunlight luminance takes away,
+/// in whichever slots the sunlight comes from: at the twilight hours without the Day slot the
+/// probe's day/night fog fits a share there (rms 0.0015 and 0.0013 under two climates) better
+/// than none (0.0033 and 0.0028).
 const SUNLIGHT_SHARE_PER_LUMINANCE: f32 = 0.102;
 
-/// `sunlight` is linear (decoded with gamma 2.2); `day_weight` is the Day slot's weight.
-pub fn sunlight_term(sunlight: Vec3, day_weight: f32) -> SunlightTerm {
+/// `sunlight` is the slot-blended sunlight, linear (decoded with gamma 2.2).
+pub fn sunlight_term(sunlight: Vec3) -> SunlightTerm {
     SunlightTerm {
-        kept: 1.0 - SUNLIGHT_SHARE_PER_LUMINANCE * luminance(sunlight) * day_weight,
+        kept: 1.0 - SUNLIGHT_SHARE_PER_LUMINANCE * luminance(sunlight),
     }
 }
 
@@ -219,7 +221,7 @@ mod tests {
             (225.0, 0.435, 0.907),
             (255.0, 0.423, 0.896),
         ] {
-            let kept = sunlight_term(decoded_grey(byte), 1.0).kept;
+            let kept = sunlight_term(decoded_grey(byte)).kept;
             assert!(
                 (DAY_COLOUR_FACTORS.near * kept - near).abs() < 0.007,
                 "{byte}"
@@ -238,7 +240,7 @@ mod tests {
             (160.0_f32 / 255.0).powf(2.2),
             (64.0_f32 / 255.0).powf(2.2),
         );
-        let kept = sunlight_term(orange, 1.0).kept;
+        let kept = sunlight_term(orange).kept;
         assert!(
             (DAY_COLOUR_FACTORS.far * kept - 0.942).abs() < 0.011,
             "{kept}"
@@ -246,8 +248,19 @@ mod tests {
     }
 
     #[test]
-    fn there_is_no_sunlight_term_without_the_day_slot() {
-        assert_eq!(sunlight_term(Vec3::ONE, 0.0), SunlightTerm::NONE);
+    fn the_night_sunlight_keeps_the_night_factor_within_its_measured_fit() {
+        let night = Vec3::new(53.0, 70.0, 87.0).map(|byte| (byte / 255.0).powf(2.2));
+        let kept = sunlight_term(night).kept;
+        assert!(kept < 1.0, "{kept}");
+        assert!(
+            (NON_DAY_COLOUR_FACTORS.near * kept - 0.48).abs() < 0.005,
+            "{kept}"
+        );
+    }
+
+    #[test]
+    fn without_sunlight_the_colour_is_kept_whole() {
+        assert_eq!(sunlight_term(Vec3::ZERO), SunlightTerm::NONE);
     }
 
     #[test]

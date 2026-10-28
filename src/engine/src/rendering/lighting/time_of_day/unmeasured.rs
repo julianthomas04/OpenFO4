@@ -10,8 +10,8 @@
 //!   at [`STAR_ANGLE_AT_DAY_ZERO_RAD`]; their opacity is the luminance of the weather Stars colour, taken as linear.
 //! - Moon size: [`MOON_SIZE_UNITS_PER_DEGREE`] size units make one degree of the moon's apparent diameter.
 //! - Star horizon fade: the stars fade in over the first [`STAR_HORIZON_FADE_SINE`] of the sine of elevation.
-//! - Night sky brightness: the moon texture is shown at [`MOON_RADIANCE`] and the star layer at
-//!   [`STAR_RADIANCE`] times the sky radiance scale.
+//! - Moon brightness: the moon texture is shown at [`MOON_RADIANCE`] times the sky radiance
+//!   scale.
 //! - Manual sun: with the lighting override on, the panel's sun lights the ground over
 //!   [`SUN_LIGHT_FADE_DEG`] of elevation.
 //! - Sun alpha: `fSunAlphaTransTime` is a number of hours; the sun's alpha ramps linearly over
@@ -25,8 +25,7 @@
 //!   the weather's own glare byte (not exported yet) are not applied.
 //! - Clouds: a layer scrolls [`CLOUD_SCROLL_SCALE`] texture widths per second for each unit of
 //!   its weather's layer speed, and blends into the sky's horizon colour over the first
-//!   [`CLOUD_HORIZON_HAZE_SINE`] of the sine of elevation. Colours and alphas are the weather's,
-//!   times the sky radiance scale.
+//!   [`CLOUD_HORIZON_HAZE_SINE`] of the sine of elevation.
 
 use std::f32::consts::PI;
 
@@ -149,9 +148,6 @@ pub const STAR_HORIZON_FADE_SINE: f32 = 0.05;
 
 /// Radiance of a fully lit moon texel at sky radiance scale 1.
 pub const MOON_RADIANCE: f32 = 4.0;
-
-/// Radiance of a fully opaque star texel at sky radiance scale 1.
-pub const STAR_RADIANCE: f32 = 2.0;
 
 /// The apparent diameter in degrees of a moon whose size setting is `size`.
 pub fn moon_angular_diameter_deg(size: f32) -> f32 {

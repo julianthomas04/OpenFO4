@@ -126,6 +126,13 @@ impl SkySettings {
         color * SKY_BRIGHTNESS * self.radiance_scale
     }
 
+    /// What the sky multiplies its colours by. The cloud colours take it too: an opaque cloud
+    /// texel shows 0.473 times its decoded colour where the cloud-free sky shows 0.470 times its
+    /// own (probe, layer 5 over 26 000 pixels).
+    pub fn colour_scale(&self) -> f32 {
+        SKY_BRIGHTNESS * self.radiance_scale
+    }
+
     /// The colour fog linked to the horizon takes: the horizon as the sky shows it at radiance
     /// scale 1.
     pub fn linked_fog_color(&self) -> Vec3 {
@@ -949,6 +956,16 @@ mod tests {
         for side in [0, 1, 4, 5] {
             assert_eq!(cube[side], Vec3::new(0.0, 1.0, 0.0), "face {side}");
         }
+    }
+
+    #[test]
+    fn the_sky_shows_its_colours_at_the_measured_brightness_times_its_radiance_scale() {
+        let sky = SkySettings {
+            radiance_scale: 3.0,
+            ..SkySettings::default()
+        };
+        assert_eq!(sky.colour_scale(), SKY_BRIGHTNESS * 3.0);
+        assert_eq!(sky.radiance(Vec3::ONE), Vec3::splat(sky.colour_scale()));
     }
 
     #[test]

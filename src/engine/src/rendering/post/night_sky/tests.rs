@@ -19,8 +19,9 @@ use crate::assets::types::mesh::{CpuMesh, Topology};
 use crate::assets::types::texture::TextureError;
 use crate::rendering::gpu_test::test_device;
 use crate::rendering::lighting::frame_uniform::FrameUniform;
+use crate::rendering::lighting::sky_measured::STAR_BRIGHTNESS;
 use crate::rendering::lighting::time_of_day::unmeasured::{
-    MOON_RADIANCE, STAR_RADIANCE, moon_angular_diameter_deg,
+    MOON_RADIANCE, moon_angular_diameter_deg,
 };
 use crate::rendering::lighting::time_of_day::{
     ClimateSunTextures, MoonKind, MoonPhase, SkyObjects, StarRotation,
@@ -238,7 +239,7 @@ mod star_maths {
             angle_rad: 0.0,
         };
         let uniform = |alpha, scale| StarUniform::new(rotation, alpha, scale).params;
-        assert_eq!(uniform(3.0, 2.0)[..2], [1.0, 2.0 * STAR_RADIANCE]);
+        assert_eq!(uniform(3.0, 2.0)[..2], [1.0, 2.0 * STAR_BRIGHTNESS]);
         assert_eq!(uniform(-1.0, -2.0)[..2], [0.0, 0.0]);
         assert_eq!(uniform(f32::NAN, f32::INFINITY)[..2], [0.0, 0.0]);
     }
