@@ -1,8 +1,9 @@
 //! The fog of one point, as `fog.wgsl` computes it. Below Max the colour weight `x = ramp^power`
 //! picks between the near and far colours and, scaled by the height density, is the opacity.
-//! From Max on the fog holds at Max and ramps to full fog towards Far; beyond Far it is full fog
-//! of the far colour. One height share, lerped from the near band's to the far band's by `x`,
-//! turns both colours towards their high colours and scales the density.
+//! From Max on the fog holds at Max and ramps towards the fill near Far; beyond Far it is the
+//! fill: the far colour at the density's opacity. One height share, lerped from the near band's
+//! to the far band's by `x`, turns both colours towards their high colours and scales the
+//! density in every branch.
 
 use glam::Vec3;
 
@@ -39,14 +40,15 @@ impl FogBlend {
         surface.lerp(self.color, self.opacity)
     }
 
-    /// This blend followed by a blend of `t` towards full fog of `fill`.
-    fn towards(self, fill: Vec3, t: f32) -> Self {
-        let opacity = self.opacity + (1.0 - self.opacity) * t;
+    /// The picture `t` of the way from this blend's to `other`'s.
+    fn towards(self, other: Self, t: f32) -> Self {
+        let opacity = self.opacity + (other.opacity - self.opacity) * t;
         if opacity <= 0.0 {
-            return self;
+            return Self::NONE;
         }
         Self {
-            color: (self.color * (self.opacity * (1.0 - t)) + fill * t) / opacity,
+            color: (self.color * (self.opacity * (1.0 - t)) + other.color * (other.opacity * t))
+                / opacity,
             opacity,
         }
     }
@@ -80,15 +82,22 @@ impl FogParams {
         )
     }
 
+    /// The fog beyond Far at `height`: the far colours at the far band's share, as dense as the
+    /// height leaves the fog.
+    fn fill(&self, height: f32) -> FogBlend {
+        let share = self.height.share(height, 1.0);
+        let (_, far) = self.colors_at(share);
+        FogBlend {
+            color: far,
+            opacity: opacity(1.0, self.height.density(share)),
+        }
+    }
+
     fn at(&self, camera: Vec3, point: Vec3) -> FogBlend {
         let distance = camera.distance(point);
         let height = point.y;
         if distance >= self.far {
-            let (_, fill) = self.colors_at(self.height.share(height, 1.0));
-            return FogBlend {
-                color: fill,
-                opacity: 1.0,
-            };
+            return self.fill(height);
         }
         let x = self.colour_weight(distance);
         let share = self.height.share(height, x);
@@ -104,7 +113,8 @@ impl FogParams {
             color: near.lerp(far, self.max),
             opacity: opacity(self.max, density),
         };
-        cap.towards(far, ramp(distance, cap_ramp_start(self.far), self.far))
+        let ramp_start = cap_ramp_start(self.near, self.far);
+        cap.towards(self.fill(height), ramp(distance, ramp_start, self.far))
     }
 }
 
@@ -114,7 +124,7 @@ impl FogParams {
 pub(crate) mod probe {
     use glam::Vec3;
 
-    use super::super::measured::{colour_factors, sunlight_term};
+    use super::super::measured::{DAY_COLOUR_FACTORS, NON_DAY_COLOUR_FACTORS, sunlight_term};
     use super::super::{FogColors, FogParams, HeightBands, SunlightTerm};
     use crate::rendering::world_streamer::SCALE;
 
@@ -128,16 +138,20 @@ pub(crate) mod probe {
         (near, far, power, max): (f32, f32, f32, f32),
         noon: bool,
     ) -> FogParams {
-        let day_colour_weight = if noon { 1.0 } else { 0.0 };
+        let factors = if noon {
+            DAY_COLOUR_FACTORS
+        } else {
+            NON_DAY_COLOUR_FACTORS
+        };
         FogParams {
-            colors: colour_factors(day_colour_weight).apply(colors),
+            colors: factors.apply(colors),
             near: near * SCALE,
             far: far * SCALE,
             power,
             max,
             height: HeightBands::NONE,
             sunlight: if noon {
-                sunlight_term(Vec3::splat(NOON_SUNLIGHT), day_colour_weight)
+                sunlight_term(Vec3::splat(NOON_SUNLIGHT), 1.0)
             } else {
                 SunlightTerm::NONE
             },
@@ -367,26 +381,29 @@ mod tests {
     }
 
     #[test]
-    fn the_fill_beyond_far_takes_the_far_bands_share() {
+    fn the_fill_beyond_far_takes_the_far_bands_share_for_its_colour_and_density() {
         let fog = Fog::Enabled(height_fog());
+        // Half way into the far band: half the far high colour, density 1 - 0.5 * 0.5.
         let blend = fog.at(Vec3::ZERO, Vec3::new(0.0, 50.0, -100.0));
-        assert_eq!(blend.opacity, 1.0);
+        assert!((blend.opacity - 0.75).abs() < 1e-6, "{blend:?}");
         assert!(blend.color.abs_diff_eq(Vec3::new(0.5, 0.5, 1.0), 1e-5));
+        let below = fog.at(Vec3::ZERO, Vec3::new(0.0, 0.0, -100.0));
+        assert_eq!(below.opacity, 1.0);
     }
 
     #[test]
-    fn the_capped_branch_scales_its_plateau_by_the_density() {
+    fn the_capped_branch_ramps_from_its_dense_plateau_to_the_dense_fill() {
         let fog = Fog::Enabled(FogParams {
             max: 0.25,
             ..height_fog()
         });
-        // Above both bands at distance 90, half way up the ramp from 80 to full fog at 100.
-        let point = Vec3::new(0.0, 78.0, -(8100.0_f32 - 78.0 * 78.0).sqrt());
+        // Above both bands at distance 88.3, half way up the ramp from 76.6 to the fill at 100.
+        let point = Vec3::new(0.0, 78.0, -(88.3_f32 * 88.3 - 78.0 * 78.0).sqrt());
         let blend = fog.at(Vec3::ZERO, point);
-        assert_eq!(cap_ramp_start(100.0), 80.0);
-        let cap = 0.25 * 0.5;
+        assert!((cap_ramp_start(0.0, 100.0) - 76.6).abs() < 1e-4);
+        let (cap, fill) = (0.25 * 0.5, 0.5);
         assert!(
-            (blend.opacity - (cap + (1.0 - cap) * 0.5)).abs() < 1e-5,
+            (blend.opacity - (cap + (fill - cap) * 0.5)).abs() < 1e-4,
             "{blend:?}"
         );
     }
@@ -395,10 +412,7 @@ mod tests {
     fn the_sunlight_term_reaches_the_normal_branch_only() {
         let sunlit = FogParams {
             colors: DAY_COLOUR_FACTORS.apply(FogColors::uniform(Vec3::ONE)),
-            sunlight: SunlightTerm {
-                kept: 0.5,
-                added: Vec3::splat(0.1),
-            },
+            sunlight: SunlightTerm { kept: 0.5 },
             max: 0.5,
             ..plain_fog()
         };
@@ -406,7 +420,7 @@ mod tests {
         let normal = fog.at(Vec3::ZERO, Vec3::new(0.0, 0.0, -60.0));
         let x = 0.25;
         let unlit = 0.47 + 0.53 * x;
-        assert!((normal.color.x - (0.5 * unlit + 0.1)).abs() < 1e-5);
+        assert!((normal.color.x - 0.5 * unlit).abs() < 1e-5);
         let capped = fog.at(Vec3::ZERO, Vec3::new(0.0, 0.0, -85.0));
         assert!((capped.color.x - (0.47 + 0.53 * 0.5)).abs() < 1e-5);
         let fill = fog.at(Vec3::ZERO, Vec3::new(0.0, 0.0, -200.0));

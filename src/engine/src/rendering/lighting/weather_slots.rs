@@ -98,14 +98,20 @@ lerp_fields!(SlotValues {
     depth_of_field,
 });
 
-/// The colours of a weather's fog in one time slot; the sunlight is linear with gamma 2.2.
+/// The colours of a weather's fog in one time slot, with the slot's colour factors, and its
+/// sunlight as stored, 0 to 1. `day_weight` is 1 in the Day slot and 0 in every other.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct SlotFogColors {
     pub(super) fog: BlendedFogColors,
     pub(super) sunlight: Vec3,
+    pub(super) day_weight: f32,
 }
 
-lerp_fields!(SlotFogColors { fog, sunlight });
+lerp_fields!(SlotFogColors {
+    fog,
+    sunlight,
+    day_weight
+});
 
 /// A weather's fog. The colours exist for every slot but the distances only for Day and Night,
 /// which the time of day weighs later. `None` is a half without fog.
@@ -122,6 +128,7 @@ impl WeatherFog {
         ExteriorFog {
             colors: colors.fog,
             sunlight: colors.sunlight,
+            day_weight: colors.day_weight,
             day: self.day,
             night: self.night,
         }
@@ -307,6 +314,7 @@ impl ExteriorWeatherSlots {
 )]
 mod tests {
     use super::*;
+    use crate::rendering::lighting::fog::measured::ColourFactors;
     use crate::rendering::lighting::fog::{FogColors, HeightBands};
 
     /// A weather whose every value is linear in `level`, with a different slope per field, so a
@@ -338,10 +346,12 @@ mod tests {
                 vignette_strength: 15.0 * level,
             }),
             fog: Some(ExteriorFog {
-                colors: BlendedFogColors::from_stored(FogColors::uniform(Vec3::splat(
-                    16.0 * level,
-                ))),
+                colors: BlendedFogColors::from_stored(
+                    FogColors::uniform(Vec3::splat(16.0 * level)),
+                    ColourFactors::UNSCALED,
+                ),
                 sunlight: Vec3::splat(17.0 * level),
+                day_weight: level,
                 day: Some(FogRange {
                     near: 18.0 * level,
                     far: 19.0 * level,

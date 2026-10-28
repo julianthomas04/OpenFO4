@@ -28,41 +28,54 @@ fn fog_colour_weight(distance_to_camera: f32) -> f32 {
     return select(0.0, pow(ramp, frame.fog_params.x), ramp > 0.0);
 }
 
-// `fog` followed by a blend of `t` towards full fog of `fill`.
-fn fog_towards(fog: Fog, fill: vec3<f32>, t: f32) -> Fog {
-    let opacity = fog.opacity + (1.0 - fog.opacity) * t;
+// The picture `t` of the way from `fog`'s to `other`'s.
+fn fog_towards(fog: Fog, other: Fog, t: f32) -> Fog {
+    let opacity = mix(fog.opacity, other.opacity, t);
     if (opacity <= 0.0) {
-        return fog;
+        return Fog(vec3<f32>(0.0), 0.0);
     }
-    return Fog((fog.color * (fog.opacity * (1.0 - t)) + fill * t) / opacity, opacity);
+    return Fog((fog.color * (fog.opacity * (1.0 - t)) + other.color * (other.opacity * t)) / opacity, opacity);
 }
 
-// Normal below Max, held at Max and ramping to full fog towards Far from Max on, full fog of the
-// far colour beyond Far.
+fn fog_share(height: f32, x: f32) -> f32 {
+    return mix(fog_band_share(height, frame.fog_near_band), fog_band_share(height, frame.fog_far_band), x);
+}
+
+fn fog_density(share: f32) -> f32 {
+    return mix(1.0, frame.fog_params.z, share);
+}
+
+// Beyond Far: the far colours at the far band's share, as dense as the height leaves the fog.
+fn fog_fill(height: f32) -> Fog {
+    let share = fog_share(height, 1.0);
+    let color = mix(frame.fog_far_color.rgb, frame.fog_far_high_color.rgb, share);
+    return Fog(color, fog_opacity(1.0, fog_density(share)));
+}
+
+// Normal below Max, held at Max and ramping towards the fill near Far from Max on, the fill
+// beyond Far.
 fn fog_at(world_pos: vec3<f32>) -> Fog {
     let far = frame.fog_far_color.w;
     if (far <= frame.fog_near_color.w) {
         return Fog(vec3<f32>(0.0), 0.0);
     }
     let distance_to_camera = distance(frame.camera_pos.xyz, world_pos);
-    let beyond_far = distance_to_camera >= far;
-    let x = select(fog_colour_weight(distance_to_camera), 1.0, beyond_far);
     let height = world_pos.y;
-    let near_share = fog_band_share(height, frame.fog_near_band);
-    let share = mix(near_share, fog_band_share(height, frame.fog_far_band), x);
+    if (distance_to_camera >= far) {
+        return fog_fill(height);
+    }
+    let x = fog_colour_weight(distance_to_camera);
+    let share = fog_share(height, x);
     let near_color = mix(frame.fog_near_color.rgb, frame.fog_near_high_color.rgb, share);
     let far_color = mix(frame.fog_far_color.rgb, frame.fog_far_high_color.rgb, share);
-    if (beyond_far) {
-        return Fog(far_color, 1.0);
-    }
-    let density = mix(1.0, frame.fog_params.z, share);
+    let density = fog_density(share);
     let max_opacity = frame.fog_params.y;
     if (x < max_opacity) {
-        let color = mix(near_color, far_color, x) * frame.fog_sunlight.w + frame.fog_sunlight.rgb;
+        let color = mix(near_color, far_color, x) * frame.fog_near_high_color.w;
         return Fog(color, fog_opacity(x, density));
     }
     let cap = Fog(mix(near_color, far_color, max_opacity), fog_opacity(max_opacity, density));
-    return fog_towards(cap, far_color, fog_ramp(distance_to_camera, frame.fog_params.w, far));
+    return fog_towards(cap, fog_fill(height), fog_ramp(distance_to_camera, frame.fog_params.w, far));
 }
 
 fn apply_fog(color: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {

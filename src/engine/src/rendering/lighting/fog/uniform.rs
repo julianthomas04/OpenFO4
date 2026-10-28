@@ -12,20 +12,18 @@ pub struct FogUniformFields {
     pub near_color: Vec4,
     /// rgb: far colour, also the fill, w: distance from which the fog is full.
     pub far_color: Vec4,
-    /// rgb: near colour at the top of the height bands.
+    /// rgb: near colour at the top of the height bands, w: share of the normal branch's fog
+    /// colour the sunlight leaves.
     pub near_high_color: Vec4,
     /// rgb: far colour at the top of the height bands.
     pub far_high_color: Vec4,
     /// x: power, y: Max, z: high density scale, w: distance at which the fog capped at Max
-    /// starts ramping to full fog.
+    /// starts ramping to the fill.
     pub params: Vec4,
     /// The near band: `share = z * saturate(height * x + y)`.
     pub near_band: Vec4,
     /// The far band, as the near one.
     pub far_band: Vec4,
-    /// rgb: light the sunlight adds to the fog colour short of Max, w: share of the fog colour
-    /// it keeps.
-    pub sunlight: Vec4,
 }
 
 fn band_fields(band: HeightBand) -> Vec4 {
@@ -42,7 +40,6 @@ impl FogUniformFields {
         params: Vec4::ZERO,
         near_band: Vec4::ZERO,
         far_band: Vec4::ZERO,
-        sunlight: Vec4::ZERO,
     };
 
     pub fn write_to(&self, frame: &mut FrameUniform) {
@@ -53,7 +50,6 @@ impl FogUniformFields {
         frame.fog_params = self.params;
         frame.fog_near_band = self.near_band;
         frame.fog_far_band = self.far_band;
-        frame.fog_sunlight = self.sunlight;
     }
 
     pub fn of_frame(frame: &FrameUniform) -> Self {
@@ -65,7 +61,6 @@ impl FogUniformFields {
             params: frame.fog_params,
             near_band: frame.fog_near_band,
             far_band: frame.fog_far_band,
-            sunlight: frame.fog_sunlight,
         }
     }
 
@@ -83,17 +78,16 @@ impl Fog {
         FogUniformFields {
             near_color: colors.near.extend(fog.near),
             far_color: colors.far.extend(fog.far),
-            near_high_color: colors.near_high.extend(0.0),
+            near_high_color: colors.near_high.extend(fog.sunlight.kept),
             far_high_color: colors.far_high.extend(0.0),
             params: Vec4::new(
                 fog.power,
                 fog.max,
                 fog.height.high_density_scale,
-                cap_ramp_start(fog.far),
+                cap_ramp_start(fog.near, fog.far),
             ),
             near_band: band_fields(fog.height.near),
             far_band: band_fields(fog.height.far),
-            sunlight: fog.sunlight.added.extend(fog.sunlight.kept),
         }
     }
 }
@@ -125,10 +119,7 @@ mod tests {
                 far: HeightBand::new(50.0, 25.0),
                 high_density_scale: 0.25,
             },
-            sunlight: SunlightTerm {
-                kept: 0.9,
-                added: Vec3::new(0.01, 0.02, 0.03),
-            },
+            sunlight: SunlightTerm { kept: 0.9 },
         }
     }
 
@@ -137,12 +128,16 @@ mod tests {
         let fields = Fog::Enabled(params()).uniform_fields();
         assert_eq!(fields.near_color, Vec4::new(0.1, 0.2, 0.3, 10.0));
         assert_eq!(fields.far_color, Vec4::new(0.4, 0.5, 0.6, 100.0));
-        assert_eq!(fields.near_high_color, Vec4::new(0.7, 0.8, 0.9, 0.0));
+        assert_eq!(fields.near_high_color, Vec4::new(0.7, 0.8, 0.9, 0.9));
         assert_eq!(fields.far_high_color, Vec4::new(1.0, 1.1, 1.2, 0.0));
-        assert_eq!(fields.params, Vec4::new(2.0, 0.5, 0.25, 80.0));
+        assert_eq!(fields.params.truncate(), Vec3::new(2.0, 0.5, 0.25));
+        assert!(
+            (fields.params.w - 78.94).abs() < 1e-4,
+            "{}",
+            fields.params.w
+        );
         assert_eq!(fields.near_band, Vec4::new(0.05, -0.5, 1.0, 0.0));
         assert_eq!(fields.far_band, Vec4::new(0.02, -0.5, 1.0, 0.0));
-        assert_eq!(fields.sunlight, Vec4::new(0.01, 0.02, 0.03, 0.9));
         assert!(fields.renders());
     }
 

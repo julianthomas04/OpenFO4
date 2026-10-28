@@ -1,7 +1,8 @@
 use glam::Vec3;
 
-use super::measured::{BlendedFogColors, colour_factors, sunlight_term};
+use super::measured::{BlendedFogColors, sunlight_term};
 use super::{Fog, FogParams, FogTime, HeightBands};
+use crate::rendering::lighting::cell_lighting::gamma_decode;
 use crate::rendering::lighting::lerp::{Lerp, lerp_fields};
 
 /// One half of a weather's FNAM fog, in engine units.
@@ -23,12 +24,14 @@ lerp_fields!(FogRange {
 });
 
 /// A weather's fog at one point between its time slots, before the time of day weighs its two
-/// halves. The colours carry no factors yet. `None` is a half without fog.
+/// halves. The colours carry their slots' factors. `None` is a half without fog.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ExteriorFog {
     pub colors: BlendedFogColors,
-    /// The weather's sunlight colour, linear with gamma 2.2.
+    /// The weather's sunlight colour as stored, 0 to 1, blended like the fog colours.
     pub sunlight: Vec3,
+    /// The Day slot's weight among the blended slots.
+    pub day_weight: f32,
     pub day: Option<FogRange>,
     pub night: Option<FogRange>,
 }
@@ -36,6 +39,7 @@ pub struct ExteriorFog {
 lerp_fields!(ExteriorFog {
     colors,
     sunlight,
+    day_weight,
     day,
     night
 });
@@ -47,13 +51,13 @@ impl ExteriorFog {
     pub fn resolve(&self, time: FogTime) -> Fog {
         match self.day.lerp(&self.night, time.night_weight) {
             Some(range) => Fog::Enabled(FogParams {
-                colors: colour_factors(time.day_colour_weight).apply(self.colors.linear()),
+                colors: self.colors.linear(),
                 near: range.near,
                 far: range.far,
                 power: range.power,
                 max: range.max,
                 height: range.height,
-                sunlight: sunlight_term(self.sunlight, time.day_colour_weight),
+                sunlight: sunlight_term(gamma_decode(self.sunlight), self.day_weight),
             }),
             None => Fog::Disabled,
         }
@@ -63,7 +67,7 @@ impl ExteriorFog {
 #[cfg(test)]
 #[allow(clippy::float_cmp, reason = "the blends below are exact in f32")]
 mod tests {
-    use super::super::measured::{DAY_COLOUR_FACTORS, NIGHT_COLOUR_FACTORS};
+    use super::super::measured::DAY_COLOUR_FACTORS;
     use super::super::{FogColors, HeightBand, SunlightTerm};
     use super::*;
 
@@ -83,8 +87,12 @@ mod tests {
 
     fn fog() -> ExteriorFog {
         ExteriorFog {
-            colors: BlendedFogColors::from_stored(FogColors::uniform(Vec3::ONE)),
+            colors: BlendedFogColors::from_stored(
+                FogColors::uniform(Vec3::ONE),
+                DAY_COLOUR_FACTORS,
+            ),
             sunlight: Vec3::splat(0.5),
+            day_weight: 1.0,
             day: Some(range(100.0)),
             night: Some(range(200.0)),
         }
@@ -98,56 +106,40 @@ mod tests {
     }
 
     #[test]
-    fn full_day_takes_the_day_distances_the_day_factors_and_the_sunlight() {
+    fn full_day_takes_the_day_distances_the_slot_colours_and_the_sunlight() {
         let resolved = enabled(fog().resolve(FogTime::DAY));
         assert_eq!(resolved.near, 100.0);
         assert_eq!(resolved.far, 1000.0);
-        assert_eq!(
-            resolved.colors,
-            DAY_COLOUR_FACTORS.apply(fog().colors.linear())
-        );
-        assert_eq!(resolved.sunlight, sunlight_term(Vec3::splat(0.5), 1.0));
+        assert_eq!(resolved.colors, fog().colors.linear());
+        let sunlight = Vec3::splat(0.5_f32.powf(2.2));
+        assert_eq!(resolved.sunlight, sunlight_term(sunlight, 1.0));
     }
 
     #[test]
-    fn full_night_takes_the_night_distances_the_night_factors_and_no_sunlight() {
-        let resolved = enabled(fog().resolve(FogTime {
-            night_weight: 1.0,
-            day_colour_weight: 0.0,
-        }));
+    fn without_the_day_slot_the_sunlight_leaves_the_colour_alone() {
+        let night = ExteriorFog {
+            day_weight: 0.0,
+            ..fog()
+        };
+        let resolved = enabled(night.resolve(FogTime { night_weight: 1.0 }));
         assert_eq!(resolved.near, 200.0);
-        assert_eq!(
-            resolved.colors,
-            NIGHT_COLOUR_FACTORS.apply(fog().colors.linear())
-        );
         assert_eq!(resolved.sunlight, SunlightTerm::NONE);
     }
 
     #[test]
-    fn the_distances_and_the_colours_follow_their_own_weights() {
-        let resolved = enabled(fog().resolve(FogTime {
-            night_weight: 0.5,
-            day_colour_weight: 0.0,
-        }));
+    fn the_night_weight_blends_the_distances_and_leaves_the_colours() {
+        let resolved = enabled(fog().resolve(FogTime { night_weight: 0.5 }));
         assert_eq!(resolved.near, 150.0);
         assert_eq!(resolved.far, 1500.0);
         assert_eq!(resolved.power, 1.5);
         assert_eq!(resolved.height.near.mid, 150.0);
-        assert_eq!(
-            resolved.colors,
-            NIGHT_COLOUR_FACTORS.apply(fog().colors.linear())
-        );
+        assert_eq!(resolved.colors, fog().colors.linear());
     }
 
     #[test]
     fn a_half_without_fog_snaps_at_the_midpoint_of_the_night_weight() {
         let foggy_nights = ExteriorFog { day: None, ..fog() };
-        let at = |night_weight| {
-            foggy_nights.resolve(FogTime {
-                night_weight,
-                day_colour_weight: 1.0,
-            })
-        };
+        let at = |night_weight| foggy_nights.resolve(FogTime { night_weight });
         assert_eq!(at(0.5), Fog::Disabled);
         assert!(matches!(at(0.6), Fog::Enabled(_)));
     }

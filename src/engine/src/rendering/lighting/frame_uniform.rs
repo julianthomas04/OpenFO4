@@ -33,7 +33,6 @@ pub struct FrameUniform {
     pub fog_params: Vec4,
     pub fog_near_band: Vec4,
     pub fog_far_band: Vec4,
-    pub fog_sunlight: Vec4,
     pub cascade_view_proj: [Mat4; MAX_CASCADES],
     /// xyz: world-space centre, w: radius.
     pub cascade_spheres: [Vec4; MAX_CASCADES],
@@ -74,7 +73,7 @@ pub fn wrapped_time(elapsed_seconds: f32) -> f32 {
     elapsed_seconds.rem_euclid(TIME_WRAP_SECONDS)
 }
 
-const _: () = assert!(std::mem::size_of::<FrameUniform>() == 960);
+const _: () = assert!(std::mem::size_of::<FrameUniform>() == 944);
 
 #[cfg(test)]
 #[allow(clippy::float_cmp, reason = "the wrap is exact in f32 by construction")]
@@ -83,7 +82,7 @@ mod tests {
 
     #[test]
     fn water_fields_close_the_uniform_at_the_wgsl_offset() {
-        assert_eq!(std::mem::offset_of!(FrameUniform, time_water), 944);
+        assert_eq!(std::mem::offset_of!(FrameUniform, time_water), 928);
         assert_eq!(std::mem::size_of::<FrameUniform>() % 16, 0);
     }
 
