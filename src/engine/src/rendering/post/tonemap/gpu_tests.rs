@@ -1,18 +1,20 @@
 //! The tonemap pass on the GPU: the scene light it is given against the displayed bytes, under
-//! the measured vanilla curve and the image space's cinematic fields.
+//! the measured vanilla curve, the image space's cinematic fields and its colour LUT.
 
 use bytemuck::Zeroable;
 use glam::{UVec2, Vec3, Vec4};
 use wgpu::util::DeviceExt;
 
 use super::TonemapPass;
+use super::lut_table::{LutTable, blended_texels};
 use crate::rendering::{
     gpu_profiler::GpuProfiler,
     gpu_test::{frame_binding, read_mip, test_device},
     lighting::{
         frame_uniform::FrameUniform,
+        lerp::Lerp,
         state::ExposureReadout,
-        tonemap_settings::{ImageSpaceCinematic, TonemapOperator, TonemapSettings},
+        tonemap_settings::{ImageSpaceCinematic, ImageSpaceLut, TonemapOperator, TonemapSettings},
     },
     post::dof_test_support::{hdr_texture, view_of},
 };
@@ -71,6 +73,9 @@ struct Picture {
     toe: f32,
     cinematic: ImageSpaceCinematic,
     operator: TonemapOperator,
+    /// The table the pass holds and how much the image space shows of it.
+    table: LutTable,
+    lut: ImageSpaceLut,
 }
 
 impl Picture {
@@ -80,6 +85,8 @@ impl Picture {
             exposure: NEUTRAL_EXPOSURE,
             toe: NEUTRAL_TOE,
             cinematic: ImageSpaceCinematic::NEUTRAL,
+            table: LutTable::identity(),
+            lut: ImageSpaceLut::NONE,
         }
     }
 
@@ -107,6 +114,7 @@ impl Picture {
         let tonemap = TonemapSettings {
             operator: self.operator,
             cinematic: self.cinematic,
+            lut: self.lut.clone(),
         }
         .uniform(self.toe);
         frame.write(
@@ -120,11 +128,13 @@ impl Picture {
         );
         let pass = TonemapPass::new(
             &device,
+            &queue,
             SURFACE_FORMAT,
             &frame.layout,
             &view_of(&scene),
             &exposure_state,
         );
+        pass.write_colour_lut(&queue, &blended_texels(&[(Some(&self.table), 1.0)]));
         let target = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("tonemap_test_target"),
             size: crate::rendering::gpu_test::extent(size),
@@ -381,4 +391,90 @@ fn agx_passes_through_the_cinematic_stage_and_the_gamma_encoding() {
         .map(|levels| displayed_levels((*levels / 255.0).powf(2.2) * 0.5))
         .collect();
     assert_levels(&half, &expected, DITHER_LEVELS);
+}
+
+/// A table that darkens the toe, brightens the shoulder and mixes the channels, as the vanilla
+/// tables do, with every grid point graded differently.
+fn mixing_table() -> LutTable {
+    let s_curve = |index: u32| {
+        let x = index as f32 / 15.0;
+        x * x * (3.0 - 2.0 * x)
+    };
+    LutTable::from_fn(|r, g, b| {
+        let (r, g, b) = (s_curve(r), s_curve(g), s_curve(b));
+        [0.8 * r + 0.2 * g, 0.9 * g + 0.1 * b, 0.7 * b + 0.3 * r].map(|x| (x * 255.0).round() as u8)
+    })
+}
+
+fn graded_by(table: LutTable, amount: f32) -> Picture {
+    Picture {
+        table,
+        lut: ImageSpaceLut::NONE.lerp(&ImageSpaceLut::named(r"Effects\LUTs\Mixing.dds"), amount),
+        ..Picture::neutral()
+    }
+}
+
+fn lut_lights() -> Vec<Vec3> {
+    colour_lights()
+        .into_iter()
+        .chain(ladder_lights())
+        .chain([Vec3::new(
+            fog_byte_light(250),
+            fog_byte_light(5),
+            fog_byte_light(130),
+        )])
+        .collect()
+}
+
+#[test]
+fn the_lut_grades_the_encoded_picture_between_its_texel_centres() {
+    let lights = lut_lights();
+    let Some(shown) = graded_by(mixing_table(), 1.0).show("tonemap lut", &lights) else {
+        return;
+    };
+    let expected: Vec<Vec3> = neutral_pictures(&lights)
+        .into_iter()
+        .map(|p| mixing_table().sample(p.clamp(Vec3::ZERO, Vec3::ONE).powf(1.0 / 2.2)) * 255.0)
+        .collect();
+    assert_levels(&shown, &expected, DITHER_LEVELS);
+}
+
+#[test]
+fn a_part_of_the_lut_mixes_the_graded_picture_into_the_ungraded_one() {
+    let lights = lut_lights();
+    let Some(shown) = graded_by(mixing_table(), 0.25).show("tonemap lut amount", &lights) else {
+        return;
+    };
+    let expected: Vec<Vec3> = neutral_pictures(&lights)
+        .into_iter()
+        .map(|p| {
+            let display = p.clamp(Vec3::ZERO, Vec3::ONE).powf(1.0 / 2.2);
+            display.lerp(mixing_table().sample(display), 0.25) * 255.0
+        })
+        .collect();
+    assert_levels(&shown, &expected, DITHER_LEVELS);
+}
+
+#[test]
+fn without_a_lut_the_held_table_leaves_the_picture_exactly_as_it_was() {
+    let lights = lut_lights();
+    let (Some(ungraded), Some(held)) = (
+        Picture::neutral().show("tonemap no lut", &lights),
+        graded_by(mixing_table(), 0.0).show("tonemap no lut", &lights),
+    ) else {
+        return;
+    };
+    assert_eq!(held, ungraded);
+}
+
+#[test]
+fn the_identity_lut_leaves_the_picture_within_its_filtering() {
+    let lights = lut_lights();
+    let (Some(ungraded), Some(identity)) = (
+        Picture::neutral().show_undithered("tonemap identity lut", &lights),
+        graded_by(LutTable::identity(), 1.0).show_undithered("tonemap identity lut", &lights),
+    ) else {
+        return;
+    };
+    assert_levels(&identity, &ungraded, 0.2);
 }

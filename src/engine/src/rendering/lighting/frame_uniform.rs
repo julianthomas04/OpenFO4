@@ -52,7 +52,8 @@ pub struct FrameUniform {
     pub cluster_grid: UVec4,
     /// See `ClusterDepth::uniform`.
     pub cluster_z: Vec4,
-    /// x: tonemap operator, y: the image space's `TonemapE`; see `TonemapSettings::uniform`.
+    /// x: tonemap operator, y: the image space's `TonemapE`, z: the weight of its colour LUT; see
+    /// `TonemapSettings::uniform`.
     pub tonemap: Vec4,
     /// x: saturation, y: brightness, z: contrast, w: tint amount.
     pub cinematic: Vec4,

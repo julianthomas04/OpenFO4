@@ -148,7 +148,7 @@ namespace AssetConverter.Pipeline
         /// <summary>
         /// Reads the game in the order the other lanes need it: the texture index (name tables only), the ESM and INIs (the database lane
         /// needs them as soon as the materials are staged), the materials and actor .hkx files and the meshes, whose NIFs the conversion
-        /// takes while they extract, then the textures.
+        /// takes while they extract, then the textures and the colour LUTs.
         /// </summary>
         private void RunPump()
         {
@@ -162,6 +162,7 @@ namespace AssetConverter.Pipeline
 
             var extractStart = _phases.Elapsed;
             _stages.ExtractTextures(textures);
+            _phases.Measure("extract colour LUTs (Misc.ba2)", _stages.ExtractColourLuts);
             _texturesExtracted.Open();
             if (textures.Pending.Count > 0) _phases.Record("extract texture BA2s", extractStart);
         }

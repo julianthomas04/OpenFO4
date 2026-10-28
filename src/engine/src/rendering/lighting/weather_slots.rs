@@ -14,7 +14,7 @@ use super::lerp::{Lerp, lerp_fields, lerp_stored, snap_to_nearer};
 use super::time_of_day::{
     ClimateMoon, ClimateSky, ClimateSunTextures, ClimateTimes, SlotBlend, TimeSlot,
 };
-use super::tonemap_settings::ImageSpaceCinematic;
+use super::tonemap_settings::{ImageSpaceCinematic, ImageSpaceLut};
 use crate::rendering::post::depth_of_field::ImageSpaceDepthOfField;
 
 /// The slot the menu background and the first frames are lit with.
@@ -119,6 +119,7 @@ pub(super) struct SlotValues {
     pub(super) water_multiplier: Vec3,
     pub(super) hdr: ImageSpaceHdr,
     pub(super) cinematic: ImageSpaceCinematic,
+    pub(super) lut: ImageSpaceLut,
     pub(super) depth_of_field: Option<ImageSpaceDepthOfField>,
 }
 
@@ -181,6 +182,7 @@ pub struct ExteriorWeather {
     pub water_multiplier: Vec3,
     pub hdr: ImageSpaceHdr,
     pub cinematic: ImageSpaceCinematic,
+    pub lut: ImageSpaceLut,
     /// The image space's depth of field and vignette: what the game's image-space manager
     /// holds for the depth of field effect. `None` when the database predates the export.
     pub depth_of_field: Option<ImageSpaceDepthOfField>,
@@ -211,6 +213,7 @@ impl Lerp for ExteriorWeather {
             water_multiplier: Lerp::lerp(&self.water_multiplier, &other.water_multiplier, t),
             hdr: Lerp::lerp(&self.hdr, &other.hdr, t),
             cinematic: Lerp::lerp(&self.cinematic, &other.cinematic, t),
+            lut: Lerp::lerp(&self.lut, &other.lut, t),
             depth_of_field: Lerp::lerp(&self.depth_of_field, &other.depth_of_field, t),
             fog: Lerp::lerp(&self.fog, &other.fog, t),
         }
@@ -360,6 +363,7 @@ impl ExteriorWeatherSlots {
             water_multiplier,
             hdr,
             cinematic,
+            lut,
             depth_of_field,
         } = self.slots[slot.index()].clone();
         ExteriorWeather {
@@ -377,6 +381,7 @@ impl ExteriorWeatherSlots {
             water_multiplier,
             hdr,
             cinematic,
+            lut,
             depth_of_field,
             fog: None,
         }
@@ -425,6 +430,7 @@ mod tests {
                 tint_amount: 26.0 * level,
                 tint_color: Vec3::splat(27.0 * level),
             },
+            lut: ImageSpaceLut::NONE.lerp(&ImageSpaceLut::named(r"Effects\LUTs\Graded.dds"), level),
             depth_of_field: Some(ImageSpaceDepthOfField {
                 strength: 11.0 * level,
                 distance: 12.0 * level,

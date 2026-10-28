@@ -1,8 +1,15 @@
+pub mod lut_library;
+pub mod lut_table;
+
+use lut_table::{LUT_SIZE, LutTable, blended_texels};
+
 use crate::rendering::{
     gpu_profiler::{GpuPass, GpuProfiler, SpanPart},
     lighting::FrameBinding,
     shaders,
 };
+
+const LUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 /// The tonemap writes linear values, so it must target an sRGB view of the swapchain.
 pub fn target_format(surface_format: wgpu::TextureFormat) -> wgpu::TextureFormat {
@@ -35,11 +42,70 @@ pub struct TonemapPass {
     source_layout: wgpu::BindGroupLayout,
     source_bind_group: wgpu::BindGroup,
     target_format: wgpu::TextureFormat,
+    colour_lut: ColourLut,
+}
+
+/// The one table the pass grades the display picture with, filtered trilinearly between its
+/// grid points; the frame uniform says how much of it to show.
+struct ColourLut {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    sampler: wgpu::Sampler,
+}
+
+impl ColourLut {
+    fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("tonemap_colour_lut"),
+            size: wgpu::Extent3d {
+                width: LUT_SIZE,
+                height: LUT_SIZE,
+                depth_or_array_layers: LUT_SIZE,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D3,
+            format: LUT_FORMAT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("tonemap_colour_lut_sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let lut = Self {
+            texture,
+            view,
+            sampler,
+        };
+        lut.write(
+            queue,
+            &blended_texels(&[(Some(&LutTable::identity()), 1.0)]),
+        );
+        lut
+    }
+
+    fn write(&self, queue: &wgpu::Queue, texels: &[[u8; 4]]) {
+        queue.write_texture(
+            self.texture.as_image_copy(),
+            bytemuck::cast_slice(texels),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(LUT_SIZE * 4),
+                rows_per_image: Some(LUT_SIZE),
+            },
+            self.texture.size(),
+        );
+    }
 }
 
 impl TonemapPass {
     pub fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
         frame_layout: &wgpu::BindGroupLayout,
         hdr_view: &wgpu::TextureView,
@@ -69,6 +135,22 @@ impl TonemapPass {
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
             ],
@@ -106,15 +188,28 @@ impl TonemapPass {
             cache: None,
         });
 
-        let source_bind_group =
-            Self::create_source_bind_group(device, &source_layout, hdr_view, exposure_state);
+        let colour_lut = ColourLut::new(device, queue);
+        let source_bind_group = Self::create_source_bind_group(
+            device,
+            &source_layout,
+            hdr_view,
+            exposure_state,
+            &colour_lut,
+        );
 
         Self {
             pipeline,
             source_layout,
             source_bind_group,
             target_format,
+            colour_lut,
         }
+    }
+
+    /// The table the picture is graded with from now on: `texels` as [`blended_texels`] lays
+    /// them out.
+    pub fn write_colour_lut(&self, queue: &wgpu::Queue, texels: &[[u8; 4]]) {
+        self.colour_lut.write(queue, texels);
     }
 
     pub fn target_format(&self) -> wgpu::TextureFormat {
@@ -127,8 +222,13 @@ impl TonemapPass {
         hdr_view: &wgpu::TextureView,
         exposure_state: &wgpu::Buffer,
     ) {
-        self.source_bind_group =
-            Self::create_source_bind_group(device, &self.source_layout, hdr_view, exposure_state);
+        self.source_bind_group = Self::create_source_bind_group(
+            device,
+            &self.source_layout,
+            hdr_view,
+            exposure_state,
+            &self.colour_lut,
+        );
     }
 
     pub fn encode(
@@ -165,6 +265,7 @@ impl TonemapPass {
         layout: &wgpu::BindGroupLayout,
         hdr_view: &wgpu::TextureView,
         exposure_state: &wgpu::Buffer,
+        colour_lut: &ColourLut,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("tonemap_source_bind_group"),
@@ -177,6 +278,14 @@ impl TonemapPass {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: exposure_state.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&colour_lut.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&colour_lut.sampler),
                 },
             ],
         })

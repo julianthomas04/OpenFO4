@@ -46,6 +46,9 @@ struct ExposureState {
 
 @group(0) @binding(0) var hdr_scene: texture_2d<f32>;
 @group(0) @binding(1) var<storage, read> exposure_state: ExposureState;
+// Red along x, green along y, blue along z; grid point i of a side stands for display level i / (size - 1).
+@group(0) @binding(2) var colour_lut: texture_3d<f32>;
+@group(0) @binding(3) var colour_lut_sampler: sampler;
 
 struct TonemapVertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -108,6 +111,19 @@ fn tone_mapped(exposed: vec3<f32>) -> vec3<f32> {
     return filmic(exposed, frame.tonemap.y);
 }
 
+// The image space's colour LUT on the encoded display picture, sampled between its grid points'
+// texel centres and shown by the LUT's weight; without one the picture is left exactly as it is.
+fn graded(display: vec3<f32>) -> vec3<f32> {
+    let amount = frame.tonemap.z;
+    if (amount <= 0.0) {
+        return display;
+    }
+    let size = f32(textureDimensions(colour_lut).x);
+    let coordinate = (display * (size - 1.0) + 0.5) / size;
+    let table = textureSampleLevel(colour_lut, colour_lut_sampler, coordinate, 0.0).rgb;
+    return mix(display, table, amount);
+}
+
 fn srgb_to_linear(srgb: vec3<f32>) -> vec3<f32> {
     let c = clamp(srgb, vec3<f32>(0.0), vec3<f32>(1.0));
     return select(pow((c + 0.055) / 1.055, vec3<f32>(2.4)), c / 12.92, c <= vec3<f32>(0.04045));
@@ -126,6 +142,6 @@ fn fs_main(in: TonemapVertexOutput) -> @location(0) vec4<f32> {
     let exposed = max(scene * exposure_state.exposure, vec3<f32>(0.0));
     let picture = apply_cinematic(tone_mapped(exposed), frame.cinematic, frame.tint.rgb);
     let dither = (interleaved_gradient_noise(in.clip_position.xy) - 0.5) * DITHER_AMPLITUDE;
-    let display = pow(picture, vec3<f32>(1.0 / DISPLAY_GAMMA)) + dither;
+    let display = graded(pow(picture, vec3<f32>(1.0 / DISPLAY_GAMMA))) + dither;
     return vec4<f32>(srgb_to_linear(display), 1.0);
 }

@@ -125,6 +125,7 @@ namespace InstallerTests
                 imageSpace.DepthOfFieldStrength = 1f;
                 imageSpace.DepthOfFieldDistance = -2500f;
                 imageSpace.DepthOfFieldRange = 3500f;
+                imageSpace.Lut = FixtureImageSpaceLut;
             });
             plugin.AddImageSpace("FixtureImageSpaceWithoutVignette", imageSpace =>
             {
@@ -324,6 +325,7 @@ namespace InstallerTests
 
         /// <summary>Mode floats with a top byte set (0x41D00000, 0x42780000), which Mutagen's DNAM model drops.</summary>
         public const float FixtureImageSpaceMode = 26f;
+        public const string FixtureImageSpaceLut = @"Effects\LUTs\FixtureLUT.dds";
         public const float FixtureShortImageSpaceMode = 62f;
         public const float FixtureVignetteRadius = 40f;
         public const float FixtureVignetteStrength = 0.25f;

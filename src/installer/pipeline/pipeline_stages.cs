@@ -276,6 +276,22 @@ namespace AssetConverter.Pipeline
                 Console.Error.WriteLine("WARNING: some texture archives had extraction failures; markers withheld, re-run to repair.");
         }
 
+        /// <summary>The image spaces' colour LUTs, from Misc.ba2 straight into assets	extures like every other texture.</summary>
+        /// <exception cref="FileNotFoundException">Misc.ba2 is missing from the game's Data folder.</exception>
+        /// <exception cref="InvalidOperationException">A LUT failed to extract, or the archive holds none.</exception>
+        public void ExtractColourLuts()
+        {
+            string archivePath = Path.Combine(_paths.GameDataDirectory, ColourLuts.ArchiveName);
+            if (!File.Exists(archivePath))
+                throw new FileNotFoundException($"{archivePath} not found; the image spaces' colour LUTs cannot be extracted.", archivePath);
+            var result = BA2ParallelUnpacker.Unpack(archivePath, _paths.TexturesOut, _memory, quiet: true,
+                stripFirstSegment: TextureExtraction.StrippedSegment, entryFilter: ColourLuts.IsColourLut, ct: _ct);
+            if (result.Total == 0)
+                throw new InvalidOperationException($"{archivePath} holds no colour LUT below {ColourLuts.ArchiveFolder}.");
+            if (!result.AllSucceeded)
+                throw new InvalidOperationException($"{result.Failed} of {result.Total} colour LUTs failed to extract from {archivePath}.");
+        }
+
         /// <summary>
         /// Purges the previous run's GLBs, then converts every NIF of <paramref name="meshes"/> as it arrives, together with those already
         /// staged by an earlier run; the render skeletons of the Havok units go first.

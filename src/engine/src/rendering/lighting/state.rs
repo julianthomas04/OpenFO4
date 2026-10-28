@@ -390,6 +390,7 @@ impl LightingState {
         self.sky.radiance_scale = weather.hdr.sky_scale;
         self.exposure.hdr = weather.hdr;
         self.tonemap.cinematic = weather.cinematic;
+        self.tonemap.lut = weather.lut.clone();
         self.sun.color = weather.sun_light;
         self.sun.disc_color = weather.sun_disc;
         self.sky.zenith = weather.sky_upper;
@@ -809,7 +810,7 @@ mod tests {
     use super::super::exterior_weather::WeatherAmbient;
     use super::super::fog::measured::{BlendedFogColors, DAY_COLOUR_FACTORS};
     use super::super::fog::{ExteriorFog, FogRange};
-    use super::super::tonemap_settings::ImageSpaceCinematic;
+    use super::super::tonemap_settings::{ImageSpaceCinematic, ImageSpaceLut};
     use super::fixtures::lighting_state;
     use super::*;
 
@@ -997,6 +998,7 @@ mod tests {
             water_multiplier: Vec3::new(0.2, 0.4, 0.6),
             hdr: ImageSpaceHdr::default(),
             cinematic: ImageSpaceCinematic::NEUTRAL,
+            lut: ImageSpaceLut::NONE,
             depth_of_field: None,
             fog: None,
         }

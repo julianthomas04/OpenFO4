@@ -33,7 +33,7 @@ struct FrameUniform {
     cluster_grid: vec4<u32>,
     // x: first slice far depth, y: cluster far depth, z: log2 scale, w: log2 bias.
     cluster_z: vec4<f32>,
-    // x: tonemap operator, y: the image space's TonemapE.
+    // x: tonemap operator, y: the image space's TonemapE, z: the weight of its colour LUT.
     tonemap: vec4<f32>,
     // x: saturation, y: brightness, z: contrast, w: tint amount.
     cinematic: vec4<f32>,

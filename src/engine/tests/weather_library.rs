@@ -187,6 +187,7 @@ fn seeded(climate_weathers: &Json) -> Connection {
                         },
                         "Cinematic": {"Saturation": 1.0, "Brightness": 1.0, "Contrast": 1.0},
                         "Tint": {"Amount": 0.0, "Color": {"R": 255, "G": 168, "B": 21}},
+                        "Lut": r"Effects\LUTs\LUT_CW_ClearDAY.DDS",
                     })
                     .to_string(),
                 ),

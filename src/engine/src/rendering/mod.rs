@@ -1256,6 +1256,8 @@ impl State {
         let world_pass_layout = WorldPassLayout::new(&device, &frame_binding.layout);
         let post = PostChain::new(
             &device,
+            &queue,
+            asset_server.asset_location(),
             config.format,
             config.width,
             config.height,
@@ -3823,6 +3825,8 @@ impl State {
             exposure
         };
         self.post.write_exposure_params(&self.queue, &exposure);
+        self.post
+            .grade_with(&self.queue, &self.lighting.tonemap.lut);
 
         drop(frame_uniform_write_span);
         let eye = self.camera.eye;

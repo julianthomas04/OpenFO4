@@ -3719,6 +3719,8 @@ namespace AssetConverter
                     Amount = record.TintAmount,
                     Color = WeatherProcessor.Rgb(record.TintColor)
                 },
+                // Empty, not null, for an image space without a LUT: null fields are left out, which would read as a database from before the export.
+                Lut = record.Lut ?? "",
                 DepthOfField = new
                 {
                     Strength = record.DepthOfFieldStrength,

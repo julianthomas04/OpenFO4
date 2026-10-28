@@ -11,7 +11,7 @@ use super::time_of_day::{
     ClimateMoon, ClimateMoonError, ClimateSky, ClimateSkyError, ClimateSunTextures, ClimateTimes,
     ClimateTimesError, TimeSlot,
 };
-use super::tonemap_settings::ImageSpaceCinematic;
+use super::tonemap_settings::{ImageSpaceCinematic, ImageSpaceLut};
 use super::weather_slots::{
     AMBIENT_ENCODING, GLARE_AND_STARS_ENCODING, SKY_ENCODING, SUN_DISC_ENCODING, SUNLIGHT_ENCODING,
     SlotFogColors, SlotValues, TINT_ENCODING, WATER_MULTIPLIER_ENCODING, WeatherFog,
@@ -104,7 +104,7 @@ pub enum ExteriorWeatherError {
         climate: String,
         source: serde_json::Error,
     },
-    #[error("image space {image_space} lacks {}; the database predates the image space tone and cinematic export, re-run the installer", missing.join(", "))]
+    #[error("image space {image_space} lacks {}; the database predates their export, re-run the installer", missing.join(", "))]
     ImageSpaceFieldsMissing {
         image_space: String,
         missing: Vec<&'static str>,
@@ -164,21 +164,24 @@ struct RawFog {
     high_density_scale: Option<f32>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(from = "RawImageSpaceData")]
 struct ImageSpaceData {
     depth_of_field: Option<ImageSpaceDepthOfField>,
     hdr: ImageSpaceHdr,
     cinematic: ImageSpaceCinematic,
+    lut: ImageSpaceLut,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct RawImageSpaceData {
     depth_of_field: Option<ImageSpaceDepthOfField>,
     hdr: ImageSpaceHdr,
     cinematic: RawCinematic,
     tint: RawTint,
+    /// Below the textures folder; empty for an image space without one.
+    lut: String,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -208,6 +211,7 @@ impl From<RawImageSpaceData> for ImageSpaceData {
                 tint_amount: raw.tint.amount,
                 tint_color: raw.tint.color.decoded(TINT_ENCODING),
             },
+            lut: ImageSpaceLut::named(&raw.lut),
         }
     }
 }
@@ -345,7 +349,7 @@ impl ExteriorWeatherSlots {
                 slot,
                 &colors,
                 &ambient,
-                image_spaces[slot.index()],
+                image_spaces[slot.index()].clone(),
             )
         })?;
         let fog = match load_fog(&form_key, fog, &colors) {
@@ -402,6 +406,7 @@ fn load_slot(
         water_multiplier: group("WaterMultiplier", WATER_MULTIPLIER_ENCODING)?,
         hdr: image_space.hdr,
         cinematic: image_space.cinematic,
+        lut: image_space.lut,
         depth_of_field: image_space.depth_of_field,
     })
 }
@@ -553,9 +558,10 @@ fn load_image_space(
     parse_image_space(image_space, &data)
 }
 
-/// The image space fields the tone curve and the cinematic stage read, which older installers
-/// did not export.
-const TONE_AND_CINEMATIC_FIELDS: [&[&str]; 3] = [&["Hdr", "TonemapE"], &["Cinematic"], &["Tint"]];
+/// The image space fields the tone curve, the cinematic stage and the colour grading read, which
+/// older installers did not export.
+const EXPORTED_LATER_FIELDS: [&[&str]; 4] =
+    [&["Hdr", "TonemapE"], &["Cinematic"], &["Tint"], &["Lut"]];
 
 fn parse_image_space(
     image_space: &str,
@@ -566,7 +572,7 @@ fn parse_image_space(
         source,
     };
     let value: serde_json::Value = serde_json::from_str(data).map_err(malformed)?;
-    let missing: Vec<&'static str> = TONE_AND_CINEMATIC_FIELDS
+    let missing: Vec<&'static str> = EXPORTED_LATER_FIELDS
         .iter()
         .filter(|path| {
             path.iter()
@@ -811,10 +817,15 @@ pub(crate) mod fixtures {
         }
     }
 
+    pub(super) fn neutral_image_spaces() -> [ImageSpaceData; TimeSlot::COUNT] {
+        std::array::from_fn(|_| neutral_image_space())
+    }
+
     pub(super) fn neutral_image_space() -> ImageSpaceData {
         ImageSpaceData {
             hdr: ImageSpaceHdr::default(),
             cinematic: ImageSpaceCinematic::NEUTRAL,
+            lut: ImageSpaceLut::NONE,
             depth_of_field: None,
         }
     }
@@ -866,7 +877,7 @@ pub(crate) mod fixtures {
     }
 
     pub(super) fn load(row: WeatherRow) -> Result<ExteriorWeatherSlots, ExteriorWeatherError> {
-        slots_with(row, &[neutral_image_space(); TimeSlot::COUNT])
+        slots_with(row, &neutral_image_spaces())
     }
 
     /// The same weather in a climate that shows no moon.
@@ -890,6 +901,7 @@ pub(crate) mod fixtures {
             Ok::<_, ExteriorWeatherError>(ImageSpaceData {
                 hdr: hdr(slot),
                 cinematic: ImageSpaceCinematic::NEUTRAL,
+                lut: ImageSpaceLut::NONE,
                 depth_of_field: None,
             })
         })
@@ -1349,7 +1361,7 @@ mod tests {
 
     #[test]
     fn the_image_space_light_scales_and_exposure_limits_are_blended() {
-        let mut image_spaces = [neutral_image_space(); TimeSlot::COUNT];
+        let mut image_spaces = neutral_image_spaces();
         image_spaces[Night.index()].hdr = ImageSpaceHdr {
             eye_adapt_speed: 1.0,
             sunlight_scale: 0.0,
@@ -1373,7 +1385,7 @@ mod tests {
 
     #[test]
     fn the_image_space_cinematic_fields_and_tint_are_blended() {
-        let mut image_spaces = [neutral_image_space(); TimeSlot::COUNT];
+        let mut image_spaces = neutral_image_spaces();
         image_spaces[Night.index()].cinematic = ImageSpaceCinematic {
             saturation: 0.0,
             brightness: 2.0,
@@ -1419,7 +1431,7 @@ mod tests {
 
     #[test]
     fn depth_of_field_blends_its_numbers_and_snaps_its_mode() {
-        let mut image_spaces = [neutral_image_space(); TimeSlot::COUNT];
+        let mut image_spaces = neutral_image_spaces();
         image_spaces[Night.index()].depth_of_field = Some(depth_of_field(0.0, 1));
         image_spaces[Day.index()].depth_of_field = Some(depth_of_field(1.0, 2));
         let slots = slots_with(row(), &image_spaces).unwrap();
@@ -1439,7 +1451,7 @@ mod tests {
 
     #[test]
     fn depth_of_field_present_at_one_end_only_snaps_at_the_midpoint() {
-        let mut image_spaces = [neutral_image_space(); TimeSlot::COUNT];
+        let mut image_spaces = neutral_image_spaces();
         image_spaces[Day.index()].depth_of_field = Some(depth_of_field(1.0, 2));
         let slots = slots_with(row(), &image_spaces).unwrap();
         assert_eq!(slots.sample(between(Night, Day, 0.4)).depth_of_field, None);
@@ -1749,7 +1761,7 @@ mod tests {
         assert_eq!(slots.moon().unwrap().phase_length(), 4);
     }
 
-    const IMAGE_SPACE_HDR: &str = r#""Hdr":{"EyeAdaptSpeed":3.0,"TonemapE":0.02,"SunlightScale":1.0,"SkyScale":1.0,"MiddleGray":0.18,"AutoExposureMin":1.6,"AutoExposureMax":3.25},"Cinematic":{"Saturation":1.1,"Brightness":0.9,"Contrast":1.2},"Tint":{"Amount":0.2,"Color":{"R":255,"G":128,"B":0}}"#;
+    const IMAGE_SPACE_HDR: &str = r#""Hdr":{"EyeAdaptSpeed":3.0,"TonemapE":0.02,"SunlightScale":1.0,"SkyScale":1.0,"MiddleGray":0.18,"AutoExposureMin":1.6,"AutoExposureMax":3.25},"Cinematic":{"Saturation":1.1,"Brightness":0.9,"Contrast":1.2},"Tint":{"Amount":0.2,"Color":{"R":255,"G":128,"B":0}},"Lut":"""#;
 
     #[test]
     fn an_image_space_row_carries_its_cinematic_fields_and_its_tint_in_linear_light() {
@@ -1781,11 +1793,37 @@ mod tests {
         assert!(matches!(
             &error,
             ExteriorWeatherError::ImageSpaceFieldsMissing { image_space, missing }
-                if image_space == "OldIS" && *missing == ["TonemapE", "Cinematic", "Tint"]
+                if image_space == "OldIS" && *missing == ["TonemapE", "Cinematic", "Tint", "Lut"]
         ));
         assert!(
             error.to_string().contains("re-run the installer"),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn an_image_space_row_from_before_the_lut_export_asks_for_a_reinstall() {
+        let json = format!("{{{IMAGE_SPACE_HDR}}}").replace(r#","Lut":"""#, "");
+        assert!(matches!(
+            parse_image_space("OldIS", &json),
+            Err(ExteriorWeatherError::ImageSpaceFieldsMissing { missing, .. }) if missing == ["Lut"]
+        ));
+    }
+
+    #[test]
+    fn an_image_space_row_names_its_lut_and_an_empty_one_names_none() {
+        let json = format!("{{{IMAGE_SPACE_HDR}}}");
+        assert_eq!(
+            parse_image_space("IS", &json).unwrap().lut,
+            ImageSpaceLut::NONE
+        );
+        let graded = json.replace(
+            r#""Lut":"""#,
+            r#""Lut":"Effects\\LUTs\\LUT_CW_ClearDAY.DDS""#,
+        );
+        assert_eq!(
+            parse_image_space("IS", &graded).unwrap().lut,
+            ImageSpaceLut::named(r"Effects\LUTs\LUT_CW_ClearDAY.DDS")
         );
     }
 

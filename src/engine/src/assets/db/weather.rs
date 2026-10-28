@@ -70,7 +70,7 @@ pub fn get_weather(
     )
 }
 
-/// JSON `{"Hdr":{...},"Cinematic":{...},"Tint":{...}}`; `QueryReturnedNoRows` when the image space is unknown.
+/// JSON `{"Hdr":{...},"Cinematic":{...},"Tint":{...},"Lut":"..."}`; `QueryReturnedNoRows` when the image space is unknown.
 pub fn get_image_space_data(
     form_key: &str,
     conn: &rusqlite::Connection,
