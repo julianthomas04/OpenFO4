@@ -1002,7 +1002,7 @@ mod tests {
         // the opposite axes: X-, X+, Z-, Z+, Y+ (north), Y-.
         let expected_bytes: [u8; 6] = [20, 10, 60, 50, 30, 40];
         for (index, (face, byte)) in cube.iter().zip(expected_bytes).enumerate() {
-            let expected = super::super::cell_lighting::srgb8_to_linear([byte, 0, 0]) * 0.5;
+            let expected = Vec3::new((f32::from(byte) / 255.0).powf(2.2), 0.0, 0.0) * 0.5;
             assert!(face.abs_diff_eq(expected, 1e-7), "face {index}: {face}");
         }
     }
@@ -1350,7 +1350,7 @@ mod tests {
         let mut row = row();
         row.directional_ambient = Some(ambient.to_string());
         let halfway = load(row).unwrap().sample(between(Night, Day, 0.5));
-        let srgb_half = ((0.5 + 0.055) / 1.055_f32).powf(2.4);
+        let stored_half = 0.5_f32.powf(2.2);
         let lit = halfway
             .ambient
             .colors
@@ -1358,7 +1358,7 @@ mod tests {
             .iter()
             .find(|face| face.x > 0.0)
             .unwrap();
-        assert!(lit.abs_diff_eq(Vec3::splat(srgb_half), 1e-6), "{lit}");
+        assert!(lit.abs_diff_eq(Vec3::splat(stored_half), 1e-6), "{lit}");
         assert!((halfway.ambient.scale - 0.75).abs() < 1e-6);
     }
 

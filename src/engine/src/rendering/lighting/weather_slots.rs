@@ -81,7 +81,7 @@ impl Default for ImageSpaceHdr {
 pub(super) const SKY_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
 pub(super) const SUN_DISC_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
 pub(super) const SUNLIGHT_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
-pub(super) const AMBIENT_ENCODING: StoredColourEncoding = StoredColourEncoding::Srgb;
+pub(super) const AMBIENT_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
 pub(super) const TINT_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
 pub(super) const GLARE_AND_STARS_ENCODING: StoredColourEncoding = StoredColourEncoding::Srgb;
 /// The water's light grows with the stored multiplier byte itself, not with its decoded light.
@@ -552,7 +552,6 @@ mod tests {
     fn a_change_of_weather_brings_the_stored_colours_in_as_their_stored_bytes_blend() {
         let changed = stored_grey("Dark", 48).cross_fade(&stored_grey("Bright", 144), 0.25);
         // A quarter of the way from byte 48 to 144 is byte 72, decoded by hand.
-        let srgb_72 = Vec3::splat(((72.0 / 255.0 + 0.055) / 1.055_f32).powf(2.4));
         let gamma_72 = Vec3::splat((72.0 / 255.0_f32).powf(2.2));
         for (name, value, expected) in [
             ("sunlight", changed.sun_light, gamma_72),
@@ -570,7 +569,7 @@ mod tests {
             assert!(value.abs_diff_eq(expected, 1e-6), "{name}: {value}");
         }
         for face in changed.ambient.colors.0 {
-            assert!(face.abs_diff_eq(srgb_72, 1e-6), "ambient: {face}");
+            assert!(face.abs_diff_eq(gamma_72, 1e-6), "ambient: {face}");
         }
         let sunlight = changed.fog.unwrap().sunlight;
         assert!(
