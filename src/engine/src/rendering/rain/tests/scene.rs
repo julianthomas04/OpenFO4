@@ -7,19 +7,15 @@ use bytemuck::Zeroable;
 use glam::{Mat4, UVec2, Vec3, Vec4};
 
 use super::{EYE, GENERATION};
-use crate::rendering::gpu_test::{f16_bits_to_f32, read_mip};
+use crate::rendering::gpu_test::{f16_bits_to_f32, frame_binding, read_mip};
 use crate::rendering::lighting::fog::{
     Fog as LightingFog, FogColors, FogParams, FogUniformFields, HeightBands, SunlightTerm,
 };
 use crate::rendering::lighting::frame_binding::FrameBinding;
-use crate::rendering::lighting::frame_uniform::{FrameUniform, MAX_CASCADES};
-use crate::rendering::local_lights::buffers::ClusterBuffers;
+use crate::rendering::lighting::frame_uniform::FrameUniform;
 use crate::rendering::post::hdr_target::HDR_FORMAT;
 use crate::rendering::rain::uniform::Draws;
 use crate::rendering::rain::{RainGpu, RainInput, RainRenderer, RainView};
-use crate::rendering::shadows::lamps::atlas_texture::LampAtlasTexture;
-use crate::rendering::shadows::settings::{ShadowConfig, ShadowFilter};
-use crate::rendering::shadows::shadow_maps::ShadowMaps;
 use crate::rendering::shadows::test_rig::{ShadowRig, Slab, rig};
 use crate::rendering::texture::Texture;
 
@@ -144,26 +140,6 @@ fn target_texture(device: &wgpu::Device, format: wgpu::TextureFormat) -> wgpu::T
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     })
-}
-
-fn frame_binding(device: &wgpu::Device) -> FrameBinding {
-    let config = ShadowConfig {
-        resolution: 4,
-        distance: 100.0,
-        cascade_count: 1,
-        split_blend: 0.0,
-        filter: ShadowFilter::SingleTap,
-        bias_scale: 1.0,
-        cascade_min_texels: [0.0; MAX_CASCADES],
-        skip_alpha_in_last_cascade: false,
-    };
-    FrameBinding::new(
-        device,
-        &FrameUniform::zeroed(),
-        &ShadowMaps::new(device, &config),
-        LampAtlasTexture::new(device, 4).view(),
-        &ClusterBuffers::new(device),
-    )
 }
 
 impl Scene {

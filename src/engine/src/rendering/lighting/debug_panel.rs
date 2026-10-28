@@ -64,11 +64,11 @@ fn tonemap_section(ui: &mut egui::Ui, tonemap: &mut TonemapSettings) {
                 ui.selectable_value(&mut tonemap.operator, operator, operator.label());
             }
         });
-    ui.add_enabled(
-        tonemap.operator == TonemapOperator::Reinhard,
-        egui::Slider::new(&mut tonemap.white_point, 1.0..=16.0).text("white point"),
-    );
-    ui.add(egui::Slider::new(&mut tonemap.saturation, 0.0..=2.0).text("saturation"));
+    let cinematic = &tonemap.cinematic;
+    ui.label(format!(
+        "saturation {:.2}, brightness {:.2}, contrast {:.2}, tint {:.2}",
+        cinematic.saturation, cinematic.brightness, cinematic.contrast, cinematic.tint_amount
+    ));
 }
 
 fn fog_section(ui: &mut egui::Ui, fog: &mut FogSettings) {
