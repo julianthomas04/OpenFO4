@@ -68,7 +68,7 @@ impl WeatherSync {
     }
 
     /// Moves the weather one frame on: lights the world with the sky of the cycle's weather at
-    /// `day_time` and flashes the strikes it brings. Call it once a frame, as the strikes of a
+    /// `day_time`, wets the ground with its rain and flashes the strikes it brings. Call it once a frame, as the strikes of a
     /// snapshot last one frame; the flashes age by `world_dt`, the world seconds of the frame.
     ///
     /// Where no frame can be made, which is the case without a weather library or cycle, with a
@@ -90,6 +90,12 @@ impl WeatherSync {
         let strikes: &[Strike] = self.frame.as_ref().map_or(&[], |frame| &frame.strikes);
         let flash = self.flashes.update(world_dt, strikes);
         lighting.set_lightning(flash);
+        lighting.set_rain(
+            self.frame
+                .as_ref()
+                .and_then(|frame| frame.precipitation)
+                .map_or(0.0, |precipitation| precipitation.intensity),
+        );
         let Some(frame) = &self.frame else {
             return WeatherStep {
                 wind: None,
@@ -181,8 +187,9 @@ mod tests {
         exterior_state, in_neutral_interior, lighting_state,
     };
     use crate::rendering::lighting::time_of_day::TimeSlot;
+    use crate::rendering::lighting::wet_ground::landscape_albedo_scale;
     use crate::rendering::weather::frame::fixtures::{
-        A, B, settled, transition, weather, with_sky,
+        A, B, dry, settled, transition, weather, with_sky,
     };
     use crate::rendering::weather::library::fixtures::library_of;
     use crate::sim::LightningStrike;
@@ -385,6 +392,21 @@ mod tests {
         assert_close(sky_upper(&lighting), linear(CLOCK_DAY));
         step(&mut sync, &mut lighting, Some(settled(A)), tuning::ATTACK_S);
         assert_eq!(lighting.lightning(), Vec3::ZERO);
+    }
+
+    #[test]
+    fn the_ground_is_as_wet_as_the_frame_rains_and_dry_without_rain() {
+        let mut sync = WeatherSync::new(Some(library_of(vec![weather("A"), dry(weather("B"))])));
+        let mut lighting = lighting();
+        step(&mut sync, &mut lighting, Some(settled(A)), 0.0);
+        let rain = sync.frame().unwrap().precipitation.unwrap().intensity;
+        assert!(rain > 0.0, "{rain}");
+        assert_eq!(
+            lighting.landscape_albedo_scale(),
+            landscape_albedo_scale(rain)
+        );
+        step(&mut sync, &mut lighting, Some(settled(B)), 0.0);
+        assert_eq!(lighting.landscape_albedo_scale(), 1.0);
     }
 
     #[test]

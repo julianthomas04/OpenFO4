@@ -54,10 +54,12 @@ fn fs_terrain(in: VertexOutput) -> @location(0) vec4<f32> {
     // Splat layers tile 32x per cell; a baked tile maps 1:1 to its UV sub-rect.
     let t = select(in.tex_coords * 32.0, in.tex_coords, baked);
 
-    let color = textureSample(textures[inst.layer_indices.x], material_sampler, t).rgb * w.r
+    let dry = textureSample(textures[inst.layer_indices.x], material_sampler, t).rgb * w.r
               + textureSample(textures[inst.layer_indices.y], material_sampler, t).rgb * w.g
               + textureSample(textures[inst.layer_indices.z], material_sampler, t).rgb * w.b
               + textureSample(textures[inst.layer_indices.w], material_sampler, t).rgb * w.a;
+
+    let color = dry * frame.landscape.x;
 
     // The baked tile has all its weight on its one layer.
     texture_feedback(inst.layer_indices, w > vec4<f32>(TERRAIN_FEEDBACK_MIN_WEIGHT), t, in.clip_position.xy);

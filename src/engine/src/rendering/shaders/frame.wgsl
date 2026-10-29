@@ -48,6 +48,8 @@ struct FrameUniform {
     time_water: vec4<f32>,
     // xyz: unit direction the sun's shadows are cast from (not the light's direction).
     to_shadow: vec4<f32>,
+    // x: the share of its dry albedo the landscape keeps in this frame's rain.
+    landscape: vec4<f32>,
 };
 
 // Mirrors `GpuShadowLamp` in shadows/lamps/table.rs.

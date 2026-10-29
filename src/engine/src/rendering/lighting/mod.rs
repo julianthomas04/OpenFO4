@@ -17,6 +17,7 @@ pub mod time_panel;
 pub mod tonemap_settings;
 pub mod weather_panel;
 pub mod weather_slots;
+pub mod wet_ground;
 
 pub use frame_binding::FrameBinding;
 pub use frame_uniform::FrameUniform;

@@ -16,6 +16,7 @@ use super::time_of_day::{
     DayTime, MoonKind, SkyGameConfig, SkyMoment, SkyObjects, SlotBlend, sun_light_weight,
 };
 use super::tonemap_settings::TonemapSettings;
+use super::wet_ground::landscape_albedo_scale;
 use crate::rendering::camera::Camera;
 use crate::rendering::debug_view::DebugView;
 use crate::rendering::local_lights::LocalLightSettings;
@@ -349,6 +350,8 @@ pub struct LightingState {
     pub sun_override: bool,
     /// The light of the lightning flash: not a weather value, so setting the weather leaves it.
     lightning: Vec3,
+    /// How hard it rains, `0..=1`: not a weather value either, so setting the weather leaves it.
+    rain: f32,
     exterior_weather: Option<ExteriorWeather>,
     /// How the time of day weighed the halves of the exterior weather's fog.
     fog_time: FogTime,
@@ -378,6 +381,7 @@ impl LightingState {
             use_weather_ambient: true,
             sun_override: false,
             lightning: Vec3::ZERO,
+            rain: 0.0,
             exterior_weather: None,
             fog_time: FogTime::DAY,
             sky_clock: None,
@@ -491,6 +495,13 @@ impl LightingState {
     /// Cell lighting and the neutral interior ignore it.
     pub fn set_lightning(&mut self, flash: Vec3) {
         self.lightning = flash;
+    }
+
+    /// Sets how hard it rains, `0..=1`, once per frame: the precipitation intensity of the
+    /// weather's frame. The exterior landscape darkens with it; cell lighting and the neutral
+    /// interior keep it dry.
+    pub fn set_rain(&mut self, intensity: f32) {
+        self.rain = intensity;
     }
 
     /// The radiance of the sky at the horizon as the exterior is lit with it, lightning flash
@@ -702,6 +713,7 @@ impl LightingState {
             tint: tonemap.tint,
             texture_feedback,
             to_shadow: self.sun_shadow_direction().extend(0.0),
+            landscape: Vec4::new(self.landscape_albedo_scale(), 0.0, 0.0, 0.0),
             time_water: Vec4::new(
                 wrapped_time(elapsed_seconds),
                 camera_water.surface_height,
@@ -712,6 +724,14 @@ impl LightingState {
         };
         scene.fog.uniform_fields().write_to(&mut frame);
         frame
+    }
+
+    /// The share of its dry albedo the landscape keeps in the rain of [`Self::set_rain`].
+    pub fn landscape_albedo_scale(&self) -> f32 {
+        match self.shading() {
+            Shading::Exterior => landscape_albedo_scale(self.rain),
+            Shading::Cell(_) | Shading::Neutral => 1.0,
+        }
     }
 
     fn scene_terms(&self) -> SceneTerms {
@@ -1938,6 +1958,43 @@ mod tests {
             assert_eq!(state.sun.color, before);
             assert!(state.exterior_weather().is_none());
             assert!(state.sky_moment().is_none());
+        }
+    }
+
+    mod rain {
+        use super::*;
+        use crate::rendering::lighting::wet_ground::WET_LANDSCAPE_ALBEDO;
+
+        fn exterior() -> LightingState {
+            state_with(Environment::Exterior, true, true, true)
+        }
+
+        #[test]
+        fn the_exterior_landscape_keeps_its_albedo_until_it_rains() {
+            let mut state = exterior();
+            assert_eq!(frame_of(&state).landscape.x, 1.0);
+            state.set_rain(1.0);
+            assert_eq!(frame_of(&state).landscape.x, WET_LANDSCAPE_ALBEDO);
+            state.set_rain(0.0);
+            assert_eq!(frame_of(&state).landscape.x, 1.0);
+        }
+
+        #[test]
+        fn the_rain_survives_the_weather_and_the_clock_being_set_again() {
+            let mut state = exterior();
+            state.set_rain(1.0);
+            state.set_exterior_weather(weather(), FogTime::DAY);
+            state.set_time_of_day(DayTime::clamped(0, 12.0));
+            assert_eq!(frame_of(&state).landscape.x, WET_LANDSCAPE_ALBEDO);
+        }
+
+        #[test]
+        fn cell_lighting_and_the_neutral_interior_keep_the_landscape_dry() {
+            for lighting in [resolved_cell(), neutral()] {
+                let mut state = state_with(interior(lighting), true, true, true);
+                state.set_rain(1.0);
+                assert_eq!(frame_of(&state).landscape.x, 1.0);
+            }
         }
     }
 
