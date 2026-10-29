@@ -35,6 +35,7 @@ const MATERIAL_SWAP_COLUMNS: &[&str] = &["material_name"];
 const WORLDSPACE_WEATHER_COLUMNS: &[&str] = &["climate"];
 const WEATHER_COLUMNS: &[&str] = &["directional_ambient"];
 const WEATHER_FOG_COLUMNS: &[&str] = &["fog"];
+const WEATHER_FOG_SCALES_COLUMNS: &[&str] = &["fog_scales"];
 const WEATHER_LIBRARY_COLUMNS: &[&str] = &["clouds", "data"];
 const CLIMATE_VOLATILITY_COLUMNS: &[&str] = &["volatility"];
 const PARTICLE_GEOMETRY_COLUMNS: &[&str] = &["data", "particle_texture", "particle_material"];
@@ -72,6 +73,9 @@ const MAP_MARKER_COLUMNS: &[&str] = &[
     "position_z",
 ];
 const WORLDSPACE_MAP_IMAGE_COLUMNS: &[&str] = &["map_image"];
+
+/// The installer command that fills the weather fog scales.
+const WEATHER_FOG_SCALES_TABLES_FIX: &str = "esm-only --tables weather";
 
 /// The installer command that fills the weather library columns.
 pub const WEATHER_LIBRARY_TABLES_FIX: &str =
@@ -111,6 +115,7 @@ pub enum ColumnGroup {
     WorldspaceWeather,
     Weather,
     WeatherFog,
+    WeatherFogScales,
     WeatherLibrary,
     ClimateVolatility,
     ParticleGeometry,
@@ -141,6 +146,7 @@ impl std::fmt::Display for ColumnGroup {
             Self::WorldspaceWeather => "worldspace weather",
             Self::Weather => "weather",
             Self::WeatherFog => "weather fog",
+            Self::WeatherFogScales => "weather fog scales",
             Self::WeatherLibrary => "weather library",
             Self::ClimateVolatility => "climate volatility",
             Self::ParticleGeometry => "particle geometry",
@@ -361,6 +367,7 @@ pub struct DbSchema {
     pub material_swap_name_column_present: bool,
     pub weather_columns_present: bool,
     pub weather_fog_column_present: bool,
+    pub weather_fog_scales_column_present: bool,
     /// The weather clouds and data, the climate volatility and the particle geometry
     /// columns the weather library needs, all or none.
     pub weather_library_columns_present: bool,
@@ -425,6 +432,12 @@ impl DbSchema {
                 ColumnGroup::WeatherFog,
                 "weather",
                 WEATHER_FOG_COLUMNS,
+            )?,
+            weather_fog_scales_column_present: column_group_present(
+                conn,
+                ColumnGroup::WeatherFogScales,
+                "weather",
+                WEATHER_FOG_SCALES_COLUMNS,
             )?,
             weather_library_columns_present: column_group_present(
                 conn,
@@ -564,6 +577,11 @@ impl DbSchema {
             {
                 tracing::warn!(
                     "water columns missing (database predates water extraction); cell and worldspace water planes and placed water meshes cannot name their water type"
+                );
+            }
+            if !self.weather_fog_scales_column_present {
+                tracing::warn!(
+                    "weather.fog_scales column missing (database predates the NAM4 export); every weather's far fog colours take the factors of a NAM4 of 1.0. Fix: run the installer with `{WEATHER_FOG_SCALES_TABLES_FIX}`"
                 );
             }
             if !self.material_swap_name_column_present {

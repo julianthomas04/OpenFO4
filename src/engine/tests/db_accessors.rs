@@ -1726,6 +1726,30 @@ fn weather_without_the_fog_column_reads_fog_as_none() {
 }
 
 #[test]
+fn weather_fog_scales_are_read_and_a_database_without_their_column_reads_them_as_none() {
+    let scales = "[1.0,1.1]";
+    let conn = schema_connection();
+    insert(
+        &conn,
+        "weather",
+        &[("form_key", text("W")), ("fog_scales", text(scales))],
+    );
+    let db = client(conn);
+    assert!(db.schema().weather_fog_scales_column_present);
+    assert_eq!(
+        db.get_weather("W").unwrap().fog_scales.as_deref(),
+        Some(scales)
+    );
+
+    let conn = legacy_connection(&[("weather", "fog_scales")]);
+    insert(&conn, "weather", &[("form_key", text("W"))]);
+    let db = client(conn);
+    assert!(!db.schema().weather_fog_scales_column_present);
+    assert_eq!(db.get_weather("W").unwrap().fog_scales, None);
+    assert!(db.schema().weather_fog_column_present);
+}
+
+#[test]
 fn unknown_weather_is_a_no_rows_error() {
     let error = client(schema_connection())
         .get_weather("nope")

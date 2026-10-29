@@ -5,7 +5,9 @@ use serde::Deserialize;
 
 use super::ambient::{AMBIENT_CUBE_FACES, AmbientCube};
 use super::cell_lighting::{RawColor, StoredColourEncoding, bethesda_faces_to_engine_order};
-use super::fog::measured::{BlendedFogColors, slot_colour_factors, slot_day_weight};
+use super::fog::measured::{
+    BlendedFogColors, FogScales, FogScalesError, slot_colour_factors, slot_day_weight,
+};
 use super::fog::{FogColors, FogRange, HeightFogError, RawHeightFog};
 use super::time_of_day::{
     ClimateMoon, ClimateMoonError, ClimateSky, ClimateSkyError, ClimateSunTextures, ClimateTimes,
@@ -82,6 +84,11 @@ pub enum ExteriorWeatherError {
         weather: String,
         slot: &'static str,
         source: HeightFogError,
+    },
+    #[error("weather {weather} has unusable fog scales: {source}")]
+    FogScales {
+        weather: String,
+        source: FogScalesError,
     },
     #[error("weather {weather} has no {slot} slot for {entry}")]
     MissingTimeSlot {
@@ -336,6 +343,7 @@ impl ExteriorWeatherSlots {
             directional_ambient,
             image_spaces: _,
             fog,
+            fog_scales,
         } = row;
         let colors: ColorGroups = parse_field(&form_key, "colors", colors.as_deref())?;
         let ambient: DirectionalAmbient = parse_field(
@@ -352,7 +360,8 @@ impl ExteriorWeatherSlots {
                 image_spaces[slot.index()].clone(),
             )
         })?;
-        let fog = match load_fog(&form_key, fog, &colors) {
+        let fog_scales = load_fog_scales(&form_key, fog_scales.as_deref())?;
+        let fog = match load_fog(&form_key, fog, &colors, &fog_scales) {
             Ok(fog) => Some(fog),
             Err(error @ ExteriorWeatherError::FogMissing { .. }) => {
                 tracing::warn!("{error}; exterior fog keeps its defaults");
@@ -437,10 +446,23 @@ fn raw_color_in_slot(
         .ok_or_else(|| missing_slot(weather, group, slot))
 }
 
+/// [`FogScales::ABSENT`] for a weather without NAM4.
+fn load_fog_scales(weather: &str, json: Option<&str>) -> Result<FogScales, ExteriorWeatherError> {
+    let Some(json) = json else {
+        return Ok(FogScales::ABSENT);
+    };
+    let entries: Vec<f32> = parse_json(weather, "fog scales", json)?;
+    FogScales::new(&entries).map_err(|source| ExteriorWeatherError::FogScales {
+        weather: weather.to_string(),
+        source,
+    })
+}
+
 fn load_fog(
     weather: &str,
     json: Option<String>,
     colors: &ColorGroups,
+    scales: &FogScales,
 ) -> Result<WeatherFog, ExteriorWeatherError> {
     let json = json.ok_or_else(|| ExteriorWeatherError::FogMissing {
         weather: weather.to_string(),
@@ -472,7 +494,7 @@ fn load_fog(
                     near_high: high_color("FogNearHigh", near)?,
                     far_high: high_color("FogFarHigh", far)?,
                 },
-                slot_colour_factors(slot),
+                slot_colour_factors(slot, scales),
             ),
             sunlight: raw_color_in_slot(weather, colors, "Sunlight", slot).map(RawColor::unit)?,
             day_weight: slot_day_weight(slot),
@@ -814,7 +836,16 @@ pub(crate) mod fixtures {
             directional_ambient: Some(directional_ambient(1.0).to_string()),
             image_spaces: Some(same_in_every_slot(&Value::Null).to_string()),
             fog: Some(fog(100.0, 1000.0).to_string()),
+            fog_scales: Some(json!(clear_fog_scales()).to_string()),
         }
+    }
+
+    /// `CommonwealthClear`'s NAM4, the one the fog colour factors were measured under.
+    pub(super) fn clear_fog_scales() -> Vec<f32> {
+        let mut scales = vec![1.0; FogScales::LEN];
+        scales[9] = 1.4;
+        scales[25] = 1.1;
+        scales
     }
 
     pub(super) fn neutral_image_spaces() -> [ImageSpaceData; TimeSlot::COUNT] {
@@ -1048,12 +1079,13 @@ mod tests {
 
     #[test]
     fn malformed_json_fails_the_whole_weather_naming_the_broken_field() {
-        let cases: [(&str, Corrupt); 3] = [
+        let cases: [(&str, Corrupt); 4] = [
             ("colors", |row, text| row.colors = Some(text)),
             ("directional ambient", |row, text| {
                 row.directional_ambient = Some(text);
             }),
             ("fog", |row, text| row.fog = Some(text)),
+            ("fog scales", |row, text| row.fog_scales = Some(text)),
         ];
         for (field, corrupt) in cases {
             let mut row = row();
@@ -1525,6 +1557,82 @@ mod tests {
         // Halfway between the stored black and white, decoded after the blend.
         let halfway = 0.5_f32.powf(2.2) * night_factor;
         assert!((past.colors.linear().near.x - halfway).abs() < 1e-6);
+    }
+
+    fn with_fog_scales(scales: &Value) -> WeatherRow {
+        let mut row = row();
+        row.fog_scales = Some(scales.to_string());
+        row
+    }
+
+    fn day_fog_colors(row: WeatherRow) -> FogColors {
+        sampled_fog(&load(row).unwrap(), at(Day)).colors.linear()
+    }
+
+    #[test]
+    fn the_day_far_fog_colours_follow_the_weathers_nam4_day_entry() {
+        let mut scales = clear_fog_scales();
+        scales[25] = 1.4;
+        let foggy = day_fog_colors(with_high_colors(with_fog_scales(&json!(scales))));
+        let clear = day_fog_colors(with_high_colors(row()));
+        let ratio = (1.4_f32 / 1.1).powf(2.3);
+        assert!(
+            foggy.far.abs_diff_eq(clear.far * ratio, 1e-5),
+            "{}",
+            foggy.far
+        );
+        assert!(
+            foggy.far_high.abs_diff_eq(clear.far_high * ratio, 1e-5),
+            "{}",
+            foggy.far_high
+        );
+        assert_eq!(foggy.near, clear.near);
+        assert_eq!(foggy.near_high, clear.near_high);
+    }
+
+    #[test]
+    fn a_weather_without_nam4_fogs_as_one_of_all_ones() {
+        let mut absent = row();
+        absent.fog_scales = None;
+        let absent = load(absent).unwrap();
+        let ones = load(with_fog_scales(&json!(vec![1.0; FogScales::LEN]))).unwrap();
+        for blend in [at(Day), at(Night), between(Sunrise, LateSunrise, 0.3)] {
+            assert_eq!(sampled_fog(&absent, blend), sampled_fog(&ones, blend));
+        }
+    }
+
+    #[test]
+    fn unusable_nam4_arrays_fail_the_weather_naming_it() {
+        let mut negative_night = clear_fog_scales();
+        negative_night[27] = -1.0;
+        for (scales, expected) in [
+            (json!(vec![1.0; 31]), FogScalesError::WrongLength(31)),
+            (json!(vec![1.0; 33]), FogScalesError::WrongLength(33)),
+            (
+                json!(negative_night),
+                FogScalesError::NegativeFarColourScale {
+                    slot: "Night",
+                    value: -1.0,
+                },
+            ),
+        ] {
+            let result = load(with_fog_scales(&scales));
+            assert!(
+                matches!(&result, Err(ExteriorWeatherError::FogScales { weather, source }) if weather == FORM_KEY && *source == expected),
+                "{scales}: {result:?}"
+            );
+        }
+        let not_numbers = load(with_fog_scales(&json!(vec![Value::Null; 32])));
+        assert!(
+            matches!(
+                &not_numbers,
+                Err(ExteriorWeatherError::Malformed {
+                    field: "fog scales",
+                    ..
+                })
+            ),
+            "{not_numbers:?}"
+        );
     }
 
     #[test]

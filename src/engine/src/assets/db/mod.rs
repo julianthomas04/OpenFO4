@@ -533,9 +533,13 @@ impl DbClient {
     }
 
     pub fn get_weather(&self, form_key: &str) -> rusqlite::Result<weather::WeatherRow> {
+        let schema = self.schema();
         weather::get_weather(
             form_key,
-            self.schema().weather_fog_column_present,
+            weather::WeatherColumns {
+                fog: schema.weather_fog_column_present,
+                fog_scales: schema.weather_fog_scales_column_present,
+            },
             &self.conn,
         )
     }

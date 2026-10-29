@@ -3,11 +3,12 @@
 //! measurement changes one place.
 //!
 //! Measured: the colour factors of the Day slot and of every other slot, interior factors, the
-//! byte-space blend of the per-slot factors, the sunlight's share against its luminance in every
-//! slot, where the normal branch's opacity has faded in after Near, and where the capped branch
-//! ramps to full fog.
+//! byte-space blend of the per-slot factors, how a weather's NAM4 scales each slot's far colour
+//! factors, the sunlight's share against its luminance in every slot, where the normal branch's
+//! opacity has faded in after Near, and where the capped branch ramps to full fog.
 //!
 //! Estimates:
+//! - [`FogScales::ABSENT`]: that a weather without NAM4 scales as one of 1.0 in every entry.
 //! - [`DAY_COLOUR_FACTORS`]' high colours: near high is the sunlit value without the sunlight's
 //!   share; far high is the fill's (the sunlit normal branch reads 5 % lower).
 //! - [`BlendedFogColors`]: that the colours themselves blend as stored bytes, as their factors
@@ -99,17 +100,88 @@ pub const DAY_COLOUR_FACTORS: ColourFactors = ColourFactors {
 /// Interiors take the factors every slot but Day takes outside.
 pub const INTERIOR_COLOUR_FACTORS: ColourFactors = NON_DAY_COLOUR_FACTORS;
 
+/// The power of a slot's NAM4 far colour entry the far and far high colour factors follow (free
+/// fit over six entries at noon, rms 0.041; the Night entry at 01:00 fits 2.2).
+const FAR_COLOUR_SCALE_POWER: f32 = 2.3;
+
+/// The NAM4 bank whose entry for a slot scales that slot's far colour factors. The second bank
+/// has a weak effect whose target is unmeasured; it and the first and third banks stay unapplied.
+const FAR_COLOUR_SCALE_BANK: usize = 3;
+
+/// The NAM4 far colour entry of each slot of the probe weathers the colour factors above were
+/// measured on, copies of `CommonwealthClear`: 1.1 in the Day slot, 1.0 in every other.
+fn measured_far_colour_scale(slot: TimeSlot) -> f32 {
+    if slot == TimeSlot::Day { 1.1 } else { 1.0 }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
+pub enum FogScalesError {
+    #[error("NAM4 has {0} entries, expected {expected}", expected = FogScales::LEN)]
+    WrongLength(usize),
+    #[error("NAM4 entry {index} is not finite ({value})")]
+    NotFinite { index: usize, value: f32 },
+    #[error("NAM4 far colour scale of {slot} is negative ({value})")]
+    NegativeFarColourScale { slot: &'static str, value: f32 },
+}
+
+/// A weather's NAM4: four banks of one entry per time slot, each in the game's record order.
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct FogScales([f32; FogScales::LEN]);
+
+impl FogScales {
+    pub const LEN: usize = 4 * TimeSlot::COUNT;
+
+    /// For a weather without NAM4; unmeasured.
+    pub const ABSENT: Self = Self([1.0; Self::LEN]);
+
+    pub fn new(entries: &[f32]) -> Result<Self, FogScalesError> {
+        let entries: [f32; Self::LEN] = entries
+            .try_into()
+            .map_err(|_| FogScalesError::WrongLength(entries.len()))?;
+        if let Some((index, &value)) = entries
+            .iter()
+            .enumerate()
+            .find(|(_, value)| !value.is_finite())
+        {
+            return Err(FogScalesError::NotFinite { index, value });
+        }
+        let scales = Self(entries);
+        if let Some(slot) = TimeSlot::ALL
+            .into_iter()
+            .find(|&slot| scales.far_colour_scale(slot) < 0.0)
+        {
+            return Err(FogScalesError::NegativeFarColourScale {
+                slot: slot.json_key(),
+                value: scales.far_colour_scale(slot),
+            });
+        }
+        Ok(scales)
+    }
+
+    fn far_colour_scale(&self, slot: TimeSlot) -> f32 {
+        self.0[FAR_COLOUR_SCALE_BANK * TimeSlot::COUNT + slot.index()]
+    }
+}
+
 /// The Day slot's weight in a blend of slots: 1 for Day, 0 for every other slot.
 pub fn slot_day_weight(slot: TimeSlot) -> f32 {
     if slot == TimeSlot::Day { 1.0 } else { 0.0 }
 }
 
-/// The factors of `slot`'s colours.
-pub fn slot_colour_factors(slot: TimeSlot) -> ColourFactors {
-    if slot == TimeSlot::Day {
+/// The factors of `slot`'s colours in a weather with `scales`: the measured ones, with the far
+/// and far high factors following the slot's NAM4 far colour entry relative to the measured one.
+pub fn slot_colour_factors(slot: TimeSlot, scales: &FogScales) -> ColourFactors {
+    let measured = if slot == TimeSlot::Day {
         DAY_COLOUR_FACTORS
     } else {
         NON_DAY_COLOUR_FACTORS
+    };
+    let far_scale = (scales.far_colour_scale(slot) / measured_far_colour_scale(slot))
+        .powf(FAR_COLOUR_SCALE_POWER);
+    ColourFactors {
+        far: measured.far * far_scale,
+        far_high: measured.far_high * far_scale,
+        ..measured
     }
 }
 
@@ -168,17 +240,113 @@ mod tests {
         Vec3::splat((byte / 255.0).powf(2.2))
     }
 
+    /// `CommonwealthClear`'s NAM4, the one the colour factors were measured under.
+    fn clear_scales() -> [f32; FogScales::LEN] {
+        let mut entries = [1.0; FogScales::LEN];
+        entries[9] = 1.4;
+        entries[25] = 1.1;
+        entries
+    }
+
+    fn scales(entries: &[f32]) -> FogScales {
+        FogScales::new(entries).unwrap()
+    }
+
     #[test]
-    fn the_day_slot_takes_the_day_factors_and_every_other_slot_the_non_day_ones() {
+    fn under_the_measured_nam4_each_slot_takes_its_measured_factors() {
+        let clear = scales(&clear_scales());
         for slot in TimeSlot::ALL {
             let (factors, day_weight) = if slot == TimeSlot::Day {
                 (DAY_COLOUR_FACTORS, 1.0)
             } else {
                 (NON_DAY_COLOUR_FACTORS, 0.0)
             };
-            assert_eq!(slot_colour_factors(slot), factors, "{slot:?}");
+            assert_eq!(slot_colour_factors(slot, &clear), factors, "{slot:?}");
             assert_eq!(slot_day_weight(slot), day_weight, "{slot:?}");
         }
+    }
+
+    #[test]
+    fn a_slots_last_bank_entry_scales_its_far_factors_by_its_power_and_leaves_the_near_ones() {
+        let mut entries = clear_scales();
+        entries[24 + TimeSlot::Day.index()] = 1.4;
+        entries[24 + TimeSlot::Night.index()] = 0.5;
+        let foggy = scales(&entries);
+        for (slot, measured, ratio) in [
+            (TimeSlot::Day, DAY_COLOUR_FACTORS, (1.4_f32 / 1.1).powf(2.3)),
+            (TimeSlot::Night, NON_DAY_COLOUR_FACTORS, 0.5_f32.powf(2.3)),
+        ] {
+            let factors = slot_colour_factors(slot, &foggy);
+            assert!(
+                (factors.far - measured.far * ratio).abs() < 1e-6,
+                "{slot:?}"
+            );
+            assert!(
+                (factors.far_high - measured.far_high * ratio).abs() < 1e-6,
+                "{slot:?}"
+            );
+            assert_eq!(factors.near, measured.near, "{slot:?}");
+            assert_eq!(factors.near_high, measured.near_high, "{slot:?}");
+        }
+        assert_eq!(
+            slot_colour_factors(TimeSlot::Sunset, &foggy),
+            NON_DAY_COLOUR_FACTORS
+        );
+    }
+
+    #[test]
+    fn the_other_banks_leave_every_factor() {
+        let mut entries = clear_scales();
+        entries[..24].fill(3.0);
+        let clear = scales(&clear_scales());
+        for slot in TimeSlot::ALL {
+            assert_eq!(
+                slot_colour_factors(slot, &scales(&entries)),
+                slot_colour_factors(slot, &clear),
+                "{slot:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_weather_without_nam4_scales_as_one_of_all_ones() {
+        assert_eq!(FogScales::ABSENT, scales(&[1.0; FogScales::LEN]));
+        let day = slot_colour_factors(TimeSlot::Day, &FogScales::ABSENT);
+        let ratio = (1.0_f32 / 1.1).powf(2.3);
+        assert!((day.far - DAY_COLOUR_FACTORS.far * ratio).abs() < 1e-6);
+        assert_eq!(
+            slot_colour_factors(TimeSlot::Night, &FogScales::ABSENT),
+            NON_DAY_COLOUR_FACTORS
+        );
+    }
+
+    #[test]
+    fn nam4_needs_thirty_two_finite_entries_and_no_negative_far_colour_scale() {
+        assert_eq!(
+            FogScales::new(&[1.0; 31]),
+            Err(FogScalesError::WrongLength(31))
+        );
+        assert_eq!(FogScales::new(&[]), Err(FogScalesError::WrongLength(0)));
+        for value in [f32::NAN, f32::INFINITY] {
+            let mut entries = clear_scales();
+            entries[3] = value;
+            assert!(matches!(
+                FogScales::new(&entries),
+                Err(FogScalesError::NotFinite { index: 3, .. })
+            ));
+        }
+        let mut entries = clear_scales();
+        entries[30] = -0.5;
+        assert_eq!(
+            FogScales::new(&entries),
+            Err(FogScalesError::NegativeFarColourScale {
+                slot: "EarlySunset",
+                value: -0.5
+            })
+        );
+        entries[30] = 0.0;
+        entries[2] = -0.5;
+        assert!(FogScales::new(&entries).is_ok());
     }
 
     #[test]
