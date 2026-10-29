@@ -39,6 +39,9 @@ namespace InstallerTests
         public const int LightningRed = 250;
         public const float VolatilityMult = 1.5f;
 
+        /// <summary>A NAM4 whose entries are distinct, so a reordered or truncated export shows.</summary>
+        public static readonly float[] FogScales = [.. Enumerable.Range(0, 32).Select(index => 0.5f + index / 8f)];
+
         public const int TexturedCloudSlot = 5;
         public const string CloudTexture = @"Sky\Clouds\Fixture05.dds";
         public const int ConfiguredCloudLayer = 3;

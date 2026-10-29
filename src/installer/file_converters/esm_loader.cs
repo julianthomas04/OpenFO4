@@ -546,6 +546,7 @@ namespace AssetConverter
             ("weather", "directional_ambient", "TEXT"),
             ("weather", "clouds", "TEXT"),
             ("weather", "data", "TEXT"),
+            ("weather", "fog_scales", "TEXT"),
             ("god_rayses", "data", "TEXT"),
             ("climates", "volatility", "INTEGER"),
             ("shader_particle_geometries", "data", "TEXT"),
@@ -3164,14 +3165,15 @@ namespace AssetConverter
 
         protected override async Task ProcessSpecificRecordAsync(IWeatherGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
         {
-            const string sql = @"INSERT OR REPLACE INTO weather (form_key, editor_id, precipitation, fog, colors, image_spaces, sounds, god_rays, directional_ambient, clouds, data)
-                VALUES (@FormKey, @EditorId, @Precipitation, @Fog, @Colors, @ImageSpaces, @Sounds, @GodRays, @DirectionalAmbient, @Clouds, @Data)";
+            const string sql = @"INSERT OR REPLACE INTO weather (form_key, editor_id, precipitation, fog, fog_scales, colors, image_spaces, sounds, god_rays, directional_ambient, clouds, data)
+                VALUES (@FormKey, @EditorId, @Precipitation, @Fog, @FogScales, @Colors, @ImageSpaces, @Sounds, @GodRays, @DirectionalAmbient, @Clouds, @Data)";
             await conn.ExecuteAsync(sql, new
             {
                 FormKey = formKey,
                 EditorId = record.EditorID,
                 Precipitation = record.Precipitation.IsNull ? (string?)null : record.Precipitation.FormKey.ToString(),
                 Fog = SafeSerialize(Fog(record)),
+                FogScales = SafeSerialize(WeatherJson.FogScales(record)),
                 Colors = SafeSerialize(ColorGroups(record)),
                 ImageSpaces = SafeSerialize(ByTimeOfDay(t => Slot(record, t) is { IsNull: false } link ? link.FormKey.ToString() : null)),
                 Sounds = SafeSerialize(WeatherJson.Sounds(record)),

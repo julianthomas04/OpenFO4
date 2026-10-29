@@ -166,6 +166,20 @@ namespace InstallerTests
         }
 
         [Fact]
+        public void Weather_FogScales_AreTheNam4FloatsInRecordOrder()
+        {
+            var scales = Json("weather", "fog_scales", "FixtureWeather");
+
+            Assert.Equal(WeatherFixture.FogScales, scales.EnumerateArray().Select(scale => scale.GetSingle()));
+        }
+
+        [Fact]
+        public void Weather_WithoutNam4_HasNullFogScales()
+        {
+            Assert.Null(db.QuerySingle<string?>("SELECT fog_scales FROM weather WHERE form_key = @key", new { key = db.KeyOf("RawDataWeather") }));
+        }
+
+        [Fact]
         public void GodRays_Data_StoresColorsAsBytesAndTheOtherFieldsAsFloats()
         {
             var data = Json("god_rayses", "data", "FixtureGodRays");
@@ -493,7 +507,7 @@ namespace InstallerTests
 
             await manager.InitializeAsync(bulkLoad: false);
 
-            Assert.Superset(new HashSet<string> { "clouds", "data" }, Columns(manager, "weather"));
+            Assert.Superset(new HashSet<string> { "clouds", "data", "fog_scales" }, Columns(manager, "weather"));
             Assert.Contains("volatility", Columns(manager, "climates"));
             Assert.Superset(new HashSet<string> { "data", "particle_material", "particle_texture", "particle_material_data" }, Columns(manager, "shader_particle_geometries"));
             Assert.Contains("data", Columns(manager, "god_rayses"));

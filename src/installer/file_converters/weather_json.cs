@@ -7,7 +7,7 @@ namespace AssetConverter
 {
     /// <summary>
     /// JSON projections of the WTHR fields the engine reads beyond the colour, fog and image space columns:
-    /// cloud layers, the DATA block, the weather sound list and the god rays per time of day. Property names are snake_case, form links are form key strings,
+    /// cloud layers, the DATA block, the weather sound list, the god rays per time of day and the NAM4 fog scales. Property names are snake_case, form links are form key strings,
     /// colours are <c>[r,g,b,a]</c> bytes and the time-of-day slots use the names of the <c>weather.colors</c> column.
     /// </summary>
     internal static class WeatherJson
@@ -98,6 +98,9 @@ namespace AssetConverter
             "LateSunset" => alphas.LateSunset,
             _ => throw new ArgumentOutOfRangeException(nameof(time), time, "Unknown time of day")
         };
+
+        // NAM4 as stored: four banks of one float per time of day, in the order of TimesOfDay; null for a weather without it.
+        public static float[]? FogScales(IWeatherGetter weather) => weather.NAM4?.ToArray();
 
         public static JsonObject Data(IWeatherGetter weather)
         {

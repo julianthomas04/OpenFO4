@@ -550,6 +550,7 @@ CREATE TABLE IF NOT EXISTS weather (
     editor_id TEXT,
     precipitation TEXT,
     fog TEXT,                           -- JSON
+    fog_scales TEXT,                    -- JSON: NAM4 floats, 4 banks of the 8 times of day
     colors TEXT,                        -- JSON
     image_spaces TEXT,                  -- JSON
     sounds TEXT,                        -- JSON: [{kind, sound}]

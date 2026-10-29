@@ -396,6 +396,7 @@ namespace InstallerTests
                 weather.LightningColor = TinyPlugin.Rgb(WeatherFixture.LightningRed, 200, 100);
                 weather.Flags = Weather.Flag.Cloudy | Weather.Flag.RainOcclusion;
                 weather.VolatilityMult = WeatherFixture.VolatilityMult;
+                weather.NAM4 = WeatherFixture.FogScales;
                 foreach (var (raw, _) in WeatherFixture.SoundKinds)
                     weather.Sounds.Add(new WeatherSound { Sound = new FormLink<ISoundDescriptorGetter>(plugin.FormKeyOf("ThunderSound")), Type = (WeatherSound.TypeEnum)raw });
                 weather.CloudTextures[WeatherFixture.TexturedCloudSlot] = WeatherFixture.CloudTexture;
