@@ -639,8 +639,17 @@ impl LightingState {
         }
         Some(
             self.shadows
-                .cascades(camera, self.sun.direction_to_sun(), rendered),
+                .cascades(camera, self.sun_shadow_direction(), rendered),
         )
+    }
+
+    /// Where the sun's shadows are cast from: the clock's shadow direction, which is not the
+    /// light's (`time_of_day::sun_shadow`), or the manual sun's while overridden.
+    fn sun_shadow_direction(&self) -> Vec3 {
+        match &self.sky_moment {
+            Some(moment) if !self.sun_override => moment.shadow.direction(),
+            Some(_) | None => self.sun.direction_to_sun(),
+        }
     }
 
     pub fn frame_uniform(&self, inputs: &FrameInputs) -> FrameUniform {
@@ -696,6 +705,7 @@ impl LightingState {
             cinematic: tonemap.cinematic,
             tint: tonemap.tint,
             texture_feedback,
+            to_shadow: self.sun_shadow_direction().extend(0.0),
             time_water: Vec4::new(
                 wrapped_time(elapsed_seconds),
                 camera_water.surface_height,
@@ -1591,7 +1601,7 @@ mod tests {
         }
 
         #[test]
-        fn shadows_follow_the_light_day_and_night_with_or_without_a_moon() {
+        fn shadows_follow_the_clocks_shadow_direction_day_and_night_with_or_without_a_moon() {
             for slots in [slots(), without_moon(slots())] {
                 let mut state = exterior_state(slots);
                 state.shadows.settings.enabled = true;
@@ -1599,8 +1609,12 @@ mod tests {
                     at_hour(&mut state, 0, hour);
                     assert_eq!(state.shadow_status(), ShadowStatus::Active, "{hour}");
                     let cascades = state.shadow_cascades(&test_camera(), 0).unwrap();
-                    let light = state.sky_moment().unwrap().light.direction;
-                    assert!(cascades.to_sun.abs_diff_eq(light, 1e-4), "{hour}");
+                    let moment = state.sky_moment().unwrap();
+                    let shadow = moment.shadow.direction();
+                    assert!(cascades.to_sun.abs_diff_eq(shadow, 1e-4), "{hour}");
+                    assert!(!shadow.abs_diff_eq(moment.light.direction, 1e-2), "{hour}");
+                    let uniform = frame_of(&state).to_shadow.truncate();
+                    assert!(uniform.abs_diff_eq(shadow, 1e-6), "{hour}");
                 }
             }
         }

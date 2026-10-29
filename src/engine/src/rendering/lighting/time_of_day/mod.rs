@@ -18,6 +18,7 @@ mod solar_turn;
 mod stars;
 mod sun_disc;
 mod sun_light;
+mod sun_shadow;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod unmeasured;

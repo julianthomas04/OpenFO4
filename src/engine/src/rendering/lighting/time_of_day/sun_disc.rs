@@ -48,17 +48,18 @@ pub fn sun_position(
     times: &ClimateTimes,
     settings: &SkyGameSettings,
 ) -> SkyPosition {
+    SkyPosition::from_bethesda_direction(disc_vector(time.hour(), times, settings))
+}
+
+/// Where the disc stands at `hour`, in Bethesda axes (not normalised).
+pub(super) fn disc_vector(hour: f32, times: &ClimateTimes, settings: &SkyGameSettings) -> Vec3 {
     let radius = settings.sun_x_extreme().abs();
     let (east, up) = reach_east_and_up(turn_with_longer_day_legs(
-        time.hour(),
+        hour,
         times,
         DISC_LEG_EXTENSION_HOURS,
     ));
-    SkyPosition::from_bethesda_direction(Vec3::new(
-        radius * east,
-        settings.sun_y_extreme(),
-        radius * up,
-    ))
+    Vec3::new(radius * east, settings.sun_y_extreme(), radius * up)
 }
 
 #[cfg(test)]

@@ -4,7 +4,7 @@
 //! midpoint to solar noon and another from solar noon to the sunset midpoint, and the other half
 //! circle over the night between the sunset midpoint and the next sunrise midpoint.
 
-use std::f32::consts::FRAC_PI_2;
+use std::f32::consts::{FRAC_PI_2, PI};
 
 use super::climate_times::ClimateTimes;
 use super::wrap::{HOURS_PER_DAY, wrap_hours};
@@ -19,6 +19,20 @@ pub fn solar_noon(times: &ClimateTimes) -> f32 {
 /// at the twilight midpoints and a half circle at solar midnight, halfway through the night.
 pub fn turn_from_noon(hour: f32, times: &ClimateTimes) -> f32 {
     turn_with_longer_day_legs(hour, times, 0.0)
+}
+
+/// The hour of the day whose turn the night mirrors, as the light's `|cos a|` does: the hour
+/// itself by day; at night the day hour as far from solar noon as the night hour's turn falls
+/// short of a half circle, on the same side of noon.
+pub fn mirrored_day_hour(hour: f32, times: &ClimateTimes) -> f32 {
+    let turn = turn_from_noon(hour, times);
+    let day_turn = if turn.abs() <= FRAC_PI_2 {
+        turn
+    } else {
+        (PI - turn.abs()).copysign(turn)
+    };
+    let day_leg = (times.sunset_midpoint() - times.sunrise_midpoint()) / 2.0;
+    wrap_hours(solar_noon(times) + day_turn / FRAC_PI_2 * day_leg)
 }
 
 /// [`turn_from_noon`] with each day quarter `extension` hours longer, at the night's expense: the
@@ -108,6 +122,31 @@ mod tests {
             turn_with_longer_day_legs(23.0, &times, 0.1).abs(),
             PI,
             "solar midnight",
+        );
+    }
+
+    #[test]
+    fn the_night_mirrors_the_day_hours_the_light_repeats() {
+        let times = default_climate();
+        for (hour, expected) in [
+            (0.0, 14.0),
+            (3.0, 11.0),
+            (21.0, 17.0),
+            (23.0, 15.0),
+            (10.0, 10.0),
+            (19.0, 19.0),
+        ] {
+            assert_close(
+                mirrored_day_hour(hour, &times),
+                expected,
+                &format!("{hour}"),
+            );
+        }
+        let second = second_climate();
+        assert_close(
+            mirrored_day_hour(23.0, &second),
+            11.0,
+            "solar midnight mirrors solar noon",
         );
     }
 

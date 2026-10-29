@@ -8,6 +8,7 @@ use super::sky::{SkyGameSettings, SkyPosition};
 use super::stars::{StarRotation, star_rotation};
 use super::sun_disc::sun_position;
 use super::sun_light::light_source;
+use super::sun_shadow::shadow_position;
 use super::unmeasured::moon_position;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -71,6 +72,8 @@ pub struct SkyMoment {
     pub sun: SkyPosition,
     pub moon: Option<MoonSky>,
     pub light: LightSource,
+    /// Where the sun's shadows are cast from, day and night.
+    pub shadow: SkyPosition,
     pub star_rotation: StarRotation,
 }
 
@@ -90,6 +93,7 @@ impl SkyMoment {
             sun,
             moon,
             light: light_source(time, times),
+            shadow: shadow_position(time, times, settings),
             star_rotation: star_rotation(time, settings),
         }
     }

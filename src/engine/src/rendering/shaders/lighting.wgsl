@@ -337,7 +337,7 @@ fn local_lights(s: SurfaceSample, p: ShadingPoint, v: vec3<f32>) -> LightContrib
 
 fn sun_and_ambient(s: SurfaceSample, world_pos: vec3<f32>, v: vec3<f32>) -> LightContribution {
     let l = frame.to_sun.xyz;
-    let shadow = sun_shadow(world_pos, s.ng, l);
+    let shadow = sun_shadow(world_pos, s.ng, frame.to_shadow.xyz);
     let direct = brdf_direct(s, l, v, frame.sun_illuminance.rgb * terminator(s.ng, l) * shadow);
     let ambient = brdf_ambient(s, v);
     return LightContribution(direct.diffuse + ambient.diffuse, direct.specular + ambient.specular);

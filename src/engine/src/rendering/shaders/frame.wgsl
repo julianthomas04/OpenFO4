@@ -46,6 +46,8 @@ struct FrameUniform {
     // camera, z: 1 while the camera is underwater, w: the share
     // of the near plane's height under the surface (0 to 1).
     time_water: vec4<f32>,
+    // xyz: unit direction the sun's shadows are cast from (not the light's direction).
+    to_shadow: vec4<f32>,
 };
 
 // Mirrors `GpuShadowLamp` in shadows/lamps/table.rs.

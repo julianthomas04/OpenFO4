@@ -65,6 +65,8 @@ pub struct FrameUniform {
     /// height at the camera, z: 1 while the camera is underwater, w: the share
     /// of the near plane's height under the surface (0 to 1).
     pub time_water: Vec4,
+    /// xyz: unit direction the sun's shadows are cast from; not `to_sun`'s light direction.
+    pub to_shadow: Vec4,
 }
 
 /// The time uniform restarts at zero after this many seconds. An f32 holds
@@ -78,7 +80,7 @@ pub fn wrapped_time(elapsed_seconds: f32) -> f32 {
     elapsed_seconds.rem_euclid(TIME_WRAP_SECONDS)
 }
 
-const _: () = assert!(std::mem::size_of::<FrameUniform>() == 976);
+const _: () = assert!(std::mem::size_of::<FrameUniform>() == 992);
 
 #[cfg(test)]
 #[allow(clippy::float_cmp, reason = "the wrap is exact in f32 by construction")]
