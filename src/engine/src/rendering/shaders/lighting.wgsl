@@ -26,6 +26,11 @@ const NO_CASCADE = 0xffffffffu;
 const LAST_CASCADE_FADE_FRACTION = 0.1;
 const MAX_SLOPE_BIAS_TANGENT = 10.0;
 const MIN_NO_L = 1e-4;
+// Radius of the sun's shadow filter in world units: constant plus a share of the distance from the
+// receiver to its caster along the shadow direction. Fitted to vanilla's shadow edges (a linear ramp
+// 11.7 + 0.0059 x distance units wide, which this filter disc matches at 0.586 of that width).
+const SUN_PENUMBRA_RADIUS = 6.85;
+const SUN_PENUMBRA_RADIUS_PER_DISTANCE = 0.00345;
 // Widest sun penumbra, as a radius in texels; the blocker search covers it.
 const SUN_MAX_PENUMBRA_TEXELS = 12.0;
 const SUN_MIN_PENUMBRA_TEXELS = 1.0;
@@ -136,8 +141,8 @@ fn mean_blocker_lead(uv: vec2<f32>, cascade: u32, depth: f32, slope: vec2<f32>) 
     return lead / blockers;
 }
 
-// Contact-hardening sun shadow: the sun is a disc, so an edge softens with the distance from its
-// caster. Hardware-filtered compare taps over a disc whose radius is that penumbra.
+// Sun shadow with vanilla's edge: hardware-filtered compare taps over a disc whose radius is
+// `SUN_PENUMBRA_RADIUS`, growing with the distance to the casters.
 fn filtered_shadow(uv: vec2<f32>, cascade: u32, depth: f32, slope: vec2<f32>) -> f32 {
     let taps = frame.shadow_filter.x;
     if (taps <= 1u) {
@@ -147,9 +152,8 @@ fn filtered_shadow(uv: vec2<f32>, cascade: u32, depth: f32, slope: vec2<f32>) ->
     if (lead < 0.0) {
         return 1.0;
     }
-    let cos_radius = frame.to_sun.w;
-    let tan_radius = sqrt(1.0 - cos_radius * cos_radius) / cos_radius;
-    let penumbra_world = lead * cascade_depth_span(cascade) * tan_radius;
+    let caster_distance = lead * cascade_depth_span(cascade);
+    let penumbra_world = SUN_PENUMBRA_RADIUS + SUN_PENUMBRA_RADIUS_PER_DISTANCE * caster_distance;
     let penumbra_texels = clamp(
         penumbra_world / frame.cascade_texel_world[cascade],
         SUN_MIN_PENUMBRA_TEXELS,

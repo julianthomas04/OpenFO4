@@ -26,8 +26,6 @@ use crate::rendering::post::night_sky::SunInput;
 use crate::rendering::shadows::{CascadeSet, ShadowState, lamps::LampShadowState};
 use crate::rendering::water::CameraWater;
 
-/// Angular radius of the real sun's disc; sun shadow edges soften with it.
-const SUN_ANGULAR_RADIUS_DEG: f32 = 0.266;
 /// The Creation Kit states the eye adaptation speed per frame at 30 fps.
 const ADAPTATION_REFERENCE_FPS: f32 = 30.0;
 /// The automatic exposure settles at this share of the middle grey over the mean luminance of
@@ -672,9 +670,7 @@ impl LightingState {
             view_proj,
             inv_view_proj: view_proj.inverse(),
             camera_pos: camera.eye.extend(1.0),
-            to_sun: scene
-                .to_sun
-                .extend(SUN_ANGULAR_RADIUS_DEG.to_radians().cos()),
+            to_sun: scene.to_sun.extend(0.0),
             sun_illuminance: scene.sun_illuminance.extend(scene.sunlight_scale),
             daylight: Vec4::new(scene.daylight, 0.0, 0.0, 0.0),
             ambient_cube: self.uploaded_ambient().uniform_faces(),
