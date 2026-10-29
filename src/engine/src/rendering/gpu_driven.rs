@@ -275,8 +275,23 @@ pub struct GpuTerrainInstance {
     pub vertex_offset: u32,
     pub splat_layer: u32,
     pub layer_indices: [u32; 4],
+    /// The splatmap weighing `layer_indices_hi`; [`NO_SPLAT_LAYER`] for a cell of 4 layers or
+    /// fewer.
+    pub splat_layer_hi: u32,
+    pub _pad2: u32,
+    pub _pad3: u32,
+    pub _pad4: u32,
+    pub layer_indices_hi: [u32; 4],
     pub flags: [u32; 4],
 }
+
+// Offsets of the WGSL `TerrainInstance` in `instance.wgsl`.
+const _: () = {
+    assert!(std::mem::offset_of!(GpuTerrainInstance, splat_layer_hi) == 64);
+    assert!(std::mem::offset_of!(GpuTerrainInstance, layer_indices_hi) == 80);
+    assert!(std::mem::offset_of!(GpuTerrainInstance, flags) == 96);
+    assert!(std::mem::size_of::<GpuTerrainInstance>() == 112);
+};
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -834,6 +849,8 @@ pub const SPLAT_SIZE: u32 = 128;
 pub const SPLAT_LAYERS: u32 = 2048;
 /// Solid red = "base layer fully", used when layers run out.
 pub const SPLAT_FALLBACK_LAYER: u32 = 0;
+/// No splatmap: the layers it would weigh take no weight. Mirrors `instance.wgsl`.
+pub const NO_SPLAT_LAYER: u32 = u32::MAX;
 
 pub struct SplatmapArray {
     texture: wgpu::Texture,

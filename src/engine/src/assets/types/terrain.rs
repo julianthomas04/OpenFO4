@@ -14,7 +14,14 @@ pub const TERRAIN_QUAD_SIZE: f32 = CELL_SIZE / TERRAIN_QUADS as f32; // 128 beth
 const HEIGHT_SCALE: f32 = 8.0;
 const SPLATMAP_RES: usize = 128;
 pub const ALPHA_GRID: usize = 17;
-const MAX_LAYERS: usize = 4;
+/// Landscape textures a cell blends at most. Vanilla cells use up to 12; 8 keeps the layers
+/// with the most coverage of nearly every cell.
+pub const MAX_LAYERS: usize = 8;
+/// Layers one splatmap holds, one per RGBA channel.
+pub const LAYERS_PER_SPLATMAP: usize = 4;
+pub const SPLATMAP_BYTES: usize = SPLATMAP_RES * SPLATMAP_RES * 4;
+/// The blend weights of up to [`LAYERS_PER_SPLATMAP`] layers, `SPLATMAP_RES`² RGBA8.
+pub type SplatmapPixels = Box<[u8; SPLATMAP_BYTES]>;
 /// The texture set vanilla shows wherever a quadrant has no base layer, and under overlay layers
 /// that name no texture: `LandscapeCommonWealthDefault01`. Measured on vanilla's own views, whose
 /// ground in such quadrants matches it far better than the quadrant's largest overlay does.
@@ -30,7 +37,9 @@ const BAKED_TILE_FLIP_V: bool = true;
 pub struct TerrainCellCpu {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
-    pub splatmap_data: [u8; SPLATMAP_RES * SPLATMAP_RES * 4],
+    /// One splatmap per [`LAYERS_PER_SPLATMAP`] layers in use, at least one: splatmap `i`
+    /// weighs `texture_paths[4 * i..4 * i + 4]`.
+    pub splatmaps: Vec<SplatmapPixels>,
     pub texture_paths: [Option<String>; MAX_LAYERS],
     /// Asset-relative path of the baked level-4 LOD tile when this cell
     /// renders in baked mode; vertex UVs are already remapped to the tile
@@ -101,13 +110,13 @@ pub fn build_cell_cpu(
 ) -> anyhow::Result<TerrainCellCpu> {
     let heights = HeightGrid::decode(&record.vertex_height_map)?;
     let (vertices, indices) = generate_mesh(&heights, record.grid_x, record.grid_y, 1);
-    let (splatmap_data, texture_paths) = build_splatmap(record, ltex_to_diffuse);
+    let (splatmaps, texture_paths) = build_splatmap(record, ltex_to_diffuse);
 
     Ok(TerrainCellCpu {
         cell_world_per_uv: cell_world_per_uv(&vertices, &indices),
         vertices,
         indices,
-        splatmap_data,
+        splatmaps,
         texture_paths,
         baked_tile: None,
         grid_x: record.grid_x,
@@ -125,13 +134,13 @@ pub fn build_cell_cpu_lod(
 ) -> anyhow::Result<TerrainCellCpu> {
     let heights = HeightGrid::decode(&record.vertex_height_map)?;
     let (vertices, indices) = generate_mesh(&heights, record.grid_x, record.grid_y, 4);
-    let (splatmap_data, texture_paths) = build_splatmap(record, ltex_to_diffuse);
+    let (splatmaps, texture_paths) = build_splatmap(record, ltex_to_diffuse);
 
     Ok(TerrainCellCpu {
         cell_world_per_uv: cell_world_per_uv(&vertices, &indices),
         vertices,
         indices,
-        splatmap_data,
+        splatmaps,
         texture_paths,
         baked_tile: None,
         grid_x: record.grid_x,
@@ -454,18 +463,15 @@ pub(crate) fn dominant_layer_at(
 fn build_splatmap(
     record: &Landscape,
     ltex_to_diffuse: &HashMap<String, String>,
-) -> (
-    [u8; SPLATMAP_RES * SPLATMAP_RES * 4],
-    [Option<String>; MAX_LAYERS],
-) {
-    let mut pixel_data = [0u8; SPLATMAP_RES * SPLATMAP_RES * 4];
+) -> (Vec<SplatmapPixels>, [Option<String>; MAX_LAYERS]) {
     let mut texture_paths: [Option<String>; MAX_LAYERS] = Default::default();
 
     let Some(decoded) = record.layers.as_deref().and_then(decode_layers) else {
+        let mut pixel_data: SplatmapPixels = Box::new([0; SPLATMAP_BYTES]);
         for i in 0..(SPLATMAP_RES * SPLATMAP_RES) {
             pixel_data[i * 4] = 255;
         }
-        return (pixel_data, texture_paths);
+        return (vec![pixel_data], texture_paths);
     };
 
     let quadrant_base: [&str; 4] = std::array::from_fn(|q| {
@@ -511,6 +517,8 @@ fn build_splatmap(
         }
     }
 
+    let mut splatmaps: Vec<SplatmapPixels> =
+        vec![Box::new([0; SPLATMAP_BYTES]); next_slot.div_ceil(LAYERS_PER_SPLATMAP)];
     let half = SPLATMAP_RES / 2;
     for py in 0..SPLATMAP_RES {
         for px in 0..SPLATMAP_RES {
@@ -548,13 +556,14 @@ fn build_splatmap(
             weights[base_slot] += (1.0 - total_alpha).max(0.0);
 
             let idx = (py * SPLATMAP_RES + px) * 4;
-            for ch in 0..MAX_LAYERS {
-                pixel_data[idx + ch] = (weights[ch].clamp(0.0, 1.0) * 255.0) as u8;
+            for (slot, weight) in weights.iter().take(next_slot).enumerate() {
+                splatmaps[slot / LAYERS_PER_SPLATMAP][idx + slot % LAYERS_PER_SPLATMAP] =
+                    (weight.clamp(0.0, 1.0) * 255.0) as u8;
             }
         }
     }
 
-    (pixel_data, texture_paths)
+    (splatmaps, texture_paths)
 }
 
 fn sample_alpha_bilinear(
@@ -675,8 +684,30 @@ mod tests {
     }
 
     fn splat_pixel(cell: &TerrainCellCpu, px: usize, py: usize) -> [u8; 4] {
+        splatmap_pixel(cell, 0, px, py)
+    }
+
+    fn splatmap_pixel(cell: &TerrainCellCpu, splatmap: usize, px: usize, py: usize) -> [u8; 4] {
         let i = (py * SPLATMAP_RES + px) * 4;
-        cell.splatmap_data[i..i + 4].try_into().unwrap()
+        cell.splatmaps[splatmap][i..i + 4].try_into().unwrap()
+    }
+
+    /// A cell whose quadrant 0 lays `overlays` distinct textures, each at 10 %, over base `t0`.
+    fn cell_with_overlays(overlays: usize) -> TerrainCellCpu {
+        let keys: Vec<String> = (0..=overlays).map(|i| format!("t{i}")).collect();
+        let mut records = base_everywhere(&keys[0]);
+        for key in &keys[1..] {
+            records.push(layer_record(key, 0, false, &full_alpha(0.1)));
+        }
+        let map: HashMap<String, String> = keys
+            .iter()
+            .map(|k| (k.clone(), format!("{k}.dds")))
+            .collect();
+        build_cell_cpu(
+            &landscape(0, 0, 0.0, &[], Some(layers_blob(&records))),
+            &map,
+        )
+        .unwrap()
     }
 
     fn layer(key: &str, quadrant: u8, is_base: bool, opacity: f32) -> LandscapeLayer {
@@ -1057,22 +1088,28 @@ mod tests {
     }
 
     #[test]
-    fn at_most_four_distinct_textures_get_slots() {
-        let keys = ["t0", "t1", "t2", "t3", "t4"];
-        let mut records = base_everywhere("t0");
-        for key in &keys[1..] {
-            records.push(layer_record(key, 0, false, &full_alpha(0.1)));
-        }
-        let map: HashMap<String, String> = keys
-            .iter()
-            .map(|k| ((*k).to_string(), format!("{k}.dds")))
-            .collect();
-        let cell = build_cell_cpu(
-            &landscape(0, 0, 0.0, &[], Some(layers_blob(&records))),
-            &map,
-        )
-        .unwrap();
-        assert_eq!(cell.texture_paths.iter().flatten().count(), 4);
+    fn at_most_eight_distinct_textures_get_slots() {
+        let cell = cell_with_overlays(MAX_LAYERS);
+        assert_eq!(cell.texture_paths.iter().flatten().count(), MAX_LAYERS);
+        assert_eq!(cell.splatmaps.len(), 2);
+    }
+
+    #[test]
+    fn up_to_four_textures_fit_one_splatmap() {
+        let cell = cell_with_overlays(LAYERS_PER_SPLATMAP - 1);
+        assert_eq!(cell.splatmaps.len(), 1);
+    }
+
+    #[test]
+    fn layers_past_the_fourth_are_weighed_in_the_second_splatmap() {
+        // Base t0 keeps 50 %, t1..t5 take 10 % each: 0.1 * 255 = 25.5.
+        let cell = cell_with_overlays(5);
+        assert_eq!(cell.splatmaps.len(), 2);
+        let [t4, t5, unused_a, unused_b] = splatmap_pixel(&cell, 1, 20, 20);
+        assert!(t4.abs_diff(25) <= 1 && t5.abs_diff(25) <= 1, "{t4} {t5}");
+        assert_eq!((unused_a, unused_b), (0, 0));
+        let [t0, ..] = splat_pixel(&cell, 20, 20);
+        assert!(t0.abs_diff(127) <= 1, "{t0}");
     }
 
     #[test]
@@ -1194,8 +1231,10 @@ mod tests {
                 .chain([("grass".to_string(), "grass.dds".to_string())])
                 .collect();
             let cell = build_cell_cpu(&landscape(0, 0, 0.0, &[], Some(layers_blob(&records))), &map).unwrap();
-            let [a, b, c, d] = splat_pixel(&cell, 20, 20);
-            let sum = u32::from(a) + u32::from(b) + u32::from(c) + u32::from(d);
+            let sum: u32 = (0..cell.splatmaps.len())
+                .flat_map(|splatmap| splatmap_pixel(&cell, splatmap, 20, 20))
+                .map(u32::from)
+                .sum();
             prop_assert!(sum.abs_diff(255) <= 4, "sum {}", sum);
         }
     }

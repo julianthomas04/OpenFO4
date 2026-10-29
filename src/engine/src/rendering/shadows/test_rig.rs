@@ -11,7 +11,7 @@ use super::shadow_maps::ShadowMaps;
 use super::{ShadowRenderer, ShadowScene};
 use crate::rendering::cube_array::CubeArray;
 use crate::rendering::gpu_driven::{
-    GpuInstance, GpuTerrainInstance, MaterialRegistry, TextureArray,
+    GpuInstance, GpuTerrainInstance, MaterialRegistry, NO_SPLAT_LAYER, TextureArray,
 };
 use crate::rendering::gpu_profiler::GpuProfiler;
 use crate::rendering::gpu_test::{map_read, world_pass_device};
@@ -337,6 +337,11 @@ impl ShadowRig {
                     vertex_offset: mesh.vertex_offset,
                     splat_layer: 0,
                     layer_indices: [0; 4],
+                    splat_layer_hi: NO_SPLAT_LAYER,
+                    _pad2: 0,
+                    _pad3: 0,
+                    _pad4: 0,
+                    layer_indices_hi: [0; 4],
                     flags: [0; 4],
                 }
             })
