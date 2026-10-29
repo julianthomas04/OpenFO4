@@ -16,6 +16,7 @@ use super::time_of_day::{
     DayTime, MoonKind, SkyGameConfig, SkyMoment, SkyObjects, SlotBlend, sun_light_weight,
 };
 use super::tonemap_settings::TonemapSettings;
+use super::weather_response::WEATHER_LIGHT_RESPONSE;
 use super::wet_ground::landscape_albedo_scale;
 use crate::rendering::camera::Camera;
 use crate::rendering::debug_view::DebugView;
@@ -270,7 +271,7 @@ fn uploaded_ambient(
                 Some(_) | None => sky.ambient_cube(),
             };
             source
-                .scaled(EXTERIOR_AMBIENT_FILL)
+                .scaled(EXTERIOR_AMBIENT_FILL * WEATHER_LIGHT_RESPONSE)
                 .added(lightning * FLASH_AMBIENT_GAIN)
         }
         Shading::Cell(cell) => cell.ambient_cube,
@@ -285,7 +286,8 @@ struct SceneTerms {
     /// The sun's alpha, for the water.
     daylight: f32,
     sun_illuminance: Vec3,
-    /// The HDR sunlight scale already folded into `sun_illuminance` (1 when none).
+    /// Every scale folded into `sun_illuminance` besides the light's own colour and dimmer: the
+    /// HDR sunlight scale and the weather light's response (1 when none).
     sunlight_scale: f32,
     sky_zenith: Vec3,
     sky_horizon: Vec3,
@@ -780,8 +782,8 @@ impl LightingState {
         SceneTerms {
             to_sun: self.sun.direction_to_sun(),
             daylight: self.sun.daylight,
-            sun_illuminance: self.sun.illuminance(),
-            sunlight_scale: self.sun.intensity,
+            sun_illuminance: self.sun.illuminance() * WEATHER_LIGHT_RESPONSE,
+            sunlight_scale: self.sun.intensity * WEATHER_LIGHT_RESPONSE,
             sky_zenith: self.sky.radiance(self.sky.zenith) + sky_flash,
             sky_horizon: self.sky.radiance(self.sky.horizon) + sky_flash,
             sky_ground: self.sky.radiance(self.sky.ground) + sky_flash,
@@ -1011,7 +1013,7 @@ mod tests {
     }
 
     fn fill(cube: AmbientCube) -> AmbientCube {
-        AmbientCube(cube.0.map(|face| face * EXTERIOR_AMBIENT_FILL))
+        cube.scaled(EXTERIOR_AMBIENT_FILL * WEATHER_LIGHT_RESPONSE)
     }
 
     fn weather_cube() -> AmbientCube {
@@ -1178,6 +1180,40 @@ mod tests {
                 state.sky.ambient_cube().uniform_faces()
             );
         }
+    }
+
+    fn lit_exterior() -> LightingState {
+        let mut state = state_with(Environment::Exterior, true, true, false);
+        state.sun.elevation_deg = 40.0;
+        state.set_time_of_day(DayTime::clamped(0, 12.0));
+        assert!(state.sun.illuminance().max_element() > 0.0);
+        state
+    }
+
+    #[test]
+    fn the_exterior_sun_reaches_surfaces_through_the_weather_light_response() {
+        let state = lit_exterior();
+        let frame = frame_of(&state);
+        assert_eq!(
+            frame.sun_illuminance.truncate(),
+            state.sun.illuminance() * WEATHER_LIGHT_RESPONSE
+        );
+        assert_eq!(
+            frame.sun_illuminance.w,
+            state.sun.intensity * WEATHER_LIGHT_RESPONSE
+        );
+    }
+
+    #[test]
+    fn dividing_out_the_folded_scales_gives_back_the_sun_colour_and_dimmer() {
+        let state = lit_exterior();
+        let frame = frame_of(&state);
+        let unscaled = frame.sun_illuminance.truncate() / frame.sun_illuminance.w;
+        let expected = state.sun.illuminance() / state.sun.intensity;
+        assert!(
+            (unscaled - expected).abs().max_element() < 1e-6,
+            "{unscaled} {expected}"
+        );
     }
 
     #[test]

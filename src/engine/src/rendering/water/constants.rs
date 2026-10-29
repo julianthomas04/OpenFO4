@@ -324,9 +324,9 @@ fn vertex_cb1(scroll: &NormalScroll, layers: &[NoiseLayer; 3]) -> [Vec4; VS_CB1_
 }
 
 /// `cb0[3].xyz`: the sun light's linear colour times its dimmer. Unlike the
-/// lighting shader, the water fill does not multiply in the image space's
-/// sunlight scale, so the scale folded
-/// into the frame's sun illuminance is divided out again.
+/// lighting shader, the water fill multiplies in neither the image space's
+/// sunlight scale nor the weather light's surface response, so the scales folded
+/// into the frame's sun illuminance are divided out again.
 fn unscaled_sun_colour(frame: &FrameUniform) -> Vec3 {
     let illuminance = frame.sun_illuminance.truncate();
     let sunlight_scale = frame.sun_illuminance.w;

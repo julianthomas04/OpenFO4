@@ -16,6 +16,7 @@ pub mod time_of_day;
 pub mod time_panel;
 pub mod tonemap_settings;
 pub mod weather_panel;
+pub mod weather_response;
 pub mod weather_slots;
 pub mod wet_ground;
 
