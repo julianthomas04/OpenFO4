@@ -649,6 +649,11 @@ impl DbClient {
     }
 
     #[instrument(skip(self))]
+    pub fn get_texture_set_diffuse(&self, form_key: &str) -> anyhow::Result<Option<String>> {
+        LandscapeTextureDiffuse::texture_set_diffuse(&self.conn, form_key)
+    }
+
+    #[instrument(skip(self))]
     pub fn get_grasses(&self) -> anyhow::Result<Vec<GrassRow>> {
         GrassRow::get_all(&self.conn)
     }

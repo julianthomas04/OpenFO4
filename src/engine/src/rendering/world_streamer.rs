@@ -1302,6 +1302,14 @@ impl WorldStreamer {
                 ltex_records.len()
             );
         }
+        if let Some(diffuse) = db.get_texture_set_diffuse(terrain::DEFAULT_LAND_TEXTURE_SET)? {
+            ltex_to_diffuse.insert(terrain::DEFAULT_LAND_TEXTURE_SET.to_string(), diffuse);
+        } else {
+            warn!(
+                "default land texture set {} has no diffuse path; quadrants without a base layer render fallback",
+                terrain::DEFAULT_LAND_TEXTURE_SET
+            );
+        }
         let ltex_to_diffuse = Arc::new(ltex_to_diffuse);
         let grass = GrassWorkerData::load(&db, asset_root, grass_settings);
 
