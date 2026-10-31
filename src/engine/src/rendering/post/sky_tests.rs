@@ -51,6 +51,9 @@ const MEASURED: [(f32, f32, f32, f32); 25] = [
 /// leaves 0.014, 0.018 and 0.010; these rows weigh the low sky, where it fits worst.
 const MAX_GAP: f32 = 0.07;
 const MAX_RMS: f32 = 0.03;
+/// How far the horizon row may miss pure Horizon: `pow(1.0, y)` is not exact on every adapter
+/// (CI's software adapter gives 0.9991).
+const HORIZON_ROW_TOLERANCE: f32 = 2e-3;
 
 fn weights_at(test: &str, sines: &[f32]) -> Option<Vec<Vec3>> {
     let (device, queue) = test_device(test)?;
@@ -155,7 +158,11 @@ fn the_shares_add_up_to_one_and_the_horizon_row_is_pure_horizon() {
             "{sine}: {weight}"
         );
     }
-    assert!(weights[0].abs_diff_eq(Vec3::Z, 1e-6), "{}", weights[0]);
+    assert!(
+        weights[0].abs_diff_eq(Vec3::Z, HORIZON_ROW_TOLERANCE),
+        "{}",
+        weights[0]
+    );
 }
 
 #[test]
