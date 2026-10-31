@@ -1361,14 +1361,15 @@ impl State {
             texture_feedback.enabled(),
         );
 
+        let overlay_format = tonemap::ui_gamma_format(config.format);
         let skeleton_overlay = SkeletonOverlay::new(
             &device,
-            HDR_FORMAT,
+            overlay_format,
             &frame_binding.layout,
             &depth_texture.view,
         );
         let debug_line_pipeline =
-            DebugLinePipeline::new(&device, HDR_FORMAT, &world_pass_layout.pipeline_layout);
+            DebugLinePipeline::new(&device, overlay_format, &world_pass_layout.pipeline_layout);
 
         // Mega-buffers
         let object_mega = MegaBuffer::new(&device, "object");
@@ -1407,7 +1408,7 @@ impl State {
             cluster_buffers,
             &placed_lights.buffer,
             hiz_pipeline.pyramid_view(),
-            HDR_FORMAT,
+            overlay_format,
             &world_pass_layout.pipeline_layout,
         );
 
@@ -2396,8 +2397,8 @@ impl State {
             );
         }
 
-        // Translucent pass: loads the opaque result, then the water stage, the
-        // overlay buckets and the debug lines. Timed as `water`, so it includes
+        // Translucent pass: loads the opaque result, then the water stage and the
+        // overlay buckets. Timed as `water`, so it includes
         // the overlay buckets.
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2459,17 +2460,6 @@ impl State {
                 if self.effect_stage.draw(&mut render_pass, &self.scene_copy) {
                     bind_world_groups(&mut render_pass);
                 }
-
-                // Collision wireframe overlay.
-                if self.collision_wireframe {
-                    self.collision_lines
-                        .draw(&mut render_pass, &self.debug_line_pipeline.pipeline);
-                }
-                self.navmesh_overlay
-                    .draw(&mut render_pass, &self.debug_line_pipeline.pipeline);
-
-                self.local_lights
-                    .draw_spheres(&mut render_pass, &self.lighting.local_lights);
             }
         }
         if !world_skipped {
@@ -2509,9 +2499,6 @@ impl State {
         }
         drop(encode_world_span);
 
-        self.skeleton_overlay
-            .encode(&mut encoder, self.post.hdr_view(), &self.frame_binding);
-
         let encode_post_span = tracing::info_span!("encode_post").entered();
         // HiZ pyramid for next frame's occlusion culling.
         if !skip.skips(DebugPass::Hiz) {
@@ -2535,6 +2522,46 @@ impl State {
                 &self.gpu_profiler,
             );
         }
+
+        // Debug overlays draw on the displayed picture, so their colours are shown as stored
+        // whatever the exposure and grading make of the scene.
+        let overlay_view = output.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(tonemap::ui_gamma_format(self.config.format)),
+            ..Default::default()
+        });
+        if !world_skipped {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Debug Overlay Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &overlay_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                occlusion_query_set: None,
+                timestamp_writes: None,
+                multiview_mask: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_texture.view,
+                    depth_ops: None,
+                    stencil_ops: None,
+                }),
+            });
+            bind_world_groups(&mut render_pass);
+            if self.collision_wireframe {
+                self.collision_lines
+                    .draw(&mut render_pass, &self.debug_line_pipeline.pipeline);
+            }
+            self.navmesh_overlay
+                .draw(&mut render_pass, &self.debug_line_pipeline.pipeline);
+            self.local_lights
+                .draw_spheres(&mut render_pass, &self.lighting.local_lights);
+        }
+        self.skeleton_overlay
+            .encode(&mut encoder, &overlay_view, &self.frame_binding);
 
         // Native HUD overlay. Color-only, LoadOp::Load, no depth: the HiZ
         // pyramid above already consumed the depth buffer, so the HUD must not

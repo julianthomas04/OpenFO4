@@ -1,4 +1,5 @@
-// Debug wireframe overlays (collision, navmesh): world-space line list with a per-vertex colour.
+// Debug wireframe overlays (collision, navmesh): world-space line list with a per-vertex colour,
+// drawn on the displayed picture after tone mapping.
 // Depth-tested against the scene (reverse-Z) but never written - the HiZ
 // occlusion pyramid samples the depth buffer after the main pass.
 
