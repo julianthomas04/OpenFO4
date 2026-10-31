@@ -12,9 +12,14 @@ struct FrameUniform {
     sky_zenith: vec4<f32>,
     sky_horizon: vec4<f32>,
     sky_ground: vec4<f32>,
+    // The fog, laid out and documented by `fog::FogUniformFields`.
     fog_near_color: vec4<f32>,
     fog_far_color: vec4<f32>,
+    fog_near_high_color: vec4<f32>,
+    fog_far_high_color: vec4<f32>,
     fog_params: vec4<f32>,
+    fog_near_band: vec4<f32>,
+    fog_far_band: vec4<f32>,
     cascade_view_proj: array<mat4x4<f32>, 4>,
     cascade_spheres: array<vec4<f32>, 4>,
     shadow_params: vec4<f32>,
@@ -28,8 +33,12 @@ struct FrameUniform {
     cluster_grid: vec4<u32>,
     // x: first slice far depth, y: cluster far depth, z: log2 scale, w: log2 bias.
     cluster_z: vec4<f32>,
-    // x: tonemap operator, y: white point, z: saturation.
+    // x: tonemap operator, y: the image space's TonemapE, z: the weight of its colour LUT.
     tonemap: vec4<f32>,
+    // x: saturation, y: brightness, z: contrast, w: tint amount.
+    cinematic: vec4<f32>,
+    // rgb: linear tint colour.
+    tint: vec4<f32>,
     // x: texture feedback on, y: frame index, z: pixel sample mask,
     // w: iTexMipMapSkip.
     texture_feedback: vec4<u32>,
@@ -37,6 +46,10 @@ struct FrameUniform {
     // camera, z: 1 while the camera is underwater, w: the share
     // of the near plane's height under the surface (0 to 1).
     time_water: vec4<f32>,
+    // xyz: unit direction the sun's shadows are cast from (not the light's direction).
+    to_shadow: vec4<f32>,
+    // x: the share of its dry albedo the landscape keeps in this frame's rain.
+    landscape: vec4<f32>,
 };
 
 // Mirrors `GpuShadowLamp` in shadows/lamps/table.rs.

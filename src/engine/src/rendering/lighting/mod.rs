@@ -8,13 +8,17 @@ pub mod frame_binding;
 pub mod frame_uniform;
 pub mod interior_catalog;
 pub mod lerp;
+pub mod lightning;
 pub mod sky_clock;
+pub mod sky_measured;
 pub mod state;
 pub mod time_of_day;
 pub mod time_panel;
 pub mod tonemap_settings;
 pub mod weather_panel;
+pub mod weather_response;
 pub mod weather_slots;
+pub mod wet_ground;
 
 pub use frame_binding::FrameBinding;
 pub use frame_uniform::FrameUniform;

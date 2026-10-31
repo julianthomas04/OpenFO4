@@ -13,15 +13,16 @@ use kira::Decibels;
 use kira::sound::FromFileError;
 
 use super::conditions::{self, ConditionError, FreshWorldContext, GameTime, global_entries};
+use super::decibels::amplitude_to_db;
 use super::file_probe::{ProbeError, probe_files};
-use super::music_output::open_music_stream;
+use super::music_output::open_stream;
 use super::music_stack::pick;
 use super::place::{Candidate, PlaceError, PlaceIndex, PlaceSnapshot};
-use super::rng::SplitMix64;
 use super::scheduler::{LOG_TARGET, PlayPlan, SchedulerError, TrackScheduler};
 use crate::assets::db::music::{
     MusicCatalog, MusicTrack, MusicTrackKind, MusicType, SoundCategory,
 };
+use crate::random::SplitMix64;
 
 pub const MUSIC_CATEGORY_EDITOR_ID: &str = "AudioCategoryMUS";
 
@@ -72,7 +73,7 @@ impl From<ProbeError> for WorldMusicError {
         match error {
             ProbeError::DirectoryMissing(path) => Self::AudioDirectoryMissing(path),
             ProbeError::Check { path, source } => Self::FileCheck { path, source },
-            ProbeError::Open { path, source } => Self::MusicFile { path, source },
+            ProbeError::Open { path, source, .. } => Self::MusicFile { path, source },
         }
     }
 }
@@ -139,7 +140,7 @@ impl WorldMusic {
             "music file",
             single_file_keys(&reachable),
             audio_dir,
-            |path| open_music_stream(path, false).map(|_| ()),
+            |path| open_stream(path, false).map(|_| ()),
         )?;
         Ok(Self {
             index,
@@ -157,7 +158,7 @@ impl WorldMusic {
 
     /// The music volume from the sound category chain, as a level for every world music sound.
     pub fn volume(&self) -> Decibels {
-        Decibels(20.0 * self.gain.log10())
+        Decibels(amplitude_to_db(self.gain))
     }
 
     pub fn missing_files(&self) -> &HashSet<String> {
@@ -456,7 +457,7 @@ fn single_file_keys<'a>(reachable: &[&'a MusicTrack]) -> Vec<&'a str> {
 mod tests {
     use super::*;
     use crate::assets::db::music::{CellPlace, Comparand, CompareOp};
-    use crate::audio::conditions::GET_STAGE;
+    use crate::audio::conditions::{GET_STAGE, IS_IN_INTERIOR};
     use crate::audio::scheduler::{FLAG_CYCLE_TRACKS, LayerStep};
     use crate::audio::test_support::catalog::{
         MASTER_CATEGORY_MULTIPLIER, MUSIC_CATEGORY_MULTIPLIER, exterior_place, palette, silent,
@@ -714,6 +715,30 @@ mod tests {
         assert!(
             message.contains("MUSTrackA") && message.contains("47"),
             "{message}"
+        );
+    }
+
+    #[test]
+    fn a_track_that_asks_for_the_interior_is_fatal_as_nothing_tells_the_music_where_the_player_is()
+    {
+        let mut catalog = two_types();
+        catalog.tracks[0].conditions = vec![condition(
+            IS_IN_INTERIOR,
+            CompareOp::Equal,
+            Comparand::Value(0.0),
+        )];
+
+        let error = build_error(catalog);
+
+        assert!(
+            matches!(
+                &error,
+                WorldMusicError::Condition {
+                    source: ConditionError::UnsupportedFunction(IS_IN_INTERIOR),
+                    ..
+                }
+            ),
+            "{error:?}"
         );
     }
 

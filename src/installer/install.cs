@@ -188,6 +188,7 @@ if (args.Length > 0 && !args[0].StartsWith("--", StringComparison.Ordinal))
                     Environment.ExitCode = 1;
                     return;
                 }
+                new PipelineStages(devLocations, devMemory.Value, CancellationToken.None).EnsureStagedMaterials();
                 string dbOnlyPath = Path.Combine(dataOut, "data.db");
                 string esmOnlySrc = ResolveFallout4Esm(stagingRoot, fo4Location);
 

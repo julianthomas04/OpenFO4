@@ -498,6 +498,7 @@ fn ambient_environment(max_specular_intensity: Option<f32>) -> Environment {
     Environment {
         max_specular_intensity,
         ambient_cube: gradient_cube(),
+        ..Environment::default()
     }
 }
 

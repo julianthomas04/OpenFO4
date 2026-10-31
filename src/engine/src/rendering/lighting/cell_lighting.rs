@@ -2,7 +2,10 @@ use glam::Vec3;
 use serde::Deserialize;
 
 use super::ambient::{AMBIENT_CUBE_FACES, AmbientCube};
-use super::fog::{Fog, FogParams};
+use super::fog::measured::{BlendedFogColors, INTERIOR_COLOUR_FACTORS};
+use super::fog::{
+    Fog, FogColors, FogParams, HeightBands, HeightFogError, RawHeightFog, SunlightTerm,
+};
 use crate::rendering::world_streamer::SCALE;
 
 #[derive(Debug, thiserror::Error)]
@@ -17,6 +20,10 @@ pub enum CellLightingError {
     NonFinite { field: &'static str },
     #[error("fog range is not increasing (near {near}, far {far} Bethesda units)")]
     InvertedFogRange { near: f32, far: f32 },
+    #[error("lighting field `{field}` is negative")]
+    NegativeFogScale { field: &'static str },
+    #[error("height fog: {0}")]
+    HeightFog(#[from] HeightFogError),
 }
 
 impl CellLightingError {
@@ -27,6 +34,8 @@ impl CellLightingError {
             Self::MissingField { .. } => "missing field",
             Self::NonFinite { .. } => "non-finite field",
             Self::InvertedFogRange { .. } => "inverted fog range",
+            Self::NegativeFogScale { .. } => "negative fog scale",
+            Self::HeightFog(_) => "invalid height fog",
         }
     }
 }
@@ -73,21 +82,91 @@ impl RawColor {
     }
 
     pub(super) fn linear(self) -> Vec3 {
-        Vec3::new(
-            srgb_to_linear(self.r),
-            srgb_to_linear(self.g),
-            srgb_to_linear(self.b),
-        )
+        self.decoded(StoredColourEncoding::Srgb)
+    }
+
+    pub(super) fn decoded(self, encoding: StoredColourEncoding) -> Vec3 {
+        encoding.decode(self.unit())
+    }
+
+    /// Each channel as stored, scaled to 0 to 1.
+    pub(super) fn unit(self) -> Vec3 {
+        Vec3::new(f32::from(self.r), f32::from(self.g), f32::from(self.b)) / 255.0
     }
 }
 
+/// How a colour stored as 0 to 1 per channel becomes linear light, and back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StoredColourEncoding {
+    Srgb,
+    Gamma22,
+    /// The stored value is itself the linear factor.
+    Linear,
+}
+
+impl StoredColourEncoding {
+    pub(crate) fn decode(self, stored: Vec3) -> Vec3 {
+        match self {
+            Self::Srgb => Vec3::from_array(stored.to_array().map(srgb_unit_to_linear)),
+            Self::Gamma22 => gamma_decode(stored),
+            Self::Linear => stored,
+        }
+    }
+
+    /// The exact inverse of [`Self::decode`]; negative channels are 0.
+    pub(crate) fn encode(self, linear: Vec3) -> Vec3 {
+        let linear = linear.max(Vec3::ZERO);
+        match self {
+            Self::Srgb => Vec3::from_array(linear.to_array().map(linear_to_srgb_unit)),
+            Self::Gamma22 => linear.powf(DISPLAY_GAMMA.recip()),
+            Self::Linear => linear,
+        }
+    }
+}
+
+pub(crate) const DISPLAY_GAMMA: f32 = 2.2;
+
+/// A colour stored as 0 to 1 per channel, decoded with gamma 2.2.
+pub(crate) fn gamma_decode(encoded: Vec3) -> Vec3 {
+    encoded.powf(DISPLAY_GAMMA)
+}
+
 pub(crate) fn srgb_to_linear(channel: u8) -> f32 {
-    let encoded = f32::from(channel) / 255.0;
+    srgb_unit_to_linear(f32::from(channel) / 255.0)
+}
+
+/// One sRGB channel stored as 0 to 1, as linear light.
+pub(crate) fn srgb_unit_to_linear(encoded: f32) -> f32 {
     if encoded <= 0.04045 {
         encoded / 12.92
     } else {
         ((encoded + 0.055) / 1.055).powf(2.4)
     }
+}
+
+fn linear_to_srgb_unit(linear: f32) -> f32 {
+    if linear <= 0.003_130_8 {
+        linear * 12.92
+    } else {
+        1.055 * linear.powf(2.4_f32.recip()) - 0.055
+    }
+}
+
+/// A colour stored as 0 to 255 per channel, as the linear light the lighting adds up.
+pub(crate) fn srgb8_to_linear([red, green, blue]: [u8; 3]) -> Vec3 {
+    Vec3::new(
+        srgb_to_linear(red),
+        srgb_to_linear(green),
+        srgb_to_linear(blue),
+    )
+}
+
+/// Rec. 709 luma weights: how much each linear channel counts towards how bright a colour looks.
+const LUMINANCE_WEIGHTS: Vec3 = Vec3::new(0.2126, 0.7152, 0.0722);
+
+/// How bright the linear colour `light` looks: 1 for white at full strength.
+pub(crate) fn luminance(light: Vec3) -> f32 {
+    light.dot(LUMINANCE_WEIGHTS)
 }
 
 /// Bethesda Z is up and Y is forward; engine Y is up and -Z is forward.
@@ -138,8 +217,9 @@ impl RawAmbientCube {
 }
 
 /// One serde shape for both cell lighting (XCLL) and lighting template data;
-/// the aliases cover the template's differently named fields. Fields the engine
-/// does not use (light fade distances, height fog, specular, scales) are ignored.
+/// the aliases cover the template's differently named fields (its fog height is
+/// the far band). Fields the engine does not use (light fade distances,
+/// specular, ambient scale) are ignored.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct RawLighting {
@@ -159,6 +239,21 @@ pub struct RawLighting {
     #[serde(alias = "DirectionalAmbientColors")]
     ambient_colors: Option<RawAmbientCube>,
     inherits: Option<u32>,
+    #[serde(alias = "FogColorHighNear")]
+    fog_high_near_color: Option<RawColor>,
+    #[serde(alias = "FogColorHighFar")]
+    fog_high_far_color: Option<RawColor>,
+    near_height_mid: Option<f32>,
+    near_height_range: Option<f32>,
+    #[serde(alias = "FogHeightMid")]
+    far_height_mid: Option<f32>,
+    #[serde(alias = "FogHeightRange")]
+    far_height_range: Option<f32>,
+    high_density_scale: Option<f32>,
+    fog_near_scale: Option<f32>,
+    fog_far_scale: Option<f32>,
+    fog_high_near_scale: Option<f32>,
+    fog_high_far_scale: Option<f32>,
 }
 
 impl RawLighting {
@@ -324,11 +419,15 @@ impl Merge<'_> {
         field: &'static str,
         get: impl Fn(&RawLighting) -> Option<T>,
     ) -> Result<T, CellLightingError> {
-        let source = match self.template {
+        get(self.source(bit)).ok_or(CellLightingError::MissingField { field })
+    }
+
+    /// The record a field under the inherit `bit` comes from.
+    fn source(&self, bit: u32) -> &RawLighting {
+        match self.template {
             Some(template) if self.inherits.contains(bit) => template,
             _ => self.cell,
-        };
-        get(source).ok_or(CellLightingError::MissingField { field })
+        }
     }
 
     fn pick_finite(
@@ -389,6 +488,8 @@ impl Merge<'_> {
         }))
     }
 
+    /// The fog colours, their scales and the height fog all follow the fog colour's inherit
+    /// bit; that the height fog does is an estimate (only all fog bits together were measured).
     fn fog(&self) -> Result<Fog, CellLightingError> {
         let near = self.pick_finite(Inherits::FOG_NEAR, "FogNear", |raw| raw.fog_near)?;
         let far = self.pick_finite(Inherits::FOG_FAR, "FogFar", |raw| raw.fog_far)?;
@@ -398,19 +499,15 @@ impl Merge<'_> {
         if far <= near {
             return Err(CellLightingError::InvertedFogRange { near, far });
         }
+        let colour_source = self.source(Inherits::FOG_COLOR);
         Ok(Fog::Enabled(FogParams {
-            near_color: self
-                .pick(Inherits::FOG_COLOR, "FogNearColor", |raw| {
-                    raw.fog_near_color
-                })?
-                .linear(),
-            far_color: self
-                .pick(Inherits::FOG_COLOR, "FogFarColor", |raw| raw.fog_far_color)?
-                .linear(),
+            colors: fog_colors(colour_source)?,
             near: near * SCALE,
             far: far * SCALE,
             power: self.pick_finite(Inherits::FOG_POWER, "FogPower", |raw| raw.fog_power)?,
             max: self.pick_finite(Inherits::FOG_MAX, "FogMax", |raw| raw.fog_max)?,
+            height: colour_source.height_fog()?,
+            sunlight: SunlightTerm::NONE,
         }))
     }
 
@@ -419,6 +516,102 @@ impl Merge<'_> {
             raw.fog_clip_distance
         })?;
         Ok((distance > 0.0).then_some(distance * SCALE))
+    }
+}
+
+impl RawLighting {
+    /// The same fog at every height for a record that predates height fog.
+    fn height_fog(&self) -> Result<HeightBands, HeightFogError> {
+        if self.predates_height_fog_and_scales() {
+            return Ok(HeightBands::NONE);
+        }
+        RawHeightFog {
+            near_mid: self.near_height_mid,
+            near_range: self.near_height_range,
+            far_mid: self.far_height_mid,
+            far_range: self.far_height_range,
+            high_density_scale: self.high_density_scale,
+        }
+        .bands()
+    }
+
+    /// Records that predate the height fog and the colour scales store 0 for all of them (and
+    /// older databases nothing).
+    fn predates_height_fog_and_scales(&self) -> bool {
+        [
+            self.fog_near_scale,
+            self.fog_far_scale,
+            self.fog_high_near_scale,
+            self.fog_high_far_scale,
+            self.high_density_scale,
+            self.near_height_range,
+            self.far_height_range,
+        ]
+        .iter()
+        .all(|value| value.is_none_or(|value| value == 0.0))
+    }
+}
+
+/// The four fog colours of `raw` with the interior colour factors. Each scale multiplies its
+/// colour as stored, before the gamma 2.2 decode. A high colour the record lacks is its low one.
+fn fog_colors(raw: &RawLighting) -> Result<FogColors, CellLightingError> {
+    let scales = FogColorScales::of(raw)?;
+    let color = |field: &'static str, color: Option<RawColor>| {
+        color
+            .map(RawColor::unit)
+            .ok_or(CellLightingError::MissingField { field })
+    };
+    let near = color("FogNearColor", raw.fog_near_color)?;
+    let far = color("FogFarColor", raw.fog_far_color)?;
+    let stored = FogColors {
+        near: near * scales.near,
+        far: far * scales.far,
+        near_high: raw.fog_high_near_color.map_or(near, RawColor::unit) * scales.near_high,
+        far_high: raw.fog_high_far_color.map_or(far, RawColor::unit) * scales.far_high,
+    };
+    Ok(BlendedFogColors::from_stored(stored, INTERIOR_COLOUR_FACTORS).linear())
+}
+
+/// The `Fog*Scale` multipliers of the fog colours, which are bytes and so cannot be brighter
+/// than 255 on their own.
+#[derive(Debug, Copy, Clone, PartialEq)]
+struct FogColorScales {
+    near: f32,
+    far: f32,
+    near_high: f32,
+    far_high: f32,
+}
+
+impl FogColorScales {
+    const UNSCALED: Self = Self {
+        near: 1.0,
+        far: 1.0,
+        near_high: 1.0,
+        far_high: 1.0,
+    };
+
+    /// A record that predates the scales is unscaled; otherwise a missing scale is 1 and a 0
+    /// turns its colour black.
+    fn of(raw: &RawLighting) -> Result<Self, CellLightingError> {
+        if raw.predates_height_fog_and_scales() {
+            return Ok(Self::UNSCALED);
+        }
+        let scale = |field: &'static str, scale: Option<f32>| {
+            let scale = scale.unwrap_or(1.0);
+            if !scale.is_finite() {
+                Err(CellLightingError::NonFinite { field })
+            } else if scale < 0.0 {
+                Err(CellLightingError::NegativeFogScale { field })
+            } else {
+                Ok(scale)
+            }
+        };
+        Ok(Self {
+            near: scale("FogNearScale", raw.fog_near_scale)?,
+            far: scale("FogFarScale", raw.fog_far_scale)?,
+            near_high: scale("FogHighNearScale", raw.fog_high_near_scale)?,
+            far_high: scale("FogHighFarScale", raw.fog_high_far_scale)?,
+        })
     }
 }
 
@@ -511,6 +704,37 @@ mod tests {
     }
 
     #[test]
+    fn a_stored_colour_converts_each_channel_by_itself() {
+        let linear = srgb8_to_linear([128, 64, 200]);
+        for (channel, expected) in [
+            (linear.x, 0.215_860_5),
+            (linear.y, 0.051_269_46),
+            (linear.z, 0.577_580_4),
+        ] {
+            assert!((channel - expected).abs() < 1e-6, "{channel} vs {expected}");
+        }
+    }
+
+    #[test]
+    fn no_light_is_no_luminance_and_white_light_at_full_strength_is_one() {
+        assert_eq!(luminance(Vec3::ZERO), 0.0);
+        assert!((luminance(Vec3::ONE) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn each_channel_counts_by_its_share_of_the_luminance() {
+        assert!((luminance(Vec3::X) - 0.2126).abs() < 1e-6);
+        assert!((luminance(Vec3::Y) - 0.7152).abs() < 1e-6);
+        assert!((luminance(Vec3::Z) - 0.0722).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_luminance_of_light_scales_with_the_light() {
+        let light = Vec3::new(0.5, 0.25, 1.0);
+        assert!((luminance(light * 3.0) - 3.0 * luminance(light)).abs() < 1e-6);
+    }
+
+    #[test]
     fn bethesda_faces_are_reordered_into_engine_axes() {
         // Bethesda +Y (forward) is engine -Z and Bethesda +Z (up) is engine +Y.
         let reordered = bethesda_faces_to_engine_order(["x+", "x-", "y+", "y-", "z+", "z-"]);
@@ -559,7 +783,6 @@ mod tests {
         assert!((fog.near - 10.0).abs() < 1e-4);
         assert!((fog.far - 100.0).abs() < 1e-3);
         assert_eq!((fog.power, fog.max), (2.0, 0.5));
-        assert_eq!(fog.near_color, Vec3::new(0.0, 0.0, 1.0));
         assert!((lighting.clip_distance.unwrap() - 400.0).abs() < 1e-2);
     }
 
@@ -747,5 +970,189 @@ mod tests {
         let cell = raw(json!({"Inherits": Inherits::FOG_MAX}));
         let merged = resolve(&cell, TemplateSource::Available(&template)).unwrap();
         assert!(merged.lighting.ambient_cube.0[0].x < 0.2);
+    }
+
+    fn fog_of(lighting: &CellLighting) -> FogParams {
+        match lighting.fog {
+            Fog::Enabled(fog) => fog,
+            Fog::Disabled => panic!("fog should be enabled"),
+        }
+    }
+
+    #[test]
+    fn cell_fog_takes_the_interior_colour_factors_and_no_sunlight() {
+        let fog = fog_of(&resolved(json!({})).unwrap().lighting);
+        let factor = INTERIOR_COLOUR_FACTORS.near;
+        assert_eq!(INTERIOR_COLOUR_FACTORS.far, factor);
+        assert!(
+            fog.colors
+                .near
+                .abs_diff_eq(Vec3::new(0.0, 0.0, factor), 1e-6)
+        );
+        assert!(
+            fog.colors
+                .far
+                .abs_diff_eq(Vec3::new(factor, 0.0, 0.0), 1e-6)
+        );
+        assert_eq!(fog.sunlight, SunlightTerm::NONE);
+    }
+
+    #[test]
+    fn cell_fog_fades_in_after_near_like_the_exterior_fog() {
+        let fog = fog_of(&resolved(json!({})).unwrap().lighting);
+        let opacity = |distance: f32| {
+            Fog::Enabled(fog)
+                .at(Vec3::ZERO, Vec3::new(0.0, 0.0, -distance))
+                .opacity
+        };
+        let span = fog.far - fog.near;
+        let half_way = fog.near + 0.0075 * span;
+        assert!((opacity(half_way) - 0.5 * fog.colour_weight(half_way)).abs() < 1e-6);
+        let faded_in = fog.near + 0.5 * span;
+        assert!((opacity(faded_in) - fog.colour_weight(faded_in)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cell_fog_colours_decode_with_gamma_two_point_two() {
+        let fog = fog_of(
+            &resolved(json!({"FogFarColor": color(128, 128, 128)}))
+                .unwrap()
+                .lighting,
+        );
+        let expected = (128.0_f32 / 255.0).powf(2.2) * INTERIOR_COLOUR_FACTORS.far;
+        assert!((fog.colors.far.x - expected).abs() < 1e-6);
+    }
+
+    fn height_fields() -> Value {
+        json!({
+            "NearHeightMid": 500.0, "NearHeightRange": 1000.0,
+            "FarHeightMid": 1500.0, "FarHeightRange": 3000.0,
+            "FogHighNearColor": color(0, 255, 0),
+            "FogHighFarColor": color(0, 0, 128),
+            "HighDensityScale": 0.7,
+            "FogNearScale": 1.0, "FogFarScale": 1.0,
+            "FogHighNearScale": 1.0, "FogHighFarScale": 1.0,
+        })
+    }
+
+    #[test]
+    fn cell_height_fog_takes_the_bands_density_and_high_colours() {
+        let fog = fog_of(&resolved(height_fields()).unwrap().lighting);
+        assert!((fog.height.near.mid - 50.0).abs() < 1e-4);
+        assert!((fog.height.far.range - 300.0).abs() < 1e-3);
+        assert_eq!(fog.height.high_density_scale, 0.7);
+        let factor = INTERIOR_COLOUR_FACTORS.near_high;
+        assert!(
+            fog.colors
+                .near_high
+                .abs_diff_eq(Vec3::new(0.0, factor, 0.0), 1e-6)
+        );
+        let far_high = (128.0_f32 / 255.0).powf(2.2) * INTERIOR_COLOUR_FACTORS.far_high;
+        assert!((fog.colors.far_high.z - far_high).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_record_without_high_colours_takes_its_low_ones_high() {
+        let fog = fog_of(&resolved(json!({})).unwrap().lighting);
+        assert_eq!(fog.colors.near_high, fog.colors.near);
+        assert_eq!(fog.colors.far_high, fog.colors.far);
+    }
+
+    #[test]
+    fn an_inherited_fog_colour_brings_the_templates_height_fog_with_its_names() {
+        let template = raw(json!({
+            "FogColorHighNear": color(0, 255, 0),
+            "NearHeightMid": 100.0, "NearHeightRange": 200.0,
+            "FogHeightMid": 300.0, "FogHeightRange": 400.0,
+            "HighDensityScale": 0.0,
+            "FogNearScale": 1.0, "FogFarScale": 1.0,
+            "FogHighNearScale": 1.0, "FogHighFarScale": 1.0,
+        }));
+        let cell = raw(json!({"Inherits": Inherits::FOG_COLOR}));
+        let merged = resolve(&cell, TemplateSource::Available(&template)).unwrap();
+        let fog = fog_of(&merged.lighting);
+        assert!((fog.height.far.mid - 30.0).abs() < 1e-4);
+        assert!((fog.height.far.range - 40.0).abs() < 1e-4);
+        assert_eq!(fog.height.high_density_scale, 0.0);
+        assert!(fog.colors.near_high.y > 0.0);
+    }
+
+    #[test]
+    fn each_fog_colour_scale_multiplies_its_colour_before_the_decode() {
+        let mut fields = height_fields();
+        fields["FogNearScale"] = json!(0.5);
+        fields["FogHighFarScale"] = json!(2.0);
+        let fog = fog_of(&resolved(fields).unwrap().lighting);
+        let plain = fog_of(&resolved(height_fields()).unwrap().lighting);
+        assert!(
+            fog.colors
+                .near
+                .abs_diff_eq(plain.colors.near * 0.5_f32.powf(2.2), 1e-6)
+        );
+        assert!(
+            fog.colors
+                .far_high
+                .abs_diff_eq(plain.colors.far_high * 2.0_f32.powf(2.2), 1e-6)
+        );
+        assert_eq!(fog.colors.far, plain.colors.far);
+    }
+
+    #[test]
+    fn a_record_that_predates_the_scales_and_height_fog_is_unscaled_and_level() {
+        let truncated = json!({
+            "FogNearScale": 0.0, "FogFarScale": 0.0,
+            "FogHighNearScale": 0.0, "FogHighFarScale": 0.0,
+            "HighDensityScale": 0.0,
+            "NearHeightMid": 0.0, "NearHeightRange": 0.0,
+            "FarHeightMid": 0.0, "FarHeightRange": 0.0,
+        });
+        assert_eq!(
+            resolved(truncated).unwrap().lighting.fog,
+            resolved(json!({})).unwrap().lighting.fog
+        );
+    }
+
+    #[test]
+    fn zero_scales_in_a_complete_record_turn_the_fog_black() {
+        let mut fields = height_fields();
+        for scale in [
+            "FogNearScale",
+            "FogFarScale",
+            "FogHighNearScale",
+            "FogHighFarScale",
+        ] {
+            fields[scale] = json!(0.0);
+        }
+        let fog = fog_of(&resolved(fields).unwrap().lighting);
+        assert_eq!(fog.colors, FogColors::uniform(Vec3::ZERO));
+    }
+
+    #[test]
+    fn a_negative_fog_scale_is_rejected_naming_the_field() {
+        for field in [
+            "FogNearScale",
+            "FogFarScale",
+            "FogHighNearScale",
+            "FogHighFarScale",
+        ] {
+            let mut fields = height_fields();
+            fields[field] = json!(-1.0);
+            assert!(
+                matches!(resolved(fields), Err(CellLightingError::NegativeFogScale { field: named }) if named == field),
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_height_band_with_a_mid_but_no_range_is_rejected() {
+        let mut fields = height_fields();
+        fields.as_object_mut().unwrap().remove("FarHeightRange");
+        assert!(matches!(
+            resolved(fields),
+            Err(CellLightingError::HeightFog(
+                HeightFogError::IncompleteBand { band: "far" }
+            ))
+        ));
     }
 }

@@ -67,12 +67,12 @@ fn blend_factors(blend: &crate::assets::types::effect_material::Blend) -> Option
         BlendMode::Mult => (wgpu::BlendFactor::Dst, wgpu::BlendFactor::Zero),
     };
     Some((
-        blend.src.map_or(default_src, factor),
-        blend.dst.map_or(default_dst, factor),
+        blend.src.map_or(default_src, wgpu_factor),
+        blend.dst.map_or(default_dst, wgpu_factor),
     ))
 }
 
-fn factor(factor: MaterialFactor) -> wgpu::BlendFactor {
+pub(crate) fn wgpu_factor(factor: MaterialFactor) -> wgpu::BlendFactor {
     match factor {
         MaterialFactor::One => wgpu::BlendFactor::One,
         MaterialFactor::Zero => wgpu::BlendFactor::Zero,
@@ -95,7 +95,7 @@ const KEEP_DESTINATION_ALPHA: wgpu::BlendComponent = wgpu::BlendComponent {
     operation: wgpu::BlendOperation::Add,
 };
 
-fn blend_state((src_factor, dst_factor): BlendFactors) -> wgpu::BlendState {
+pub(crate) fn blend_state((src_factor, dst_factor): BlendFactors) -> wgpu::BlendState {
     wgpu::BlendState {
         color: wgpu::BlendComponent {
             src_factor,
@@ -453,7 +453,7 @@ mod tests {
             (SrcAlphaSaturate, wgpu::BlendFactor::SrcAlphaSaturated),
         ];
         for (stored, wanted) in expected {
-            assert_eq!(factor(stored), wanted, "{stored:?}");
+            assert_eq!(wgpu_factor(stored), wanted, "{stored:?}");
         }
     }
 

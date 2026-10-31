@@ -42,7 +42,7 @@ use crate::rendering::gpu_driven::{
     DRAW_BUCKET_COUNT, FALLBACK_MATERIAL_ID, FALLBACK_SLOT, GpuInstance, GpuTerrainInstance,
     INSTANCE_FLAGS_BLEND, INSTANCE_FLAGS_DECAL, INSTANCE_FLAGS_EFFECT, INSTANCE_FLAGS_HIDDEN_FX,
     INSTANCE_FLAGS_MARKER, INSTANCE_FLAGS_MULTIPLY, INSTANCE_FLAGS_TWO_SIDED, INSTANCE_FLAGS_WATER,
-    InstanceBuffer, LEGACY_SURFACE, MaterialKey, MaterialRegistry, MaterialSlots,
+    InstanceBuffer, LEGACY_SURFACE, MaterialKey, MaterialRegistry, MaterialSlots, NO_SPLAT_LAYER,
     SPLAT_FALLBACK_LAYER, SlotChanges, SplatmapArray, SurfaceParams, TERRAIN_FLAGS_BAKED,
     TerrainInstanceBuffer, TextureArray, TextureHandle, potential_buckets,
 };
@@ -846,7 +846,8 @@ struct CellResources {
     /// height the cell water rule compares the water height against.
     land_lowest_y: Option<f32>,
     terrain_mega_key: Option<String>,
-    splat_key: Option<String>,
+    /// The cell's splatmaps, by their keys in the splatmap array.
+    splat_keys: Vec<String>,
     /// One entry per successful texture acquire (diffuse, normal, layers).
     texture_refs: Vec<TextureHandle>,
     /// Which of `texture_refs` each submesh or terrain cell uses and where;
@@ -1300,6 +1301,14 @@ impl WorldStreamer {
                 "{}/{} landscape textures missing a diffuse path",
                 ltex_missing,
                 ltex_records.len()
+            );
+        }
+        if let Some(diffuse) = db.get_texture_set_diffuse(terrain::DEFAULT_LAND_TEXTURE_SET)? {
+            ltex_to_diffuse.insert(terrain::DEFAULT_LAND_TEXTURE_SET.to_string(), diffuse);
+        } else {
+            warn!(
+                "default land texture set {} has no diffuse path; quadrants without a base layer render fallback",
+                terrain::DEFAULT_LAND_TEXTURE_SET
             );
         }
         let ltex_to_diffuse = Arc::new(ltex_to_diffuse);
@@ -2624,7 +2633,7 @@ impl WorldStreamer {
         if let Some(key) = &res.terrain_mega_key {
             targets.terrain_mega.release(key);
         }
-        if let Some(key) = &res.splat_key {
+        for key in &res.splat_keys {
             targets.splatmaps.release(key);
         }
         for &handle in &res.texture_refs {
@@ -3238,39 +3247,43 @@ impl WorldStreamer {
         let (bounds_min, bounds_max) = cpu.world_bounds();
         let world_per_uv = cpu.world_per_uv();
         let texture_start = res.texture_refs.len();
-        let (splat_layer, layer_indices, flags) = if let Some(tile) = &cpu.baked_tile {
+        let (splat_layers, layer_indices, flags) = if let Some(tile) = &cpu.baked_tile {
             // Baked level-4 LOD tile: one shared texture (up to 16 cells per
             // tile via the refcount), no splat slot consumed — the shader
             // ignores splat weights when TERRAIN_FLAGS_BAKED is set. A load
             // failure here, despite the worker's existence check, leaves the
             // magenta FALLBACK_SLOT as the deliberate last resort.
             let slot = self.acquire_texture(tile, FALLBACK_SLOT, true, preloaded, res, targets);
+            let mut layer_indices = [FALLBACK_SLOT; terrain::MAX_LAYERS];
+            layer_indices[0] = slot;
             (
-                SPLAT_FALLBACK_LAYER,
-                [slot, FALLBACK_SLOT, FALLBACK_SLOT, FALLBACK_SLOT],
+                [SPLAT_FALLBACK_LAYER, NO_SPLAT_LAYER],
+                layer_indices,
                 [TERRAIN_FLAGS_BAKED, 0, 0, 0],
             )
         } else {
             // Splat data is identical for full and LOD variants — shared key;
             // the refcount covers the promotion/demotion overlap window.
-            let splat_key = format!("splatmap_{}_{}", cpu.grid_x, cpu.grid_y);
-            let mut splat_layer =
-                targets
+            let mut splat_layers = [SPLAT_FALLBACK_LAYER, NO_SPLAT_LAYER];
+            for (i, pixels) in cpu.splatmaps.iter().enumerate() {
+                let splat_key = format!("splatmap_{}_{}_{i}", cpu.grid_x, cpu.grid_y);
+                let mut layer = targets
                     .splatmaps
-                    .acquire(&splat_key, &cpu.splatmap_data, targets.queue);
-            if splat_layer == SPLAT_FALLBACK_LAYER && !self.retire_queue.is_empty() {
-                self.drain_retire_queue(targets, std::time::Duration::MAX);
-                splat_layer =
-                    targets
+                    .acquire(&splat_key, &pixels[..], targets.queue);
+                if layer == SPLAT_FALLBACK_LAYER && !self.retire_queue.is_empty() {
+                    self.drain_retire_queue(targets, std::time::Duration::MAX);
+                    layer = targets
                         .splatmaps
-                        .acquire(&splat_key, &cpu.splatmap_data, targets.queue);
-            }
-            if splat_layer != SPLAT_FALLBACK_LAYER {
-                res.splat_key = Some(splat_key);
+                        .acquire(&splat_key, &pixels[..], targets.queue);
+                }
+                if layer != SPLAT_FALLBACK_LAYER {
+                    res.splat_keys.push(splat_key);
+                    splat_layers[i] = layer;
+                }
             }
 
             // Layer textures
-            let mut layer_indices = [0u32; 4];
+            let mut layer_indices = [0u32; terrain::MAX_LAYERS];
             for (i, path_opt) in cpu.texture_paths.iter().enumerate() {
                 if let Some(path) = path_opt {
                     // Key construction pinned to the worker's pre-read
@@ -3287,7 +3300,7 @@ impl WorldStreamer {
                     );
                 }
             }
-            (splat_layer, layer_indices, [0u32; 4])
+            (splat_layers, layer_indices, [0u32; 4])
         };
 
         if res.texture_refs.len() > texture_start {
@@ -3320,8 +3333,23 @@ impl WorldStreamer {
             index_offset: slot.index_offset,
             index_count: slot.index_count,
             vertex_offset: slot.vertex_offset,
-            splat_layer,
-            layer_indices,
+            splat_layer: splat_layers[0],
+            layer_indices: [
+                layer_indices[0],
+                layer_indices[1],
+                layer_indices[2],
+                layer_indices[3],
+            ],
+            splat_layer_hi: splat_layers[1],
+            _pad2: 0,
+            _pad3: 0,
+            _pad4: 0,
+            layer_indices_hi: [
+                layer_indices[4],
+                layer_indices[5],
+                layer_indices[6],
+                layer_indices[7],
+            ],
             flags,
         });
     }
@@ -3864,6 +3892,16 @@ impl WorldStreamer {
 
     pub(crate) fn lod_pending_cell_count(&self) -> usize {
         self.lod_pending_cells.len()
+    }
+
+    /// Whether some cells are loaded and no cell of either ring is still loading or waiting to be
+    /// integrated.
+    pub(crate) fn fully_streamed(&self) -> bool {
+        !self.loaded.is_empty()
+            && self.pending_cells.is_empty()
+            && self.lod_pending_cells.is_empty()
+            && self.buffered_full.is_empty()
+            && self.buffered_lod.is_empty()
     }
 
     /// (full, LOD) integration rates in cells/s, averaged over the last

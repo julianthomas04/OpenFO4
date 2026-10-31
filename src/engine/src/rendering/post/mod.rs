@@ -10,12 +10,14 @@ mod dof_test_support;
 pub mod hdr_target;
 pub mod night_sky;
 pub mod sky;
+#[cfg(test)]
+mod sky_tests;
 pub mod tonemap;
 
 use crate::rendering::{
     device_loss::DeviceLossMonitor,
     gpu_profiler::GpuProfiler,
-    lighting::{FrameBinding, state::ExposureReadout},
+    lighting::{FrameBinding, state::ExposureReadout, tonemap_settings::ImageSpaceLut},
     readback_ring::ReadbackError,
 };
 use auto_exposure::{AutoExposure, AutoExposureParams};
@@ -25,6 +27,8 @@ use glam::Vec2;
 use hdr_target::HdrTarget;
 use sky::SkyPipeline;
 use tonemap::TonemapPass;
+use tonemap::lut_library::LutLibrary;
+use tonemap::lut_table::blended_texels;
 
 /// Everything between the world pass and the swapchain: the HDR colour target,
 /// the sky drawn into it, the auto exposure measuring it and the tonemap
@@ -35,11 +39,17 @@ pub struct PostChain {
     auto_exposure: AutoExposure,
     depth_of_field: BokehDepthOfField,
     tonemap: TonemapPass,
+    colour_luts: LutLibrary,
+    /// The tables the tonemap pass grades with now; `None` until the first [`Self::grade_with`].
+    graded_with: Option<ImageSpaceLut>,
 }
 
 impl PostChain {
+    /// `asset_root` holds the installed textures the image spaces' colour LUTs are read from.
     pub fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        asset_root: &str,
         surface_format: wgpu::TextureFormat,
         width: u32,
         height: u32,
@@ -52,6 +62,7 @@ impl PostChain {
         let depth_of_field = BokehDepthOfField::new(device, width, height);
         let tonemap = TonemapPass::new(
             device,
+            queue,
             surface_format,
             frame_layout,
             &hdr_target.view,
@@ -64,7 +75,29 @@ impl PostChain {
             auto_exposure,
             depth_of_field,
             tonemap,
+            colour_luts: LutLibrary::new(asset_root),
+            graded_with: None,
         }
+    }
+
+    /// Grades the picture with the image space's colour LUTs from the next tonemap on, reading
+    /// each table the first time it is named; the frame uniform carries how much they show.
+    pub fn grade_with(&mut self, queue: &wgpu::Queue, lut: &ImageSpaceLut) {
+        if self.graded_with.as_ref() == Some(lut) {
+            return;
+        }
+        let tables: Vec<_> = lut
+            .tables()
+            .iter()
+            .map(|(key, weight)| (self.colour_luts.table(key), *weight))
+            .collect();
+        let weighted: Vec<_> = tables
+            .iter()
+            .map(|(table, weight)| (table.as_deref(), *weight))
+            .collect();
+        self.tonemap
+            .write_colour_lut(queue, &blended_texels(&weighted));
+        self.graded_with = Some(lut.clone());
     }
 
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {

@@ -1,6 +1,11 @@
 use serde::Deserialize;
 
+use super::keyframes::NIGHT_PADDING_HOURS;
 use super::wrap::HOURS_PER_DAY;
+
+/// The shortest night, from sunset end to the next sunrise begin, for which the evening and
+/// morning `Night` keyframes do not cross.
+pub const MIN_NIGHT_HOURS: f32 = 2.0 * NIGHT_PADDING_HOURS;
 
 /// The two twilight windows of a climate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,6 +32,11 @@ pub enum ClimateTimesError {
     },
     #[error("sunrise ends at {sunrise_end} h, after sunset begins at {sunset_begin} h")]
     WindowsOverlap { sunrise_end: f32, sunset_begin: f32 },
+    #[error(
+        "the night from sunset end at {sunset_end} h to sunrise begin at {sunrise_begin} h is \
+         shorter than {MIN_NIGHT_HOURS} h, so the evening and morning Night keyframes would cross"
+    )]
+    NightTooShort { sunset_end: f32, sunrise_begin: f32 },
 }
 
 #[derive(Debug, Deserialize)]
@@ -39,7 +49,8 @@ struct RawClimateTimes {
 }
 
 /// The sunrise and sunset windows of a climate in hours of the day, validated
-/// so that `0 <= sunrise_begin < sunrise_end <= sunset_begin < sunset_end < 24`.
+/// so that `0 <= sunrise_begin < sunrise_end <= sunset_begin < sunset_end < 24` and the night
+/// from sunset end to the next sunrise begin lasts at least [`MIN_NIGHT_HOURS`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ClimateTimes {
     sunrise_begin: f32,
@@ -78,6 +89,12 @@ impl ClimateTimes {
             return Err(ClimateTimesError::WindowsOverlap {
                 sunrise_end,
                 sunset_begin,
+            });
+        }
+        if HOURS_PER_DAY - (sunset_end - sunrise_begin) < MIN_NIGHT_HOURS {
+            return Err(ClimateTimesError::NightTooShort {
+                sunset_end,
+                sunrise_begin,
             });
         }
         Ok(Self {
@@ -128,13 +145,6 @@ impl ClimateTimes {
 
     pub fn sunset_end(&self) -> f32 {
         self.sunset_end
-    }
-
-    pub fn window(&self, window: ClimateWindow) -> (f32, f32) {
-        match window {
-            ClimateWindow::Sunrise => (self.sunrise_begin, self.sunrise_end),
-            ClimateWindow::Sunset => (self.sunset_begin, self.sunset_end),
-        }
     }
 
     pub fn sunrise_midpoint(&self) -> f32 {
@@ -243,8 +253,6 @@ mod tests {
         let times = times_of(DEFAULT_CLIMATE_JSON);
         assert_eq!(times.sunrise_midpoint(), 7.0);
         assert_eq!(times.sunset_midpoint(), 19.0);
-        assert_eq!(times.window(ClimateWindow::Sunrise), (5.0, 9.0));
-        assert_eq!(times.window(ClimateWindow::Sunset), (17.0, 21.0));
     }
 
     #[test]
@@ -335,6 +343,43 @@ mod tests {
             result,
             Err(ClimateTimesError::WindowsOverlap { .. })
         ));
+    }
+
+    #[test]
+    fn the_vanilla_windows_leave_a_night_long_enough_for_the_keyframes() {
+        // Sunrise begin and sunset end of the vanilla climates, which alone bound the night; the
+        // longest day, 04:00-22:00, leaves 6 h.
+        for (begin, end) in [
+            ("05:00:00", "21:00:00"),
+            ("05:30:00", "20:30:00"),
+            ("04:00:00", "22:00:00"),
+        ] {
+            assert!(
+                ClimateTimes::parse(&json(begin, "10:00:00", "16:00:00", end)).is_ok(),
+                "{begin}-{end}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_night_shorter_than_the_keyframes_need_is_rejected() {
+        assert!(ClimateTimes::new(2.0, 3.0, 20.0, 22.0).is_ok());
+        let result = ClimateTimes::new(2.0, 3.0, 20.0, 22.1);
+        assert!(
+            matches!(
+                result,
+                Err(ClimateTimesError::NightTooShort {
+                    sunset_end: 22.1,
+                    sunrise_begin: 2.0
+                })
+            ),
+            "{result:?}"
+        );
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "the night from sunset end at 22.1 h to sunrise begin at 2 h is shorter than 4 h, \
+             so the evening and morning Night keyframes would cross"
+        );
     }
 
     #[test]

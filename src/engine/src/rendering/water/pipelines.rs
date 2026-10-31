@@ -645,16 +645,14 @@ mod tests {
     use super::*;
     use crate::assets::types::water_shader::water_flags;
     use crate::rendering::{
-        gpu_test::test_device,
+        gpu_test::{extent, f16_bits_to_f32, f32_to_f16_bits, read_mip, test_device},
         scene_copy::SceneCopy,
         shaders::composed::water::POSITION_ENTRY_MARKER,
         water::{
             constants::WaterDrawConstants,
             displacement::{DISPLACEMENT_QUAD_DRAW_REGISTER, DisplacementGpu, QUAD_REGISTER},
             permutation::{PassContext, select},
-            ssr::tests::harness::{
-                depth_texture, extent, f16_bits_to_f32, f32_to_f16_bits, read_mip,
-            },
+            ssr::tests::harness::depth_texture,
         },
     };
 

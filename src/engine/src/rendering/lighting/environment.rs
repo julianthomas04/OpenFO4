@@ -18,16 +18,12 @@ impl NeutralReason {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum InteriorLighting {
-    Cell(ResolvedLighting),
+    Cell(Box<ResolvedLighting>),
     Neutral(NeutralReason),
     CatalogUnavailable,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[allow(
-    clippy::large_enum_variant,
-    reason = "Environment is a single long-lived value; boxing the interior payload would change the public variant shape"
-)]
 pub enum Environment {
     Exterior,
     Interior {
@@ -51,7 +47,7 @@ impl Environment {
         let lighting = match catalog.map(|catalog| catalog.get(cell)) {
             None => InteriorLighting::CatalogUnavailable,
             Some(None) => InteriorLighting::Neutral(NeutralReason::NotInCatalog),
-            Some(Some(Ok(resolved))) => InteriorLighting::Cell(resolved.clone()),
+            Some(Some(Ok(resolved))) => InteriorLighting::Cell(Box::new(resolved.clone())),
             Some(Some(Err(error))) => InteriorLighting::Neutral(NeutralReason::Unresolvable {
                 label: error.label(),
                 detail: error.to_string(),

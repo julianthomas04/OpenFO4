@@ -107,6 +107,29 @@ namespace AssetConverter.Pipeline
                 throw new InvalidOperationException($"The extraction markers claim the mesh archives are staged, but {_paths.StagedMeshes} does not exist; delete the markers (.Fallout4 - Meshes*.extracted) and run again.");
         }
 
+        /// <summary>
+        /// For dev commands that read the staged materials but run without a staging folder: extracts the materials archive by the same
+        /// source and marker as the full install, so an archive already marked complete is skipped.
+        /// </summary>
+        /// <exception cref="FileNotFoundException">The materials archive is missing from the game's Data folder.</exception>
+        /// <exception cref="InvalidOperationException">An entry failed to extract, or the extraction left no staged materials behind.</exception>
+        public void EnsureStagedMaterials()
+        {
+            string archivePath = Path.Combine(_paths.GameDataDirectory, MaterialsArchiveName);
+            if (!File.Exists(archivePath)) throw new FileNotFoundException($"{archivePath} not found; the materials cannot be staged.", archivePath);
+
+            using var extraction = StagingExtraction.Open(_paths.GameDataDirectory, _paths.StagingRoot, [ArchiveSource(MaterialsArchiveName)], _memory);
+            if (extraction.WrittenFiles.Count > 0)
+            {
+                Console.WriteLine($"The staged materials are missing or incomplete: extracting {extraction.WrittenFiles.Count:N0} files from the materials archive into {_paths.StagingRoot} first.");
+                Directory.CreateDirectory(_paths.StagingRoot);
+                if (!extraction.Run(-1, _ct))
+                    throw new InvalidOperationException("Some materials archive entries failed to extract; the staged materials are incomplete.");
+            }
+            if (!Directory.Exists(_paths.StagedMaterials))
+                throw new InvalidOperationException($"The extraction marker claims the materials archive is staged, but {_paths.StagedMaterials} does not exist; delete the marker (.{MaterialsArchiveName}.extracted) and run again.");
+        }
+
         private IReadOnlyList<StagingSource> MeshSources(NifWorkQueue meshes, PriorityFiles skeletons)
         {
             var onDisk = new StagedPathSpelling(_paths.StagingRoot);
@@ -251,6 +274,22 @@ namespace AssetConverter.Pipeline
             InstallProgress.EndPhase(phase);
             if (!allSucceeded)
                 Console.Error.WriteLine("WARNING: some texture archives had extraction failures; markers withheld, re-run to repair.");
+        }
+
+        /// <summary>The image spaces' colour LUTs, from Misc.ba2 straight into assets	extures like every other texture.</summary>
+        /// <exception cref="FileNotFoundException">Misc.ba2 is missing from the game's Data folder.</exception>
+        /// <exception cref="InvalidOperationException">A LUT failed to extract, or the archive holds none.</exception>
+        public void ExtractColourLuts()
+        {
+            string archivePath = Path.Combine(_paths.GameDataDirectory, ColourLuts.ArchiveName);
+            if (!File.Exists(archivePath))
+                throw new FileNotFoundException($"{archivePath} not found; the image spaces' colour LUTs cannot be extracted.", archivePath);
+            var result = BA2ParallelUnpacker.Unpack(archivePath, _paths.TexturesOut, _memory, quiet: true,
+                stripFirstSegment: TextureExtraction.StrippedSegment, entryFilter: ColourLuts.IsColourLut, ct: _ct);
+            if (result.Total == 0)
+                throw new InvalidOperationException($"{archivePath} holds no colour LUT below {ColourLuts.ArchiveFolder}.");
+            if (!result.AllSucceeded)
+                throw new InvalidOperationException($"{result.Failed} of {result.Total} colour LUTs failed to extract from {archivePath}.");
         }
 
         /// <summary>

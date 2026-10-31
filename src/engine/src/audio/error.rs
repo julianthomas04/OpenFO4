@@ -55,6 +55,8 @@ pub enum AudioError {
         path: PathBuf,
         source: PlaySoundError<()>,
     },
+    #[error("cannot create the weather sound track: {0}")]
+    WeatherTrack(ResourceLimitReached),
     #[error("cannot resolve the surface of a footstep: {0:#}")]
     FootSurface(anyhow::Error),
     #[error(transparent)]

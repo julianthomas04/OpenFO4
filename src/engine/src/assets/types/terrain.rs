@@ -14,7 +14,18 @@ pub const TERRAIN_QUAD_SIZE: f32 = CELL_SIZE / TERRAIN_QUADS as f32; // 128 beth
 const HEIGHT_SCALE: f32 = 8.0;
 const SPLATMAP_RES: usize = 128;
 pub const ALPHA_GRID: usize = 17;
-const MAX_LAYERS: usize = 4;
+/// Landscape textures a cell blends at most. Vanilla cells use up to 12; 8 keeps the layers
+/// with the most coverage of nearly every cell.
+pub const MAX_LAYERS: usize = 8;
+/// Layers one splatmap holds, one per RGBA channel.
+pub const LAYERS_PER_SPLATMAP: usize = 4;
+pub const SPLATMAP_BYTES: usize = SPLATMAP_RES * SPLATMAP_RES * 4;
+/// The blend weights of up to [`LAYERS_PER_SPLATMAP`] layers, `SPLATMAP_RES`² RGBA8.
+pub type SplatmapPixels = Box<[u8; SPLATMAP_BYTES]>;
+/// The texture set vanilla shows wherever a quadrant has no base layer, and under overlay layers
+/// that name no texture: `LandscapeCommonWealthDefault01`. Measured on vanilla's own views, whose
+/// ground in such quadrants matches it far better than the quadrant's largest overlay does.
+pub const DEFAULT_LAND_TEXTURE_SET: &str = "0AB07C:Fallout4.esm";
 /// Cells per baked terrain-LOD tile edge (level-4 tiles: `<ws>.4.<x>.<y>.dds`).
 pub const BAKED_TILE_CELLS: i32 = 4;
 /// Times a splat layer texture repeats across a cell; mirrors `terrain.wgsl`.
@@ -26,7 +37,9 @@ const BAKED_TILE_FLIP_V: bool = true;
 pub struct TerrainCellCpu {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
-    pub splatmap_data: [u8; SPLATMAP_RES * SPLATMAP_RES * 4],
+    /// One splatmap per [`LAYERS_PER_SPLATMAP`] layers in use, at least one: splatmap `i`
+    /// weighs `texture_paths[4 * i..4 * i + 4]`.
+    pub splatmaps: Vec<SplatmapPixels>,
     pub texture_paths: [Option<String>; MAX_LAYERS],
     /// Asset-relative path of the baked level-4 LOD tile when this cell
     /// renders in baked mode; vertex UVs are already remapped to the tile
@@ -97,13 +110,13 @@ pub fn build_cell_cpu(
 ) -> anyhow::Result<TerrainCellCpu> {
     let heights = HeightGrid::decode(&record.vertex_height_map)?;
     let (vertices, indices) = generate_mesh(&heights, record.grid_x, record.grid_y, 1);
-    let (splatmap_data, texture_paths) = build_splatmap(record, ltex_to_diffuse);
+    let (splatmaps, texture_paths) = build_splatmap(record, ltex_to_diffuse);
 
     Ok(TerrainCellCpu {
         cell_world_per_uv: cell_world_per_uv(&vertices, &indices),
         vertices,
         indices,
-        splatmap_data,
+        splatmaps,
         texture_paths,
         baked_tile: None,
         grid_x: record.grid_x,
@@ -121,13 +134,13 @@ pub fn build_cell_cpu_lod(
 ) -> anyhow::Result<TerrainCellCpu> {
     let heights = HeightGrid::decode(&record.vertex_height_map)?;
     let (vertices, indices) = generate_mesh(&heights, record.grid_x, record.grid_y, 4);
-    let (splatmap_data, texture_paths) = build_splatmap(record, ltex_to_diffuse);
+    let (splatmaps, texture_paths) = build_splatmap(record, ltex_to_diffuse);
 
     Ok(TerrainCellCpu {
         cell_world_per_uv: cell_world_per_uv(&vertices, &indices),
         vertices,
         indices,
-        splatmap_data,
+        splatmaps,
         texture_paths,
         baked_tile: None,
         grid_x: record.grid_x,
@@ -401,6 +414,14 @@ fn quadrant_vertex(x: usize, y: usize) -> (u8, usize, usize) {
     )
 }
 
+/// The texture an overlay layer paints: its own, or the default land texture when it names none.
+fn overlay_texture(layer: &LandscapeLayer) -> &str {
+    layer
+        .texture_key
+        .as_deref()
+        .unwrap_or(DEFAULT_LAND_TEXTURE_SET)
+}
+
 /// The layer with the highest blend weight at a cell vertex. An overlay weighs its opacity, the
 /// base layer what the overlays leave (`1 - sum of overlay opacities`). Only layers of the
 /// vertex's quadrant with a texture count. Ties go to the base layer, then to the earlier overlay
@@ -442,61 +463,38 @@ pub(crate) fn dominant_layer_at(
 fn build_splatmap(
     record: &Landscape,
     ltex_to_diffuse: &HashMap<String, String>,
-) -> (
-    [u8; SPLATMAP_RES * SPLATMAP_RES * 4],
-    [Option<String>; MAX_LAYERS],
-) {
-    let mut pixel_data = [0u8; SPLATMAP_RES * SPLATMAP_RES * 4];
+) -> (Vec<SplatmapPixels>, [Option<String>; MAX_LAYERS]) {
     let mut texture_paths: [Option<String>; MAX_LAYERS] = Default::default();
 
     let Some(decoded) = record.layers.as_deref().and_then(decode_layers) else {
+        let mut pixel_data: SplatmapPixels = Box::new([0; SPLATMAP_BYTES]);
         for i in 0..(SPLATMAP_RES * SPLATMAP_RES) {
             pixel_data[i * 4] = 255;
         }
-        return (pixel_data, texture_paths);
+        return (vec![pixel_data], texture_paths);
     };
 
-    let mut quadrant_base: [Option<&str>; 4] = [None; 4];
-    for (q, base) in quadrant_base.iter_mut().enumerate() {
-        *base = base_layer(&decoded, q as u8).and_then(|dl| dl.texture_key.as_deref());
-    }
-    for q in 0..4u8 {
-        if quadrant_base[q as usize].is_some() {
-            continue;
-        }
-        let best = decoded
-            .iter()
-            .filter(|dl| dl.quadrant == q && !dl.is_base && dl.texture_key.is_some())
-            .max_by(|a, b| {
-                a.coverage
-                    .partial_cmp(&b.coverage)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-        if let Some(dl) = best {
-            quadrant_base[q as usize] = dl.texture_key.as_deref();
-        }
-    }
+    let quadrant_base: [&str; 4] = std::array::from_fn(|q| {
+        base_layer(&decoded, q as u8)
+            .and_then(|dl| dl.texture_key.as_deref())
+            .unwrap_or(DEFAULT_LAND_TEXTURE_SET)
+    });
 
     let mut slot_map: HashMap<String, usize> = HashMap::new();
     let mut next_slot = 0usize;
 
-    for base in quadrant_base {
-        if let Some(key) = base
-            && !slot_map.contains_key(key)
-            && next_slot < MAX_LAYERS
-        {
+    for key in quadrant_base {
+        if !slot_map.contains_key(key) {
             slot_map.insert(key.to_string(), next_slot);
             next_slot += 1;
         }
     }
 
     let mut overlays: Vec<(&str, f32)> = Vec::new();
-    for dl in &decoded {
-        if !dl.is_base
-            && let Some(key) = &dl.texture_key
-            && !slot_map.contains_key(key.as_str())
-        {
-            overlays.push((key.as_str(), dl.coverage));
+    for dl in decoded.iter().filter(|dl| !dl.is_base) {
+        let key = overlay_texture(dl);
+        if !slot_map.contains_key(key) {
+            overlays.push((key, dl.coverage));
         }
     }
     overlays.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -519,6 +517,8 @@ fn build_splatmap(
         }
     }
 
+    let mut splatmaps: Vec<SplatmapPixels> =
+        vec![Box::new([0; SPLATMAP_BYTES]); next_slot.div_ceil(LAYERS_PER_SPLATMAP)];
     let half = SPLATMAP_RES / 2;
     for py in 0..SPLATMAP_RES {
         for px in 0..SPLATMAP_RES {
@@ -532,8 +532,7 @@ fn build_splatmap(
             let qx = if px >= half { px - half } else { px };
             let qy = if py >= half { py - half } else { py };
 
-            let base_key = quadrant_base[q as usize];
-            let base_slot = base_key.and_then(|k| slot_map.get(k).copied());
+            let base_slot = slot_map[quadrant_base[q as usize]];
 
             let mut weights = [0.0f32; MAX_LAYERS];
             let mut total_alpha = 0.0f32;
@@ -542,10 +541,7 @@ fn build_splatmap(
                 if dl.quadrant != q || dl.is_base {
                     continue;
                 }
-                let Some(key) = &dl.texture_key else {
-                    continue;
-                };
-                let Some(&slot) = slot_map.get(key.as_str()) else {
+                let Some(&slot) = slot_map.get(overlay_texture(dl)) else {
                     continue;
                 };
                 let Some(grid) = &dl.alpha_grid else {
@@ -557,20 +553,17 @@ fn build_splatmap(
                 total_alpha += opacity;
             }
 
-            if let Some(bs) = base_slot {
-                weights[bs] += (1.0 - total_alpha).max(0.0);
-            } else if total_alpha < 1.0 {
-                weights[0] += (1.0 - total_alpha).max(0.0);
-            }
+            weights[base_slot] += (1.0 - total_alpha).max(0.0);
 
             let idx = (py * SPLATMAP_RES + px) * 4;
-            for ch in 0..MAX_LAYERS {
-                pixel_data[idx + ch] = (weights[ch].clamp(0.0, 1.0) * 255.0) as u8;
+            for (slot, weight) in weights.iter().take(next_slot).enumerate() {
+                splatmaps[slot / LAYERS_PER_SPLATMAP][idx + slot % LAYERS_PER_SPLATMAP] =
+                    (weight.clamp(0.0, 1.0) * 255.0) as u8;
             }
         }
     }
 
-    (pixel_data, texture_paths)
+    (splatmaps, texture_paths)
 }
 
 fn sample_alpha_bilinear(
@@ -678,15 +671,43 @@ mod tests {
         [
             ("grass", "textures/grass_d.dds"),
             ("rock", "textures/rock_d.dds"),
+            (DEFAULT_LAND_TEXTURE_SET, "textures/default_d.dds"),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect()
     }
 
+    /// `key` as the base layer of all four quadrants.
+    fn base_everywhere(key: &str) -> Vec<Vec<u8>> {
+        (0..4).map(|q| layer_record(key, q, true, &[])).collect()
+    }
+
     fn splat_pixel(cell: &TerrainCellCpu, px: usize, py: usize) -> [u8; 4] {
+        splatmap_pixel(cell, 0, px, py)
+    }
+
+    fn splatmap_pixel(cell: &TerrainCellCpu, splatmap: usize, px: usize, py: usize) -> [u8; 4] {
         let i = (py * SPLATMAP_RES + px) * 4;
-        cell.splatmap_data[i..i + 4].try_into().unwrap()
+        cell.splatmaps[splatmap][i..i + 4].try_into().unwrap()
+    }
+
+    /// A cell whose quadrant 0 lays `overlays` distinct textures, each at 10 %, over base `t0`.
+    fn cell_with_overlays(overlays: usize) -> TerrainCellCpu {
+        let keys: Vec<String> = (0..=overlays).map(|i| format!("t{i}")).collect();
+        let mut records = base_everywhere(&keys[0]);
+        for key in &keys[1..] {
+            records.push(layer_record(key, 0, false, &full_alpha(0.1)));
+        }
+        let map: HashMap<String, String> = keys
+            .iter()
+            .map(|k| (k.clone(), format!("{k}.dds")))
+            .collect();
+        build_cell_cpu(
+            &landscape(0, 0, 0.0, &[], Some(layers_blob(&records))),
+            &map,
+        )
+        .unwrap()
     }
 
     fn layer(key: &str, quadrant: u8, is_base: bool, opacity: f32) -> LandscapeLayer {
@@ -980,26 +1001,31 @@ mod tests {
 
     #[test]
     fn opaque_overlay_replaces_the_base_in_its_quadrant_only() {
-        let layers = layers_blob(&[
-            layer_record("grass", 0, true, &[]),
-            layer_record("rock", 0, false, &full_alpha(1.0)),
-        ]);
+        let layers = layers_blob(
+            &[
+                base_everywhere("grass"),
+                vec![layer_record("rock", 0, false, &full_alpha(1.0))],
+            ]
+            .concat(),
+        );
         let cell = build_cell_cpu(&landscape(0, 0, 0.0, &[], Some(layers)), &textures()).unwrap();
         assert_eq!(
             cell.texture_paths[1].as_deref(),
             Some("textures/rock_d.dds")
         );
         assert_eq!(splat_pixel(&cell, 10, 10), [0, 255, 0, 0]);
-        // Quadrant 1 (east) has no layers: falls back to slot 0 weight.
         assert_eq!(splat_pixel(&cell, 100, 10), [255, 0, 0, 0]);
     }
 
     #[test]
     fn half_opaque_overlay_splits_the_weight_evenly() {
-        let layers = layers_blob(&[
-            layer_record("grass", 0, true, &[]),
-            layer_record("rock", 0, false, &full_alpha(0.5)),
-        ]);
+        let layers = layers_blob(
+            &[
+                base_everywhere("grass"),
+                vec![layer_record("rock", 0, false, &full_alpha(0.5))],
+            ]
+            .concat(),
+        );
         let cell = build_cell_cpu(&landscape(0, 0, 0.0, &[], Some(layers)), &textures()).unwrap();
         let [grass, rock, _, _] = splat_pixel(&cell, 10, 10);
         assert_eq!((grass, rock), (127, 127));
@@ -1007,16 +1033,20 @@ mod tests {
 
     #[test]
     fn overlay_opacity_is_clamped_to_unit_range() {
-        let layers = layers_blob(&[
-            layer_record("grass", 0, true, &[]),
-            layer_record("rock", 0, false, &full_alpha(7.0)),
-        ]);
+        let layers = layers_blob(
+            &[
+                base_everywhere("grass"),
+                vec![layer_record("rock", 0, false, &full_alpha(7.0))],
+            ]
+            .concat(),
+        );
         let cell = build_cell_cpu(&landscape(0, 0, 0.0, &[], Some(layers)), &textures()).unwrap();
         assert_eq!(splat_pixel(&cell, 10, 10), [0, 255, 0, 0]);
     }
 
     #[test]
-    fn quadrant_without_a_base_layer_uses_its_most_covering_overlay_as_base() {
+    fn quadrant_without_a_base_layer_shows_the_default_land_texture_under_its_overlays() {
+        // 20% rock leaves 80% default: 0.8 * 255 = 204, 0.2 * 255 = 51.
         let layers = layers_blob(&[
             layer_record("grass", 0, false, &[(0, 0.1)]),
             layer_record("rock", 0, false, &full_alpha(0.2)),
@@ -1024,8 +1054,30 @@ mod tests {
         let cell = build_cell_cpu(&landscape(0, 0, 0.0, &[], Some(layers)), &textures()).unwrap();
         assert_eq!(
             cell.texture_paths[0].as_deref(),
-            Some("textures/rock_d.dds")
+            Some("textures/default_d.dds")
         );
+        let [default, rock, grass, _] = splat_pixel(&cell, 20, 20);
+        assert!(
+            default.abs_diff(204) <= 1 && rock.abs_diff(51) <= 1 && grass == 0,
+            "{default} {rock} {grass}"
+        );
+    }
+
+    #[test]
+    fn an_overlay_without_a_texture_paints_the_default_land_texture() {
+        let layers = layers_blob(
+            &[
+                base_everywhere("grass"),
+                vec![layer_record("", 0, false, &full_alpha(1.0))],
+            ]
+            .concat(),
+        );
+        let cell = build_cell_cpu(&landscape(0, 0, 0.0, &[], Some(layers)), &textures()).unwrap();
+        assert_eq!(
+            cell.texture_paths[1].as_deref(),
+            Some("textures/default_d.dds")
+        );
+        assert_eq!(splat_pixel(&cell, 10, 10), [0, 255, 0, 0]);
     }
 
     #[test]
@@ -1036,31 +1088,40 @@ mod tests {
     }
 
     #[test]
-    fn at_most_four_distinct_textures_get_slots() {
-        let keys = ["t0", "t1", "t2", "t3", "t4"];
-        let mut records = vec![layer_record("t0", 0, true, &[])];
-        for key in &keys[1..] {
-            records.push(layer_record(key, 0, false, &full_alpha(0.1)));
-        }
-        let map: HashMap<String, String> = keys
-            .iter()
-            .map(|k| ((*k).to_string(), format!("{k}.dds")))
-            .collect();
-        let cell = build_cell_cpu(
-            &landscape(0, 0, 0.0, &[], Some(layers_blob(&records))),
-            &map,
-        )
-        .unwrap();
-        assert_eq!(cell.texture_paths.iter().flatten().count(), 4);
+    fn at_most_eight_distinct_textures_get_slots() {
+        let cell = cell_with_overlays(MAX_LAYERS);
+        assert_eq!(cell.texture_paths.iter().flatten().count(), MAX_LAYERS);
+        assert_eq!(cell.splatmaps.len(), 2);
+    }
+
+    #[test]
+    fn up_to_four_textures_fit_one_splatmap() {
+        let cell = cell_with_overlays(LAYERS_PER_SPLATMAP - 1);
+        assert_eq!(cell.splatmaps.len(), 1);
+    }
+
+    #[test]
+    fn layers_past_the_fourth_are_weighed_in_the_second_splatmap() {
+        // Base t0 keeps 50 %, t1..t5 take 10 % each: 0.1 * 255 = 25.5.
+        let cell = cell_with_overlays(5);
+        assert_eq!(cell.splatmaps.len(), 2);
+        let [t4, t5, unused_a, unused_b] = splatmap_pixel(&cell, 1, 20, 20);
+        assert!(t4.abs_diff(25) <= 1 && t5.abs_diff(25) <= 1, "{t4} {t5}");
+        assert_eq!((unused_a, unused_b), (0, 0));
+        let [t0, ..] = splat_pixel(&cell, 20, 20);
+        assert!(t0.abs_diff(127) <= 1, "{t0}");
     }
 
     #[test]
     fn base_receives_whatever_weight_the_overlay_leaves() {
         // 30% rock leaves 70% grass: 0.7 * 255 = 178.5, 0.3 * 255 = 76.5.
-        let layers = layers_blob(&[
-            layer_record("grass", 0, true, &[]),
-            layer_record("rock", 0, false, &full_alpha(0.3)),
-        ]);
+        let layers = layers_blob(
+            &[
+                base_everywhere("grass"),
+                vec![layer_record("rock", 0, false, &full_alpha(0.3))],
+            ]
+            .concat(),
+        );
         let cell = build_cell_cpu(&landscape(0, 0, 0.0, &[], Some(layers)), &textures()).unwrap();
         let [grass, rock, unused_a, unused_b] = splat_pixel(&cell, 20, 20);
         assert!(
@@ -1078,7 +1139,8 @@ mod tests {
             layer_record("rock", 3, false, &full_alpha(1.0)),
         ]);
         let cell = build_cell_cpu(&landscape(0, 0, 0.0, &[], Some(layers)), &textures()).unwrap();
-        assert_eq!(splat_pixel(&cell, 100, 100), [0, 255, 0, 0]);
+        // The other quadrants have no layers: the default land texture, slot 0.
+        assert_eq!(splat_pixel(&cell, 100, 100), [0, 0, 255, 0]);
         assert_eq!(splat_pixel(&cell, 10, 100), [255, 0, 0, 0]);
         assert_eq!(splat_pixel(&cell, 100, 10), [255, 0, 0, 0]);
     }
@@ -1169,8 +1231,10 @@ mod tests {
                 .chain([("grass".to_string(), "grass.dds".to_string())])
                 .collect();
             let cell = build_cell_cpu(&landscape(0, 0, 0.0, &[], Some(layers_blob(&records))), &map).unwrap();
-            let [a, b, c, d] = splat_pixel(&cell, 20, 20);
-            let sum = u32::from(a) + u32::from(b) + u32::from(c) + u32::from(d);
+            let sum: u32 = (0..cell.splatmaps.len())
+                .flat_map(|splatmap| splatmap_pixel(&cell, splatmap, 20, 20))
+                .map(u32::from)
+                .sum();
             prop_assert!(sum.abs_diff(255) <= 4, "sum {}", sum);
         }
     }

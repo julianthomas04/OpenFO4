@@ -14,8 +14,8 @@ use super::collider_user_data::{
 use super::collision::{CellColliderBatch, ObjectColliderGroup, Placement, TerrainCollision};
 use super::commands::KinematicPose;
 use super::dynamic_body::{
-    DYN_ANGULAR_DAMPING, DYN_LINEAR_DAMPING, ENGINE_UNITS_PER_METER, GRAVITY_DYN, body_builder,
-    clamp_linvel, density_for_mass, sanitize_body, state_is_bounded, within_radius,
+    DYN_ANGULAR_DAMPING, DYN_LINEAR_DAMPING, GRAVITY_DYN, body_builder, clamp_linvel,
+    density_for_mass, sanitize_body, state_is_bounded, within_radius,
 };
 use super::kinematic::KinematicBodies;
 use super::mirror::{KinematicMirror, scene_query_filter};
@@ -26,6 +26,7 @@ use super::sound_pose::{pose_is_sound, vec_is_sound};
 use super::water_materials::{MaterialBuoyancy, WaterBodyProps};
 use super::water_physics::{WaterBodyState, WaterPhysics, WaterQuery, WaterTarget};
 use super::{CellGrid, DynamicPose, EntityId, FIXED_DT, RayHit, refr_entity_id};
+use crate::bethesda_space::ENGINE_UNITS_PER_METER;
 use crate::footsteps::events::SurfaceMaterial;
 use crate::utils::warn_once;
 

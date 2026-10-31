@@ -35,6 +35,11 @@ const MATERIAL_SWAP_COLUMNS: &[&str] = &["material_name"];
 const WORLDSPACE_WEATHER_COLUMNS: &[&str] = &["climate"];
 const WEATHER_COLUMNS: &[&str] = &["directional_ambient"];
 const WEATHER_FOG_COLUMNS: &[&str] = &["fog"];
+const WEATHER_FOG_SCALES_COLUMNS: &[&str] = &["fog_scales"];
+const WEATHER_LIBRARY_COLUMNS: &[&str] = &["clouds", "data"];
+const CLIMATE_VOLATILITY_COLUMNS: &[&str] = &["volatility"];
+const PARTICLE_GEOMETRY_COLUMNS: &[&str] = &["data", "particle_texture", "particle_material"];
+const PARTICLE_MATERIAL_DATA_COLUMNS: &[&str] = &["particle_material_data"];
 const CELL_WATER_COLUMNS: &[&str] = &[
     "has_water",
     "no_lod_water",
@@ -68,6 +73,13 @@ const MAP_MARKER_COLUMNS: &[&str] = &[
     "position_z",
 ];
 const WORLDSPACE_MAP_IMAGE_COLUMNS: &[&str] = &["map_image"];
+
+/// The installer command that fills the weather fog scales.
+const WEATHER_FOG_SCALES_TABLES_FIX: &str = "esm-only --tables weather";
+
+/// The installer command that fills the weather library columns.
+pub const WEATHER_LIBRARY_TABLES_FIX: &str =
+    "esm-only --tables weather,climates,shader_particle_geometries";
 
 /// The installer command that fills the Pip-Boy tables and columns.
 const PIPBOY_TABLES_FIX: &str =
@@ -103,6 +115,11 @@ pub enum ColumnGroup {
     WorldspaceWeather,
     Weather,
     WeatherFog,
+    WeatherFogScales,
+    WeatherLibrary,
+    ClimateVolatility,
+    ParticleGeometry,
+    ParticleMaterialData,
     CellWater,
     WorldspaceWater,
     ActivatorWater,
@@ -129,6 +146,11 @@ impl std::fmt::Display for ColumnGroup {
             Self::WorldspaceWeather => "worldspace weather",
             Self::Weather => "weather",
             Self::WeatherFog => "weather fog",
+            Self::WeatherFogScales => "weather fog scales",
+            Self::WeatherLibrary => "weather library",
+            Self::ClimateVolatility => "climate volatility",
+            Self::ParticleGeometry => "particle geometry",
+            Self::ParticleMaterialData => "particle material data",
             Self::CellWater => "cell water",
             Self::WorldspaceWater => "worldspace water",
             Self::ActivatorWater => "activator water",
@@ -222,6 +244,7 @@ const MUSIC_TABLES: &[(&str, &[&str])] = &[
     ),
 ];
 
+/// The footstep tables besides the sound ones.
 const FOOTSTEP_TABLES: &[(&str, &[&str])] = &[
     ("default_object_slots", &["manager", "slot", "target"]),
     ("footstep_sets", &["form_key", "editor_id"]),
@@ -244,6 +267,11 @@ const FOOTSTEP_TABLES: &[(&str, &[&str])] = &[
         &["form_key", "editor_id", "material_hash", "parent"],
     ),
     ("landscape_textures", &["form_key", "material_type"]),
+];
+
+/// The sound descriptors, their output models and the sound categories: what a sound that plays
+/// from a descriptor reads, footsteps and weather alike.
+const SOUND_TABLES: &[(&str, &[&str])] = &[
     (
         "sound_descriptors",
         &[
@@ -310,6 +338,11 @@ pub enum SchemaError {
         table: &'static str,
         missing: Vec<&'static str>,
     },
+    #[error("table `{table}` lacks the sound columns {}; the database predates sound extraction, re-run the installer", missing.join(", "))]
+    WeatherSoundColumnsMissing {
+        table: &'static str,
+        missing: Vec<&'static str>,
+    },
     #[error("table `{table}` lacks the ambient music columns {}; the database predates music extraction, re-run the installer", missing.join(", "))]
     MusicColumnsMissing {
         table: &'static str,
@@ -334,6 +367,12 @@ pub struct DbSchema {
     pub material_swap_name_column_present: bool,
     pub weather_columns_present: bool,
     pub weather_fog_column_present: bool,
+    pub weather_fog_scales_column_present: bool,
+    /// The weather clouds and data, the climate volatility and the particle geometry
+    /// columns the weather library needs, all or none.
+    pub weather_library_columns_present: bool,
+    /// The material data of the particle geometries, which the weather library reads when present.
+    pub particle_material_data_column_present: bool,
     pub cell_water_columns_present: bool,
     pub worldspace_water_columns_present: bool,
     pub activator_water_column_present: bool,
@@ -393,6 +432,34 @@ impl DbSchema {
                 ColumnGroup::WeatherFog,
                 "weather",
                 WEATHER_FOG_COLUMNS,
+            )?,
+            weather_fog_scales_column_present: column_group_present(
+                conn,
+                ColumnGroup::WeatherFogScales,
+                "weather",
+                WEATHER_FOG_SCALES_COLUMNS,
+            )?,
+            weather_library_columns_present: column_group_present(
+                conn,
+                ColumnGroup::WeatherLibrary,
+                "weather",
+                WEATHER_LIBRARY_COLUMNS,
+            )? & column_group_present(
+                conn,
+                ColumnGroup::ClimateVolatility,
+                "climates",
+                CLIMATE_VOLATILITY_COLUMNS,
+            )? & column_group_present(
+                conn,
+                ColumnGroup::ParticleGeometry,
+                "shader_particle_geometries",
+                PARTICLE_GEOMETRY_COLUMNS,
+            )?,
+            particle_material_data_column_present: column_group_present(
+                conn,
+                ColumnGroup::ParticleMaterialData,
+                "shader_particle_geometries",
+                PARTICLE_MATERIAL_DATA_COLUMNS,
             )?,
             cell_water_columns_present: column_group_present(
                 conn,
@@ -510,6 +577,11 @@ impl DbSchema {
             {
                 tracing::warn!(
                     "water columns missing (database predates water extraction); cell and worldspace water planes and placed water meshes cannot name their water type"
+                );
+            }
+            if !self.weather_fog_scales_column_present {
+                tracing::warn!(
+                    "weather.fog_scales column missing (database predates the NAM4 export); every weather's far fog colours take the factors of a NAM4 of 1.0. Fix: run the installer with `{WEATHER_FOG_SCALES_TABLES_FIX}`"
                 );
             }
             if !self.material_swap_name_column_present {
@@ -639,13 +711,37 @@ pub fn require_music_tables(conn: &Connection) -> anyhow::Result<()> {
 
 /// Every table and column the footstep catalog reads; a missing table reads as all its columns missing.
 pub fn require_footstep_tables(conn: &Connection) -> anyhow::Result<()> {
-    for &(table, columns) in FOOTSTEP_TABLES {
+    match first_table_with_missing_columns(conn, FOOTSTEP_TABLES.iter().chain(SOUND_TABLES))? {
+        Some((table, missing)) => {
+            Err(SchemaError::FootstepColumnsMissing { table, missing }.into())
+        }
+        None => Ok(()),
+    }
+}
+
+/// Every table and column the weather sounds read; a missing table reads as all its columns
+/// missing. The footstep tables are not needed.
+pub fn require_weather_sound_tables(conn: &Connection) -> anyhow::Result<()> {
+    match first_table_with_missing_columns(conn, SOUND_TABLES)? {
+        Some((table, missing)) => {
+            Err(SchemaError::WeatherSoundColumnsMissing { table, missing }.into())
+        }
+        None => Ok(()),
+    }
+}
+
+/// The first of `tables` that lacks columns, with the columns it lacks.
+fn first_table_with_missing_columns<'a>(
+    conn: &Connection,
+    tables: impl IntoIterator<Item = &'a (&'static str, &'static [&'static str])>,
+) -> anyhow::Result<Option<(&'static str, Vec<&'static str>)>> {
+    for &(table, columns) in tables {
         let missing = missing_columns(conn, table, columns)?;
         if !missing.is_empty() {
-            return Err(SchemaError::FootstepColumnsMissing { table, missing }.into());
+            return Ok(Some((table, missing)));
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 fn missing_columns(

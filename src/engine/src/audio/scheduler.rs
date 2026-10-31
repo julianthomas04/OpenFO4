@@ -10,8 +10,8 @@
 use std::collections::{HashMap, HashSet};
 
 use super::conditions::{ConditionContext, ConditionError, evaluate};
-use super::rng::AudioRng;
 use crate::assets::db::music::{MusicTrack, MusicTrackKind, MusicType};
+use crate::random::RandomSource;
 
 pub const FLAG_ABRUPT_TRANSITION: u32 = 0x02;
 pub const FLAG_CYCLE_TRACKS: u32 = 0x04;
@@ -84,7 +84,7 @@ impl TrackScheduler {
         music_type: &MusicType,
         tracks: &HashMap<String, MusicTrack>,
         ctx: &dyn ConditionContext,
-        rng: &mut dyn AudioRng,
+        rng: &mut dyn RandomSource,
     ) -> Result<Option<PlayPlan>, SchedulerError> {
         let eligible = self.eligible(&music_type.tracks, tracks, ctx)?;
         if eligible.is_empty() {
@@ -205,11 +205,11 @@ mod tests {
     use super::*;
     use crate::assets::db::music::{Comparand, CompareOp};
     use crate::audio::conditions::FreshWorldContext;
-    use crate::audio::rng::SplitMix64;
     use crate::audio::test_support::catalog::{
         music_type, palette as catalog_palette, silent, single, track_map,
     };
     use crate::audio::test_support::condition::{condition, day, night};
+    use crate::random::SplitMix64;
 
     fn clock(hour: f32) -> FreshWorldContext {
         FreshWorldContext::new(hour, [])
@@ -225,7 +225,7 @@ mod tests {
     /// Replays fixed answers so a test can steer the pick exactly.
     struct ScriptedRng(Vec<usize>);
 
-    impl AudioRng for ScriptedRng {
+    impl RandomSource for ScriptedRng {
         fn below(&mut self, n: usize) -> usize {
             let answer = self.0.remove(0);
             assert!(answer < n, "scripted {answer} is out of range 0..{n}");

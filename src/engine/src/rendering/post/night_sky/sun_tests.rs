@@ -1,15 +1,19 @@
 use glam::{Vec3, Vec4};
 
-use super::assets::{AssetFailureKind, AssetState, SkyAssetError, sun_texture_key};
+use super::assets::{AssetFailureKind, AssetState, SkyAssetError};
 use super::sun::{SunInput, SunLayer, SunSizes, SunUniform, SunUniforms};
 use super::tests::gpu::{
-    Rig, SKY_CLEAR, WorldDraw, feedback_group, pattern_texture, render, rig, texel, white_texture,
+    Rig, SKY_CLEAR, WorldDraw, feedback_group, missing_texture, pattern_texture, render, rig,
+    texel, white_texture,
 };
 use super::{NightSky, NightSkyInput, SkySizes};
 use crate::assets::ini::{GameIni, IniError};
+use crate::rendering::lighting::sky_measured::{
+    SUN_DISC_BRIGHTNESS, SUN_DISC_SIZE_UNITS_PER_DEGREE, sun_disc_edge_deg,
+};
 use crate::rendering::lighting::time_of_day::unmeasured::{
-    MOON_SIZE_UNITS_PER_DEGREE, SUN_DISC_RADIANCE, SUN_GLARE_RADIANCE, SUN_HORIZON_FADE_SINE,
-    SUN_SIZE_UNITS_PER_DEGREE, sun_sprite_edge_deg,
+    MOON_SIZE_UNITS_PER_DEGREE, SUN_GLARE_RADIANCE, SUN_GLARE_SIZE_UNITS_PER_DEGREE,
+    SUN_HORIZON_FADE_SINE, sun_glare_edge_deg,
 };
 use crate::rendering::lighting::time_of_day::{ClimateSunTextures, StarRotation};
 use crate::rendering::shaders;
@@ -111,29 +115,19 @@ mod sizes {
     }
 
     #[test]
-    fn a_size_is_converted_to_the_edge_of_its_sprite_in_the_moons_unit() {
-        assert_eq!(SUN_SIZE_UNITS_PER_DEGREE, MOON_SIZE_UNITS_PER_DEGREE);
-        assert_close(sun_sprite_edge_deg(SunSizes::VANILLA.base), 425.0 / 30.0);
-        assert_close(sun_sprite_edge_deg(SunSizes::VANILLA.glare), 20.0);
-        assert!(
-            sun_sprite_edge_deg(SunSizes::VANILLA.glare)
-                > sun_sprite_edge_deg(SunSizes::VANILLA.base)
-        );
+    fn the_glare_size_is_converted_to_the_edge_of_its_sprite_in_the_moons_unit() {
+        assert_eq!(SUN_GLARE_SIZE_UNITS_PER_DEGREE, MOON_SIZE_UNITS_PER_DEGREE);
+        assert_close(sun_glare_edge_deg(SunSizes::VANILLA.glare), 20.0);
     }
-}
 
-mod keys {
-    use super::*;
-
+    /// The vanilla `Sun_d` texture is above half its peak over 9.3 % of its edge across; the
+    /// probe saw the vanilla disc's half-peak light out to a radius of 1.92 to 2.18 degrees.
     #[test]
-    fn a_sun_texture_key_names_the_file_below_the_textures_in_lower_case() {
-        assert_eq!(
-            sun_texture_key("Sky\\Sun_d.dds"),
-            "textures\\sky\\sun_d.dds"
-        );
-        assert_eq!(
-            sun_texture_key("Sky/SunGlare.DDS"),
-            "textures\\sky\\sunglare.dds"
+    fn the_vanilla_disc_sprite_shows_its_half_peak_light_where_the_probe_saw_it() {
+        let half_peak_radius = sun_disc_edge_deg(SunSizes::VANILLA.base) * 0.093 / 2.0;
+        assert!(
+            (1.92..=2.18).contains(&half_peak_radius),
+            "{half_peak_radius}"
         );
     }
 }
@@ -206,7 +200,7 @@ mod uniforms {
     #[test]
     fn each_sprite_takes_its_size_colour_and_brightness() {
         let sizes = SunSizes {
-            base: 300.0,
+            base: 10.0 * SUN_DISC_SIZE_UNITS_PER_DEGREE,
             glare: 600.0,
         };
 
@@ -223,7 +217,7 @@ mod uniforms {
         let radiance = |uniform: SunUniform, color: Vec3, brightness: f32| {
             Vec3::from(uniform.radiance).abs_diff_eq(color * 2.0 * brightness, 1e-4)
         };
-        assert!(radiance(disc, input().disc_color, SUN_DISC_RADIANCE));
+        assert!(radiance(disc, input().disc_color, SUN_DISC_BRIGHTNESS));
         assert!(radiance(glare, input().glare_color, SUN_GLARE_RADIANCE));
     }
 
@@ -281,9 +275,11 @@ mod gpu {
     const TEXTURE_EDGE: u32 = 16;
     const HALF_ALPHA: u8 = 128;
     /// 20 degrees across: a disc around the sun that leaves the left of the view alone.
-    const SMALL: f32 = 600.0;
+    const SMALL: f32 = 20.0 * SUN_DISC_SIZE_UNITS_PER_DEGREE;
+    /// 20 degrees across, for the glare.
+    const SMALL_GLARE: f32 = 20.0 * SUN_GLARE_SIZE_UNITS_PER_DEGREE;
     /// 90 degrees across: a glare that covers the view around the sun.
-    const LARGE: f32 = 2700.0;
+    const LARGE: f32 = 90.0 * SUN_GLARE_SIZE_UNITS_PER_DEGREE;
     const SIZES: SunSizes = SunSizes {
         base: SMALL,
         glare: LARGE,
@@ -296,10 +292,7 @@ mod gpu {
     type Texture = Option<Result<wgpu::TextureView, SkyAssetError>>;
 
     fn not_found(key: &str) -> Result<wgpu::TextureView, SkyAssetError> {
-        Err(SkyAssetError::NotFound {
-            key: key.to_owned(),
-            source: std::io::Error::from(std::io::ErrorKind::NotFound),
-        })
+        Err(missing_texture(key))
     }
 
     fn sun_layer(rig: &Rig, disc: Texture, glare: Texture) -> (SunLayer, [AssetState; 2]) {
@@ -346,7 +339,7 @@ mod gpu {
         assert_eq!(sun.w, 1.0, "the target alpha is left alone");
         let glare_only = at(&drawn, GLARE_ONLY_PIXEL);
         assert_close(glare_only.x, SUN_GLARE_RADIANCE);
-        assert_close(sun.x, SUN_DISC_RADIANCE + SUN_GLARE_RADIANCE);
+        assert_close(sun.x, SUN_DISC_BRIGHTNESS + SUN_GLARE_RADIANCE);
         assert_eq!(
             at(&drawn, (0, BELOW_HORIZON_ROW)),
             BLACK,
@@ -370,7 +363,7 @@ mod gpu {
 
         assert_close(at(&glare, GLARE_ONLY_PIXEL).x, SUN_GLARE_RADIANCE);
         assert_close(at(&glare, SUN_PIXEL).x, SUN_GLARE_RADIANCE);
-        assert_close(at(&disc, SUN_PIXEL).x, SUN_DISC_RADIANCE);
+        assert_close(at(&disc, SUN_PIXEL).x, SUN_DISC_BRIGHTNESS);
         assert_eq!(
             at(&disc, GLARE_ONLY_PIXEL),
             BLACK,
@@ -417,8 +410,8 @@ mod gpu {
         }
         let disc = at(&tinted, SUN_PIXEL);
         let glare = at(&tinted, GLARE_ONLY_PIXEL);
-        assert_close(disc.x, SUN_DISC_RADIANCE);
-        assert_close(disc.y, SUN_DISC_RADIANCE * 0.5);
+        assert_close(disc.x, SUN_DISC_BRIGHTNESS);
+        assert_close(disc.y, SUN_DISC_BRIGHTNESS * 0.5);
         assert_close(disc.z, SUN_GLARE_RADIANCE);
         assert_eq!(
             (glare.x, glare.y),
@@ -462,7 +455,7 @@ mod gpu {
 
         assert_close(
             at(&shown, SUN_PIXEL).x,
-            SUN_DISC_RADIANCE * f32::from(HALF_ALPHA) / 255.0,
+            SUN_DISC_BRIGHTNESS * f32::from(HALF_ALPHA) / 255.0,
         );
         assert!(at(&opaque, SUN_PIXEL).x > at(&shown, SUN_PIXEL).x);
         assert_black(&hidden);
@@ -490,8 +483,8 @@ mod gpu {
             &SunUniforms::new(
                 &up_front,
                 SunSizes {
-                    base: 1800.0,
-                    glare: SMALL,
+                    base: 60.0 * SUN_DISC_SIZE_UNITS_PER_DEGREE,
+                    glare: SMALL_GLARE,
                 },
                 1.0,
             ),
@@ -542,7 +535,7 @@ mod gpu {
         };
         let small = SunSizes {
             base: SMALL,
-            glare: SMALL,
+            glare: SMALL_GLARE,
         };
         layer.update(&rig.queue, &SunUniforms::new(&set, small, 1.0));
 
@@ -628,7 +621,7 @@ mod gpu {
 
         assert_eq!(states, [AssetState::Loaded, AssetState::NotRequested]);
         let drawn = pixels(&rig, &mut layer, &sun_input(), 1.0, SKY_CLEAR);
-        assert_close(at(&drawn, SUN_PIXEL).x, SUN_DISC_RADIANCE);
+        assert_close(at(&drawn, SUN_PIXEL).x, SUN_DISC_BRIGHTNESS);
     }
 
     #[test]

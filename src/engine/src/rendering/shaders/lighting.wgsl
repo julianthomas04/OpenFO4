@@ -21,12 +21,16 @@ const CLASS_LIT_ENV = vec3<f32>(0.0, 0.0, 1.0);
 const CLASS_OTHER = vec3<f32>(0.08);
 
 const TERMINATOR_SHARPNESS = 8.0;
-const FOG_MIN_RANGE = 0.001;
 
 const NO_CASCADE = 0xffffffffu;
 const LAST_CASCADE_FADE_FRACTION = 0.1;
 const MAX_SLOPE_BIAS_TANGENT = 10.0;
 const MIN_NO_L = 1e-4;
+// Radius of the sun's shadow filter in world units: constant plus a share of the distance from the
+// receiver to its caster along the shadow direction. Fitted to vanilla's shadow edges (a linear ramp
+// 11.7 + 0.0059 x distance units wide, which this filter disc matches at 0.586 of that width).
+const SUN_PENUMBRA_RADIUS = 6.85;
+const SUN_PENUMBRA_RADIUS_PER_DISTANCE = 0.00345;
 // Widest sun penumbra, as a radius in texels; the blocker search covers it.
 const SUN_MAX_PENUMBRA_TEXELS = 12.0;
 const SUN_MIN_PENUMBRA_TEXELS = 1.0;
@@ -137,8 +141,8 @@ fn mean_blocker_lead(uv: vec2<f32>, cascade: u32, depth: f32, slope: vec2<f32>) 
     return lead / blockers;
 }
 
-// Contact-hardening sun shadow: the sun is a disc, so an edge softens with the distance from its
-// caster. Hardware-filtered compare taps over a disc whose radius is that penumbra.
+// Sun shadow with vanilla's edge: hardware-filtered compare taps over a disc whose radius is
+// `SUN_PENUMBRA_RADIUS`, growing with the distance to the casters.
 fn filtered_shadow(uv: vec2<f32>, cascade: u32, depth: f32, slope: vec2<f32>) -> f32 {
     let taps = frame.shadow_filter.x;
     if (taps <= 1u) {
@@ -148,9 +152,8 @@ fn filtered_shadow(uv: vec2<f32>, cascade: u32, depth: f32, slope: vec2<f32>) ->
     if (lead < 0.0) {
         return 1.0;
     }
-    let cos_radius = frame.to_sun.w;
-    let tan_radius = sqrt(1.0 - cos_radius * cos_radius) / cos_radius;
-    let penumbra_world = lead * cascade_depth_span(cascade) * tan_radius;
+    let caster_distance = lead * cascade_depth_span(cascade);
+    let penumbra_world = SUN_PENUMBRA_RADIUS + SUN_PENUMBRA_RADIUS_PER_DISTANCE * caster_distance;
     let penumbra_texels = clamp(
         penumbra_world / frame.cascade_texel_world[cascade],
         SUN_MIN_PENUMBRA_TEXELS,
@@ -225,32 +228,6 @@ fn cascade_debug_tint(world_pos: vec3<f32>) -> vec3<f32> {
         case 3u: { return vec3<f32>(1.0, 1.0, 0.35); }
         default: { return vec3<f32>(1.0); }
     }
-}
-
-struct Fog {
-    color: vec3<f32>,
-    opacity: f32,
-}
-
-// Bethesda-style parametric fog. A zero maximum opacity disables it.
-fn fog_at(world_pos: vec3<f32>) -> Fog {
-    let near = frame.fog_near_color.w;
-    let far = frame.fog_far_color.w;
-    let power = frame.fog_params.x;
-    let max_opacity = frame.fog_params.y;
-    let distance_to_camera = distance(frame.camera_pos.xyz, world_pos);
-    let t = saturate((distance_to_camera - near) / max(far - near, FOG_MIN_RANGE));
-    return Fog(mix(frame.fog_near_color.rgb, frame.fog_far_color.rgb, t), min(pow(t, power), max_opacity));
-}
-
-fn apply_fog(color: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
-    let fog = fog_at(world_pos);
-    return mix(color, fog.color, fog.opacity);
-}
-
-// Share of a surface's own light that survives the fog.
-fn fog_transmittance(world_pos: vec3<f32>) -> f32 {
-    return 1.0 - fog_at(world_pos).opacity;
 }
 
 fn light_cluster(p: ShadingPoint) -> u32 {
@@ -364,7 +341,7 @@ fn local_lights(s: SurfaceSample, p: ShadingPoint, v: vec3<f32>) -> LightContrib
 
 fn sun_and_ambient(s: SurfaceSample, world_pos: vec3<f32>, v: vec3<f32>) -> LightContribution {
     let l = frame.to_sun.xyz;
-    let shadow = sun_shadow(world_pos, s.ng, l);
+    let shadow = sun_shadow(world_pos, s.ng, frame.to_shadow.xyz);
     let direct = brdf_direct(s, l, v, frame.sun_illuminance.rgb * terminator(s.ng, l) * shadow);
     let ambient = brdf_ambient(s, v);
     return LightContribution(direct.diffuse + ambient.diffuse, direct.specular + ambient.specular);

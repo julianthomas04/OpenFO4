@@ -3,14 +3,15 @@
 
 use std::collections::HashMap;
 
-use crate::assets::db::footsteps::STANDARD_DESCRIPTOR_TYPE;
 use crate::assets::db::footsteps::{
-    Footstep, FootstepCatalog, FootstepSet, Impact, ImpactDataSet, MaterialImpact, OutputChannel,
-    SoundDescriptor, SoundOutputModel,
+    Footstep, FootstepCatalog, FootstepSet, Impact, ImpactDataSet, MaterialImpact,
 };
 use crate::assets::db::music::{Comparand, CompareOp, Condition, SoundCategory};
+use crate::assets::db::sound_catalog::{
+    COMPOUND_DESCRIPTOR, OutputChannel, STANDARD_DESCRIPTOR_TYPE, SoundCatalog, SoundDescriptor,
+    SoundOutputModel,
+};
 use crate::audio::conditions::{HAS_SILENT_RUNNING_PERK, IS_FIRST_PERSON};
-use crate::audio::footsteps::resolve::COMPOUND_DESCRIPTOR;
 use crate::audio::test_support::condition::condition;
 use crate::footsteps::{FootTag, Gait};
 
@@ -220,31 +221,33 @@ pub fn catalog() -> FootstepCatalog {
             impact("sprint_impact", "sprint_sound"),
             impact("sneak_impact", "sneak_sound"),
         ]),
-        sound_descriptors: descriptors
-            .into_iter()
-            .map(|descriptor| (descriptor.form_key.clone(), descriptor))
-            .collect(),
-        output_models: HashMap::from([(
-            "model".to_string(),
-            SoundOutputModel {
-                form_key: "model".to_string(),
-                editor_id: None,
-                output_type: 1,
-                static_attenuation_db: MODEL_ATTENUATION_DB,
-                channels: ["L", "R"]
-                    .into_iter()
-                    .map(|speaker| OutputChannel {
-                        input_channel: 0,
-                        speaker: speaker.to_string(),
-                        percent: CHANNEL_PERCENT,
-                    })
-                    .collect(),
-            },
-        )]),
-        sound_categories: HashMap::from([
-            category("footstep", FOOTSTEP_CATEGORY_MULTIPLIER, Some("master")),
-            category("master", MASTER_CATEGORY_MULTIPLIER, None),
-        ]),
+        sounds: SoundCatalog {
+            descriptors: descriptors
+                .into_iter()
+                .map(|descriptor| (descriptor.form_key.clone(), descriptor))
+                .collect(),
+            output_models: HashMap::from([(
+                "model".to_string(),
+                SoundOutputModel {
+                    form_key: "model".to_string(),
+                    editor_id: None,
+                    output_type: 1,
+                    static_attenuation_db: MODEL_ATTENUATION_DB,
+                    channels: ["L", "R"]
+                        .into_iter()
+                        .map(|speaker| OutputChannel {
+                            input_channel: 0,
+                            speaker: speaker.to_string(),
+                            percent: CHANNEL_PERCENT,
+                        })
+                        .collect(),
+                },
+            )]),
+            categories: HashMap::from([
+                category("footstep", FOOTSTEP_CATEGORY_MULTIPLIER, Some("master")),
+                category("master", MASTER_CATEGORY_MULTIPLIER, None),
+            ]),
+        },
         landscape_materials: HashMap::new(),
     }
 }

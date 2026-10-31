@@ -20,6 +20,7 @@ pub mod fatal_runtime_error;
 mod flow_input;
 pub mod foot_surface;
 pub mod fps;
+pub mod frame_capture;
 pub mod free_list;
 pub mod frustum;
 pub mod game_frame;
@@ -53,13 +54,17 @@ pub mod post;
 pub mod ragdoll_debug_panel;
 pub mod ragdoll_objects;
 mod ragdoll_sim_link;
+pub mod rain;
+mod rain_stage;
 pub mod readback_ring;
 pub mod refraction;
 pub mod render_pipelines;
 pub(crate) mod row_pose;
 pub mod scene_copy;
+pub mod scene_overrides;
 pub mod shaders;
 pub mod shadows;
+pub mod shot;
 pub mod skeleton_overlay;
 pub mod skinning;
 mod startup_reads;
@@ -75,6 +80,8 @@ mod walk_in;
 mod walk_in_hook;
 mod walk_in_trace;
 pub mod water;
+pub mod weather;
+mod weather_sync;
 pub mod window_surface;
 pub mod world_streamer;
 
@@ -92,6 +99,7 @@ use crate::assets::layout;
 use crate::assets::pipboy_art::ArtLibrary;
 use crate::assets::sky_game_settings::load_sky_game_config;
 use crate::audio::conditions::GameTime;
+use crate::audio::weather::load_or_report;
 use crate::audio::world_music_loader::{load_world_music, seed_from_clock};
 use crate::audio::{
     AudioError, AudioFrame, AudioSystem, Footsteps, PLACE_POLLS_PER_SECOND, PlacePoll,
@@ -115,12 +123,12 @@ use crate::rendering::{
     },
     gpu_profiler::{GpuPass, GpuProfiler, SpanPart, panel::gpu_profiler_section},
     gpu_slab::GpuSlab,
-    grass::{GrassPanelState, GrassStage, GrassView, grass_panel},
+    grass::{GrassPanelState, GrassStage, GrassView, commonwealth_clear_wind, grass_panel},
     hiz::HizPipeline,
     lighting::{
         FrameBinding, LightingState, debug_panel::lighting_panel,
         exterior_weather::ExteriorWeatherSlots, interior_catalog::InteriorLightingCatalog,
-        state::FrameInputs, time_of_day::DayTime, time_panel::time_panel,
+        state::FrameInputs, time_panel::time_panel,
     },
     line_buffer::LineBuffer,
     local_lights::{
@@ -138,10 +146,12 @@ use crate::rendering::{
         PostChain,
         depth_of_field::{BokehGate, DofCamera, select_frame},
         hdr_target::{HDR_FORMAT, clear_color},
-        night_sky::{MoonSizes, NightSky, NightSkyInput, SkySizes},
+        night_sky::{MoonSizes, NightSky, SkySizes},
         tonemap,
     },
     ragdoll_debug_panel::ragdoll_settings_section,
+    rain::RainGpu,
+    rain_stage::{RainFrame, RainStage},
     readback_ring::{ReadbackError, escalate_device_loss},
     render_pipelines::{
         debug_lines::{DebugLinePipeline, LineVertex},
@@ -150,6 +160,7 @@ use crate::rendering::{
         world_pass_layout::{FEEDBACK_GROUP, WorldPassLayout},
     },
     scene_copy::SceneCopy,
+    scene_overrides::{SceneOverrides, SpawnLook},
     shadows::{
         ShadowRenderer, ShadowScene, ShadowState,
         lamps::{
@@ -166,10 +177,17 @@ use crate::rendering::{
     },
     texture::Texture,
     texture_streaming::{ResidencyPolicy, TextureFeedback, TextureResidency, demand::ScreenView},
-    water::{CameraWater, WaterStage, water_panel},
+    water::{CameraWater, WaterSetting, WaterStage, water_panel},
+    weather::{
+        StartupWeather, WeatherSync,
+        panel::{WeatherPanelState, weather_panel},
+        sounds::sound_table,
+        startup::{WEATHER_SEED_VAR, cycle_seed},
+    },
     window_surface::WindowSurface,
     world_streamer::{LoadMode, StreamTargets, UploadBudget, WorldStreamer},
 };
+use crate::sim::commands::{ClockEdit, WeatherEdit};
 use crate::sim::pipboy::PipBoyAction;
 use crate::sim::{
     ClockFrame, DynamicPose, MaterialBuoyancy, PlayerInput, PlayerMovement, SimCommand, SimWorld,
@@ -486,6 +504,9 @@ pub struct State {
     // Lighting
     lighting: LightingState,
     interior_lighting: Option<InteriorLightingCatalog>,
+    weather: WeatherSync,
+    weather_panel: WeatherPanelState,
+    rain: RainStage,
     frame_binding: FrameBinding,
     shadow_renderer: ShadowRenderer,
     lamp_shadow_cache: LampShadowCache,
@@ -680,6 +701,8 @@ pub struct State {
     pipboy_env: PipBoyEnv,
     /// The screenshot session when `OPENFO4_PIPBOY_CAPTURE` is set.
     capture: Option<PipBoyCapture>,
+    /// The single-screenshot session when `OPENFO4_SHOT` is set.
+    shot: Option<shot::ShotSession>,
     pipboy_was_open: bool,
     /// Whether the mouse was captured when the Pip-Boy opened, to restore on close.
     capture_before_pipboy: bool,
@@ -1165,7 +1188,8 @@ impl State {
 
         // Camera. Base FOV comes from the game INI cascade the installer
         // copies (step 2d), validated at startup.
-        let world_fov_beth = settings.world_fov_beth;
+        let overrides = SceneOverrides::from_env()?;
+        let world_fov_beth = overrides.world_fov.unwrap_or(settings.world_fov_beth);
         tracing::info!(
             "world FOV {world_fov_beth} ({:.1}° vertical)",
             beth_fov_to_vertical(world_fov_beth),
@@ -1186,9 +1210,17 @@ impl State {
             LampShadowState::new(settings.lamp_shadows),
             LocalLightSettings::new(settings.light_fade),
         );
-        if let Some(slots) =
-            ExteriorWeatherSlots::load_or_report(&asset_server.db_path(), WORLDSPACE)
-        {
+        let weather = StartupWeather::load_or_report(&asset_server.db_path(), WORLDSPACE);
+        let forced_weather = overrides
+            .weather
+            .as_ref()
+            .map(|selector| selector.resolve(weather.as_ref().map(|weather| &weather.library)))
+            .transpose()?;
+        let exterior_slots = match &weather {
+            Some(weather) => Some(weather.library.initial_weather().slots.clone()),
+            None => ExteriorWeatherSlots::load_or_report(&asset_server.db_path(), WORLDSPACE),
+        };
+        if let Some(slots) = exterior_slots {
             let game = crate::assets::db::DbClient::new(&asset_server.db_path())
                 .and_then(|db| load_sky_game_config(&db))
                 .map_err(StartupError::SkySettings)?;
@@ -1213,10 +1245,19 @@ impl State {
             lamp_atlas.view(),
             &cluster_buffers,
         );
+        let rain = RainStage::new(
+            &device,
+            &queue,
+            asset_server.asset_location(),
+            &frame_binding.layout,
+            seed_from_clock(),
+        );
         let scene_copy = SceneCopy::new(&device, config.width, config.height);
         let world_pass_layout = WorldPassLayout::new(&device, &frame_binding.layout);
         let post = PostChain::new(
             &device,
+            &queue,
+            asset_server.asset_location(),
             config.format,
             config.width,
             config.height,
@@ -1320,14 +1361,15 @@ impl State {
             texture_feedback.enabled(),
         );
 
+        let overlay_format = tonemap::ui_gamma_format(config.format);
         let skeleton_overlay = SkeletonOverlay::new(
             &device,
-            HDR_FORMAT,
+            overlay_format,
             &frame_binding.layout,
             &depth_texture.view,
         );
         let debug_line_pipeline =
-            DebugLinePipeline::new(&device, HDR_FORMAT, &world_pass_layout.pipeline_layout);
+            DebugLinePipeline::new(&device, overlay_format, &world_pass_layout.pipeline_layout);
 
         // Mega-buffers
         let object_mega = MegaBuffer::new(&device, "object");
@@ -1366,7 +1408,7 @@ impl State {
             cluster_buffers,
             &placed_lights.buffer,
             hiz_pipeline.pyramid_view(),
-            HDR_FORMAT,
+            overlay_format,
             &world_pass_layout.pipeline_layout,
         );
 
@@ -1462,7 +1504,8 @@ impl State {
             .map(|capture_config| PipBoyCapture::new(&capture_config))
             .transpose()
             .map_err(|error| StartupError::Pipboy(error.into()))?;
-        if capture.is_some() {
+        let shot = shot::ShotConfig::from_env()?.map(shot::ShotSession::new);
+        if capture.is_some() || shot.is_some() {
             config.usage |= wgpu::TextureUsages::COPY_SRC;
         }
         let fps_utils = FpsUtils::new(64);
@@ -1524,22 +1567,20 @@ impl State {
             &world_pass_layout,
             &frame_binding.layout,
             settings.grass_fade_limits,
+            weather
+                .as_ref()
+                .map_or_else(commonwealth_clear_wind, |weather| {
+                    weather.library.wind_ceiling()
+                }),
         );
         timer.mark("effects_and_grass")?;
 
-        // Dev override: OPENFO4_SPAWN_LOOK="yaw_deg,pitch_deg" aims the camera at
-        // launch (yaw 0 = +X/east, pitch -90 = straight down). The controller drives
-        // the look direction every frame in both walk and fly modes, so set it there;
-        // the first-frame camera.target is updated to match so frame 0 already aims.
-        let spawn_look = std::env::var("OPENFO4_SPAWN_LOOK").ok().and_then(|raw| {
-            let parsed = camera::parse_spawn_look(&raw);
-            if parsed.is_none() {
-                tracing::warn!(
-                    "OPENFO4_SPAWN_LOOK={raw:?} is not `yaw_deg,pitch_deg` with finite numbers; ignoring it"
-                );
-            }
-            parsed
-        });
+        // Dev override: OPENFO4_SPAWN_LOOK="yaw_deg,pitch_deg" (or OPENFO4_SPAWN_ANGLE as
+        // player.getangle prints it) aims the camera at launch (yaw 0 = +X/east, pitch -90 =
+        // straight down). The controller drives the look direction every frame in both walk
+        // and fly modes, so set it there; the first-frame camera.target is updated to match so
+        // frame 0 already aims.
+        let spawn_look = overrides.look.map(|SpawnLook { yaw, pitch }| (yaw, pitch));
         let spawn_target =
             spawn_cell.map(|target| ResolvedTarget::interior_spawn(target, spawn_look));
         // Dev override: OPENFO4_SPAWN="x,y,z" in Bethesda world units (the
@@ -1591,6 +1632,23 @@ impl State {
             .and_then(|db| crate::assets::world_clock_start::load_world_clock(&db))
             .map_err(StartupError::WorldClock)?;
         let mut sim = SimWorld::new(player_movement, world_clock);
+        if let Some(hour) = overrides.hour {
+            sim.apply(SimCommand::SetWorldClock(ClockEdit::SetHour(hour)));
+        }
+        if overrides.hour.is_some() || shot.is_some() {
+            sim.apply(SimCommand::SetWorldClock(ClockEdit::SetPaused(true)));
+        }
+        let weather_library = weather.map(|StartupWeather { library, table }| {
+            let seed = cycle_seed(std::env::var(WEATHER_SEED_VAR), seed_from_clock());
+            tracing::info!(
+                "weather cycle seed {seed}; set {WEATHER_SEED_VAR}={seed} to roll the same weather again"
+            );
+            sim.install_weather(table, seed);
+            library
+        });
+        if let Some(weather) = forced_weather {
+            sim.apply(SimCommand::SetWeather(WeatherEdit::Force(weather)));
+        }
         if let Some(table) = buoyancy_table {
             sim.set_material_buoyancy_table(std::sync::Arc::new(table));
         }
@@ -1637,6 +1695,17 @@ impl State {
             )
             .map_err(AudioError::from)?;
             audio.set_footsteps(footsteps);
+            if let Some(weather_sounds) =
+                weather_library.as_ref().map(sound_table).and_then(|table| {
+                    load_or_report(
+                        &db_path,
+                        table,
+                        Path::new(&layout::audio_dir(asset_server.asset_location())),
+                    )
+                })
+            {
+                audio.set_weather(weather_sounds);
+            }
         }
         let menu_video = MenuVideo::new(
             settings.menu_video,
@@ -1678,6 +1747,9 @@ impl State {
             camera_controller,
             lighting,
             interior_lighting,
+            weather: WeatherSync::new(weather_library),
+            weather_panel: WeatherPanelState::default(),
+            rain,
             frame_binding,
             night_sky,
             shadow_renderer,
@@ -1789,6 +1861,7 @@ impl State {
             pipboy,
             pipboy_env,
             capture,
+            shot,
             pipboy_was_open: false,
             capture_before_pipboy: false,
             flow,
@@ -2072,24 +2145,25 @@ impl State {
 
         drop(encode_cull_span);
 
+        let shadow_scene = ShadowScene {
+            material_bind_group: self
+                .shadow_material_bind_group
+                .as_ref()
+                .unwrap_or(&self.material_bind_group),
+            instance_bind_group: &self.instance_bind_group,
+            object_mega: &self.object_mega,
+            terrain_mega: &self.terrain_mega,
+            object_count: self.object_instances.dispatch_count(),
+            terrain_count: self.terrain_instances.len(),
+            skinned: self.characters.scene(),
+        };
         {
             let _span = tracing::info_span!("shadows").entered();
             if !skip.skips(DebugPass::Shadows) {
                 self.shadow_renderer.encode(
                     &mut encoder,
                     &self.queue,
-                    &ShadowScene {
-                        material_bind_group: self
-                            .shadow_material_bind_group
-                            .as_ref()
-                            .unwrap_or(&self.material_bind_group),
-                        instance_bind_group: &self.instance_bind_group,
-                        object_mega: &self.object_mega,
-                        terrain_mega: &self.terrain_mega,
-                        object_count: self.object_instances.dispatch_count(),
-                        terrain_count: self.terrain_instances.len(),
-                        skinned: self.characters.scene(),
-                    },
+                    &shadow_scene,
                     &self.gpu_profiler,
                 );
                 if self.lighting.lamp_shadows.settings.show_atlas {
@@ -2098,8 +2172,24 @@ impl State {
             }
         }
 
-        let encode_world_span = tracing::info_span!("encode_world_pass").entered();
         let world_skipped = skip.skips(DebugPass::World);
+        if !world_skipped {
+            self.rain.prepare(
+                RainGpu {
+                    device: &self.device,
+                    queue: &self.queue,
+                    encoder: &mut encoder,
+                    shadows: &self.shadow_renderer,
+                    scene: &shadow_scene,
+                    profiler: &self.gpu_profiler,
+                },
+                &self.camera,
+                self.streamer.loaded_generation(),
+                self.water_stage.camera_water().underwater,
+            );
+        }
+
+        let encode_world_span = tracing::info_span!("encode_world_pass").entered();
         let pipelines = self.object_pipelines.pipelines_in_bucket_order();
         let skinned = self.characters.scene();
         let skinned_pipelines = &self.skinned_pipelines;
@@ -2307,8 +2397,8 @@ impl State {
             );
         }
 
-        // Translucent pass: loads the opaque result, then the water stage, the
-        // overlay buckets and the debug lines. Timed as `water`, so it includes
+        // Translucent pass: loads the opaque result, then the water stage and the
+        // overlay buckets. Timed as `water`, so it includes
         // the overlay buckets.
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2370,18 +2460,16 @@ impl State {
                 if self.effect_stage.draw(&mut render_pass, &self.scene_copy) {
                     bind_world_groups(&mut render_pass);
                 }
-
-                // Collision wireframe overlay.
-                if self.collision_wireframe {
-                    self.collision_lines
-                        .draw(&mut render_pass, &self.debug_line_pipeline.pipeline);
-                }
-                self.navmesh_overlay
-                    .draw(&mut render_pass, &self.debug_line_pipeline.pipeline);
-
-                self.local_lights
-                    .draw_spheres(&mut render_pass, &self.lighting.local_lights);
             }
+        }
+        if !world_skipped {
+            self.rain.encode(
+                &mut encoder,
+                self.post.hdr_view(),
+                &self.depth_texture.view,
+                &self.frame_binding,
+                &self.gpu_profiler,
+            );
         }
         if !world_skipped && !skip.skips(DebugPass::DepthOfField) {
             let underwater = self
@@ -2411,9 +2499,6 @@ impl State {
         }
         drop(encode_world_span);
 
-        self.skeleton_overlay
-            .encode(&mut encoder, self.post.hdr_view(), &self.frame_binding);
-
         let encode_post_span = tracing::info_span!("encode_post").entered();
         // HiZ pyramid for next frame's occlusion culling.
         if !skip.skips(DebugPass::Hiz) {
@@ -2438,14 +2523,56 @@ impl State {
             );
         }
 
+        // Debug overlays draw on the displayed picture, so their colours are shown as stored
+        // whatever the exposure and grading make of the scene.
+        let overlay_view = output.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(tonemap::ui_gamma_format(self.config.format)),
+            ..Default::default()
+        });
+        if !world_skipped {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Debug Overlay Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &overlay_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                occlusion_query_set: None,
+                timestamp_writes: None,
+                multiview_mask: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_texture.view,
+                    depth_ops: None,
+                    stencil_ops: None,
+                }),
+            });
+            bind_world_groups(&mut render_pass);
+            if self.collision_wireframe {
+                self.collision_lines
+                    .draw(&mut render_pass, &self.debug_line_pipeline.pipeline);
+            }
+            self.navmesh_overlay
+                .draw(&mut render_pass, &self.debug_line_pipeline.pipeline);
+            self.local_lights
+                .draw_spheres(&mut render_pass, &self.lighting.local_lights);
+        }
+        self.skeleton_overlay
+            .encode(&mut encoder, &overlay_view, &self.frame_binding);
+
         // Native HUD overlay. Color-only, LoadOp::Load, no depth: the HiZ
         // pyramid above already consumed the depth buffer, so the HUD must not
         // touch it. Drawn before egui so the developer menu paints over the HUD.
         // The Pip-Boy replaces the HUD while it is open.
+        // A shot shows the world alone: no HUD, Pip-Boy, version line or developer UI.
+        let shows_interface = !self.shot_active();
         let pipboy_open = self.sim.pipboy_snapshot().model.open;
         self.pipboy.sync_open(pipboy_open);
         if pipboy_open {
-            if !skip.skips(DebugPass::PipBoy) {
+            if shows_interface && !skip.skips(DebugPass::PipBoy) {
                 let snapshot = self.sim.pipboy_snapshot();
                 self.pipboy.render(
                     &self.device,
@@ -2457,7 +2584,7 @@ impl State {
                     &snapshot,
                 );
             }
-        } else if !skip.skips(DebugPass::Hud) {
+        } else if shows_interface && !skip.skips(DebugPass::Hud) {
             self.hud.render(
                 &self.device,
                 &self.queue,
@@ -2487,7 +2614,9 @@ impl State {
             );
         }
 
-        self.render_version_overlay(&mut encoder, &view);
+        if shows_interface {
+            self.render_version_overlay(&mut encoder, &view);
+        }
 
         // Queued toasts must register before debug_ui.render so they paint
         // inside this frame's egui pass.
@@ -2520,7 +2649,7 @@ impl State {
 
         // Debug UI
         let egui_span = tracing::info_span!("egui").entered();
-        if !skip.skips(DebugPass::Egui) {
+        if shows_interface && !skip.skips(DebugPass::Egui) {
             self.debug_ui.render(
                 &self.window,
                 &self.device,
@@ -2986,6 +3115,22 @@ impl State {
                                 for edit in clock_edits {
                                     self.sim.apply(SimCommand::SetWorldClock(edit));
                                 }
+                                egui::CollapsingHeader::new("Weather cycle")
+                                    .default_open(true)
+                                    .show(ui, |ui| {
+                                        let view = self.weather.view(self.sim.weather_snapshot());
+                                        let mut weather_edits = Vec::new();
+                                        weather_panel(
+                                            ui,
+                                            &mut self.weather_panel,
+                                            view.as_ref(),
+                                            self.rain.asset_status(),
+                                            &mut weather_edits,
+                                        );
+                                        for edit in weather_edits {
+                                            self.sim.apply(SimCommand::SetWeather(edit));
+                                        }
+                                    });
                             });
 
                         egui::CollapsingHeader::new("Lighting")
@@ -3048,6 +3193,7 @@ impl State {
         }
         self.memory_section_open = memory_section_open;
         let frame_capture = self.begin_frame_capture(&mut encoder, &output.texture);
+        let shot_capture = self.begin_shot_capture(&mut encoder, &output.texture);
         self.texture_feedback.encode_readback(
             &mut encoder,
             Instant::now(),
@@ -3066,6 +3212,7 @@ impl State {
             self.queue.submit(std::iter::once(command_buffer));
         }
         self.finish_frame_capture(frame_capture);
+        self.finish_shot_capture(shot_capture);
         let post_submit_span = tracing::info_span!("post_submit").entered();
         self.cull_stats.post_submit();
         self.texture_feedback.post_submit();
@@ -3329,6 +3476,12 @@ impl State {
         let dt = Duration::from_secs_f32(dt.max(0.0));
         let place = (!phase.shows_menu() && self.music_poll.due(dt))
             .then(|| self.streamer.music_place(self.camera.eye));
+        let weather = (!phase.shows_menu())
+            .then(|| {
+                self.weather
+                    .audio_input(self.sim.weather_snapshot(), !self.streamer.in_interior())
+            })
+            .flatten();
         let frame = AudioFrame {
             phase,
             dt,
@@ -3337,6 +3490,7 @@ impl State {
                 GameTime::new(clock.hour(), clock.days_passed())
             },
             place,
+            weather,
         };
         match &mut self.audio {
             Some(audio) => audio.sync(frame),
@@ -3356,12 +3510,12 @@ impl State {
         self.fps_utils.tick();
         let dt = self.fps_utils.dt().unwrap_or(0.0);
         self.flow.tick(dt);
-        self.sync_audio(dt)?;
         self.sync_menu_video();
         // Nothing is loaded and nothing simulates until the player picks a spawn.
         if self.flow.phase().shows_menu() {
             self.drive_pipboy_capture(dt);
             self.streamer.suspend_frame_meter();
+            self.sync_audio(dt)?;
             return Ok(());
         }
 
@@ -3376,6 +3530,8 @@ impl State {
             in_game: self.flow.phase() == Phase::InGame,
             world_dt,
         });
+        // The audio reads the strikes of the step the clock has just taken.
+        self.sync_audio(dt)?;
 
         // Apply a debug-UI worldspace selection before anything reads the
         // camera this frame: the streamer tears the old content down and reports
@@ -3569,20 +3725,7 @@ impl State {
             self.streamer.current_interior(),
             self.interior_lighting.as_ref(),
         );
-        let clock = self.sim.world_clock();
-        self.lighting
-            .set_time_of_day(DayTime::clamped(clock.days_passed(), clock.hour()));
-        if self.lighting.draws_sky()
-            && let Some(objects) = self.lighting.sky_objects()
-            && let Some(night_sky) = &mut self.night_sky
-        {
-            night_sky.update(
-                &self.device,
-                &self.queue,
-                &NightSkyInput::new(objects, self.lighting.sun_input()),
-                self.lighting.sky.radiance_scale,
-            );
-        }
+        self.sync_weather(world_dt);
         let mut water_entries = Vec::new();
         if self.water_stage.wants_water_entries() {
             self.sim.drain_water_entries(&mut water_entries);
@@ -3590,6 +3733,18 @@ impl State {
         let wading_player = matches!(self.input_mode, InputMode::Walk)
             .then(|| self.sim.player_body())
             .flatten();
+        self.rain.sync(
+            &RainFrame {
+                weather: &self.weather,
+                water: &self.water_stage,
+                controls: self.weather_panel.rain,
+                tint: self.lighting.horizon_radiance(),
+                indoors: self.streamer.in_interior(),
+                world_dt,
+                origin: wading_player.map_or(self.camera.eye, |body| body.feet),
+            },
+            &mut water_entries,
+        );
         self.water_stage.update_displacement(
             &self.queue,
             world_dt,
@@ -3640,7 +3795,16 @@ impl State {
             &self.device,
             &self.queue,
             &frame_uniform,
-            self.streamer.in_interior(),
+            if self.streamer.in_interior() {
+                WaterSetting::Interior
+            } else {
+                WaterSetting::Exterior {
+                    water_multiplier: self
+                        .lighting
+                        .exterior_weather()
+                        .map(|weather| weather.water_multiplier),
+                }
+            },
         );
         drop(lighting_frame_span);
         let gpu_poll_span = tracing::info_span!("gpu_poll").entered();
@@ -3681,8 +3845,15 @@ impl State {
         }
         let frame_uniform_write_span = tracing::info_span!("frame_uniform_write").entered();
         self.frame_binding.write(&self.queue, &frame_uniform);
+        let exposure = self.lighting.exposure.gpu_params(dt);
+        let exposure = if self.shot_active() {
+            exposure.adapted_at_once()
+        } else {
+            exposure
+        };
+        self.post.write_exposure_params(&self.queue, &exposure);
         self.post
-            .write_exposure_params(&self.queue, &self.lighting.exposure.gpu_params(dt));
+            .grade_with(&self.queue, &self.lighting.tonemap.lut);
 
         drop(frame_uniform_write_span);
         let eye = self.camera.eye;
@@ -3949,6 +4120,7 @@ impl State {
             placed_lights: placed_lights_realloc,
         });
         drop(rebind_buffers_span);
+        self.drive_shot()?;
         Ok(())
     }
 

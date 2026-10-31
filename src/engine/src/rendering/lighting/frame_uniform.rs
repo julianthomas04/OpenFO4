@@ -25,12 +25,14 @@ pub struct FrameUniform {
     pub sky_zenith: Vec4,
     pub sky_horizon: Vec4,
     pub sky_ground: Vec4,
-    /// rgb: colour, w: distance at which the fog starts.
+    /// The fog, laid out and documented by `fog::FogUniformFields`.
     pub fog_near_color: Vec4,
-    /// rgb: colour, w: distance at which the fog is fully developed.
     pub fog_far_color: Vec4,
-    /// x: falloff power, y: maximum opacity.
+    pub fog_near_high_color: Vec4,
+    pub fog_far_high_color: Vec4,
     pub fog_params: Vec4,
+    pub fog_near_band: Vec4,
+    pub fog_far_band: Vec4,
     pub cascade_view_proj: [Mat4; MAX_CASCADES],
     /// xyz: world-space centre, w: radius.
     pub cascade_spheres: [Vec4; MAX_CASCADES],
@@ -50,14 +52,23 @@ pub struct FrameUniform {
     pub cluster_grid: UVec4,
     /// See `ClusterDepth::uniform`.
     pub cluster_z: Vec4,
-    /// See `TonemapSettings::uniform`.
+    /// x: tonemap operator, y: the image space's `TonemapE`, z: the weight of its colour LUT; see
+    /// `TonemapSettings::uniform`.
     pub tonemap: Vec4,
+    /// x: saturation, y: brightness, z: contrast, w: tint amount.
+    pub cinematic: Vec4,
+    /// rgb: linear tint colour.
+    pub tint: Vec4,
     /// See `TextureFeedback::frame_params`.
     pub texture_feedback: UVec4,
     /// x: seconds since start wrapped at `TIME_WRAP_SECONDS`, y: water surface
     /// height at the camera, z: 1 while the camera is underwater, w: the share
     /// of the near plane's height under the surface (0 to 1).
     pub time_water: Vec4,
+    /// xyz: unit direction the sun's shadows are cast from; not `to_sun`'s light direction.
+    pub to_shadow: Vec4,
+    /// x: the share of its dry albedo the landscape keeps in this frame's rain.
+    pub landscape: Vec4,
 }
 
 /// The time uniform restarts at zero after this many seconds. An f32 holds
@@ -71,7 +82,7 @@ pub fn wrapped_time(elapsed_seconds: f32) -> f32 {
     elapsed_seconds.rem_euclid(TIME_WRAP_SECONDS)
 }
 
-const _: () = assert!(std::mem::size_of::<FrameUniform>() == 880);
+const _: () = assert!(std::mem::size_of::<FrameUniform>() == 1008);
 
 #[cfg(test)]
 #[allow(clippy::float_cmp, reason = "the wrap is exact in f32 by construction")]
@@ -80,7 +91,7 @@ mod tests {
 
     #[test]
     fn water_fields_close_the_uniform_at_the_wgsl_offset() {
-        assert_eq!(std::mem::offset_of!(FrameUniform, time_water), 864);
+        assert_eq!(std::mem::offset_of!(FrameUniform, time_water), 960);
         assert_eq!(std::mem::size_of::<FrameUniform>() % 16, 0);
     }
 

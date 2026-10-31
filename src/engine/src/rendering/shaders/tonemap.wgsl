@@ -1,11 +1,22 @@
 const AGX_MIN_EV = -12.47393;
 const AGX_MAX_EV = 4.026069;
-const AGX_DISPLAY_GAMMA = 2.2;
+const DISPLAY_GAMMA = 2.2;
 const DITHER_AMPLITUDE = 1.0 / 255.0;
-const TONEMAP_REINHARD = 0u;
+const TONEMAP_FILMIC = 0u;
 const TONEMAP_AGX = 1u;
 const LUMA = vec3<f32>(0.2126, 0.7152, 0.0722);
-const MIN_LUMA = 1e-6;
+
+// The filmic curve's fixed constants; its toe numerator is the image space's TonemapE.
+const FILMIC_SHOULDER = 0.15;
+const FILMIC_LINEAR_STRENGTH = 0.5;
+const FILMIC_LINEAR_ANGLE = 0.1;
+const FILMIC_TOE_STRENGTH = 0.2;
+const FILMIC_TOE_DENOMINATOR = 0.3;
+const FILMIC_WHITE = 11.2;
+// Exposed scene light (a fog colour byte decoded with gamma 2.2 is its light) to the curve's input.
+const FILMIC_INPUT_SCALE = 4.113;
+// Contrast pivots about the display's middle: 0.5 once encoded.
+const CONTRAST_PIVOT = 0.217638;
 
 const LINEAR_SRGB_TO_REC2020 = mat3x3<f32>(
     vec3<f32>(0.6274, 0.0691, 0.0164),
@@ -35,6 +46,9 @@ struct ExposureState {
 
 @group(0) @binding(0) var hdr_scene: texture_2d<f32>;
 @group(0) @binding(1) var<storage, read> exposure_state: ExposureState;
+// Red along x, green along y, blue along z; grid point i of a side stands for display level i / (size - 1).
+@group(0) @binding(2) var colour_lut: texture_3d<f32>;
+@group(0) @binding(3) var colour_lut_sampler: sampler;
 
 struct TonemapVertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -62,27 +76,52 @@ fn agx_display(scene_linear: vec3<f32>) -> vec3<f32> {
 }
 
 fn display_to_linear_srgb(display: vec3<f32>) -> vec3<f32> {
-    let rec2020 = pow(max(display, vec3<f32>(0.0)), vec3<f32>(AGX_DISPLAY_GAMMA));
+    let rec2020 = pow(max(display, vec3<f32>(0.0)), vec3<f32>(DISPLAY_GAMMA));
     return clamp(REC2020_TO_LINEAR_SRGB * rec2020, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
-// Extended Reinhard on luminance, T(L) = L (p L + 1) / (L + 1) with p = 1 / white^2;
-// chroma is kept by scaling the colour with T(L) / L.
-fn reinhard_linear(scene_linear: vec3<f32>, white_point: f32) -> vec3<f32> {
-    let luma = max(dot(scene_linear, LUMA), MIN_LUMA);
-    let p = 1.0 / (white_point * white_point);
-    let mapped = luma * (p * luma + 1.0) / (luma + 1.0);
-    return scene_linear * (mapped / luma);
+fn filmic_curve(x: vec3<f32>, toe: f32) -> vec3<f32> {
+    let a = FILMIC_SHOULDER;
+    let b = FILMIC_LINEAR_STRENGTH;
+    let numerator = x * (a * x + FILMIC_LINEAR_ANGLE * b) + FILMIC_TOE_STRENGTH * toe;
+    let denominator = x * (a * x + b) + FILMIC_TOE_STRENGTH * FILMIC_TOE_DENOMINATOR;
+    return numerator / denominator - toe / FILMIC_TOE_DENOMINATOR;
 }
 
-fn saturate_from_luma(color: vec3<f32>, saturation: f32) -> vec3<f32> {
-    let luma = dot(color, LUMA);
-    return max(vec3<f32>(luma) + (color - vec3<f32>(luma)) * saturation, vec3<f32>(0.0));
+// Per channel, linear display light from 0 to 1.
+fn filmic(exposed: vec3<f32>, toe: f32) -> vec3<f32> {
+    let white = filmic_curve(vec3<f32>(FILMIC_WHITE), toe);
+    return clamp(filmic_curve(exposed * FILMIC_INPUT_SCALE, toe) / white, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
-fn linear_to_srgb(linear: vec3<f32>) -> vec3<f32> {
-    let c = clamp(linear, vec3<f32>(0.0), vec3<f32>(1.0));
-    return select(1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055, c * 12.92, c <= vec3<f32>(0.0031308));
+// cinematic: x saturation, y brightness, z contrast, w tint amount; tint: linear colour.
+fn apply_cinematic(picture: vec3<f32>, cinematic: vec4<f32>, tint: vec3<f32>) -> vec3<f32> {
+    let luma = dot(picture, LUMA);
+    let saturated = vec3<f32>(luma) + (picture - vec3<f32>(luma)) * cinematic.x;
+    let tinted = mix(saturated, dot(saturated, LUMA) * tint, cinematic.w);
+    let brightened = tinted * cinematic.y;
+    let contrasted = vec3<f32>(CONTRAST_PIVOT) + (brightened - vec3<f32>(CONTRAST_PIVOT)) * cinematic.z;
+    return clamp(contrasted, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+fn tone_mapped(exposed: vec3<f32>) -> vec3<f32> {
+    if (u32(frame.tonemap.x) == TONEMAP_AGX) {
+        return display_to_linear_srgb(agx_display(exposed));
+    }
+    return filmic(exposed, frame.tonemap.y);
+}
+
+// The image space's colour LUT on the encoded display picture, sampled between its grid points'
+// texel centres and shown by the LUT's weight; without one the picture is left exactly as it is.
+fn graded(display: vec3<f32>) -> vec3<f32> {
+    let amount = frame.tonemap.z;
+    if (amount <= 0.0) {
+        return display;
+    }
+    let size = f32(textureDimensions(colour_lut).x);
+    let coordinate = (display * (size - 1.0) + 0.5) / size;
+    let table = textureSampleLevel(colour_lut, colour_lut_sampler, coordinate, 0.0).rgb;
+    return mix(display, table, amount);
 }
 
 fn srgb_to_linear(srgb: vec3<f32>) -> vec3<f32> {
@@ -100,12 +139,9 @@ fn fs_main(in: TonemapVertexOutput) -> @location(0) vec4<f32> {
     if (debug_view() != 0u) {
         return vec4<f32>(scene, 1.0);
     }
+    let exposed = max(scene * exposure_state.exposure, vec3<f32>(0.0));
+    let picture = apply_cinematic(tone_mapped(exposed), frame.cinematic, frame.tint.rgb);
     let dither = (interleaved_gradient_noise(in.clip_position.xy) - 0.5) * DITHER_AMPLITUDE;
-    let exposed = scene * exposure_state.exposure;
-    if (u32(frame.tonemap.x) == TONEMAP_AGX) {
-        let display = agx_display(exposed) + dither;
-        return vec4<f32>(display_to_linear_srgb(display), 1.0);
-    }
-    let mapped = saturate_from_luma(reinhard_linear(exposed, frame.tonemap.y), frame.tonemap.z);
-    return vec4<f32>(srgb_to_linear(linear_to_srgb(mapped) + dither), 1.0);
+    let display = graded(pow(picture, vec3<f32>(1.0 / DISPLAY_GAMMA))) + dither;
+    return vec4<f32>(srgb_to_linear(display), 1.0);
 }

@@ -1,6 +1,7 @@
 use glam::Vec3;
 
 use super::ambient::AmbientCube;
+use super::cell_lighting::StoredColourEncoding;
 
 /// Linear interpolation of a value that has a meaningful midpoint: `t` 0 gives `self`, 1 gives
 /// `other`. Colours are blended in the linear space they are stored in.
@@ -48,14 +49,25 @@ impl Lerp for AmbientCube {
     }
 }
 
+/// Two linear colours blended as the game blends weather colours: as the stored 0 to 1 values
+/// they were decoded from with `encoding`, and decoded again.
+pub(crate) fn lerp_stored(from: Vec3, to: Vec3, t: f32, encoding: StoredColourEncoding) -> Vec3 {
+    encoding.decode(encoding.encode(from).lerp(encoding.encode(to), t))
+}
+
+/// The end a value that has no midpoint snaps to: `from` up to and including exactly one half of
+/// the way, `to` beyond it.
+pub(crate) fn snap_to_nearer<'a, T: ?Sized>(from: &'a T, to: &'a T, t: f32) -> &'a T {
+    if t > 0.5 { to } else { from }
+}
+
 /// An absent value cannot be blended with a present one, so the nearer end wins and the result
 /// snaps at the midpoint (`self` at exactly one half).
 impl<T: Lerp + Clone> Lerp for Option<T> {
     fn lerp(&self, other: &Self, t: f32) -> Self {
         match (self, other) {
             (Some(from), Some(to)) => Some(from.lerp(to, t)),
-            _ if t > 0.5 => other.clone(),
-            _ => self.clone(),
+            _ => snap_to_nearer(self, other, t).clone(),
         }
     }
 }
@@ -93,6 +105,47 @@ mod tests {
         );
     }
 
+    /// Bytes 48 and 144 halfway are byte 96; each decoded by hand.
+    #[test]
+    fn a_stored_blend_of_srgb_colours_lands_on_the_blended_byte() {
+        let byte_48 = ((48.0 / 255.0 + 0.055) / 1.055_f32).powf(2.4);
+        let byte_96 = ((96.0 / 255.0 + 0.055) / 1.055_f32).powf(2.4);
+        let byte_144 = ((144.0 / 255.0 + 0.055) / 1.055_f32).powf(2.4);
+        let halfway = lerp_stored(
+            Vec3::splat(byte_48),
+            Vec3::splat(byte_144),
+            0.5,
+            StoredColourEncoding::Srgb,
+        );
+        assert!(halfway.abs_diff_eq(Vec3::splat(byte_96), 1e-6), "{halfway}");
+    }
+
+    #[test]
+    fn a_stored_blend_of_gamma_colours_lands_on_the_blended_byte() {
+        let byte = |value: f32| (value / 255.0).powf(2.2);
+        let quarter = lerp_stored(
+            Vec3::new(byte(0.0), byte(200.0), byte(40.0)),
+            Vec3::new(byte(100.0), byte(0.0), byte(40.0)),
+            0.25,
+            StoredColourEncoding::Gamma22,
+        );
+        let expected = Vec3::new(byte(25.0), byte(150.0), byte(40.0));
+        assert!(quarter.abs_diff_eq(expected, 1e-6), "{quarter}");
+    }
+
+    #[test]
+    fn a_stored_blend_keeps_its_ends() {
+        let (from, to) = (Vec3::new(0.0, 0.002, 0.3), Vec3::new(0.9, 0.5, 0.001));
+        for encoding in [
+            StoredColourEncoding::Srgb,
+            StoredColourEncoding::Gamma22,
+            StoredColourEncoding::Linear,
+        ] {
+            assert!(lerp_stored(from, to, 0.0, encoding).abs_diff_eq(from, 1e-6));
+            assert!(lerp_stored(from, to, 1.0, encoding).abs_diff_eq(to, 1e-6));
+        }
+    }
+
     #[test]
     fn arrays_blend_element_wise() {
         assert_eq!([0.0_f32, 10.0].lerp(&[4.0, 20.0], 0.5), [2.0, 15.0]);
@@ -111,6 +164,20 @@ mod tests {
     #[test]
     fn a_struct_blends_every_listed_field() {
         assert_eq!(pair(0.0, 0.0).lerp(&pair(2.0, 4.0), 0.5), pair(1.0, 2.0));
+    }
+
+    #[test]
+    fn a_value_without_a_midpoint_snaps_to_the_nearer_end_and_the_first_at_exactly_one_half() {
+        let ends = [
+            (0.0, "from"),
+            (0.4, "from"),
+            (0.5, "from"),
+            (0.6, "to"),
+            (1.0, "to"),
+        ];
+        for (t, nearer) in ends {
+            assert_eq!(snap_to_nearer("from", "to", t), nearer, "{t}");
+        }
     }
 
     #[test]

@@ -16,6 +16,7 @@ pub mod game_flow;
 pub(crate) mod installer_source;
 pub mod navmesh;
 pub mod platform;
+pub mod random;
 pub mod rendering;
 pub mod shared_cache;
 pub mod sim;
@@ -26,6 +27,7 @@ pub mod utils;
 pub mod version;
 pub mod video;
 pub mod water_world;
+pub mod weather;
 
 pub use assets::types::mesh;
 pub use platform::run;

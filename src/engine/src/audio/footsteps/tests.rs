@@ -2,11 +2,16 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Duration;
 
-use super::resolve::COMPOUND_DESCRIPTOR;
 use super::*;
 use crate::assets::db::footsteps::FootstepCatalog;
-use crate::assets::db::footsteps::STANDARD_DESCRIPTOR_TYPE;
-use crate::audio::conditions::{ConditionContext, FreshWorldContext};
+use crate::assets::db::music::{Comparand, CompareOp};
+use crate::assets::db::sound_catalog::{COMPOUND_DESCRIPTOR, STANDARD_DESCRIPTOR_TYPE};
+use crate::audio::conditions::{
+    ConditionContext, ConditionError, FreshWorldContext, IS_IN_INTERIOR,
+};
+use crate::audio::file_probe::ProbeError;
+use crate::audio::sound_resolve::SoundError;
+use crate::audio::test_support::condition::condition;
 use crate::audio::test_support::footsteps::{
     DIRT, DIRT_FIRST_PERSON_FILES, DIRT_QUIET_FILE, GRASS, ORPHAN, SILENT_RUNNING_FILE, SNEAK_FILE,
     SPRINT_FILE, STONE, STONE_FILE, THIRD_PERSON_FILE, UNKNOWN, all_files, catalog,
@@ -14,7 +19,7 @@ use crate::audio::test_support::footsteps::{
 };
 use crate::audio::test_support::{
     HALF_SECOND_SAMPLES, MockAudio, PeakReader, SAMPLE_RATE, SEED, SharedBuffer,
-    mock_manager_settings, render, render_buffer, sine_flac, undecodable_flac,
+    mock_manager_settings, render, render_buffer, sine_flac, undecodable_flac, write_audio_file,
 };
 use crate::audio::{AudioError, AudioFrame, AudioSystem, MenuMusicSettings};
 use crate::footsteps::{FootTag, FootstepEvent, Gait, SurfaceMaterial};
@@ -74,9 +79,9 @@ fn files(layers: &[LayerPlay]) -> BTreeSet<&str> {
 fn modify_descriptor(
     catalog: &mut FootstepCatalog,
     key: &str,
-    change: impl FnOnce(&mut crate::assets::db::footsteps::SoundDescriptor),
+    change: impl FnOnce(&mut crate::assets::db::sound_catalog::SoundDescriptor),
 ) {
-    change(catalog.sound_descriptors.get_mut(key).unwrap());
+    change(catalog.sounds.descriptors.get_mut(key).unwrap());
 }
 
 mod tag_selection {
@@ -262,6 +267,9 @@ impl ConditionContext for Situation {
     fn has_silent_running_perk(&self) -> bool {
         self.silent_running
     }
+    fn is_in_interior(&self) -> Option<bool> {
+        None
+    }
 }
 
 mod compound_layers {
@@ -346,7 +354,7 @@ mod compound_layers {
     #[test]
     fn a_compound_sound_nested_in_a_compound_plays_its_layers() {
         let mut catalog = catalog();
-        catalog.sound_descriptors.insert(
+        catalog.sounds.descriptors.insert(
             "outer".to_string(),
             crate::audio::test_support::footsteps::compound("outer", &["dirt_sound"]),
         );
@@ -490,7 +498,10 @@ mod data_errors {
         let error = stone_error(|catalog| {
             modify_descriptor(catalog, "stone_sound", |d| d.looping_flags = 0x0800);
         });
-        assert_eq!(error, ResolveError::Looping("stone_sound".to_string()));
+        assert_eq!(
+            error,
+            ResolveError::Sound(SoundError::Looping("stone_sound".to_string()))
+        );
     }
 
     #[test]
@@ -498,7 +509,10 @@ mod data_errors {
         let error = stone_error(|catalog| {
             modify_descriptor(catalog, "stone_sound", |d| d.sound_files.clear());
         });
-        assert_eq!(error, ResolveError::NoSoundFiles("stone_sound".to_string()));
+        assert_eq!(
+            error,
+            ResolveError::Sound(SoundError::NoSoundFiles("stone_sound".to_string()))
+        );
     }
 
     #[test]
@@ -508,7 +522,7 @@ mod data_errors {
         });
         assert_eq!(
             error,
-            ResolveError::NoOutputModel("stone_sound".to_string())
+            ResolveError::Sound(SoundError::NoOutputModel("stone_sound".to_string()))
         );
     }
 
@@ -519,10 +533,28 @@ mod data_errors {
         });
         assert_eq!(
             error,
-            ResolveError::UnsupportedDescriptor {
+            ResolveError::Sound(SoundError::UnsupportedDescriptor {
                 descriptor: "stone_sound".to_string(),
                 descriptor_type: 0xED15_7AE3
-            }
+            })
+        );
+    }
+
+    #[test]
+    fn a_condition_on_the_interior_is_an_error_as_nothing_tells_the_footsteps_where_the_player_is()
+    {
+        let error = stone_error(|catalog| {
+            modify_descriptor(catalog, "stone_sound", |d| {
+                d.conditions = vec![condition(
+                    IS_IN_INTERIOR,
+                    CompareOp::Equal,
+                    Comparand::Value(0.0),
+                )];
+            });
+        });
+        assert_eq!(
+            error,
+            ResolveError::Condition(ConditionError::UnsupportedFunction(IS_IN_INTERIOR))
         );
     }
 
@@ -543,24 +575,24 @@ mod data_errors {
     #[test]
     fn a_missing_record_is_an_error_naming_it() {
         let error = stone_error(|catalog| {
-            catalog.sound_descriptors.remove("stone_sound");
+            catalog.sounds.descriptors.remove("stone_sound");
         });
         assert_eq!(
             error,
-            ResolveError::UnknownRecord {
+            ResolveError::Sound(SoundError::UnknownRecord {
                 kind: "sound descriptor",
                 key: "stone_sound".to_string()
-            }
+            })
         );
     }
 
     #[test]
     fn unusable_mix_data_is_an_error_naming_the_sound() {
         let error = stone_error(|catalog| {
-            catalog.sound_categories.clear();
+            catalog.sounds.categories.clear();
         });
         assert!(
-            matches!(&error, ResolveError::Mix { descriptor, source: MixError::UnknownCategory(_) } if descriptor == "stone_sound"),
+            matches!(&error, ResolveError::Sound(SoundError::Mix { descriptor, source: MixError::UnknownCategory(_) }) if descriptor == "stone_sound"),
             "{error:?}"
         );
     }
@@ -568,16 +600,10 @@ mod data_errors {
     #[test]
     fn a_standard_descriptor_keeps_its_own_type_constant() {
         assert_eq!(
-            catalog().sound_descriptors["stone_sound"].descriptor_type,
+            catalog().sounds.descriptors["stone_sound"].descriptor_type,
             STANDARD_DESCRIPTOR_TYPE
         );
     }
-}
-
-fn write_file(root: &Path, key: &str, bytes: &[u8]) {
-    let path = root.join("audio").join(key);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, bytes).unwrap();
 }
 
 fn sine() -> Vec<u8> {
@@ -587,7 +613,7 @@ fn sine() -> Vec<u8> {
 fn install() -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
     for file in all_files() {
-        write_file(root.path(), file, &sine());
+        write_audio_file(root.path(), file, &sine());
     }
     root
 }
@@ -609,7 +635,7 @@ mod startup_and_logging {
         let root = tempfile::tempdir().unwrap();
         assert!(matches!(
             footsteps(root.path()),
-            Err(FootstepError::AudioDirectoryMissing(_))
+            Err(FootstepError::Probe(ProbeError::DirectoryMissing(_)))
         ));
     }
 
@@ -685,10 +711,10 @@ mod startup_and_logging {
     #[test]
     fn a_file_whose_header_cannot_be_opened_is_an_error() {
         let root = install();
-        write_file(root.path(), STONE_FILE, &[]);
+        write_audio_file(root.path(), STONE_FILE, &[]);
         assert!(matches!(
             footsteps(root.path()),
-            Err(FootstepError::UnreadableFile { .. })
+            Err(FootstepError::Probe(ProbeError::Open { .. }))
         ));
     }
 
@@ -878,7 +904,7 @@ mod playback {
     #[test]
     fn a_file_that_cannot_be_decoded_is_fatal() {
         let root = install();
-        write_file(
+        write_audio_file(
             root.path(),
             STONE_FILE,
             &undecodable_flac(SAMPLE_RATE, HALF_SECOND_SAMPLES),

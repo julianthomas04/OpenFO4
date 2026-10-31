@@ -34,9 +34,9 @@ mod tests {
 
     use glam::Quat;
 
+    use super::super::sun_disc::sun_position;
     use super::super::test_support::default_climate;
     use super::super::test_support::{at, vanilla_settings};
-    use super::super::unmeasured::sun_position;
     use super::*;
     use crate::bethesda_space::axes_to_engine;
 

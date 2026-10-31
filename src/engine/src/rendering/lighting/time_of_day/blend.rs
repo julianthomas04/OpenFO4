@@ -1,8 +1,8 @@
 use super::climate_times::ClimateTimes;
 use super::day_time::DayTime;
+use super::keyframes::{KEYFRAMES, keyframe_hours};
 use super::slot::TimeSlot;
-use super::unmeasured::{KEYFRAMES, Keyframe};
-use super::wrap::HOURS_PER_DAY;
+use super::wrap::{HOURS_PER_DAY, wrap_hours};
 
 /// Where an hour sits between two neighbouring keyframes: `t` is 0 at `from`
 /// and 1 at `to`.
@@ -13,15 +13,21 @@ pub struct SlotBlend {
     pub t: f32,
 }
 
+impl SlotBlend {
+    /// The share `slot` takes in the blend: `1 - t` as `from`, `t` as `to`, 0 for any other slot.
+    pub fn weight_of(&self, slot: TimeSlot) -> f32 {
+        let from = if self.from == slot { 1.0 - self.t } else { 0.0 };
+        let to = if self.to == slot { self.t } else { 0.0 };
+        from + to
+    }
+}
+
 /// The slots surrounding a moment of the day. The timeline is a ring: after the
 /// last keyframe it continues into the first of the next day.
 pub fn slot_blend(time: DayTime, times: &ClimateTimes) -> SlotBlend {
-    let keyframe_hours = KEYFRAMES.map(|keyframe| keyframe.hour(times));
+    let keyframe_hours = keyframe_hours(times);
     let first_hour = keyframe_hours[0];
-    let mut hour = time.hour();
-    if hour < first_hour {
-        hour += HOURS_PER_DAY;
-    }
+    let hour = first_hour + wrap_hours(time.hour() - first_hour);
     let from_index = keyframe_hours
         .partition_point(|keyframe_hour| *keyframe_hour <= hour)
         .saturating_sub(1);
@@ -45,21 +51,6 @@ pub fn slot_blend(time: DayTime, times: &ClimateTimes) -> SlotBlend {
     }
 }
 
-fn slot_daylight_weight(slot: TimeSlot) -> f32 {
-    KEYFRAMES
-        .iter()
-        .find(|keyframe| keyframe.slot == slot)
-        .map_or(0.0, Keyframe::daylight_weight)
-}
-
-/// 0 where the Night fog applies in full, 1 where the Day fog does: the blend of
-/// the two slots' daylight weights. Fog exists only for those two slots.
-pub fn fog_daylight_weight(blend: &SlotBlend) -> f32 {
-    let from = slot_daylight_weight(blend.from);
-    let to = slot_daylight_weight(blend.to);
-    from + (to - from) * blend.t
-}
-
 #[cfg(test)]
 #[allow(
     clippy::float_cmp,
@@ -74,6 +65,24 @@ mod tests {
 
     fn slot_blend(hour: f32, times: &ClimateTimes) -> SlotBlend {
         super::slot_blend(at_hour(hour), times)
+    }
+
+    #[test]
+    fn a_slot_weighs_one_minus_t_as_from_t_as_to_and_nothing_otherwise() {
+        let blend = SlotBlend {
+            from: LateSunset,
+            to: Night,
+            t: 0.25,
+        };
+        assert_eq!(blend.weight_of(LateSunset), 0.75);
+        assert_eq!(blend.weight_of(Night), 0.25);
+        assert_eq!(blend.weight_of(Day), 0.0);
+        let held = SlotBlend {
+            from: Night,
+            to: Night,
+            t: 0.25,
+        };
+        assert_eq!(held.weight_of(Night), 1.0);
     }
 
     const SLOTS_BY_KEYFRAME: [(TimeSlot, TimeSlot); 10] = [
@@ -92,17 +101,17 @@ mod tests {
     const VANILLA_CLIMATES: [([f32; 4], [f32; 10]); 3] = [
         (
             [5.0, 9.0, 17.0, 21.0],
-            [5.0, 6.0, 7.0, 8.0, 9.0, 17.0, 18.0, 19.0, 20.0, 21.0],
+            [3.0, 4.5, 6.0, 7.5, 9.0, 17.0, 18.5, 20.0, 21.5, 23.0],
         ),
         (
             [5.5, 8.0, 16.0, 20.5],
             [
-                5.5, 6.125, 6.75, 7.375, 8.0, 16.0, 17.125, 18.25, 19.375, 20.5,
+                3.5, 4.625, 5.75, 6.875, 8.0, 16.0, 17.625, 19.25, 20.875, 22.5,
             ],
         ),
         (
             [4.0, 10.0, 16.0, 22.0],
-            [4.0, 5.5, 7.0, 8.5, 10.0, 16.0, 17.5, 19.0, 20.5, 22.0],
+            [2.0, 4.0, 6.0, 8.0, 10.0, 16.0, 18.0, 20.0, 22.0, 24.0],
         ),
     ];
 
@@ -115,7 +124,7 @@ mod tests {
         for (bounds, keyframe_hours) in VANILLA_CLIMATES {
             let times = climate(bounds);
             for (hour, (from, to)) in keyframe_hours.into_iter().zip(SLOTS_BY_KEYFRAME) {
-                let blend = slot_blend(hour, &times);
+                let blend = slot_blend(hour.rem_euclid(HOURS_PER_DAY), &times);
                 assert_eq!((blend.from, blend.to), (from, to), "{bounds:?} at {hour}");
                 assert_eq!(blend.t, 0.0, "{bounds:?} at {hour}");
             }
@@ -126,14 +135,14 @@ mod tests {
     fn halfway_between_keyframes_the_blend_is_half() {
         let times = default_climate();
         for (hour, from, to) in [
-            (5.5, Night, EarlySunrise),
-            (6.5, EarlySunrise, Sunrise),
-            (7.5, Sunrise, LateSunrise),
-            (8.5, LateSunrise, Day),
-            (17.5, Day, EarlySunset),
-            (18.5, EarlySunset, Sunset),
-            (19.5, Sunset, LateSunset),
-            (20.5, LateSunset, Night),
+            (3.75, Night, EarlySunrise),
+            (5.25, EarlySunrise, Sunrise),
+            (6.75, Sunrise, LateSunrise),
+            (8.25, LateSunrise, Day),
+            (17.75, Day, EarlySunset),
+            (19.25, EarlySunset, Sunset),
+            (20.75, Sunset, LateSunset),
+            (22.25, LateSunset, Night),
         ] {
             assert_eq!(
                 slot_blend(hour, &times),
@@ -143,14 +152,35 @@ mod tests {
         }
     }
 
+    /// The share of the later slot the probe solved at the hours between two pure slots, from the
+    /// fog's fully fogged boards and the sky alike (`results_v10`).
     #[test]
-    fn the_blend_holds_day_through_the_afternoon_and_night_through_the_small_hours() {
+    fn the_blend_follows_the_slot_shares_measured_under_the_default_climate() {
+        let times = default_climate();
+        for (hour, from, to, measured) in [
+            (6.5, Sunrise, LateSunrise, 0.32),
+            (7.0, Sunrise, LateSunrise, 0.67),
+            (8.0, LateSunrise, Day, 0.34),
+            (8.5, LateSunrise, Day, 0.71),
+            (17.5, Day, EarlySunset, 0.33),
+            (18.0, Day, EarlySunset, 0.67),
+            (20.5, Sunset, LateSunset, 0.36),
+            (21.0, Sunset, LateSunset, 0.71),
+        ] {
+            let blend = slot_blend(hour, &times);
+            assert_eq!((blend.from, blend.to), (from, to), "{hour}");
+            assert!((blend.t - measured).abs() < 0.05, "{hour}: {}", blend.t);
+        }
+    }
+
+    #[test]
+    fn the_blend_holds_day_through_the_afternoon_and_night_around_midnight() {
         let times = default_climate();
         for hour in [9.5, 12.0, 16.9] {
             let blend = slot_blend(hour, &times);
             assert_eq!((blend.from, blend.to), (Day, Day), "{hour}");
         }
-        for hour in [21.5, 23.0, 0.0, 2.0, 4.9] {
+        for hour in [23.5, 0.0, 2.0, 2.9] {
             let blend = slot_blend(hour, &times);
             assert_eq!((blend.from, blend.to), (Night, Night), "{hour}");
         }
@@ -159,13 +189,13 @@ mod tests {
     #[test]
     fn the_night_to_night_span_wraps_over_midnight() {
         let times = default_climate();
-        let late = slot_blend(23.0, &times);
+        let late = slot_blend(23.5, &times);
         let early = slot_blend(1.0, &times);
         assert_eq!((late.from, late.to), (Night, Night));
         assert_eq!((early.from, early.to), (Night, Night));
-        assert!(late.t > 0.0 && early.t > late.t, "{late:?} {early:?}");
-        assert!((slot_blend(21.0, &times).t - 0.0).abs() < 1e-6);
-        assert!(slot_blend(4.999, &times).t > 0.99);
+        assert_eq!(late.t, 0.125);
+        assert_eq!(early.t, 0.5);
+        assert!(slot_blend(2.999, &times).t > 0.99);
     }
 
     #[test]
@@ -175,6 +205,22 @@ mod tests {
         let after = slot_blend(0.0, &times);
         assert_eq!((before.from, before.to), (after.from, after.to));
         assert!((before.t - after.t).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_first_keyframe_before_midnight_still_wraps_the_night() {
+        let times = ClimateTimes::new(1.0, 4.0, 15.0, 18.0).unwrap();
+        assert_eq!(
+            slot_blend(21.5, &times),
+            SlotBlend {
+                from: Night,
+                to: Night,
+                t: 0.5
+            }
+        );
+        let blend = slot_blend(23.5, &times);
+        assert_eq!((blend.from, blend.to), (Night, EarlySunrise));
+        assert_eq!(blend.t, 0.4);
     }
 
     #[test]
@@ -205,60 +251,6 @@ mod tests {
         assert!(blend.t > 0.99);
     }
 
-    #[test]
-    fn fog_weight_is_zero_at_night_and_one_at_day() {
-        let times = default_climate();
-        for hour in [21.0, 23.0, 0.0, 3.0, 5.0] {
-            assert_eq!(
-                fog_daylight_weight(&slot_blend(hour, &times)),
-                0.0,
-                "{hour}"
-            );
-        }
-        for hour in [9.0, 12.0, 17.0] {
-            assert_eq!(
-                fog_daylight_weight(&slot_blend(hour, &times)),
-                1.0,
-                "{hour}"
-            );
-        }
-    }
-
-    #[test]
-    fn fog_weight_follows_the_slot_position_in_each_window() {
-        let times = default_climate();
-        for (hour, weight) in [
-            (5.0, 0.0),
-            (5.5, 0.125),
-            (6.0, 0.25),
-            (7.0, 0.5),
-            (8.0, 0.75),
-            (9.0, 1.0),
-            (17.0, 1.0),
-            (18.0, 0.75),
-            (19.0, 0.5),
-            (20.0, 0.25),
-            (21.0, 0.0),
-        ] {
-            let actual = fog_daylight_weight(&slot_blend(hour, &times));
-            assert!((actual - weight).abs() < 1e-6, "{hour}: {actual}");
-        }
-    }
-
-    #[test]
-    fn fog_weight_rises_through_sunrise_and_falls_through_sunset() {
-        let times = default_climate();
-        let weight = |hour: f32| fog_daylight_weight(&slot_blend(hour, &times));
-        for step in 0..160 {
-            let hour = 5.0 + step as f32 * 0.025;
-            assert!(weight(hour + 0.025) >= weight(hour), "{hour}");
-        }
-        for step in 0..160 {
-            let hour = 17.0 + step as f32 * 0.025;
-            assert!(weight(hour + 0.025) <= weight(hour), "{hour}");
-        }
-    }
-
     fn valid_climate() -> impl Strategy<Value = ClimateTimes> {
         prop::collection::vec(0.0f32..24.0, 4).prop_filter_map(
             "windows at least half an hour wide and ordered",
@@ -281,18 +273,6 @@ mod tests {
         ) {
             let blend = slot_blend(hour, &times);
             prop_assert!((0.0..=1.0).contains(&blend.t), "{blend:?}");
-        }
-
-        #[test]
-        fn the_fog_weight_is_continuous_in_time(
-            hour in 0.0f32..23.99,
-            times in valid_climate(),
-        ) {
-            let step = 0.001;
-            let here = fog_daylight_weight(&slot_blend(hour, &times));
-            let there = fog_daylight_weight(&slot_blend(hour + step, &times));
-            prop_assert!((0.0..=1.0).contains(&here));
-            prop_assert!((here - there).abs() <= 0.01, "{here} -> {there} at {hour}");
         }
     }
 }

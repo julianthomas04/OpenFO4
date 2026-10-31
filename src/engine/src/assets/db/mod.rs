@@ -25,6 +25,7 @@ pub mod navigation_meshes;
 pub mod perks;
 pub mod placed_objects;
 pub mod schema;
+pub mod sound_catalog;
 pub mod special_attributes;
 pub mod static_collections;
 pub mod statics;
@@ -34,6 +35,7 @@ pub mod water_placement;
 pub mod waters;
 pub mod weapons;
 pub mod weather;
+pub mod weather_library;
 pub mod worldspace_lineage;
 pub mod worldspaces;
 
@@ -137,6 +139,18 @@ impl DbClient {
     #[instrument(skip(self))]
     pub fn get_footstep_catalog(&self) -> anyhow::Result<footsteps::FootstepCatalog> {
         footsteps::FootstepCatalog::from_connection(&self.conn)
+    }
+
+    /// The sound descriptors reachable from the weather sound descriptors `roots`, with the output
+    /// models and categories they name; errors when the installer has not extracted the sound
+    /// tables, a root is not a sound descriptor or a row is malformed.
+    #[instrument(skip(self, roots))]
+    pub fn get_weather_sound_catalog(
+        &self,
+        roots: impl IntoIterator<Item = String>,
+    ) -> anyhow::Result<sound_catalog::SoundCatalog> {
+        schema::require_weather_sound_tables(&self.conn)?;
+        sound_catalog::SoundCatalog::load_reachable(&self.conn, roots)
     }
 
     /// Which layers never touch the player. A database converted before the
@@ -519,11 +533,40 @@ impl DbClient {
     }
 
     pub fn get_weather(&self, form_key: &str) -> rusqlite::Result<weather::WeatherRow> {
+        let schema = self.schema();
         weather::get_weather(
             form_key,
-            self.schema().weather_fog_column_present,
+            weather::WeatherColumns {
+                fog: schema.weather_fog_column_present,
+                fog_scales: schema.weather_fog_scales_column_present,
+            },
             &self.conn,
         )
+    }
+
+    /// The weather columns of the library; only call when
+    /// [`DbSchema::weather_library_columns_present`] holds.
+    pub fn get_weather_library_row(
+        &self,
+        form_key: &str,
+    ) -> rusqlite::Result<weather_library::WeatherLibraryRow> {
+        weather_library::get_weather_library_row(form_key, &self.conn)
+    }
+
+    pub fn get_particle_geometry(
+        &self,
+        form_key: &str,
+    ) -> rusqlite::Result<weather_library::ParticleGeometryRow> {
+        weather_library::get_particle_geometry(
+            form_key,
+            self.schema().particle_material_data_column_present,
+            &self.conn,
+        )
+    }
+
+    /// `QueryReturnedNoRows` when the climate is unknown.
+    pub fn get_climate_volatility(&self, climate: &str) -> rusqlite::Result<Option<i64>> {
+        weather_library::get_climate_volatility(climate, &self.conn)
     }
 
     #[instrument(skip(self))]
@@ -603,6 +646,11 @@ impl DbClient {
     #[instrument(skip(self))]
     pub fn get_landscape_textures(&self) -> anyhow::Result<Vec<LandscapeTextureDiffuse>> {
         LandscapeTextureDiffuse::get_all(&self.conn)
+    }
+
+    #[instrument(skip(self))]
+    pub fn get_texture_set_diffuse(&self, form_key: &str) -> anyhow::Result<Option<String>> {
+        LandscapeTextureDiffuse::texture_set_diffuse(&self.conn, form_key)
     }
 
     #[instrument(skip(self))]

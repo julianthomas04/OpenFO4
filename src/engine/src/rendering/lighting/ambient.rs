@@ -2,10 +2,11 @@ use glam::{Vec3, Vec4};
 
 pub const AMBIENT_CUBE_FACES: usize = 6;
 
-/// Fill calibration of the exterior ambient (+0.58 stop): the six linear face
-/// colours of the cube used for exterior shading are multiplied by it before
-/// upload. An engine tuning value, independent of where the cube comes from.
-pub const EXTERIOR_AMBIENT_FILL: f32 = 1.5;
+/// The exterior ambient's strength against the sun: the six linear face colours of the cube used
+/// for exterior shading are multiplied by it before upload. A directional ambient of one colour
+/// lights a surface 0.93 times as much as a sunlight of that colour falling square on it at solar
+/// noon, whatever the hour.
+pub const EXTERIOR_AMBIENT_FILL: f32 = 0.93;
 
 /// The six directional ambient colours, linear, faces in engine order
 /// +X, -X, +Y, -Y, +Z, -Z.
@@ -22,6 +23,12 @@ impl AmbientCube {
     #[must_use]
     pub fn scaled(&self, factor: f32) -> Self {
         Self(self.0.map(|face| face * factor))
+    }
+
+    /// `colour` added to every face colour.
+    #[must_use]
+    pub fn added(&self, colour: Vec3) -> Self {
+        Self(self.0.map(|face| face + colour))
     }
 }
 
@@ -57,6 +64,27 @@ mod tests {
         for (face, original) in scaled.0.iter().zip(cube.0) {
             assert_eq!(*face, original * 0.5);
         }
+    }
+
+    #[test]
+    fn adding_a_colour_lifts_every_face_by_it_and_keeps_the_face_order() {
+        let cube = AmbientCube(std::array::from_fn(|face| Vec3::splat(face as f32)));
+        let lifted = cube.added(Vec3::new(0.5, 0.25, 0.125));
+        for (face, (lifted, original)) in lifted.0.iter().zip(cube.0).enumerate() {
+            assert_eq!(
+                *lifted,
+                original + Vec3::new(0.5, 0.25, 0.125),
+                "face {face}"
+            );
+        }
+    }
+
+    #[test]
+    fn adding_no_light_leaves_the_cube_as_it_is() {
+        let cube = AmbientCube(std::array::from_fn(|face| {
+            Vec3::new(0.1 + face as f32, 0.0, 0.3)
+        }));
+        assert_eq!(cube.added(Vec3::ZERO), cube);
     }
 
     #[test]

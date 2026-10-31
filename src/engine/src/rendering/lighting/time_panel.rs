@@ -436,9 +436,9 @@ mod tests {
             moon,
             light: LightSource {
                 direction: sun.direction(),
-                from_moon_weight: 0.0,
                 strength: 1.0,
             },
+            shadow: sun,
             star_rotation: StarRotation {
                 axis: glam::Vec3::Y,
                 angle_rad: 0.0,

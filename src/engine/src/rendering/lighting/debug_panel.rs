@@ -64,11 +64,11 @@ fn tonemap_section(ui: &mut egui::Ui, tonemap: &mut TonemapSettings) {
                 ui.selectable_value(&mut tonemap.operator, operator, operator.label());
             }
         });
-    ui.add_enabled(
-        tonemap.operator == TonemapOperator::Reinhard,
-        egui::Slider::new(&mut tonemap.white_point, 1.0..=16.0).text("white point"),
-    );
-    ui.add(egui::Slider::new(&mut tonemap.saturation, 0.0..=2.0).text("saturation"));
+    let cinematic = &tonemap.cinematic;
+    ui.label(format!(
+        "saturation {:.2}, brightness {:.2}, contrast {:.2}, tint {:.2}",
+        cinematic.saturation, cinematic.brightness, cinematic.contrast, cinematic.tint_amount
+    ));
 }
 
 fn fog_section(ui: &mut egui::Ui, fog: &mut FogSettings) {
@@ -80,8 +80,10 @@ fn fog_section(ui: &mut egui::Ui, fog: &mut FogSettings) {
         ui.add(egui::Slider::new(&mut params.max, 0.0..=1.0).text("max"));
         ui.checkbox(&mut fog.link_to_horizon, "link colours to sky horizon");
         if !fog.link_to_horizon {
-            color_row(ui, "near color", &mut params.near_color);
-            color_row(ui, "far color", &mut params.far_color);
+            color_row(ui, "near color", &mut params.colors.near);
+            color_row(ui, "far color", &mut params.colors.far);
+            color_row(ui, "near high color", &mut params.colors.near_high);
+            color_row(ui, "far high color", &mut params.colors.far_high);
         }
     });
 }

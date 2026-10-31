@@ -21,6 +21,9 @@ pub const IS_FIRST_PERSON: u16 = 391;
 /// Function 448; the name is inferred from the footstep sound conditions it guards: the layer that
 /// is silenced by the Silent Running perk requires it to be 0.
 pub const HAS_SILENT_RUNNING_PERK: u16 = 448;
+/// Function 300; the name is inferred from the sound conditions it guards: the exterior ambience
+/// beds require it to be 0 and the interior layer of a hammer sound requires it to be 1.
+pub const IS_IN_INTERIOR: u16 = 300;
 
 pub const GAME_HOUR_EDITOR_ID: &str = "GameHour";
 pub const GAME_DAYS_PASSED_EDITOR_ID: &str = "GameDaysPassed";
@@ -93,6 +96,9 @@ pub trait ConditionContext {
     fn vm_quest_variable(&self, quest: &str, variable: &str) -> f32;
     fn is_first_person(&self) -> bool;
     fn has_silent_running_perk(&self) -> bool;
+    /// Whether the player is in an interior cell; `None` where the context does not know, which
+    /// leaves the function unsupported rather than guessed.
+    fn is_in_interior(&self) -> Option<bool>;
 }
 
 #[derive(Debug, Clone)]
@@ -121,9 +127,12 @@ pub fn global_entries(catalog: &MusicCatalog) -> Vec<GlobalEntry> {
 }
 
 /// A new game before any quest started; quest state is empty and `GameHour` follows the clock.
+/// Where the player is stays unknown until [`set_interior`](Self::set_interior) tells it, and the
+/// interior function is unsupported until then.
 #[derive(Debug, Clone)]
 pub struct FreshWorldContext {
     time: GameTime,
+    interior: Option<bool>,
     globals: HashMap<String, f32>,
     live_globals: HashMap<String, LiveGlobal>,
 }
@@ -155,6 +164,7 @@ impl FreshWorldContext {
         }
         Self {
             time: GameTime::at_hour(hour),
+            interior: None,
             globals: map,
             live_globals,
         }
@@ -164,6 +174,11 @@ impl FreshWorldContext {
 impl FreshWorldContext {
     pub fn set_time(&mut self, time: GameTime) {
         self.time = time;
+    }
+
+    /// Whether the player is in an interior cell, which `IS_IN_INTERIOR` reports.
+    pub fn set_interior(&mut self, interior: bool) {
+        self.interior = Some(interior);
     }
 }
 
@@ -203,6 +218,10 @@ impl ConditionContext for FreshWorldContext {
 
     fn has_silent_running_perk(&self) -> bool {
         false
+    }
+
+    fn is_in_interior(&self) -> Option<bool> {
+        self.interior
     }
 }
 
@@ -257,6 +276,10 @@ fn function_value(
         }
         IS_FIRST_PERSON => Ok(f32::from(u8::from(ctx.is_first_person()))),
         HAS_SILENT_RUNNING_PERK => Ok(f32::from(u8::from(ctx.has_silent_running_perk()))),
+        IS_IN_INTERIOR => ctx
+            .is_in_interior()
+            .map(|interior| f32::from(u8::from(interior)))
+            .ok_or(ConditionError::UnsupportedFunction(IS_IN_INTERIOR)),
         other => Err(ConditionError::UnsupportedFunction(other)),
     }
 }
@@ -488,6 +511,32 @@ mod tests {
     fn silent_running_function_is_false_in_a_fresh_world() {
         assert!(evaluate(&[flag_condition(HAS_SILENT_RUNNING_PERK, 0.0)], &clock(0.0)).unwrap());
         assert!(!evaluate(&[flag_condition(HAS_SILENT_RUNNING_PERK, 1.0)], &clock(0.0)).unwrap());
+    }
+
+    #[test]
+    fn the_interior_function_is_unsupported_until_the_context_is_told_where_the_player_is() {
+        for expected in [0.0, 1.0] {
+            assert_eq!(
+                evaluate(&[flag_condition(IS_IN_INTERIOR, expected)], &clock(0.0)),
+                Err(ConditionError::UnsupportedFunction(IS_IN_INTERIOR)),
+                "compared with {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_interior_function_follows_the_cell_the_context_is_told_about() {
+        let exterior_only = [flag_condition(IS_IN_INTERIOR, 0.0)];
+        let interior_only = [flag_condition(IS_IN_INTERIOR, 1.0)];
+        let mut ctx = clock(0.0);
+
+        ctx.set_interior(false);
+        assert!(evaluate(&exterior_only, &ctx).unwrap());
+        assert!(!evaluate(&interior_only, &ctx).unwrap());
+
+        ctx.set_interior(true);
+        assert!(!evaluate(&exterior_only, &ctx).unwrap());
+        assert!(evaluate(&interior_only, &ctx).unwrap());
     }
 
     #[test]

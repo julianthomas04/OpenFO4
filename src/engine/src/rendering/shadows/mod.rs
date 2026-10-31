@@ -1,12 +1,15 @@
 pub mod cascade_cache;
 pub mod cascades;
 pub mod lamps;
+pub mod ortho_map;
 pub mod overflow;
 pub mod settings;
 pub mod shadow_cull;
 pub mod shadow_maps;
 pub mod shadow_pipelines;
 pub mod state;
+#[cfg(test)]
+pub(crate) mod test_rig;
 pub mod views;
 
 pub use cascades::CascadeSet;
@@ -34,10 +37,10 @@ use lamps::atlas_texture::LampAtlasTexture;
 use lamps::cache::LampView;
 pub use overflow::ShadowDrawStats;
 use overflow::{LampOverflow, ShadowCountsReadback};
-use shadow_cull::{CASTER_KINDS, CasterKind, ShadowCull, ShadowDraws};
+use shadow_cull::{CASTER_KINDS, CasterKind, CullSlots, ShadowCull, ShadowDraws};
 use shadow_maps::ShadowMaps;
 use shadow_pipelines::{INSTANCE_GROUP, MATERIAL_GROUP, ShadowPipelines};
-use views::ShadowViewSet;
+use views::{MAX_LAMP_VIEWS_PER_FRAME, ShadowViewSet};
 
 /// The world-pass resources the shadow passes draw from.
 pub struct ShadowScene<'a> {
@@ -52,13 +55,15 @@ pub struct ShadowScene<'a> {
 
 /// GPU side of the shadows: one caster cull over every view of the frame,
 /// one depth pass per sun cascade, then one pass over the lamp atlas tiles
-/// that re-render this frame.
+/// that re-render this frame. Maps of the callers' own (see `ortho_map`) are
+/// culled apart from these, so they take no view away from the lamps.
 pub struct ShadowRenderer {
     maps: ShadowMaps,
     lamp_atlas: LampAtlasTexture,
     atlas_preview: LampAtlasPreview,
     pipelines: ShadowPipelines,
     cull: ShadowCull,
+    ortho_cull: ShadowCull,
     cascade_slots: usize,
     views: ShadowViewSet,
     lamp_tiles: Vec<Tile>,
@@ -79,17 +84,20 @@ impl ShadowRenderer {
         object_instances: &wgpu::Buffer,
         terrain_instances: &wgpu::Buffer,
     ) -> Self {
+        let cull = ShadowCull::new(
+            device,
+            CullSlots::new(config.cascade_count as u32, MAX_LAMP_VIEWS_PER_FRAME as u32),
+            object_instances,
+            terrain_instances,
+        );
+        let ortho_cull = ortho_map::new_cull(&cull, device, object_instances, terrain_instances);
         Self {
             maps,
             atlas_preview: LampAtlasPreview::new(device, lamp_atlas.view()),
             lamp_atlas,
             pipelines: ShadowPipelines::new(device, world_pass_layout, skinned_layout),
-            cull: ShadowCull::new(
-                device,
-                config.cascade_count as u32,
-                object_instances,
-                terrain_instances,
-            ),
+            cull,
+            ortho_cull,
             cascade_slots: config.cascade_count,
             views: ShadowViewSet::default(),
             lamp_tiles: Vec::new(),
@@ -133,7 +141,9 @@ impl ShadowRenderer {
     }
 
     pub fn resize_draws(&mut self, device: &wgpu::Device, potentials: [u32; CASTER_KINDS]) -> bool {
-        self.cull.resize_draws(device, potentials)
+        let views_grew = self.cull.resize_draws(device, potentials);
+        let ortho_grew = self.ortho_cull.resize_draws(device, potentials);
+        views_grew || ortho_grew
     }
 
     pub fn draw_stats(&self) -> &ShadowDrawStats {
@@ -187,6 +197,8 @@ impl ShadowRenderer {
     ) {
         self.cull
             .rebind(device, object_instances, terrain_instances);
+        self.ortho_cull
+            .rebind(device, object_instances, terrain_instances);
     }
 
     pub fn encode(
@@ -207,7 +219,7 @@ impl ShadowRenderer {
                 &self.views,
                 scene.object_count,
                 scene.terrain_count,
-                profiler,
+                profiler.compute_writes(GpuPass::ShadowCull, SpanPart::Whole),
             );
         }
         self.overflow.encode_copy(
@@ -259,7 +271,12 @@ impl ShadowRenderer {
         let planes = self.views.cascades[cascade]
             .as_ref()
             .map(|view| frustum::clip_planes(&view.view_proj));
-        self.draw_casters(&mut pass, scene, cascade, planes.as_ref());
+        let slots = CasterSlots {
+            draws: self.cull.draws(),
+            view: cascade,
+            region: cascade,
+        };
+        self.draw_casters(&mut pass, scene, slots, planes.as_ref());
     }
 
     /// Tiles are not cleared as a whole: the atlas keeps every lamp tile that
@@ -289,7 +306,13 @@ impl ShadowRenderer {
         for (lamp, &tile) in self.lamp_tiles.iter().enumerate() {
             self.lamp_atlas.begin_tile(&mut pass, tile);
             let planes = frustum::clip_planes(&self.views.lamps[lamp].view_proj);
-            self.draw_casters(&mut pass, scene, self.cascade_slots + lamp, Some(&planes));
+            let slot = self.cascade_slots + lamp;
+            let slots = CasterSlots {
+                draws: self.cull.draws(),
+                view: slot,
+                region: slot,
+            };
+            self.draw_casters(&mut pass, scene, slots, Some(&planes));
         }
     }
 
@@ -305,18 +328,17 @@ impl ShadowRenderer {
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         scene: &ShadowScene,
-        slot: usize,
+        slots: CasterSlots<'_>,
         view_planes: Option<&[Vec4; 6]>,
     ) {
-        self.pipelines.bind_view(pass, slot);
+        self.pipelines.bind_view(pass, slots.view);
 
-        let draws = self.cull.draws();
         bind_mega(pass, scene.object_mega);
         for kind in [CasterKind::Opaque, CasterKind::AlphaTest] {
-            self.draw_kind(pass, draws, kind, slot);
+            self.draw_kind(pass, slots, kind);
         }
         bind_mega(pass, scene.terrain_mega);
-        self.draw_kind(pass, draws, CasterKind::Terrain, slot);
+        self.draw_kind(pass, slots, CasterKind::Terrain);
         if let Some(planes) = view_planes {
             self.draw_skinned_casters(pass, scene, planes);
         }
@@ -346,22 +368,26 @@ impl ShadowRenderer {
         }
     }
 
-    fn draw_kind(
-        &self,
-        pass: &mut wgpu::RenderPass<'_>,
-        draws: &ShadowDraws,
-        kind: CasterKind,
-        slot: usize,
-    ) {
+    fn draw_kind(&self, pass: &mut wgpu::RenderPass<'_>, slots: CasterSlots<'_>, kind: CasterKind) {
+        let CasterSlots { draws, region, .. } = slots;
         pass.set_pipeline(self.pipelines.pipeline(kind));
         pass.multi_draw_indexed_indirect_count(
             draws.buffer(kind),
-            draws.draw_offset(kind, slot),
+            draws.draw_offset(kind, region),
             &draws.counts,
-            ShadowDraws::count_offset(kind, slot),
-            draws.capacity(kind, slot),
+            ShadowDraws::count_offset(kind, region),
+            draws.capacity(kind, region),
         );
     }
+}
+
+/// Where a view's casters are drawn from: the view matrix of slot `view` and
+/// the draw region `region` of `draws`.
+#[derive(Clone, Copy)]
+struct CasterSlots<'a> {
+    draws: &'a ShadowDraws,
+    view: usize,
+    region: usize,
 }
 
 fn bind_mega(pass: &mut wgpu::RenderPass<'_>, mega: &MegaBuffer) {

@@ -16,10 +16,12 @@ use super::stars::{StarLayer, StarUniform};
 use super::sun::SunInput;
 use super::{MoonInput, NightSky, NightSkyInput, SkySizes, WorldGroupLayouts};
 use crate::assets::types::mesh::{CpuMesh, Topology};
+use crate::assets::types::texture::TextureError;
 use crate::rendering::gpu_test::test_device;
 use crate::rendering::lighting::frame_uniform::FrameUniform;
+use crate::rendering::lighting::sky_measured::STAR_BRIGHTNESS;
 use crate::rendering::lighting::time_of_day::unmeasured::{
-    MOON_RADIANCE, STAR_RADIANCE, moon_angular_diameter_deg,
+    MOON_RADIANCE, moon_angular_diameter_deg,
 };
 use crate::rendering::lighting::time_of_day::{
     ClimateSunTextures, MoonKind, MoonPhase, SkyObjects, StarRotation,
@@ -27,7 +29,7 @@ use crate::rendering::lighting::time_of_day::{
 use crate::rendering::post::dof_test_support::{read_hdr, view_of};
 use crate::rendering::post::hdr_target::HDR_FORMAT;
 use crate::rendering::shaders;
-use crate::rendering::texture::Texture;
+use crate::rendering::texture::{Texture, TextureAssetError};
 use crate::rendering::vertex::Vertex;
 
 fn sun_input() -> SunInput {
@@ -44,6 +46,36 @@ fn assert_close(actual: Vec3, expected: Vec3) {
         actual.abs_diff_eq(expected, 1e-5),
         "{actual} is not {expected}"
     );
+}
+
+/// A GLB container of the glTF document `json` and the binary buffer `bin`.
+pub(super) fn glb(json: &Value, bin: &[u8]) -> Vec<u8> {
+    fn chunk(kind: [u8; 4], data: &[u8], pad: u8) -> Vec<u8> {
+        let mut data = data.to_vec();
+        while !data.len().is_multiple_of(4) {
+            data.push(pad);
+        }
+        let mut out = (data.len() as u32).to_le_bytes().to_vec();
+        out.extend(kind);
+        out.extend(data);
+        out
+    }
+    let mut body = chunk(*b"JSON", json.to_string().as_bytes(), b' ');
+    body.extend(chunk(*b"BIN\0", bin, 0));
+    let mut out = b"glTF".to_vec();
+    out.extend(2u32.to_le_bytes());
+    out.extend(((12 + body.len()) as u32).to_le_bytes());
+    out.extend(body);
+    out
+}
+
+/// An install whose only file is `Meshes\<file_dir>\<file_name>`.
+pub(super) fn install_with(file_dir: &str, file_name: &str, bytes: &[u8]) -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("Meshes").join(file_dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(file_name), bytes).unwrap();
+    root
 }
 
 mod keys {
@@ -207,7 +239,7 @@ mod star_maths {
             angle_rad: 0.0,
         };
         let uniform = |alpha, scale| StarUniform::new(rotation, alpha, scale).params;
-        assert_eq!(uniform(3.0, 2.0)[..2], [1.0, 2.0 * STAR_RADIANCE]);
+        assert_eq!(uniform(3.0, 2.0)[..2], [1.0, 2.0 * STAR_BRIGHTNESS]);
         assert_eq!(uniform(-1.0, -2.0)[..2], [0.0, 0.0]);
         assert_eq!(uniform(f32::NAN, f32::INFINITY)[..2], [0.0, 0.0]);
     }
@@ -318,34 +350,6 @@ mod star_geometry {
         glb(&document, &floats)
     }
 
-    fn glb(json: &Value, bin: &[u8]) -> Vec<u8> {
-        fn chunk(kind: [u8; 4], data: &[u8], pad: u8) -> Vec<u8> {
-            let mut data = data.to_vec();
-            while !data.len().is_multiple_of(4) {
-                data.push(pad);
-            }
-            let mut out = (data.len() as u32).to_le_bytes().to_vec();
-            out.extend(kind);
-            out.extend(data);
-            out
-        }
-        let mut body = chunk(*b"JSON", json.to_string().as_bytes(), b' ');
-        body.extend(chunk(*b"BIN\0", bin, 0));
-        let mut out = b"glTF".to_vec();
-        out.extend(2u32.to_le_bytes());
-        out.extend(((12 + body.len()) as u32).to_le_bytes());
-        out.extend(body);
-        out
-    }
-
-    fn install_with(file_dir: &str, file_name: &str, bytes: &[u8]) -> tempfile::TempDir {
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("Meshes").join(file_dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(file_name), bytes).unwrap();
-        root
-    }
-
     #[test]
     fn the_dome_of_a_nif_path_loads_from_its_glb_whatever_the_stored_casing() {
         let root = install_with("SKY", "Stars.glb", &triangle_glb());
@@ -419,6 +423,15 @@ pub(super) mod gpu {
     pub(in super::super) const SIZE: UVec2 = UVec2::new(16, 16);
     const TEXTURE_EDGE: u32 = 16;
     pub(in super::super) const SKY_CLEAR: f32 = 0.0;
+
+    /// What loading the texture `key` fails with in an install that lacks the file.
+    pub(in super::super) fn missing_texture(key: &str) -> SkyAssetError {
+        TextureAssetError::NotFound {
+            key: key.to_owned(),
+            source: std::io::Error::from(std::io::ErrorKind::NotFound),
+        }
+        .into()
+    }
 
     pub(in super::super) struct Rig {
         pub(in super::super) device: wgpu::Device,
@@ -551,13 +564,19 @@ pub(super) mod gpu {
 
     /// A camera at the origin looking down -Z with a 90 degree view and the infinite reverse-Z
     /// projection of the game.
-    fn frame_uniform() -> FrameUniform {
+    pub(in super::super) fn frame_uniform() -> FrameUniform {
         let mut uniform: FrameUniform = bytemuck::Zeroable::zeroed();
         uniform.view_proj = Mat4::perspective_infinite_reverse_rh(FRAC_PI_2, 1.0, 0.1);
         uniform
     }
 
     pub(in super::super) fn rig(test: &str) -> Option<Rig> {
+        rig_with_frame(test, &frame_uniform())
+    }
+
+    /// A rig whose frame group holds `frame`, for layers that read more of it than the
+    /// projection.
+    pub(in super::super) fn rig_with_frame(test: &str, frame: &FrameUniform) -> Option<Rig> {
         let (device, queue) = test_device(test)?;
         let material_layout = uniform_layout(&device, "night_sky_test_material_bgl");
         let frame_layout = uniform_layout(&device, "night_sky_test_frame_bgl");
@@ -574,7 +593,7 @@ pub(super) mod gpu {
                 &device,
                 "night_sky_test_frame",
                 &frame_layout,
-                bytemuck::bytes_of(&frame_uniform()),
+                bytemuck::bytes_of(frame),
             ),
             uniform_group(
                 &device,
@@ -845,10 +864,7 @@ pub(super) mod gpu {
         };
         let white = white_texture(&rig, TEXTURE_EDGE);
         let textures: PhaseTextures = std::array::from_fn(|index| match index {
-            i if i == MOON_PHASE.index() => Err(SkyAssetError::NotFound {
-                key: "textures\\sky\\masser_full.dds".to_owned(),
-                source: std::io::Error::from(std::io::ErrorKind::NotFound),
-            }),
+            i if i == MOON_PHASE.index() => Err(missing_texture("textures\\sky\\masser_full.dds")),
             i if i == MoonPhase::New.index() => Ok(white_texture(&rig, 8)),
             _ => Ok(white.clone()),
         });
@@ -903,7 +919,7 @@ pub(super) mod gpu {
         }
     }
 
-    fn star_layer(rig: &Rig) -> (StarLayer, [AssetState; 2]) {
+    pub(in super::super) fn star_layer(rig: &Rig) -> (StarLayer, [AssetState; 2]) {
         let mut layer = StarLayer::new(&rig.device, rig.world_groups());
         let texture = layer.install_texture(&rig.device, Ok(white_texture(rig, TEXTURE_EDGE)));
         let mesh = layer.install_mesh(&rig.device, Some(Ok(covering_dome())));
@@ -918,7 +934,7 @@ pub(super) mod gpu {
         render(rig, SKY_CLEAR, |pass| layer.draw(pass))
     }
 
-    fn unturned(alpha: f32, scale: f32) -> StarUniform {
+    pub(in super::super) fn unturned(alpha: f32, scale: f32) -> StarUniform {
         StarUniform::new(
             StarRotation {
                 axis: Vec3::Y,
@@ -1050,10 +1066,7 @@ pub(super) mod gpu {
         let mut no_texture = StarLayer::new(&rig.device, rig.world_groups());
         let state = no_texture.install_texture(
             &rig.device,
-            Err(SkyAssetError::NotFound {
-                key: "textures\\sky\\skystars.dds".to_owned(),
-                source: std::io::Error::from(std::io::ErrorKind::NotFound),
-            }),
+            Err(missing_texture("textures\\sky\\skystars.dds")),
         );
         no_texture.install_mesh(&rig.device, Some(Ok(covering_dome())));
 
@@ -1377,6 +1390,23 @@ mod error_typing {
             SkyAssetError::NoTriangles {
                 key: "a".to_owned(),
             },
+            TextureAssetError::NotFound {
+                key: "a".to_owned(),
+                source: io(),
+            }
+            .into(),
+            TextureAssetError::Unreadable {
+                key: "a".to_owned(),
+                source: io(),
+            }
+            .into(),
+            TextureAssetError::Unusable {
+                key: "a".to_owned(),
+                source: TextureError::BadMagic {
+                    path: "a".to_owned(),
+                },
+            }
+            .into(),
         ];
         let kinds = errors.map(|error| match AssetState::failed(&error) {
             AssetState::Failed(failure) => failure.kind,
@@ -1388,7 +1418,10 @@ mod error_typing {
                 AssetFailureKind::NotFound,
                 AssetFailureKind::Unreadable,
                 AssetFailureKind::Mesh,
-                AssetFailureKind::NoTriangles
+                AssetFailureKind::NoTriangles,
+                AssetFailureKind::NotFound,
+                AssetFailureKind::Unreadable,
+                AssetFailureKind::Texture,
             ]
         );
     }

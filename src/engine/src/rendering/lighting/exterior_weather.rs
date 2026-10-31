@@ -3,14 +3,24 @@ use std::collections::HashMap;
 use glam::Vec3;
 use serde::Deserialize;
 
-use super::ambient::AmbientCube;
-use super::cell_lighting::{RawColor, bethesda_faces_to_engine_order};
+use super::ambient::{AMBIENT_CUBE_FACES, AmbientCube};
+use super::cell_lighting::{RawColor, StoredColourEncoding, bethesda_faces_to_engine_order};
+use super::fog::measured::{
+    BlendedFogColors, FogScales, FogScalesError, slot_colour_factors, slot_day_weight,
+};
+use super::fog::{FogColors, FogRange, HeightFogError, RawHeightFog};
 use super::time_of_day::{
     ClimateMoon, ClimateMoonError, ClimateSky, ClimateSkyError, ClimateSunTextures, ClimateTimes,
     ClimateTimesError, TimeSlot,
 };
-pub use super::weather_slots::{ExteriorWeather, ExteriorWeatherSlots, ImageSpaceHdr};
-use super::weather_slots::{FogColors, FogRange, SLOT_COUNT, SlotValues, WeatherFog};
+use super::tonemap_settings::{ImageSpaceCinematic, ImageSpaceLut};
+use super::weather_slots::{
+    AMBIENT_ENCODING, GLARE_AND_STARS_ENCODING, SKY_ENCODING, SUN_DISC_ENCODING, SUNLIGHT_ENCODING,
+    SlotFogColors, SlotValues, TINT_ENCODING, WATER_MULTIPLIER_ENCODING, WeatherFog,
+};
+pub use super::weather_slots::{
+    ExteriorWeather, ExteriorWeatherSlots, ImageSpaceHdr, WeatherAmbient,
+};
 use crate::assets::db::DbClient;
 use crate::assets::db::weather::WeatherRow;
 use crate::rendering::post::depth_of_field::ImageSpaceDepthOfField;
@@ -34,6 +44,8 @@ pub enum ExteriorWeatherError {
     ClimateWithoutData { climate: String },
     #[error("climate {climate} lists no weathers")]
     EmptyWeatherList { climate: String },
+    #[error("climate {climate} has no weather without a global gate")]
+    NoUngatedWeather { climate: String },
     #[error("climate {climate} has unusable sunrise and sunset times: {source}")]
     ClimateTimes {
         climate: String,
@@ -67,6 +79,17 @@ pub enum ExteriorWeatherError {
         near: f32,
         far: f32,
     },
+    #[error("weather {weather} {slot} fog: {source}")]
+    HeightFog {
+        weather: String,
+        slot: &'static str,
+        source: HeightFogError,
+    },
+    #[error("weather {weather} has unusable fog scales: {source}")]
+    FogScales {
+        weather: String,
+        source: FogScalesError,
+    },
     #[error("weather {weather} has no {slot} slot for {entry}")]
     MissingTimeSlot {
         weather: String,
@@ -77,9 +100,25 @@ pub enum ExteriorWeatherError {
     ImageSpaceNotFound { image_space: String },
     #[error("image space {image_space} has no data")]
     ImageSpaceWithoutData { image_space: String },
-    #[error("malformed {what} JSON: {source}")]
+    #[error("weather {weather} has malformed {field} JSON: {source}")]
     Malformed {
-        what: &'static str,
+        weather: String,
+        field: &'static str,
+        source: serde_json::Error,
+    },
+    #[error("climate {climate} has malformed data JSON: {source}")]
+    ClimateMalformed {
+        climate: String,
+        source: serde_json::Error,
+    },
+    #[error("image space {image_space} lacks {}; the database predates their export, re-run the installer", missing.join(", "))]
+    ImageSpaceFieldsMissing {
+        image_space: String,
+        missing: Vec<&'static str>,
+    },
+    #[error("image space {image_space} has malformed data JSON: {source}")]
+    ImageSpaceMalformed {
+        image_space: String,
         source: serde_json::Error,
     },
     #[error("database query failed: {0}")]
@@ -92,12 +131,15 @@ struct ClimateData {
     weathers: Vec<ClimateWeather>,
 }
 
-#[derive(Debug, Deserialize)]
-struct ClimateWeather {
+/// One weather a climate can pick, with the global that gates it when it has one.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub(crate) struct ClimateWeather {
     #[serde(rename = "Weather")]
-    weather: String,
+    pub(crate) weather: String,
     #[serde(rename = "Chance")]
-    chance: u32,
+    pub(crate) chance: u32,
+    #[serde(rename = "Global")]
+    global: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -113,7 +155,8 @@ struct RawAmbientColors {
     scale: f32,
 }
 
-/// Optional height-fog fields in the JSON are ignored.
+/// One slot of the fog JSON. Databases from before the height-fog export have no height
+/// fields; their fog stays the same at every height.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct RawFog {
@@ -121,14 +164,63 @@ struct RawFog {
     far: f32,
     power: f32,
     max: f32,
+    near_height_mid: Option<f32>,
+    near_height_range: Option<f32>,
+    far_height_mid: Option<f32>,
+    far_height_range: Option<f32>,
+    high_density_scale: Option<f32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(from = "RawImageSpaceData")]
+struct ImageSpaceData {
+    depth_of_field: Option<ImageSpaceDepthOfField>,
+    hdr: ImageSpaceHdr,
+    cinematic: ImageSpaceCinematic,
+    lut: ImageSpaceLut,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct RawImageSpaceData {
+    depth_of_field: Option<ImageSpaceDepthOfField>,
+    hdr: ImageSpaceHdr,
+    cinematic: RawCinematic,
+    tint: RawTint,
+    /// Below the textures folder; empty for an image space without one.
+    lut: String,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
-struct ImageSpaceData {
-    #[serde(rename = "DepthOfField")]
-    depth_of_field: Option<ImageSpaceDepthOfField>,
-    #[serde(rename = "Hdr")]
-    hdr: ImageSpaceHdr,
+#[serde(rename_all = "PascalCase")]
+struct RawCinematic {
+    saturation: f32,
+    brightness: f32,
+    contrast: f32,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct RawTint {
+    amount: f32,
+    color: RawColor,
+}
+
+impl From<RawImageSpaceData> for ImageSpaceData {
+    fn from(raw: RawImageSpaceData) -> Self {
+        Self {
+            depth_of_field: raw.depth_of_field,
+            hdr: raw.hdr,
+            cinematic: ImageSpaceCinematic {
+                saturation: raw.cinematic.saturation,
+                brightness: raw.cinematic.brightness,
+                contrast: raw.cinematic.contrast,
+                tint_amount: raw.tint.amount,
+                tint_color: raw.tint.color.decoded(TINT_ENCODING),
+            },
+            lut: ImageSpaceLut::named(&raw.lut),
+        }
+    }
 }
 
 type ColorGroups = HashMap<String, HashMap<String, RawColor>>;
@@ -137,13 +229,34 @@ type DirectionalAmbient = HashMap<String, RawAmbientColors>;
 
 /// The sunrise and sunset times and the moon of the climate a weather belongs to.
 #[derive(Debug, Clone, PartialEq)]
-struct ClimateInfo {
-    weather_key: String,
+pub(crate) struct ClimateInfo {
+    pub(crate) name: String,
+    /// The weathers the climate can pick, in its order. Entries gated by a global are left out:
+    /// global values are not evaluated yet.
+    entries: Vec<ClimateWeather>,
+    /// The index in `entries` of the most likely weather, the one lighting and the weather cycle
+    /// start from.
+    initial: usize,
     times: ClimateTimes,
     sky: ClimateSky,
     moon: Option<ClimateMoon>,
     /// Not in the climate JSON: [`load_climate`] reads the columns.
     sun_textures: ClimateSunTextures,
+}
+
+impl ClimateInfo {
+    pub(crate) fn entries(&self) -> &[ClimateWeather] {
+        &self.entries
+    }
+
+    /// The index in [`Self::entries`] of the weather lighting and the weather cycle start from.
+    pub(crate) fn initial_index(&self) -> usize {
+        self.initial
+    }
+
+    fn initial_weather(&self) -> &str {
+        &self.entries[self.initial].weather
+    }
 }
 
 impl ExteriorWeatherSlots {
@@ -163,9 +276,10 @@ impl ExteriorWeatherSlots {
             Ok(slots) => {
                 let initial = slots.initial();
                 tracing::info!(
-                    "exterior weather {} ({}) for {worldspace}, all {SLOT_COUNT} time slots, climate {:?}, moon {:?}; initial slot: sun light {:?}, sun disc {:?}, hdr {:?}, depth of field {:?}, sky upper {:?}, sky lower {:?}, horizon {:?}, stars {:?}, ambient cube {:?}, ambient specular {:?}, fog source {}",
+                    "exterior weather {} ({}) for {worldspace}, all {} time slots, climate {:?}, moon {:?}; initial slot: sun light {:?}, sun disc {:?}, hdr {:?}, depth of field {:?}, sky upper {:?}, sky lower {:?}, horizon {:?}, stars {:?}, ambient cube {:?}, ambient specular {:?}, fog source {}",
                     slots.editor_id().unwrap_or("<no editor id>"),
                     slots.form_key(),
+                    TimeSlot::COUNT,
                     slots.climate_times(),
                     slots.moon(),
                     initial.sun_light,
@@ -176,7 +290,7 @@ impl ExteriorWeatherSlots {
                     initial.sky_lower,
                     initial.horizon,
                     initial.stars,
-                    initial.ambient_cube.0,
+                    initial.ambient,
                     initial.ambient_specular,
                     initial
                         .fog
@@ -197,39 +311,30 @@ impl ExteriorWeatherSlots {
         if !db.schema().weather_columns_present {
             return Err(ExteriorWeatherError::ColumnsMissing);
         }
-        let climate_name = db
-            .get_worldspace_climate(worldspace)
-            .map_err(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => ExteriorWeatherError::WorldspaceNotFound {
-                    worldspace: worldspace.to_string(),
-                },
-                other => other.into(),
-            })?
-            .ok_or_else(|| ExteriorWeatherError::WorldspaceWithoutClimate {
-                worldspace: worldspace.to_string(),
-            })?;
-        let climate = load_climate(db, &climate_name)?;
-        if climate.sky.moons.is_none() {
-            tracing::warn!(
-                "climate {climate_name} stores no moon flags (database predates the moon export); the sky shows no moon"
-            );
-        }
-        let row = db
-            .get_weather(&climate.weather_key)
-            .map_err(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => ExteriorWeatherError::WeatherNotFound {
-                    weather: climate.weather_key.clone(),
-                },
-                other => other.into(),
-            })?;
+        let climate = load_worldspace_climate(db, worldspace)?;
+        Self::load_weather(db, climate.initial_weather(), &climate)
+    }
+
+    /// One weather of `climate` with all its slots.
+    pub(crate) fn load_weather(
+        db: &DbClient,
+        weather_key: &str,
+        climate: &ClimateInfo,
+    ) -> Result<Self, ExteriorWeatherError> {
+        let row = db.get_weather(weather_key).map_err(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => ExteriorWeatherError::WeatherNotFound {
+                weather: weather_key.to_string(),
+            },
+            other => other.into(),
+        })?;
         let image_spaces = load_image_spaces(db, &row)?;
         Self::from_row(row, &image_spaces, climate)
     }
 
     fn from_row(
         row: WeatherRow,
-        image_spaces: &[ImageSpaceData; SLOT_COUNT],
-        climate: ClimateInfo,
+        image_spaces: &[ImageSpaceData; TimeSlot::COUNT],
+        climate: &ClimateInfo,
     ) -> Result<Self, ExteriorWeatherError> {
         let WeatherRow {
             form_key,
@@ -238,20 +343,25 @@ impl ExteriorWeatherSlots {
             directional_ambient,
             image_spaces: _,
             fog,
+            fog_scales,
         } = row;
-        let colors: ColorGroups = parse_field(&form_key, "colors", colors)?;
-        let ambient: DirectionalAmbient =
-            parse_field(&form_key, "directional ambient", directional_ambient)?;
-        let slots = all_slots(|slot| {
+        let colors: ColorGroups = parse_field(&form_key, "colors", colors.as_deref())?;
+        let ambient: DirectionalAmbient = parse_field(
+            &form_key,
+            "directional ambient",
+            directional_ambient.as_deref(),
+        )?;
+        let slots = TimeSlot::try_map_all(|slot| {
             load_slot(
                 &form_key,
                 slot,
                 &colors,
                 &ambient,
-                image_spaces[slot.index()],
+                image_spaces[slot.index()].clone(),
             )
         })?;
-        let fog = match load_fog(&form_key, fog, &colors) {
+        let fog_scales = load_fog_scales(&form_key, fog_scales.as_deref())?;
+        let fog = match load_fog(&form_key, fog, &colors, &fog_scales) {
             Ok(fog) => Some(fog),
             Err(error @ ExteriorWeatherError::FogMissing { .. }) => {
                 tracing::warn!("{error}; exterior fog keeps its defaults");
@@ -265,25 +375,11 @@ impl ExteriorWeatherSlots {
             slots,
             fog,
             climate.times,
-            climate.sky,
+            climate.sky.clone(),
             climate.moon,
         )
-        .with_sun_textures(climate.sun_textures))
+        .with_sun_textures(climate.sun_textures.clone()))
     }
-}
-
-/// Runs `load` for every slot in the order of [`TimeSlot::index`], stopping at the first failure.
-fn all_slots<T, E>(mut load: impl FnMut(TimeSlot) -> Result<T, E>) -> Result<[T; SLOT_COUNT], E> {
-    Ok([
-        load(TimeSlot::Sunrise)?,
-        load(TimeSlot::Day)?,
-        load(TimeSlot::Sunset)?,
-        load(TimeSlot::Night)?,
-        load(TimeSlot::EarlySunrise)?,
-        load(TimeSlot::LateSunrise)?,
-        load(TimeSlot::EarlySunset)?,
-        load(TimeSlot::LateSunset)?,
-    ])
 }
 
 fn load_slot(
@@ -293,69 +389,115 @@ fn load_slot(
     ambient: &DirectionalAmbient,
     image_space: ImageSpaceData,
 ) -> Result<SlotValues, ExteriorWeatherError> {
-    let group = |name: &str| color_in_slot(weather, colors, name, slot);
+    let group = |name: &str, encoding: StoredColourEncoding| {
+        raw_color_in_slot(weather, colors, name, slot).map(|color| color.decoded(encoding))
+    };
     let dalc = ambient
         .get(slot.json_key())
         .ok_or_else(|| missing_slot(weather, "directional ambient", slot))?;
-    let ambient_cube = AmbientCube(
-        bethesda_faces_to_engine_order([
-            dalc.x_plus,
-            dalc.x_minus,
-            dalc.y_plus,
-            dalc.y_minus,
-            dalc.z_plus,
-            dalc.z_minus,
-        ])
-        .map(|face| face.linear() * dalc.scale),
-    );
+    let ambient = WeatherAmbient {
+        colors: AmbientCube(
+            bethesda_faces_to_engine_order(faces_lit_by_weather_axes(dalc))
+                .map(|face| face.decoded(AMBIENT_ENCODING)),
+        ),
+        scale: dalc.scale,
+    };
     Ok(SlotValues {
-        sun_light: group("Sunlight")?,
-        sun_disc: group("Sun")?,
-        sun_glare: group("SunGlare")?,
-        sky_upper: group("SkyUpper")?,
-        sky_lower: group("SkyLower")?,
-        horizon: group("Horizon")?,
-        stars: group("Stars")?,
-        ambient_cube,
+        sun_light: group("Sunlight", SUNLIGHT_ENCODING)?,
+        sun_disc: group("Sun", SUN_DISC_ENCODING)?,
+        sun_glare: group("SunGlare", GLARE_AND_STARS_ENCODING)?,
+        sky_upper: group("SkyUpper", SKY_ENCODING)?,
+        sky_lower: group("SkyLower", SKY_ENCODING)?,
+        horizon: group("Horizon", SKY_ENCODING)?,
+        stars: group("Stars", GLARE_AND_STARS_ENCODING)?,
+        ambient,
         ambient_specular: dalc.specular.linear(),
+        water_multiplier: group("WaterMultiplier", WATER_MULTIPLIER_ENCODING)?,
         hdr: image_space.hdr,
+        cinematic: image_space.cinematic,
+        lut: image_space.lut,
         depth_of_field: image_space.depth_of_field,
     })
 }
 
-fn color_in_slot(
+/// A weather's directional ambient colour lights the surfaces that face away from its axis, so
+/// each goes to the opposite face, in Bethesda order +X, -X, +Y, -Y, +Z, -Z.
+fn faces_lit_by_weather_axes(dalc: &RawAmbientColors) -> [RawColor; AMBIENT_CUBE_FACES] {
+    [
+        dalc.x_minus,
+        dalc.x_plus,
+        dalc.y_minus,
+        dalc.y_plus,
+        dalc.z_minus,
+        dalc.z_plus,
+    ]
+}
+
+fn raw_color_in_slot(
     weather: &str,
     colors: &ColorGroups,
     group: &str,
     slot: TimeSlot,
-) -> Result<Vec3, ExteriorWeatherError> {
+) -> Result<RawColor, ExteriorWeatherError> {
     colors
         .get(group)
         .and_then(|slots| slots.get(slot.json_key()))
         .copied()
-        .map(RawColor::linear)
         .ok_or_else(|| missing_slot(weather, group, slot))
+}
+
+/// [`FogScales::ABSENT`] for a weather without NAM4.
+fn load_fog_scales(weather: &str, json: Option<&str>) -> Result<FogScales, ExteriorWeatherError> {
+    let Some(json) = json else {
+        return Ok(FogScales::ABSENT);
+    };
+    let entries: Vec<f32> = parse_json(weather, "fog scales", json)?;
+    FogScales::new(&entries).map_err(|source| ExteriorWeatherError::FogScales {
+        weather: weather.to_string(),
+        source,
+    })
 }
 
 fn load_fog(
     weather: &str,
     json: Option<String>,
     colors: &ColorGroups,
+    scales: &FogScales,
 ) -> Result<WeatherFog, ExteriorWeatherError> {
     let json = json.ok_or_else(|| ExteriorWeatherError::FogMissing {
         weather: weather.to_string(),
     })?;
-    let ranges: FogSlots = parse_field(weather, "fog", Some(json))?;
+    let ranges: FogSlots = parse_json(weather, "fog", &json)?;
     let range_of = |slot: TimeSlot| -> Result<Option<FogRange>, ExteriorWeatherError> {
         let raw = ranges
             .get(slot.json_key())
             .ok_or_else(|| missing_slot(weather, "fog", slot))?;
         fog_range(weather, slot, raw)
     };
-    let colors = all_slots(|slot| {
-        Ok::<_, ExteriorWeatherError>(FogColors {
-            near: color_in_slot(weather, colors, "FogNear", slot)?,
-            far: color_in_slot(weather, colors, "FogFar", slot)?,
+    let colors = TimeSlot::try_map_all(|slot| {
+        let fog_color =
+            |group: &str| raw_color_in_slot(weather, colors, group, slot).map(RawColor::unit);
+        let near = fog_color("FogNear")?;
+        let far = fog_color("FogFar")?;
+        let high_color = |group: &str, low: Vec3| {
+            if colors.contains_key(group) {
+                fog_color(group)
+            } else {
+                Ok(low)
+            }
+        };
+        Ok::<_, ExteriorWeatherError>(SlotFogColors {
+            fog: BlendedFogColors::from_stored(
+                FogColors {
+                    near,
+                    far,
+                    near_high: high_color("FogNearHigh", near)?,
+                    far_high: high_color("FogFarHigh", far)?,
+                },
+                slot_colour_factors(slot, scales),
+            ),
+            sunlight: raw_color_in_slot(weather, colors, "Sunlight", slot).map(RawColor::unit)?,
+            day_weight: slot_day_weight(slot),
         })
     })?;
     Ok(WeatherFog {
@@ -382,21 +524,35 @@ fn fog_range(
             far: raw.far,
         });
     }
+    let height = RawHeightFog {
+        near_mid: raw.near_height_mid,
+        near_range: raw.near_height_range,
+        far_mid: raw.far_height_mid,
+        far_range: raw.far_height_range,
+        high_density_scale: raw.high_density_scale,
+    }
+    .bands()
+    .map_err(|source| ExteriorWeatherError::HeightFog {
+        weather: weather.to_string(),
+        slot: slot.json_key(),
+        source,
+    })?;
     Ok(Some(FogRange {
         near: raw.near * SCALE,
         far: raw.far * SCALE,
         power: raw.power,
         max: raw.max,
+        height,
     }))
 }
 
 fn load_image_spaces(
     db: &DbClient,
     row: &WeatherRow,
-) -> Result<[ImageSpaceData; SLOT_COUNT], ExteriorWeatherError> {
+) -> Result<[ImageSpaceData; TimeSlot::COUNT], ExteriorWeatherError> {
     let names: HashMap<String, Option<String>> =
-        parse_field(&row.form_key, "image spaces", row.image_spaces.clone())?;
-    all_slots(|slot| {
+        parse_field(&row.form_key, "image spaces", row.image_spaces.as_deref())?;
+    TimeSlot::try_map_all(|slot| {
         let image_space = names
             .get(slot.json_key())
             .cloned()
@@ -421,10 +577,64 @@ fn load_image_space(
         .ok_or_else(|| ExteriorWeatherError::ImageSpaceWithoutData {
             image_space: image_space.to_string(),
         })?;
-    serde_json::from_str(&data).map_err(|source| ExteriorWeatherError::Malformed {
-        what: "image space",
+    parse_image_space(image_space, &data)
+}
+
+/// The image space fields the tone curve, the cinematic stage and the colour grading read, which
+/// older installers did not export.
+const EXPORTED_LATER_FIELDS: [&[&str]; 4] =
+    [&["Hdr", "TonemapE"], &["Cinematic"], &["Tint"], &["Lut"]];
+
+fn parse_image_space(
+    image_space: &str,
+    data: &str,
+) -> Result<ImageSpaceData, ExteriorWeatherError> {
+    let malformed = |source| ExteriorWeatherError::ImageSpaceMalformed {
+        image_space: image_space.to_string(),
         source,
-    })
+    };
+    let value: serde_json::Value = serde_json::from_str(data).map_err(malformed)?;
+    let missing: Vec<&'static str> = EXPORTED_LATER_FIELDS
+        .iter()
+        .filter(|path| {
+            path.iter()
+                .try_fold(&value, |node, key| node.get(key))
+                .is_none()
+        })
+        .map(|path| *path.last().expect("every path names a field"))
+        .collect();
+    if !missing.is_empty() {
+        return Err(ExteriorWeatherError::ImageSpaceFieldsMissing {
+            image_space: image_space.to_string(),
+            missing,
+        });
+    }
+    serde_json::from_value(value).map_err(malformed)
+}
+
+/// The climate of `worldspace`, with a warning when it predates the moon export.
+pub(crate) fn load_worldspace_climate(
+    db: &DbClient,
+    worldspace: &str,
+) -> Result<ClimateInfo, ExteriorWeatherError> {
+    let climate_name = db
+        .get_worldspace_climate(worldspace)
+        .map_err(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => ExteriorWeatherError::WorldspaceNotFound {
+                worldspace: worldspace.to_string(),
+            },
+            other => other.into(),
+        })?
+        .ok_or_else(|| ExteriorWeatherError::WorldspaceWithoutClimate {
+            worldspace: worldspace.to_string(),
+        })?;
+    let climate = load_climate(db, &climate_name)?;
+    if climate.sky.moons.is_none() {
+        tracing::warn!(
+            "climate {climate_name} stores no moon flags (database predates the moon export); the sky shows no moon"
+        );
+    }
+    Ok(climate)
 }
 
 fn load_climate(db: &DbClient, climate: &str) -> Result<ClimateInfo, ExteriorWeatherError> {
@@ -447,16 +657,19 @@ fn load_climate(db: &DbClient, climate: &str) -> Result<ClimateInfo, ExteriorWea
 
 fn parse_climate(climate: &str, json: &str) -> Result<ClimateInfo, ExteriorWeatherError> {
     let data: ClimateData =
-        serde_json::from_str(json).map_err(|source| ExteriorWeatherError::Malformed {
-            what: "climate",
+        serde_json::from_str(json).map_err(|source| ExteriorWeatherError::ClimateMalformed {
+            climate: climate.to_string(),
             source,
         })?;
     let sky = ClimateSky::parse(json).map_err(|source| ExteriorWeatherError::ClimateSky {
         climate: climate.to_string(),
         source,
     })?;
+    let (entries, initial) = pickable_entries(climate, data.weathers)?;
     Ok(ClimateInfo {
-        weather_key: most_likely_weather(climate, data)?,
+        name: climate.to_string(),
+        entries,
+        initial,
         times: ClimateTimes::parse(json).map_err(|source| ExteriorWeatherError::ClimateTimes {
             climate: climate.to_string(),
             source,
@@ -472,29 +685,71 @@ fn parse_climate(climate: &str, json: &str) -> Result<ClimateInfo, ExteriorWeath
     })
 }
 
-fn most_likely_weather(climate: &str, data: ClimateData) -> Result<String, ExteriorWeatherError> {
-    // Reversed so that among equal chances the first listed weather wins.
-    data.weathers
-        .into_iter()
-        .rev()
-        .max_by_key(|entry| entry.chance)
-        .map(|entry| entry.weather)
-        .ok_or_else(|| ExteriorWeatherError::EmptyWeatherList {
+/// The entries a climate can pick, without the ones gated by a global (not evaluated yet, so
+/// they are ignored with a warning), and the index of the most likely of them: the highest
+/// chance, the first listed among equals.
+fn pickable_entries(
+    climate: &str,
+    weathers: Vec<ClimateWeather>,
+) -> Result<(Vec<ClimateWeather>, usize), ExteriorWeatherError> {
+    if weathers.is_empty() {
+        return Err(ExteriorWeatherError::EmptyWeatherList {
             climate: climate.to_string(),
-        })
+        });
+    }
+    let (entries, gated): (Vec<_>, Vec<_>) = weathers
+        .into_iter()
+        .partition(|entry| entry.global.is_none());
+    if !gated.is_empty() {
+        let gated: Vec<String> = gated
+            .iter()
+            .map(|entry| {
+                format!(
+                    "{} (global {})",
+                    entry.weather,
+                    entry.global.as_deref().unwrap_or_default()
+                )
+            })
+            .collect();
+        tracing::warn!(
+            "climate {climate} has weathers gated by a global, which is not supported and ignored: {}",
+            gated.join(", ")
+        );
+    }
+    let initial = entries
+        .iter()
+        .enumerate()
+        .rev()
+        .max_by_key(|(_, entry)| entry.chance)
+        .map(|(index, _)| index)
+        .ok_or_else(|| ExteriorWeatherError::NoUngatedWeather {
+            climate: climate.to_string(),
+        })?;
+    Ok((entries, initial))
 }
 
-fn parse_field<T: serde::de::DeserializeOwned>(
+/// A JSON column of a weather that must be there.
+pub(crate) fn parse_field<T: serde::de::DeserializeOwned>(
     weather: &str,
     field: &'static str,
-    json: Option<String>,
+    json: Option<&str>,
 ) -> Result<T, ExteriorWeatherError> {
     let json = json.ok_or_else(|| ExteriorWeatherError::MissingField {
         weather: weather.to_string(),
         field,
     })?;
-    serde_json::from_str(&json).map_err(|source| ExteriorWeatherError::Malformed {
-        what: field,
+    parse_json(weather, field, json)
+}
+
+/// A JSON column of a weather.
+pub(crate) fn parse_json<T: serde::de::DeserializeOwned>(
+    weather: &str,
+    field: &'static str,
+    json: &str,
+) -> Result<T, ExteriorWeatherError> {
+    serde_json::from_str(json).map_err(|source| ExteriorWeatherError::Malformed {
+        weather: weather.to_string(),
+        field,
         source,
     })
 }
@@ -508,12 +763,12 @@ fn missing_slot(weather: &str, entry: &str, slot: TimeSlot) -> ExteriorWeatherEr
 }
 
 #[cfg(test)]
-pub(super) mod fixtures {
+pub(crate) mod fixtures {
     use serde_json::{Value, json};
 
     use super::*;
 
-    pub(super) const FORM_KEY: &str = "0012AB:Fallout4.esm";
+    pub(crate) const FORM_KEY: &str = "0012AB:Fallout4.esm";
     pub(super) const DEFAULT_CLIMATE_JSON: &str = r#"{"Weathers":[{"Weather":"0012AB:Fallout4.esm","Chance":51}],"SunriseBegin":"05:00:00","SunriseEnd":"09:00:00","SunsetBegin":"17:00:00","SunsetEnd":"21:00:00","MoonPhaseLength":4,"Moons":{"Masser":true,"Secunda":false},"ModelPath":"Sky\\Stars.nif"}"#;
 
     pub(in crate::rendering::lighting) fn rgb(r: u8, g: u8, b: u8) -> Value {
@@ -544,6 +799,7 @@ pub(super) mod fixtures {
             "SkyLower": group(rgb(255, 255, 0)),
             "Horizon": group(rgb(0, 255, 255)),
             "Stars": group(rgb(255, 0, 255)),
+            "WaterMultiplier": group(rgb(51, 102, 255)),
             "FogNear": group(rgb(0, 0, 0)),
             "FogFar": group(rgb(255, 255, 255)),
         })
@@ -580,29 +836,79 @@ pub(super) mod fixtures {
             directional_ambient: Some(directional_ambient(1.0).to_string()),
             image_spaces: Some(same_in_every_slot(&Value::Null).to_string()),
             fog: Some(fog(100.0, 1000.0).to_string()),
+            fog_scales: Some(json!(clear_fog_scales()).to_string()),
         }
+    }
+
+    /// `CommonwealthClear`'s NAM4, the one the fog colour factors were measured under.
+    pub(super) fn clear_fog_scales() -> Vec<f32> {
+        let mut scales = vec![1.0; FogScales::LEN];
+        scales[9] = 1.4;
+        scales[25] = 1.1;
+        scales
+    }
+
+    pub(super) fn neutral_image_spaces() -> [ImageSpaceData; TimeSlot::COUNT] {
+        std::array::from_fn(|_| neutral_image_space())
     }
 
     pub(super) fn neutral_image_space() -> ImageSpaceData {
         ImageSpaceData {
             hdr: ImageSpaceHdr::default(),
+            cinematic: ImageSpaceCinematic::NEUTRAL,
+            lut: ImageSpaceLut::NONE,
             depth_of_field: None,
         }
     }
 
-    pub(super) fn climate() -> ClimateInfo {
+    pub(crate) fn climate() -> ClimateInfo {
         parse_climate("DefaultClimate", DEFAULT_CLIMATE_JSON).unwrap()
+    }
+
+    /// The default climate with the weather list `entries_json` (a JSON array).
+    pub(crate) fn climate_with_entries(entries_json: &str) -> ClimateInfo {
+        let json = format!(
+            r#"{{"Weathers":{entries_json},"SunriseBegin":"05:00:00","SunriseEnd":"09:00:00","SunsetBegin":"17:00:00","SunsetEnd":"21:00:00"}}"#
+        );
+        parse_climate("DefaultClimate", &json).unwrap()
+    }
+
+    /// The default weather's slots under another form key.
+    pub(crate) fn slots_for(form_key: &str, editor_id: &str) -> ExteriorWeatherSlots {
+        let mut row = row();
+        form_key.clone_into(&mut row.form_key);
+        row.editor_id = Some(editor_id.to_owned());
+        load(row).unwrap()
+    }
+
+    /// The default weather's slots under another form key, with the upper sky colour that
+    /// `sky_upper` gives for each time slot.
+    pub(crate) fn slots_with_sky(
+        form_key: &str,
+        editor_id: &str,
+        sky_upper: impl Fn(TimeSlot) -> (u8, u8, u8),
+    ) -> ExteriorWeatherSlots {
+        let mut colors = colors();
+        colors["SkyUpper"] = per_slot(|slot| {
+            let (r, g, b) = sky_upper(slot);
+            rgb(r, g, b)
+        });
+        let mut row = row();
+        form_key.clone_into(&mut row.form_key);
+        row.editor_id = Some(editor_id.to_owned());
+        row.colors = Some(colors.to_string());
+        load(row).unwrap()
     }
 
     pub(super) fn slots_with(
         row: WeatherRow,
-        image_spaces: &[ImageSpaceData; SLOT_COUNT],
+        image_spaces: &[ImageSpaceData; TimeSlot::COUNT],
     ) -> Result<ExteriorWeatherSlots, ExteriorWeatherError> {
-        ExteriorWeatherSlots::from_row(row, image_spaces, climate())
+        ExteriorWeatherSlots::from_row(row, image_spaces, &climate())
     }
 
     pub(super) fn load(row: WeatherRow) -> Result<ExteriorWeatherSlots, ExteriorWeatherError> {
-        slots_with(row, &[neutral_image_space(); SLOT_COUNT])
+        slots_with(row, &neutral_image_spaces())
     }
 
     /// The same weather in a climate that shows no moon.
@@ -622,14 +928,16 @@ pub(super) mod fixtures {
         edit_colors(&mut colors);
         let mut row = row();
         row.colors = Some(colors.to_string());
-        let image_spaces = all_slots(|slot| {
+        let image_spaces = TimeSlot::try_map_all(|slot| {
             Ok::<_, ExteriorWeatherError>(ImageSpaceData {
                 hdr: hdr(slot),
+                cinematic: ImageSpaceCinematic::NEUTRAL,
+                lut: ImageSpaceLut::NONE,
                 depth_of_field: None,
             })
         })
         .unwrap();
-        ExteriorWeatherSlots::from_row(row, &image_spaces, climate()).unwrap()
+        ExteriorWeatherSlots::from_row(row, &image_spaces, &climate()).unwrap()
     }
 }
 
@@ -642,11 +950,13 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use TimeSlot::{Day, EarlySunrise, LateSunrise, Night, Sunrise};
+    use TimeSlot::{Day, LateSunrise, Night, Sunrise};
 
     type Corrupt = fn(&mut WeatherRow, String);
 
-    use super::super::fog::{Fog, FogParams};
+    use super::super::fog::measured::{DAY_COLOUR_FACTORS, NON_DAY_COLOUR_FACTORS};
+    use super::super::fog::test_support::assert_band;
+    use super::super::fog::{ExteriorFog, Fog, FogTime, HeightBand, HeightBands};
     use super::super::time_of_day::SlotBlend;
     use super::fixtures::*;
 
@@ -677,33 +987,55 @@ mod tests {
         assert_eq!(weather.sky_lower, Vec3::new(1.0, 1.0, 0.0));
         assert_eq!(weather.horizon, Vec3::new(0.0, 1.0, 1.0));
         assert_eq!(weather.stars, Vec3::new(1.0, 0.0, 1.0));
+        assert_eq!(weather.water_multiplier, Vec3::new(0.2, 0.4, 1.0));
         assert_eq!(&*weather.form_key, FORM_KEY);
         assert_eq!(weather.editor_id.as_deref(), Some("CommonwealthClear"));
     }
 
     #[test]
     fn weather_fog_is_scaled_into_engine_units() {
-        let weather = day_weather(row());
-        let Some(Fog::Enabled(fog)) = weather.fog else {
-            panic!("fog should be enabled: {:?}", weather.fog);
-        };
-        assert!((fog.near - 10.0).abs() < 1e-4);
-        assert!((fog.far - 100.0).abs() < 1e-3);
-        assert_eq!((fog.power, fog.max), (1.5, 0.75));
-        assert_eq!(fog.near_color, Vec3::ZERO);
-        assert_eq!(fog.far_color, Vec3::ONE);
+        let fog = sampled_fog(&load(row()).unwrap(), at(Day));
+        let day = fog.day.expect("the day half has fog");
+        assert!((day.near - 10.0).abs() < 1e-4);
+        assert!((day.far - 100.0).abs() < 1e-3);
+        assert_eq!((day.power, day.max), (1.5, 0.75));
+        assert_eq!(fog.colors.linear().near, Vec3::ZERO);
+        assert_eq!(fog.colors.linear().far, Vec3::ONE);
     }
 
     #[test]
-    fn the_ambient_cube_follows_engine_axis_order_and_the_weather_scale() {
+    fn fog_colours_decode_with_gamma_two_point_two_and_the_sunlight_stays_as_stored() {
         let mut row = row();
-        row.directional_ambient = Some(directional_ambient(0.5).to_string());
-        let cube = day_weather(row).ambient_cube.0;
-        // Bethesda +Y (forward) is the engine -Z face, the last one.
-        let nonzero: Vec<usize> = (0..6).filter(|i| cube[*i] != Vec3::ZERO).collect();
-        assert_eq!(nonzero, vec![5]);
-        let unscaled = day_weather(self::row()).ambient_cube.0[5];
-        assert!(cube[5].x < unscaled.x);
+        let mut colors: Value = serde_json::from_str(row.colors.as_deref().unwrap()).unwrap();
+        colors["FogNear"] = same_in_every_slot(&rgb(128, 128, 128));
+        colors["Sunlight"] = same_in_every_slot(&rgb(225, 225, 225));
+        row.colors = Some(colors.to_string());
+        let fog = sampled_fog(&load(row).unwrap(), at(Day));
+        let near = (128.0_f32 / 255.0).powf(2.2) * DAY_COLOUR_FACTORS.near;
+        assert!((fog.colors.linear().near.x - near).abs() < 1e-6);
+        assert!((fog.sunlight.x - 225.0 / 255.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn each_ambient_colour_lights_the_face_opposite_its_axis_with_the_weather_scale() {
+        let face = |r: u8| rgb(r, 0, 0);
+        let slot = serde_json::json!({
+            "XPlus": face(10), "XMinus": face(20),
+            "YPlus": face(30), "YMinus": face(40),
+            "ZPlus": face(50), "ZMinus": face(60),
+            "Specular": rgb(0, 0, 0),
+            "Scale": 0.5,
+        });
+        let mut row = row();
+        row.directional_ambient = Some(same_in_every_slot(&slot).to_string());
+        let cube = day_weather(row).ambient.cube().0;
+        // Engine faces +X (east), -X, +Y (up), -Y, +Z (south), -Z take the Bethesda colours of
+        // the opposite axes: X-, X+, Z-, Z+, Y+ (north), Y-.
+        let expected_bytes: [u8; 6] = [20, 10, 60, 50, 30, 40];
+        for (index, (face, byte)) in cube.iter().zip(expected_bytes).enumerate() {
+            let expected = Vec3::new((f32::from(byte) / 255.0).powf(2.2), 0.0, 0.0) * 0.5;
+            assert!(face.abs_diff_eq(expected, 1e-7), "face {index}: {face}");
+        }
     }
 
     #[test]
@@ -722,7 +1054,9 @@ mod tests {
         row.fog = Some(fog(0.0, 0.0).to_string());
         let slots = load(row).unwrap();
         for blend in [at(Day), at(Night), between(Night, Day, 0.5)] {
-            assert_eq!(slots.sample(blend).fog, Some(Fog::Disabled));
+            let fog = sampled_fog(&slots, blend);
+            assert_eq!((fog.day, fog.night), (None, None));
+            assert_eq!(fog.resolve(FogTime::DAY), Fog::Disabled);
         }
     }
 
@@ -745,20 +1079,21 @@ mod tests {
 
     #[test]
     fn malformed_json_fails_the_whole_weather_naming_the_broken_field() {
-        let cases: [(&str, Corrupt); 3] = [
+        let cases: [(&str, Corrupt); 4] = [
             ("colors", |row, text| row.colors = Some(text)),
             ("directional ambient", |row, text| {
                 row.directional_ambient = Some(text);
             }),
             ("fog", |row, text| row.fog = Some(text)),
+            ("fog scales", |row, text| row.fog_scales = Some(text)),
         ];
-        for (what, corrupt) in cases {
+        for (field, corrupt) in cases {
             let mut row = row();
             corrupt(&mut row, "{ not json".to_owned());
             let result = load(row);
             assert!(
-                matches!(&result, Err(ExteriorWeatherError::Malformed { what: w, .. }) if *w == what),
-                "{what}: {result:?}"
+                matches!(&result, Err(ExteriorWeatherError::Malformed { weather, field: f, .. }) if weather == FORM_KEY && *f == field),
+                "{field}: {result:?}"
             );
         }
     }
@@ -769,19 +1104,15 @@ mod tests {
         no_colors.colors = None;
         assert!(matches!(
             load(no_colors),
-            Err(ExteriorWeatherError::MissingField {
-                field: "colors",
-                ..
-            })
+            Err(ExteriorWeatherError::MissingField { weather, field: "colors" })
+                if weather == FORM_KEY
         ));
         let mut no_ambient = row();
         no_ambient.directional_ambient = None;
         assert!(matches!(
             load(no_ambient),
-            Err(ExteriorWeatherError::MissingField {
-                field: "directional ambient",
-                ..
-            })
+            Err(ExteriorWeatherError::MissingField { weather, field: "directional ambient" })
+                if weather == FORM_KEY
         ));
     }
 
@@ -810,6 +1141,18 @@ mod tests {
         assert!(matches!(
             load(row),
             Err(ExteriorWeatherError::MissingTimeSlot { entry, .. }) if entry == "Horizon"
+        ));
+    }
+
+    #[test]
+    fn a_missing_water_multiplier_group_is_a_missing_slot_error() {
+        let mut broken = colors();
+        broken.as_object_mut().unwrap().remove("WaterMultiplier");
+        let mut row = row();
+        row.colors = Some(broken.to_string());
+        assert!(matches!(
+            load(row),
+            Err(ExteriorWeatherError::MissingTimeSlot { entry, .. }) if entry == "WaterMultiplier"
         ));
     }
 
@@ -872,7 +1215,11 @@ mod tests {
     }
 
     fn sunlight_red(slot: TimeSlot) -> f32 {
-        RawColor::linear(serde_json::from_value(rgb(slot.index() as u8 * 30, 0, 0)).unwrap()).x
+        RawColor::decoded(
+            serde_json::from_value(rgb(slot.index() as u8 * 30, 0, 0)).unwrap(),
+            SUNLIGHT_ENCODING,
+        )
+        .x
     }
 
     #[test]
@@ -894,15 +1241,17 @@ mod tests {
     }
 
     #[test]
-    fn a_blend_mixes_exactly_its_two_slots_in_linear_space() {
+    fn a_blend_mixes_exactly_its_two_slots_as_stored_bytes() {
         let slots = load(sunlight_by_slot()).unwrap();
         let weather = slots.sample(between(LateSunrise, Sunrise, 0.25));
-        let expected = sunlight_red(LateSunrise) * 0.75 + sunlight_red(Sunrise) * 0.25;
-        assert!((weather.sun_light.x - expected).abs() < 1e-6);
+        let stored_byte = f32::from(LateSunrise.index() as u8 * 30) * 0.75
+            + f32::from(Sunrise.index() as u8 * 30) * 0.25;
+        let expected = SUNLIGHT_ENCODING.decode(Vec3::new(stored_byte / 255.0, 0.0, 0.0));
+        assert!((weather.sun_light.x - expected.x).abs() < 1e-6);
     }
 
     #[test]
-    fn halfway_between_black_and_white_is_linear_one_half_not_the_encoded_mid_grey() {
+    fn halfway_between_black_and_white_is_the_stored_mid_grey_decoded() {
         let mut colors = colors();
         colors["Sun"] = per_slot(|slot| {
             if slot == Night {
@@ -914,14 +1263,21 @@ mod tests {
         let mut row = row();
         row.colors = Some(colors.to_string());
         let weather = load(row).unwrap().sample(between(Night, Day, 0.5));
-        assert!((weather.sun_disc.x - 0.5).abs() < 1e-6);
+        assert!((weather.sun_disc.x - 0.5_f32.powf(2.2)).abs() < 1e-6);
     }
 
     #[test]
     fn every_colour_group_is_blended() {
         let mut colors = colors();
         for group in [
-            "Sunlight", "Sun", "SunGlare", "SkyUpper", "SkyLower", "Horizon", "Stars",
+            "Sunlight",
+            "Sun",
+            "SunGlare",
+            "SkyUpper",
+            "SkyLower",
+            "Horizon",
+            "Stars",
+            "WaterMultiplier",
         ] {
             colors[group] = per_slot(|slot| {
                 if slot == Night {
@@ -934,20 +1290,61 @@ mod tests {
         let mut row = row();
         row.colors = Some(colors.to_string());
         let weather = load(row).unwrap().sample(between(Night, Day, 0.5));
-        for (name, colour) in [
-            ("sun light", weather.sun_light),
-            ("sun disc", weather.sun_disc),
-            ("sun glare", weather.sun_glare),
-            ("sky upper", weather.sky_upper),
-            ("sky lower", weather.sky_lower),
-            ("horizon", weather.horizon),
-            ("stars", weather.stars),
+        let stored_half = 0.5_f32.powf(2.2);
+        for (name, colour, expected) in [
+            ("sun light", weather.sun_light, stored_half),
+            ("sun disc", weather.sun_disc, stored_half),
+            ("sun glare", weather.sun_glare, 0.5),
+            ("sky upper", weather.sky_upper, stored_half),
+            ("sky lower", weather.sky_lower, stored_half),
+            ("horizon", weather.horizon, stored_half),
+            ("stars", weather.stars, 0.5),
+            ("water multiplier", weather.water_multiplier, 0.5),
         ] {
             assert!(
-                colour.abs_diff_eq(Vec3::splat(0.5), 1e-6),
+                colour.abs_diff_eq(Vec3::splat(expected), 1e-6),
                 "{name}: {colour}"
             );
         }
+    }
+
+    #[test]
+    fn the_sky_colours_blend_as_stored_and_decode_with_gamma_two_point_two() {
+        let mut colors = colors();
+        for group in ["SkyUpper", "SkyLower", "Horizon"] {
+            colors[group] = per_slot(|slot| match slot {
+                Sunrise => rgb(48, 48, 48),
+                _ => rgb(144, 144, 144),
+            });
+        }
+        let mut row = row();
+        row.colors = Some(colors.to_string());
+        let slots = load(row).unwrap();
+        let pure = slots.sample(between(Sunrise, LateSunrise, 0.0));
+        assert!((pure.sky_upper.x - (48.0_f32 / 255.0).powf(2.2)).abs() < 1e-6);
+        let blended = slots.sample(between(Sunrise, LateSunrise, 0.25));
+        let stored = (0.75 * 48.0 + 0.25 * 144.0) / 255.0;
+        for colour in [blended.sky_upper, blended.sky_lower, blended.horizon] {
+            assert!(
+                colour.abs_diff_eq(Vec3::splat(f32::powf(stored, 2.2)), 1e-6),
+                "{colour}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_sun_disc_decodes_with_gamma_two_point_two() {
+        let mut colors = colors();
+        colors["Sun"] = per_slot(|_| rgb(16, 48, 255));
+        let mut row = row();
+        row.colors = Some(colors.to_string());
+        let weather = load(row).unwrap().sample(between(Day, Day, 0.0));
+        let expected = Vec3::new(16.0, 48.0, 255.0).map(|byte| (byte / 255.0).powf(2.2));
+        assert!(
+            weather.sun_disc.abs_diff_eq(expected, 1e-6),
+            "{}",
+            weather.sun_disc
+        );
     }
 
     #[test]
@@ -960,18 +1357,46 @@ mod tests {
         let day = slots.sample(at(Day));
         let night = slots.sample(at(Night));
         let halfway = slots.sample(between(Night, Day, 0.5));
-        assert!(night.ambient_cube.0.iter().all(|face| *face == Vec3::ZERO));
+        assert!(
+            night
+                .ambient
+                .cube()
+                .0
+                .iter()
+                .all(|face| *face == Vec3::ZERO)
+        );
         for face in 0..6 {
             assert!(
-                halfway.ambient_cube.0[face].abs_diff_eq(day.ambient_cube.0[face] * 0.5, 1e-6),
+                halfway.ambient.cube().0[face].abs_diff_eq(day.ambient.cube().0[face] * 0.5, 1e-6),
                 "face {face}"
             );
         }
     }
 
     #[test]
+    fn the_ambient_colours_blend_as_stored_bytes_and_their_scale_linearly() {
+        let mut ambient = directional_ambient(1.0);
+        let mut night = ambient_slot(0.5);
+        night["YPlus"] = rgb(0, 0, 0);
+        ambient["Night"] = night;
+        let mut row = row();
+        row.directional_ambient = Some(ambient.to_string());
+        let halfway = load(row).unwrap().sample(between(Night, Day, 0.5));
+        let stored_half = 0.5_f32.powf(2.2);
+        let lit = halfway
+            .ambient
+            .colors
+            .0
+            .iter()
+            .find(|face| face.x > 0.0)
+            .unwrap();
+        assert!(lit.abs_diff_eq(Vec3::splat(stored_half), 1e-6), "{lit}");
+        assert!((halfway.ambient.scale - 0.75).abs() < 1e-6);
+    }
+
+    #[test]
     fn the_image_space_light_scales_and_exposure_limits_are_blended() {
-        let mut image_spaces = [neutral_image_space(); SLOT_COUNT];
+        let mut image_spaces = neutral_image_spaces();
         image_spaces[Night.index()].hdr = ImageSpaceHdr {
             eye_adapt_speed: 1.0,
             sunlight_scale: 0.0,
@@ -979,6 +1404,7 @@ mod tests {
             middle_gray: 0.1,
             auto_exposure_min: 0.2,
             auto_exposure_max: 2.0,
+            tonemap_e: 0.04,
         };
         let slots = slots_with(row(), &image_spaces).unwrap();
         let hdr = slots.sample(between(Night, Day, 0.5)).hdr;
@@ -989,6 +1415,41 @@ mod tests {
         assert!((hdr.middle_gray - f32::midpoint(0.1, day.middle_gray)).abs() < 1e-6);
         assert!((hdr.auto_exposure_min - f32::midpoint(0.2, day.auto_exposure_min)).abs() < 1e-6);
         assert!((hdr.auto_exposure_max - f32::midpoint(2.0, day.auto_exposure_max)).abs() < 1e-6);
+        assert!((hdr.tonemap_e - f32::midpoint(0.04, day.tonemap_e)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_image_space_cinematic_fields_and_tint_are_blended() {
+        let mut image_spaces = neutral_image_spaces();
+        image_spaces[Night.index()].cinematic = ImageSpaceCinematic {
+            saturation: 0.0,
+            brightness: 2.0,
+            contrast: 0.5,
+            tint_amount: 1.0,
+            tint_color: Vec3::new(1.0, 0.0, 0.0),
+        };
+        let slots = slots_with(row(), &image_spaces).unwrap();
+        let cinematic = slots.sample(between(Night, Day, 0.5)).cinematic;
+        assert_eq!(
+            ImageSpaceCinematic {
+                tint_color: Vec3::ZERO,
+                ..cinematic
+            },
+            ImageSpaceCinematic {
+                saturation: 0.5,
+                brightness: 1.5,
+                contrast: 0.75,
+                tint_amount: 0.5,
+                tint_color: Vec3::ZERO,
+            }
+        );
+        assert!(
+            cinematic
+                .tint_color
+                .abs_diff_eq(Vec3::new(1.0, 0.0, 0.0), 1e-6),
+            "half the amount of the tint colour alone: {}",
+            cinematic.tint_color
+        );
     }
 
     fn depth_of_field(strength: f32, mode: u32) -> ImageSpaceDepthOfField {
@@ -1004,7 +1465,7 @@ mod tests {
 
     #[test]
     fn depth_of_field_blends_its_numbers_and_snaps_its_mode() {
-        let mut image_spaces = [neutral_image_space(); SLOT_COUNT];
+        let mut image_spaces = neutral_image_spaces();
         image_spaces[Night.index()].depth_of_field = Some(depth_of_field(0.0, 1));
         image_spaces[Day.index()].depth_of_field = Some(depth_of_field(1.0, 2));
         let slots = slots_with(row(), &image_spaces).unwrap();
@@ -1024,7 +1485,7 @@ mod tests {
 
     #[test]
     fn depth_of_field_present_at_one_end_only_snaps_at_the_midpoint() {
-        let mut image_spaces = [neutral_image_space(); SLOT_COUNT];
+        let mut image_spaces = neutral_image_spaces();
         image_spaces[Day.index()].depth_of_field = Some(depth_of_field(1.0, 2));
         let slots = slots_with(row(), &image_spaces).unwrap();
         assert_eq!(slots.sample(between(Night, Day, 0.4)).depth_of_field, None);
@@ -1056,40 +1517,27 @@ mod tests {
         row
     }
 
-    fn sampled_fog(slots: &ExteriorWeatherSlots, blend: SlotBlend) -> FogParams {
-        match slots.sample(blend).fog {
-            Some(Fog::Enabled(params)) => params,
-            other => panic!("fog should be enabled: {other:?}"),
+    fn sampled_fog(slots: &ExteriorWeatherSlots, blend: SlotBlend) -> ExteriorFog {
+        slots
+            .sample(blend)
+            .fog
+            .expect("the weather carries fog data")
+    }
+
+    #[test]
+    fn both_fog_halves_reach_the_sample_whatever_the_slot() {
+        let slots = load(fog_with(&fog_slot(100.0, 1000.0), &fog_slot(300.0, 5000.0))).unwrap();
+        for blend in [at(Day), at(Night), between(Sunrise, LateSunrise, 0.3)] {
+            let fog = sampled_fog(&slots, blend);
+            assert!((fog.day.unwrap().near - 10.0).abs() < 1e-4);
+            assert!((fog.night.unwrap().near - 30.0).abs() < 1e-4);
         }
     }
 
     #[test]
-    fn fog_distances_blend_by_how_much_daylight_the_moment_has() {
-        let slots = load(fog_with(&fog_slot(100.0, 1000.0), &fog_slot(300.0, 5000.0))).unwrap();
-        let day = sampled_fog(&slots, at(Day));
-        let night = sampled_fog(&slots, at(Night));
-        assert!((day.far - 100.0).abs() < 1e-3);
-        assert!((night.far - 500.0).abs() < 1e-3);
-        let halfway = sampled_fog(&slots, between(Night, Day, 0.5));
-        assert!((halfway.near - f32::midpoint(day.near, night.near)).abs() < 1e-4);
-        assert!((halfway.far - 300.0).abs() < 1e-3);
-    }
-
-    #[test]
-    fn a_slot_between_night_and_day_blends_the_fog_by_its_own_daylight_weight() {
-        let slots = load(fog_with(&fog_slot(100.0, 1000.0), &fog_slot(300.0, 5000.0))).unwrap();
-        let night = sampled_fog(&slots, at(Night));
-        let day = sampled_fog(&slots, at(Day));
-        // EarlySunrise sits a quarter of the way from Night to Day.
-        let early = sampled_fog(&slots, at(EarlySunrise));
-        assert!((early.far - (night.far + (day.far - night.far) * 0.25)).abs() < 1e-3);
-        let start_of_blend = sampled_fog(&slots, between(Night, EarlySunrise, 0.0));
-        assert_eq!(start_of_blend.far, night.far);
-    }
-
-    #[test]
-    fn fog_colours_follow_the_slot_blend_not_the_daylight_weight() {
-        let mut colors = colors();
+    fn fog_colours_blend_as_stored_across_slots_with_their_slot_factors() {
+        let mut row = fog_with(&fog_slot(100.0, 1000.0), &fog_slot(300.0, 5000.0));
+        let mut colors: Value = serde_json::from_str(row.colors.as_deref().unwrap()).unwrap();
         colors["FogNear"] = per_slot(|slot| {
             if slot == Sunrise {
                 rgb(255, 255, 255)
@@ -1097,67 +1545,238 @@ mod tests {
                 rgb(0, 0, 0)
             }
         });
-        let mut row = row();
         row.colors = Some(colors.to_string());
         let slots = load(row).unwrap();
-        let at_sunrise = sampled_fog(&slots, at(Sunrise));
-        assert_eq!(at_sunrise.near_color, Vec3::ONE);
-        let past = sampled_fog(&slots, between(Sunrise, LateSunrise, 0.5));
-        assert!(past.near_color.abs_diff_eq(Vec3::splat(0.5), 1e-6));
-    }
-
-    #[test]
-    fn fog_that_is_off_by_day_and_on_by_night_snaps_at_half_the_daylight_weight() {
-        let slots = load(fog_with(&fog_slot(0.0, 0.0), &fog_slot(300.0, 5000.0))).unwrap();
-        assert_eq!(slots.sample(at(Day)).fog, Some(Fog::Disabled));
-        assert!(matches!(slots.sample(at(Night)).fog, Some(Fog::Enabled(_))));
-        // Daylight weight 0.4 is nearer to Night, 0.6 to Day.
-        let near_night = slots.sample(between(Night, Day, 0.4)).fog;
-        let near_day = slots.sample(between(Night, Day, 0.6)).fog;
-        let Some(Fog::Enabled(params)) = near_night else {
-            panic!("night fog should still apply: {near_night:?}");
-        };
+        let night_factor = NON_DAY_COLOUR_FACTORS.near;
+        let sunrise = sampled_fog(&slots, at(Sunrise)).colors.linear().near;
         assert!(
-            (params.far - 500.0).abs() < 1e-3,
-            "distances are not blended"
+            sunrise.abs_diff_eq(Vec3::splat(night_factor), 1e-6),
+            "{sunrise}"
         );
-        assert_eq!(near_day, Some(Fog::Disabled));
+        let past = sampled_fog(&slots, between(Sunrise, LateSunrise, 0.5));
+        // Halfway between the stored black and white, decoded after the blend.
+        let halfway = 0.5_f32.powf(2.2) * night_factor;
+        assert!((past.colors.linear().near.x - halfway).abs() < 1e-6);
+    }
+
+    fn with_fog_scales(scales: &Value) -> WeatherRow {
+        let mut row = row();
+        row.fog_scales = Some(scales.to_string());
+        row
+    }
+
+    fn day_fog_colors(row: WeatherRow) -> FogColors {
+        sampled_fog(&load(row).unwrap(), at(Day)).colors.linear()
     }
 
     #[test]
-    fn fog_that_is_on_by_day_and_off_by_night_snaps_the_other_way() {
-        let slots = load(fog_with(&fog_slot(100.0, 1000.0), &fog_slot(0.0, 0.0))).unwrap();
-        assert_eq!(
-            slots.sample(between(Night, Day, 0.4)).fog,
-            Some(Fog::Disabled)
+    fn the_day_far_fog_colours_follow_the_weathers_nam4_day_entry() {
+        let mut scales = clear_fog_scales();
+        scales[25] = 1.4;
+        let foggy = day_fog_colors(with_high_colors(with_fog_scales(&json!(scales))));
+        let clear = day_fog_colors(with_high_colors(row()));
+        let ratio = (1.4_f32 / 1.1).powf(2.3);
+        assert!(
+            foggy.far.abs_diff_eq(clear.far * ratio, 1e-5),
+            "{}",
+            foggy.far
         );
-        assert!(matches!(
-            slots.sample(between(Night, Day, 0.6)).fog,
-            Some(Fog::Enabled(_))
-        ));
+        assert!(
+            foggy.far_high.abs_diff_eq(clear.far_high * ratio, 1e-5),
+            "{}",
+            foggy.far_high
+        );
+        assert_eq!(foggy.near, clear.near);
+        assert_eq!(foggy.near_high, clear.near_high);
     }
 
     #[test]
-    fn all_slots_are_visited_in_index_order_and_stop_at_the_first_failure() {
-        let visited = all_slots(Ok::<_, ()>).unwrap();
-        assert_eq!(visited, TimeSlot::ALL);
-        let mut seen = Vec::new();
-        let result = all_slots(|slot| {
-            seen.push(slot);
-            if slot == Night {
-                Err("night")
-            } else {
-                Ok(slot)
-            }
+    fn a_weather_without_nam4_fogs_as_one_of_all_ones() {
+        let mut absent = row();
+        absent.fog_scales = None;
+        let absent = load(absent).unwrap();
+        let ones = load(with_fog_scales(&json!(vec![1.0; FogScales::LEN]))).unwrap();
+        for blend in [at(Day), at(Night), between(Sunrise, LateSunrise, 0.3)] {
+            assert_eq!(sampled_fog(&absent, blend), sampled_fog(&ones, blend));
+        }
+    }
+
+    #[test]
+    fn unusable_nam4_arrays_fail_the_weather_naming_it() {
+        let mut negative_night = clear_fog_scales();
+        negative_night[27] = -1.0;
+        for (scales, expected) in [
+            (json!(vec![1.0; 31]), FogScalesError::WrongLength(31)),
+            (json!(vec![1.0; 33]), FogScalesError::WrongLength(33)),
+            (
+                json!(negative_night),
+                FogScalesError::NegativeFarColourScale {
+                    slot: "Night",
+                    value: -1.0,
+                },
+            ),
+        ] {
+            let result = load(with_fog_scales(&scales));
+            assert!(
+                matches!(&result, Err(ExteriorWeatherError::FogScales { weather, source }) if weather == FORM_KEY && *source == expected),
+                "{scales}: {result:?}"
+            );
+        }
+        let not_numbers = load(with_fog_scales(&json!(vec![Value::Null; 32])));
+        assert!(
+            matches!(
+                &not_numbers,
+                Err(ExteriorWeatherError::Malformed {
+                    field: "fog scales",
+                    ..
+                })
+            ),
+            "{not_numbers:?}"
+        );
+    }
+
+    #[test]
+    fn a_half_without_fog_stays_without_it() {
+        let slots = load(fog_with(&fog_slot(0.0, 0.0), &fog_slot(300.0, 5000.0))).unwrap();
+        let fog = sampled_fog(&slots, at(Day));
+        assert_eq!(fog.day, None);
+        assert!(fog.night.is_some());
+    }
+
+    /// A fog slot with height fog: near band `near` and far band `far` as (mid, range).
+    fn height_fog_slot(near: (f32, f32), far: (f32, f32), high_density_scale: f32) -> Value {
+        let mut slot = fog_slot(100.0, 1000.0);
+        let fields = json!({
+            "NearHeightMid": near.0, "NearHeightRange": near.1,
+            "FarHeightMid": far.0, "FarHeightRange": far.1,
+            "HighDensityScale": high_density_scale,
         });
-        assert_eq!(result, Err("night"));
-        assert_eq!(seen, [TimeSlot::Sunrise, Day, TimeSlot::Sunset, Night]);
+        slot.as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        slot
+    }
+
+    fn with_high_colors(mut row: WeatherRow) -> WeatherRow {
+        let mut colors = colors();
+        colors["FogNearHigh"] = same_in_every_slot(&rgb(255, 0, 0));
+        colors["FogFarHigh"] = same_in_every_slot(&rgb(0, 0, 255));
+        row.colors = Some(colors.to_string());
+        row
+    }
+
+    fn day_half(fog: &ExteriorFog) -> FogRange {
+        fog.day.expect("the day half has fog")
+    }
+
+    #[test]
+    fn a_weather_without_height_fog_data_has_the_same_fog_at_every_height() {
+        let fog = sampled_fog(&load(row()).unwrap(), at(Day));
+        assert_eq!(day_half(&fog).height, HeightBands::NONE);
+        // The fixture's near colour is black and its far colour white: the high colours repeat
+        // them, so at Day the far high colour is white times the far high factor 0.58.
+        let colors = fog.colors.linear();
+        assert_eq!(colors.near, Vec3::ZERO);
+        assert_eq!(colors.near_high, Vec3::ZERO);
+        assert!(colors.far.abs_diff_eq(Vec3::ONE, 1e-6), "{}", colors.far);
+        assert!(
+            colors.far_high.abs_diff_eq(Vec3::splat(0.58), 1e-6),
+            "{}",
+            colors.far_high
+        );
+    }
+
+    #[test]
+    fn height_fog_is_scaled_into_engine_units_with_its_high_colours() {
+        let slot = height_fog_slot((500.0, 2000.0), (1800.0, 15_000.0), 0.95);
+        let fog = sampled_fog(
+            &load(with_high_colors(fog_with(&slot, &slot))).unwrap(),
+            at(Day),
+        );
+        let height = day_half(&fog).height;
+        assert_band(height.near, 50.0, 200.0);
+        assert_band(height.far, 180.0, 1500.0);
+        assert_eq!(height.high_density_scale, 0.95);
+        let colors = fog.colors.linear();
+        assert!(
+            colors
+                .near_high
+                .abs_diff_eq(Vec3::X * DAY_COLOUR_FACTORS.near_high, 1e-6)
+        );
+        assert!(
+            colors
+                .far_high
+                .abs_diff_eq(Vec3::Z * DAY_COLOUR_FACTORS.far_high, 1e-6)
+        );
+    }
+
+    #[test]
+    fn height_bands_and_density_blend_by_the_night_weight_like_the_distances() {
+        let day = height_fog_slot((500.0, 2000.0), (1000.0, 10_000.0), 1.0);
+        let night = height_fog_slot((1500.0, 4000.0), (3000.0, 30_000.0), 0.5);
+        let slots = load(fog_with(&day, &night)).unwrap();
+        let Fog::Enabled(halfway) =
+            sampled_fog(&slots, at(Day)).resolve(FogTime { night_weight: 0.5 })
+        else {
+            panic!("both halves have fog");
+        };
+        assert_band(halfway.height.near, 100.0, 300.0);
+        assert_band(halfway.height.far, 200.0, 2000.0);
+        assert_eq!(halfway.height.high_density_scale, 0.75);
+    }
+
+    #[test]
+    fn zero_height_ranges_leave_the_fog_the_same_at_every_height() {
+        // Records from before height fog store zeros, a zero density scale included.
+        let slot = height_fog_slot((0.0, 0.0), (0.0, 0.0), 0.0);
+        let slots = load(with_high_colors(fog_with(&slot, &slot))).unwrap();
+        let height = day_half(&sampled_fog(&slots, at(Day))).height;
+        assert_eq!(height.near, HeightBand::UNSET);
+        assert_eq!(height.far, HeightBand::UNSET);
+    }
+
+    #[test]
+    fn a_height_mid_without_its_range_fails_the_weather_naming_the_band() {
+        let mut slot = height_fog_slot((500.0, 2000.0), (1800.0, 15_000.0), 1.0);
+        slot.as_object_mut().unwrap().remove("FarHeightRange");
+        let result = load(fog_with(&fog_slot(100.0, 1000.0), &slot));
+        assert!(
+            matches!(&result, Err(ExteriorWeatherError::HeightFog { slot, source: HeightFogError::IncompleteBand { band }, .. }) if *slot == "Night" && *band == "far"),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn a_negative_high_density_scale_fails_the_weather() {
+        let slot = height_fog_slot((500.0, 2000.0), (1800.0, 15_000.0), -0.5);
+        let result = load(fog_with(&slot, &fog_slot(100.0, 1000.0)));
+        assert!(
+            matches!(&result, Err(ExteriorWeatherError::HeightFog { slot, source: HeightFogError::NegativeHighDensityScale { .. }, .. }) if *slot == "Day"),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn a_high_fog_colour_group_must_have_every_slot() {
+        let mut colors = colors();
+        colors["FogFarHigh"] = same_in_every_slot(&rgb(0, 0, 255));
+        colors["FogFarHigh"]
+            .as_object_mut()
+            .unwrap()
+            .remove("Sunset");
+        let mut row = row();
+        row.colors = Some(colors.to_string());
+        let error = load(row).unwrap_err();
+        assert!(
+            matches!(&error, ExteriorWeatherError::MissingTimeSlot { entry, slot, .. } if entry == "FogFarHigh" && *slot == "Sunset"),
+            "{error:?}"
+        );
     }
 
     #[test]
     fn the_climate_gives_the_most_likely_weather_and_its_sky() {
         let climate = climate();
-        assert_eq!(climate.weather_key, FORM_KEY);
+        assert_eq!(climate.initial_weather(), FORM_KEY);
         assert_eq!(climate.times.sunrise_begin(), 5.0);
         assert_eq!(climate.times.sunset_end(), 21.0);
         assert_eq!(climate.sky.moon_phase_length, Some(4));
@@ -1168,7 +1787,41 @@ mod tests {
     #[test]
     fn among_equal_chances_the_first_listed_weather_wins() {
         let json = r#"{"Weathers":[{"Weather":"A","Chance":10},{"Weather":"B","Chance":10},{"Weather":"C","Chance":5}],"SunriseBegin":"05:00:00","SunriseEnd":"09:00:00","SunsetBegin":"17:00:00","SunsetEnd":"21:00:00"}"#;
-        assert_eq!(parse_climate("C", json).unwrap().weather_key, "A");
+        let climate = parse_climate("C", json).unwrap();
+        assert_eq!(climate.initial_weather(), "A");
+        assert_eq!(climate.initial_index(), 0);
+    }
+
+    fn climate_json(weathers: &str) -> String {
+        format!(
+            r#"{{"Weathers":{weathers},"SunriseBegin":"05:00:00","SunriseEnd":"09:00:00","SunsetBegin":"17:00:00","SunsetEnd":"21:00:00"}}"#
+        )
+    }
+
+    #[test]
+    fn weathers_gated_by_a_global_are_not_picked_and_never_start_the_climate() {
+        let json = climate_json(
+            r#"[{"Weather":"Gated","Chance":90,"Global":"00FF:Fallout4.esm"},{"Weather":"A","Chance":10,"Global":null},{"Weather":"B","Chance":20}]"#,
+        );
+        let climate = parse_climate("C", &json).unwrap();
+        let listed: Vec<&str> = climate
+            .entries()
+            .iter()
+            .map(|entry| entry.weather.as_str())
+            .collect();
+        assert_eq!(listed, ["A", "B"]);
+        assert_eq!(climate.initial_weather(), "B");
+        assert_eq!(climate.initial_index(), 1);
+    }
+
+    #[test]
+    fn a_climate_with_only_gated_weathers_is_an_error_naming_it() {
+        let json = climate_json(r#"[{"Weather":"A","Chance":50,"Global":"00FF:Fallout4.esm"}]"#);
+        let error = parse_climate("Clim", &json).unwrap_err();
+        assert!(
+            matches!(&error, ExteriorWeatherError::NoUngatedWeather { climate } if climate == "Clim"),
+            "{error:?}"
+        );
     }
 
     #[test]
@@ -1198,10 +1851,7 @@ mod tests {
         ));
         assert!(matches!(
             parse_climate("Clim", "{ not json"),
-            Err(ExteriorWeatherError::Malformed {
-                what: "climate",
-                ..
-            })
+            Err(ExteriorWeatherError::ClimateMalformed { climate, .. }) if climate == "Clim"
         ));
     }
 
@@ -1221,7 +1871,90 @@ mod tests {
         assert_eq!(slots.moon().unwrap().phase_length(), 4);
     }
 
-    const IMAGE_SPACE_HDR: &str = r#""Hdr":{"EyeAdaptSpeed":3.0,"SunlightScale":1.0,"SkyScale":1.0,"MiddleGray":0.18,"AutoExposureMin":1.6,"AutoExposureMax":3.25}"#;
+    const IMAGE_SPACE_HDR: &str = r#""Hdr":{"EyeAdaptSpeed":3.0,"TonemapE":0.02,"SunlightScale":1.0,"SkyScale":1.0,"MiddleGray":0.18,"AutoExposureMin":1.6,"AutoExposureMax":3.25},"Cinematic":{"Saturation":1.1,"Brightness":0.9,"Contrast":1.2},"Tint":{"Amount":0.2,"Color":{"R":255,"G":128,"B":0}},"Lut":"""#;
+
+    #[test]
+    fn an_image_space_row_carries_its_cinematic_fields_and_its_tint_in_linear_light() {
+        let json = format!("{{{IMAGE_SPACE_HDR}}}");
+        let data: ImageSpaceData = serde_json::from_str(&json).unwrap();
+        assert_eq!(data.hdr.tonemap_e, 0.02);
+        let cinematic = data.cinematic;
+        assert_eq!(
+            (
+                cinematic.saturation,
+                cinematic.brightness,
+                cinematic.contrast
+            ),
+            (1.1, 0.9, 1.2)
+        );
+        assert_eq!(cinematic.tint_amount, 0.2);
+        let half_byte = (128.0_f32 / 255.0).powf(2.2);
+        assert!(
+            cinematic
+                .tint_color
+                .abs_diff_eq(Vec3::new(1.0, half_byte, 0.0), 1e-6)
+        );
+    }
+
+    #[test]
+    fn an_image_space_row_from_before_the_tone_and_cinematic_export_asks_for_a_reinstall() {
+        let json = r#"{"Hdr":{"EyeAdaptSpeed":3.0,"SunlightScale":1.0,"SkyScale":1.0,"MiddleGray":0.18,"AutoExposureMin":1.6,"AutoExposureMax":3.25}}"#;
+        let error = parse_image_space("OldIS", json).unwrap_err();
+        assert!(matches!(
+            &error,
+            ExteriorWeatherError::ImageSpaceFieldsMissing { image_space, missing }
+                if image_space == "OldIS" && *missing == ["TonemapE", "Cinematic", "Tint", "Lut"]
+        ));
+        assert!(
+            error.to_string().contains("re-run the installer"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_image_space_row_from_before_the_lut_export_asks_for_a_reinstall() {
+        let json = format!("{{{IMAGE_SPACE_HDR}}}").replace(r#","Lut":"""#, "");
+        assert!(matches!(
+            parse_image_space("OldIS", &json),
+            Err(ExteriorWeatherError::ImageSpaceFieldsMissing { missing, .. }) if missing == ["Lut"]
+        ));
+    }
+
+    #[test]
+    fn an_image_space_row_names_its_lut_and_an_empty_one_names_none() {
+        let json = format!("{{{IMAGE_SPACE_HDR}}}");
+        assert_eq!(
+            parse_image_space("IS", &json).unwrap().lut,
+            ImageSpaceLut::NONE
+        );
+        let graded = json.replace(
+            r#""Lut":"""#,
+            r#""Lut":"Effects\\LUTs\\LUT_CW_ClearDAY.DDS""#,
+        );
+        assert_eq!(
+            parse_image_space("IS", &graded).unwrap().lut,
+            ImageSpaceLut::named(r"Effects\LUTs\LUT_CW_ClearDAY.DDS")
+        );
+    }
+
+    #[test]
+    fn an_image_space_row_with_a_mistyped_field_is_malformed() {
+        let json = format!("{{{IMAGE_SPACE_HDR}}}")
+            .replace(r#""Saturation":1.1"#, r#""Saturation":"high""#);
+        assert!(matches!(
+            parse_image_space("BadIS", &json),
+            Err(ExteriorWeatherError::ImageSpaceMalformed { .. })
+        ));
+    }
+
+    #[test]
+    fn a_complete_image_space_row_parses() {
+        let json = format!("{{{IMAGE_SPACE_HDR}}}");
+        assert_eq!(
+            parse_image_space("IS", &json).unwrap().cinematic.contrast,
+            1.2
+        );
+    }
 
     #[test]
     fn an_image_space_row_carries_its_depth_of_field_and_vignette() {

@@ -16,10 +16,10 @@ use glam::Vec3;
 use rapier3d::prelude::*;
 
 use super::EntityId;
-use super::dynamic_body::ENGINE_UNITS_PER_METER;
 use super::water_materials::{
     MaterialBuoyancy, WaterBodyProps, buoyancy_multiplier, is_tracked_layer,
 };
+use crate::bethesda_space::ENGINE_UNITS_PER_METER;
 use crate::utils::{env_flag, env_opt};
 
 /// Havok metres per Fallout 4 game unit.
@@ -588,6 +588,15 @@ mod tests {
             drained.len(),
             MAX_PENDING_ENTRIES + 1,
             "draining frees room"
+        );
+    }
+
+    #[test]
+    fn the_engine_metre_is_the_havok_metre_in_engine_units() {
+        let exact = crate::bethesda_space::UNITS_TO_ENGINE / HAVOK_PER_GAME_UNIT;
+        assert!(
+            (ENGINE_UNITS_PER_METER - exact).abs() < 0.01,
+            "a Havok metre is {exact} engine units"
         );
     }
 

@@ -9,25 +9,22 @@
 //! `SurfaceMaterial::Terrain` is first turned into its landscape texture's material hash, which
 //! is `None` when that texture names no material. The event's own `surface` is not read.
 
-pub mod mix;
 pub mod resolve;
 #[cfg(test)]
 mod tests;
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use kira::sound::FromFileError;
-use kira::sound::streaming::StreamingSoundData;
-
-pub use mix::{LayerMix, MixError};
-pub use resolve::{LayerPlay, Resolution, ResolveError, SilentReason, resolve};
+pub use resolve::{Resolution, ResolveError, SilentReason, resolve};
 
 use super::conditions::FreshWorldContext;
-use super::file_probe::{ProbeError, probe_files};
-use super::rng::SplitMix64;
+use super::file_probe::{ProbeError, probe_sounds};
+pub use super::sound_mix::{LayerMix, MixError};
+pub use super::sound_resolve::LayerPlay;
 use crate::assets::db::footsteps::FootstepCatalog;
 use crate::footsteps::FootstepEvent;
+use crate::random::SplitMix64;
 
 /// The tracing target of everything the footsteps decide.
 pub const LOG_TARGET: &str = "openfo4::audio::footsteps";
@@ -36,31 +33,8 @@ pub const LOG_TARGET: &str = "openfo4::audio::footsteps";
 pub enum FootstepError {
     #[error(transparent)]
     Resolve(#[from] ResolveError),
-    #[error("the audio folder {0} is missing; run the installer")]
-    AudioDirectoryMissing(PathBuf),
-    #[error("cannot check {path}: {source}")]
-    FileCheck {
-        path: PathBuf,
-        source: std::io::Error,
-    },
-    #[error(
-        "footstep sound {path} cannot be opened; the installer converts it from the game, \
-         so run the installer again: {source}"
-    )]
-    UnreadableFile {
-        path: PathBuf,
-        source: FromFileError,
-    },
-}
-
-impl From<ProbeError> for FootstepError {
-    fn from(error: ProbeError) -> Self {
-        match error {
-            ProbeError::DirectoryMissing(path) => Self::AudioDirectoryMissing(path),
-            ProbeError::Check { path, source } => Self::FileCheck { path, source },
-            ProbeError::Open { path, source } => Self::UnreadableFile { path, source },
-        }
-    }
+    #[error(transparent)]
+    Probe(#[from] ProbeError),
 }
 
 pub struct Footsteps {
@@ -81,27 +55,7 @@ impl Footsteps {
         seed: u64,
     ) -> Result<Self, FootstepError> {
         let sounds = resolve::reachable_sounds(&catalog)?;
-        let missing_files = probe_files(
-            "footstep sound",
-            sounds
-                .iter()
-                .flat_map(|sound| sound.file_keys.iter().map(String::as_str)),
-            audio_dir,
-            |path| StreamingSoundData::from_file(path).map(|_| ()),
-        )?;
-        for sound in &sounds {
-            if sound
-                .file_keys
-                .iter()
-                .all(|file_key| missing_files.contains(file_key))
-            {
-                tracing::warn!(
-                    target: LOG_TARGET,
-                    "footstep sound {} has no file left; its steps are silent",
-                    sound.descriptor
-                );
-            }
-        }
+        let missing_files = probe_sounds("footstep sound", &sounds, audio_dir)?;
         Ok(Self {
             catalog,
             context: FreshWorldContext::new(0.0, []),

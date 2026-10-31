@@ -44,6 +44,8 @@ namespace AssetConverter.Pipeline
 
         public string StagedMeshes => Path.Combine(StagingRoot, "Meshes");
 
+        public string StagedMaterials => Path.Combine(StagingRoot, "Materials");
+
         public string GameExecutable => Path.Combine(InstallRoot, GameFiles.ExecutableName);
 
         public string LogFile => Path.Combine(InstallRoot, InstallLayout.InstallLogFileName);

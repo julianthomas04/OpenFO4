@@ -21,12 +21,6 @@ pub(super) const GRAVITY_DYN: f32 = 68.59;
 /// mechanism, not sleeping-distance culling.)
 pub(super) const DYN_LINEAR_DAMPING: f32 = 0.2;
 pub(super) const DYN_ANGULAR_DAMPING: f32 = 0.4;
-/// Engine units per real metre (1 unit ≈ 14.3 cm; collision geometry is baked
-/// from Havok metres × 7). rapier is tuned for metre-scale worlds and uses
-/// `IntegrationParameters.length_unit` to keep its internal tolerances (contact
-/// margin, sleep thresholds, CCD) correct at other scales — so it must be told
-/// the world is 7× metre-scale.
-pub(super) const ENGINE_UNITS_PER_METER: f32 = 7.0;
 /// Fallback density for a dynamic body whose sidecar carries no usable Havok
 /// mass (shouldn't happen — `dynamic` implies a positive mass) or whose shapes
 /// have ~zero volume. Rapier's default; mass then derives from shape volume.

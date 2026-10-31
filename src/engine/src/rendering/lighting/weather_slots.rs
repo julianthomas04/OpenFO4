@@ -7,15 +7,16 @@ use glam::Vec3;
 use serde::Deserialize;
 
 use super::ambient::AmbientCube;
-use super::fog::{Fog, FogParams};
-use super::lerp::{Lerp, lerp_fields};
+use super::cell_lighting::StoredColourEncoding;
+use super::fog::measured::BlendedFogColors;
+use super::fog::{ExteriorFog, FogRange};
+use super::lerp::{Lerp, lerp_fields, lerp_stored, snap_to_nearer};
 use super::time_of_day::{
     ClimateMoon, ClimateSky, ClimateSunTextures, ClimateTimes, SlotBlend, TimeSlot,
-    fog_daylight_weight,
 };
+use super::tonemap_settings::{ImageSpaceCinematic, ImageSpaceLut};
 use crate::rendering::post::depth_of_field::ImageSpaceDepthOfField;
 
-pub(super) const SLOT_COUNT: usize = TimeSlot::ALL.len();
 /// The slot the menu background and the first frames are lit with.
 const INITIAL_SLOT: TimeSlot = TimeSlot::Day;
 
@@ -30,6 +31,8 @@ pub struct ImageSpaceHdr {
     pub middle_gray: f32,
     pub auto_exposure_min: f32,
     pub auto_exposure_max: f32,
+    /// The toe numerator of the filmic tone curve.
+    pub tonemap_e: f32,
 }
 
 lerp_fields!(ImageSpaceHdr {
@@ -39,6 +42,7 @@ lerp_fields!(ImageSpaceHdr {
     middle_gray,
     auto_exposure_min,
     auto_exposure_max,
+    tonemap_e,
 });
 
 /// The mode is a bit field, so it snaps to the nearer end instead of blending.
@@ -48,7 +52,7 @@ impl Lerp for ImageSpaceDepthOfField {
             strength: self.strength.lerp(&other.strength, t),
             distance: self.distance.lerp(&other.distance, t),
             range: self.range.lerp(&other.range, t),
-            mode: if t > 0.5 { other.mode } else { self.mode },
+            mode: *snap_to_nearer(&self.mode, &other.mode, t),
             vignette_radius: self.vignette_radius.lerp(&other.vignette_radius, t),
             vignette_strength: self.vignette_strength.lerp(&other.vignette_strength, t),
         }
@@ -65,7 +69,39 @@ impl Default for ImageSpaceHdr {
             middle_gray: 0.18,
             auto_exposure_min: 1.6,
             auto_exposure_max: 3.25,
+            tonemap_e: 0.02,
         }
+    }
+}
+
+/// How the loader decodes each stored colour of a slot. The time slots and a change of weather
+/// blend the sky, sun disc, sunlight, directional ambient and water multiplier colours as stored
+/// and decode the blend once, and the tint as its amount times its decoded colour (see
+/// [`ExteriorWeather::cross_fade`]); the glare and star colours, whose blend is unmeasured, blend
+/// in linear light.
+pub(super) const SKY_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
+pub(super) const SUN_DISC_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
+pub(super) const SUNLIGHT_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
+pub(super) const AMBIENT_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
+pub(super) const TINT_ENCODING: StoredColourEncoding = StoredColourEncoding::Gamma22;
+pub(super) const GLARE_AND_STARS_ENCODING: StoredColourEncoding = StoredColourEncoding::Srgb;
+/// The water's light grows with the stored multiplier byte itself, not with its decoded light.
+pub(super) const WATER_MULTIPLIER_ENCODING: StoredColourEncoding = StoredColourEncoding::Linear;
+
+/// A weather's directional ambient: its six colours as linear light, faces in engine order, and
+/// the scale they light with.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WeatherAmbient {
+    pub colors: AmbientCube,
+    pub scale: f32,
+}
+
+lerp_fields!(WeatherAmbient { colors, scale });
+
+impl WeatherAmbient {
+    /// The light of each face.
+    pub fn cube(&self) -> AmbientCube {
+        self.colors.scaled(self.scale)
     }
 }
 
@@ -79,75 +115,48 @@ pub(super) struct SlotValues {
     pub(super) sky_lower: Vec3,
     pub(super) horizon: Vec3,
     pub(super) stars: Vec3,
-    pub(super) ambient_cube: AmbientCube,
+    pub(super) ambient: WeatherAmbient,
     pub(super) ambient_specular: Vec3,
+    pub(super) water_multiplier: Vec3,
     pub(super) hdr: ImageSpaceHdr,
+    pub(super) cinematic: ImageSpaceCinematic,
+    pub(super) lut: ImageSpaceLut,
     pub(super) depth_of_field: Option<ImageSpaceDepthOfField>,
 }
 
-lerp_fields!(SlotValues {
-    sun_light,
-    sun_disc,
-    sun_glare,
-    sky_upper,
-    sky_lower,
-    horizon,
-    stars,
-    ambient_cube,
-    ambient_specular,
-    hdr,
-    depth_of_field,
-});
-
-/// A fog distance set in engine units.
+/// The colours of a weather's fog in one time slot, with the slot's colour factors, and its
+/// sunlight as stored, 0 to 1. `day_weight` is 1 in the Day slot and 0 in every other.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct FogRange {
-    pub(super) near: f32,
-    pub(super) far: f32,
-    pub(super) power: f32,
-    pub(super) max: f32,
+pub(super) struct SlotFogColors {
+    pub(super) fog: BlendedFogColors,
+    pub(super) sunlight: Vec3,
+    pub(super) day_weight: f32,
 }
 
-lerp_fields!(FogRange {
-    near,
-    far,
-    power,
-    max
+lerp_fields!(SlotFogColors {
+    fog,
+    sunlight,
+    day_weight
 });
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct FogColors {
-    pub(super) near: Vec3,
-    pub(super) far: Vec3,
-}
-
-lerp_fields!(FogColors { near, far });
-
-/// A weather's fog. The colours exist for every slot but the distances only for Day and
-/// Night, which the sample blends by how much daylight the moment has. `None` is a slot without fog.
+/// A weather's fog. The colours exist for every slot but the distances only for Day and Night,
+/// which the time of day weighs later. `None` is a half without fog.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct WeatherFog {
     pub(super) day: Option<FogRange>,
     pub(super) night: Option<FogRange>,
-    pub(super) colors: [FogColors; SLOT_COUNT],
+    pub(super) colors: [SlotFogColors; TimeSlot::COUNT],
 }
 
 impl WeatherFog {
-    /// A fog that is on at one end of the day and off at the other cannot be blended, so it
-    /// snaps at the midpoint of the daylight weight (to Night at exactly one half).
-    fn sample(&self, blend: SlotBlend) -> Fog {
+    fn sample(&self, blend: SlotBlend) -> ExteriorFog {
         let colors = self.colors[blend.from.index()].lerp(&self.colors[blend.to.index()], blend.t);
-        let range = self.night.lerp(&self.day, fog_daylight_weight(&blend));
-        match range {
-            Some(range) => Fog::Enabled(FogParams {
-                near_color: colors.near,
-                far_color: colors.far,
-                near: range.near,
-                far: range.far,
-                power: range.power,
-                max: range.max,
-            }),
-            None => Fog::Disabled,
+        ExteriorFog {
+            colors: colors.fog,
+            sunlight: colors.sunlight,
+            day_weight: colors.day_weight,
+            day: self.day,
+            night: self.night,
         }
     }
 }
@@ -167,16 +176,93 @@ pub struct ExteriorWeather {
     pub horizon: Vec3,
     /// The colour of the star layer; its luminance is the layer's opacity.
     pub stars: Vec3,
-    pub ambient_cube: AmbientCube,
+    pub ambient: WeatherAmbient,
     /// Extracted but not rendered yet.
     pub ambient_specular: Vec3,
+    /// What the water's body colours are multiplied by.
+    pub water_multiplier: Vec3,
     pub hdr: ImageSpaceHdr,
+    pub cinematic: ImageSpaceCinematic,
+    pub lut: ImageSpaceLut,
     /// The image space's depth of field and vignette: what the game's image-space manager
     /// holds for the depth of field effect. `None` when the database predates the export.
     pub depth_of_field: Option<ImageSpaceDepthOfField>,
-    /// `None` when the database carries no fog data for the weather;
-    /// `Fog::Disabled` when the weather explicitly has no fog.
-    pub fog: Option<Fog>,
+    /// `None` when the database carries no fog data for the weather. The time of day resolves
+    /// it into the fog that renders.
+    pub fog: Option<ExteriorFog>,
+}
+
+/// The blend of two weathers at one moment. The names have no midpoint, so they snap to the
+/// nearer weather (to `self` at exactly one half), as a fog half without fog and the depth of
+/// field mode do.
+/// Naming every field keeps one added later from being left out.
+impl Lerp for ExteriorWeather {
+    fn lerp(&self, other: &Self, t: f32) -> Self {
+        let nearer = snap_to_nearer(self, other, t);
+        Self {
+            form_key: Arc::clone(&nearer.form_key),
+            editor_id: nearer.editor_id.clone(),
+            sun_light: Lerp::lerp(&self.sun_light, &other.sun_light, t),
+            sun_disc: Lerp::lerp(&self.sun_disc, &other.sun_disc, t),
+            sun_glare: Lerp::lerp(&self.sun_glare, &other.sun_glare, t),
+            sky_upper: Lerp::lerp(&self.sky_upper, &other.sky_upper, t),
+            sky_lower: Lerp::lerp(&self.sky_lower, &other.sky_lower, t),
+            horizon: Lerp::lerp(&self.horizon, &other.horizon, t),
+            stars: Lerp::lerp(&self.stars, &other.stars, t),
+            ambient: Lerp::lerp(&self.ambient, &other.ambient, t),
+            ambient_specular: Lerp::lerp(&self.ambient_specular, &other.ambient_specular, t),
+            water_multiplier: Lerp::lerp(&self.water_multiplier, &other.water_multiplier, t),
+            hdr: Lerp::lerp(&self.hdr, &other.hdr, t),
+            cinematic: Lerp::lerp(&self.cinematic, &other.cinematic, t),
+            lut: Lerp::lerp(&self.lut, &other.lut, t),
+            depth_of_field: Lerp::lerp(&self.depth_of_field, &other.depth_of_field, t),
+            fog: Lerp::lerp(&self.fog, &other.fog, t),
+        }
+    }
+}
+
+impl ExteriorWeather {
+    /// The weather `t` of the way from this one to `other`, between two time slots or through a
+    /// change of weather. The sky, sun disc, sunlight, directional ambient and water multiplier
+    /// colours blend as the game measurably blends its weather colours: as stored, re-encoded
+    /// exactly as the loader decoded them, then decoded once; the fog colours and the fog's
+    /// sunlight are kept stored already. The tint blends as measured through a change of weather:
+    /// see [`blended_tint_colour`]. Every other value blends as [`Lerp`] blends it.
+    #[must_use]
+    pub fn cross_fade(&self, other: &Self, t: f32) -> Self {
+        let stored = |from, to, encoding| lerp_stored(from, to, t, encoding);
+        let mut blend = self.lerp(other, t);
+        blend.sun_light = stored(self.sun_light, other.sun_light, SUNLIGHT_ENCODING);
+        blend.sun_disc = stored(self.sun_disc, other.sun_disc, SUN_DISC_ENCODING);
+        blend.sky_upper = stored(self.sky_upper, other.sky_upper, SKY_ENCODING);
+        blend.sky_lower = stored(self.sky_lower, other.sky_lower, SKY_ENCODING);
+        blend.horizon = stored(self.horizon, other.horizon, SKY_ENCODING);
+        blend.ambient.colors = AmbientCube(std::array::from_fn(|face| {
+            stored(
+                self.ambient.colors.0[face],
+                other.ambient.colors.0[face],
+                AMBIENT_ENCODING,
+            )
+        }));
+        blend.cinematic.tint_color = blended_tint_colour(&self.cinematic, &other.cinematic, t);
+        blend.water_multiplier = stored(
+            self.water_multiplier,
+            other.water_multiplier,
+            WATER_MULTIPLIER_ENCODING,
+        );
+        blend
+    }
+}
+
+/// The tint colour that, at the blended tint amount, tints the picture by the blend of each
+/// side's amount times its decoded colour, as the game blends the tint of one weather into the
+/// next. Without any tint amount the colour has no effect and blends linearly.
+fn blended_tint_colour(from: &ImageSpaceCinematic, to: &ImageSpaceCinematic, t: f32) -> Vec3 {
+    let amount = from.tint_amount + (to.tint_amount - from.tint_amount) * t;
+    if amount.abs() < f32::EPSILON {
+        return from.tint_color.lerp(to.tint_color, t);
+    }
+    (from.tint_color * from.tint_amount).lerp(to.tint_color * to.tint_amount, t) / amount
 }
 
 /// One weather with the values of all eight time slots, loaded once, and the climate around
@@ -185,7 +271,7 @@ pub struct ExteriorWeather {
 pub struct ExteriorWeatherSlots {
     form_key: Arc<str>,
     editor_id: Option<Arc<str>>,
-    slots: [SlotValues; SLOT_COUNT],
+    slots: [SlotValues; TimeSlot::COUNT],
     fog: Option<WeatherFog>,
     climate_times: ClimateTimes,
     climate_sky: ClimateSky,
@@ -198,7 +284,7 @@ impl ExteriorWeatherSlots {
     pub(super) fn new(
         form_key: &str,
         editor_id: Option<&str>,
-        slots: [SlotValues; SLOT_COUNT],
+        slots: [SlotValues; TimeSlot::COUNT],
         fog: Option<WeatherFog>,
         climate_times: ClimateTimes,
         climate_sky: ClimateSky,
@@ -264,8 +350,15 @@ impl ExteriorWeatherSlots {
 
     /// The weather between two neighbouring slots, `blend.t` of the way from the first.
     pub fn sample(&self, blend: SlotBlend) -> ExteriorWeather {
-        let from = &self.slots[blend.from.index()];
-        let to = &self.slots[blend.to.index()];
+        let mut weather = self
+            .in_slot(blend.from)
+            .cross_fade(&self.in_slot(blend.to), blend.t);
+        weather.fog = self.fog.as_ref().map(|fog| fog.sample(blend));
+        weather
+    }
+
+    /// The weather in one slot, without its fog.
+    fn in_slot(&self, slot: TimeSlot) -> ExteriorWeather {
         let SlotValues {
             sun_light,
             sun_disc,
@@ -274,11 +367,14 @@ impl ExteriorWeatherSlots {
             sky_lower,
             horizon,
             stars,
-            ambient_cube,
+            ambient,
             ambient_specular,
+            water_multiplier,
             hdr,
+            cinematic,
+            lut,
             depth_of_field,
-        } = from.lerp(to, blend.t);
+        } = self.slots[slot.index()].clone();
         ExteriorWeather {
             form_key: Arc::clone(&self.form_key),
             editor_id: self.editor_id.clone(),
@@ -289,11 +385,300 @@ impl ExteriorWeatherSlots {
             sky_lower,
             horizon,
             stars,
-            ambient_cube,
+            ambient,
             ambient_specular,
+            water_multiplier,
             hdr,
+            cinematic,
+            lut,
             depth_of_field,
-            fog: self.fog.as_ref().map(|fog| fog.sample(blend)),
+            fog: None,
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "the blends below land on exactly representable fractions"
+)]
+mod tests {
+    use super::*;
+    use crate::rendering::lighting::fog::measured::ColourFactors;
+    use crate::rendering::lighting::fog::{FogColors, HeightBands};
+
+    /// A weather whose every value is linear in `level`, with a different slope per field, so a
+    /// blend between two levels is the weather at the blended level.
+    fn weather(name: &str, level: f32) -> ExteriorWeather {
+        ExteriorWeather {
+            form_key: name.into(),
+            editor_id: Some(format!("{name}Id").as_str().into()),
+            sun_light: Vec3::splat(level),
+            sun_disc: Vec3::splat(2.0 * level),
+            sun_glare: Vec3::splat(3.0 * level),
+            sky_upper: Vec3::splat(4.0 * level),
+            sky_lower: Vec3::splat(5.0 * level),
+            horizon: Vec3::splat(6.0 * level),
+            stars: Vec3::splat(7.0 * level),
+            ambient: WeatherAmbient {
+                colors: AmbientCube(std::array::from_fn(|face| Vec3::splat(level + face as f32))),
+                scale: 28.0 * level,
+            },
+            ambient_specular: Vec3::splat(8.0 * level),
+            water_multiplier: Vec3::splat(29.0 * level),
+            hdr: ImageSpaceHdr {
+                sunlight_scale: 9.0 * level,
+                sky_scale: 10.0 * level,
+                tonemap_e: 22.0 * level,
+                ..ImageSpaceHdr::default()
+            },
+            cinematic: ImageSpaceCinematic {
+                saturation: 23.0 * level,
+                brightness: 24.0 * level,
+                contrast: 25.0 * level,
+                tint_amount: 26.0 * level,
+                tint_color: Vec3::splat(27.0 * level),
+            },
+            lut: ImageSpaceLut::NONE.lerp(&ImageSpaceLut::named(r"Effects\LUTs\Graded.dds"), level),
+            depth_of_field: Some(ImageSpaceDepthOfField {
+                strength: 11.0 * level,
+                distance: 12.0 * level,
+                range: 13.0 * level,
+                mode: 1,
+                vignette_radius: 14.0 * level,
+                vignette_strength: 15.0 * level,
+            }),
+            fog: Some(ExteriorFog {
+                colors: BlendedFogColors::from_stored(
+                    FogColors::uniform(Vec3::splat(16.0 * level)),
+                    ColourFactors::UNSCALED,
+                ),
+                sunlight: Vec3::splat(17.0 * level),
+                day_weight: level,
+                day: Some(FogRange {
+                    near: 18.0 * level,
+                    far: 19.0 * level,
+                    power: 20.0 * level,
+                    max: 21.0 * level,
+                    height: HeightBands::NONE,
+                }),
+                night: None,
+            }),
+        }
+    }
+
+    /// `weather` with the names of another.
+    fn named(name: &str, weather: &ExteriorWeather) -> ExteriorWeather {
+        ExteriorWeather {
+            form_key: name.into(),
+            editor_id: Some(format!("{name}Id").as_str().into()),
+            ..weather.clone()
+        }
+    }
+
+    #[test]
+    fn a_blend_blends_every_value_of_the_two_weathers() {
+        let blended = weather("Dim", 0.0).lerp(&weather("Bright", 1.0), 0.25);
+        assert_eq!(blended, named("Dim", &weather("Dim", 0.25)));
+    }
+
+    #[test]
+    fn a_blend_starts_at_the_first_weather_and_ends_at_the_second() {
+        let (dim, bright) = (weather("Dim", 0.0), weather("Bright", 1.0));
+        assert_eq!(dim.lerp(&bright, 0.0), dim);
+        assert_eq!(dim.lerp(&bright, 1.0), bright);
+    }
+
+    #[test]
+    fn the_depth_of_field_mode_follows_the_nearer_weather_and_the_first_at_exactly_one_half() {
+        let with_mode = |mode| ExteriorWeather {
+            depth_of_field: weather("Mode", 0.0)
+                .depth_of_field
+                .map(|dof| ImageSpaceDepthOfField { mode, ..dof }),
+            ..weather("Mode", 0.0)
+        };
+        let (first, second) = (with_mode(1), with_mode(2));
+        for (t, mode) in [(0.25, 1), (0.5, 1), (0.75, 2)] {
+            let blended = first.lerp(&second, t);
+            assert_eq!(blended.depth_of_field.unwrap().mode, mode, "{t}");
+        }
+    }
+
+    #[test]
+    fn the_names_follow_the_nearer_weather_and_the_first_at_exactly_one_half() {
+        let (dim, bright) = (weather("Dim", 0.0), weather("Bright", 1.0));
+        for (t, name) in [(0.25, "Dim"), (0.5, "Dim"), (0.75, "Bright")] {
+            let blended = dim.lerp(&bright, t);
+            assert_eq!(&*blended.form_key, name, "{t}");
+            assert_eq!(
+                blended.editor_id.as_deref(),
+                Some(format!("{name}Id").as_str()),
+                "{t}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fog_half_the_weathers_do_not_share_snaps_with_the_names_of_the_nearer_one() {
+        let foggy = weather("Foggy", 1.0);
+        let clear = weather("Clear", 0.0);
+        let clear = ExteriorWeather {
+            fog: clear.fog.map(|fog| ExteriorFog { day: None, ..fog }),
+            ..clear
+        };
+        let day_of = |weather: ExteriorWeather| weather.fog.and_then(|fog| fog.day);
+        assert_eq!(day_of(foggy.lerp(&clear, 0.25)), day_of(foggy.clone()));
+        assert_eq!(day_of(foggy.lerp(&clear, 0.75)), None);
+    }
+
+    /// `weather` with every stored-blended colour decoded from the stored grey `byte` as the
+    /// loader decodes it, and the fog's sunlight kept as stored.
+    fn stored_grey(name: &str, byte: u8) -> ExteriorWeather {
+        let stored = Vec3::splat(f32::from(byte) / 255.0);
+        let base = weather(name, 0.0);
+        let mut weather = ExteriorWeather {
+            sun_light: SUNLIGHT_ENCODING.decode(stored),
+            sun_disc: SUN_DISC_ENCODING.decode(stored),
+            sky_upper: SKY_ENCODING.decode(stored),
+            sky_lower: SKY_ENCODING.decode(stored),
+            horizon: SKY_ENCODING.decode(stored),
+            ambient: WeatherAmbient {
+                colors: AmbientCube([AMBIENT_ENCODING.decode(stored); 6]),
+                scale: 1.0,
+            },
+            water_multiplier: WATER_MULTIPLIER_ENCODING.decode(stored),
+            ..base
+        };
+        weather.fog.as_mut().unwrap().sunlight = stored;
+        weather
+    }
+
+    #[test]
+    fn a_change_of_weather_brings_the_stored_colours_in_as_their_stored_bytes_blend() {
+        let changed = stored_grey("Dark", 48).cross_fade(&stored_grey("Bright", 144), 0.25);
+        // A quarter of the way from byte 48 to 144 is byte 72, decoded by hand.
+        let gamma_72 = Vec3::splat((72.0 / 255.0_f32).powf(2.2));
+        for (name, value, expected) in [
+            ("sunlight", changed.sun_light, gamma_72),
+            ("sun disc", changed.sun_disc, gamma_72),
+            ("sky upper", changed.sky_upper, gamma_72),
+            ("sky lower", changed.sky_lower, gamma_72),
+            ("horizon", changed.horizon, gamma_72),
+            (
+                "water multiplier",
+                changed.water_multiplier,
+                Vec3::splat(72.0 / 255.0),
+            ),
+        ] {
+            assert!(value.abs_diff_eq(expected, 1e-6), "{name}: {value}");
+        }
+        for face in changed.ambient.colors.0 {
+            assert!(face.abs_diff_eq(gamma_72, 1e-6), "ambient: {face}");
+        }
+        let sunlight = changed.fog.unwrap().sunlight;
+        assert!(
+            sunlight.abs_diff_eq(Vec3::splat(72.0 / 255.0), 1e-6),
+            "{sunlight}"
+        );
+    }
+
+    fn tinted(name: &str, amount: f32, rgb8: [u8; 3]) -> ExteriorWeather {
+        let base = weather(name, 0.0);
+        ExteriorWeather {
+            cinematic: ImageSpaceCinematic {
+                tint_amount: amount,
+                tint_color: TINT_ENCODING.decode(Vec3::from_array(rgb8.map(f32::from)) / 255.0),
+                ..base.cinematic
+            },
+            ..base
+        }
+    }
+
+    /// What the tint does to a grey picture, per channel: `1 - amount + amount * colour`.
+    fn grey_multiplier(cinematic: &ImageSpaceCinematic) -> Vec3 {
+        Vec3::splat(1.0 - cinematic.tint_amount) + cinematic.tint_color * cinematic.tint_amount
+    }
+
+    #[test]
+    fn a_change_of_weather_moves_the_tints_effect_on_grey_linearly() {
+        let (red, blue) = (
+            tinted("Red", 1.0, [255, 0, 0]),
+            tinted("Blue", 0.5, [0, 0, 255]),
+        );
+        let (start, end) = (
+            grey_multiplier(&red.cinematic),
+            grey_multiplier(&blue.cinematic),
+        );
+        for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let changed = red.cross_fade(&blue, t).cinematic;
+            assert!((changed.tint_amount - (1.0 - 0.5 * t)).abs() < 1e-6, "{t}");
+            let multiplier = grey_multiplier(&changed);
+            assert!(
+                multiplier.abs_diff_eq(start.lerp(end, t), 1e-6),
+                "{t}: {multiplier}"
+            );
+        }
+    }
+
+    #[test]
+    fn without_any_tint_the_tint_colour_blends_linearly() {
+        let (red, blue) = (
+            tinted("Red", 0.0, [255, 0, 0]),
+            tinted("Blue", 0.0, [0, 0, 255]),
+        );
+        let colour = red.cross_fade(&blue, 0.25).cinematic.tint_color;
+        assert!(
+            colour.abs_diff_eq(Vec3::new(0.75, 0.0, 0.25), 1e-6),
+            "{colour}"
+        );
+    }
+
+    #[test]
+    fn a_change_of_weather_blends_the_other_values_as_a_blend_does() {
+        let (dark, bright) = (weather("Dark", 0.0), weather("Bright", 1.0));
+        let changed = dark.cross_fade(&bright, 0.25);
+        let blended = dark.lerp(&bright, 0.25);
+        assert_eq!(
+            ExteriorWeather {
+                sun_light: blended.sun_light,
+                sun_disc: blended.sun_disc,
+                sky_upper: blended.sky_upper,
+                sky_lower: blended.sky_lower,
+                horizon: blended.horizon,
+                water_multiplier: blended.water_multiplier,
+                ambient: WeatherAmbient {
+                    colors: blended.ambient.colors,
+                    ..changed.ambient
+                },
+                cinematic: ImageSpaceCinematic {
+                    tint_color: blended.cinematic.tint_color,
+                    ..changed.cinematic
+                },
+                ..changed.clone()
+            },
+            blended
+        );
+        assert_eq!(changed.fog.unwrap().colors, blended.fog.unwrap().colors);
+    }
+
+    #[test]
+    fn a_change_of_weather_starts_at_the_first_weather_and_ends_at_the_second() {
+        let (dim, bright) = (weather("Dim", 0.5), weather("Bright", 1.0));
+        let start = dim.cross_fade(&bright, 0.0);
+        let end = dim.cross_fade(&bright, 1.0);
+        assert!(start.sky_upper.abs_diff_eq(dim.sky_upper, 1e-5));
+        assert!(end.sky_upper.abs_diff_eq(bright.sky_upper, 1e-5));
+        assert_eq!(&*end.form_key, "Bright");
+    }
+
+    #[test]
+    fn a_weather_without_fog_data_keeps_without_it_until_the_midpoint() {
+        let unknown = ExteriorWeather {
+            fog: None,
+            ..weather("Unknown", 0.0)
+        };
+        let foggy = weather("Foggy", 1.0);
+        assert_eq!(unknown.lerp(&foggy, 0.25).fog, None);
+        assert_eq!(unknown.lerp(&foggy, 0.75).fog, foggy.fog);
     }
 }

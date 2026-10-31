@@ -1,9 +1,9 @@
 use glam::Vec3;
 
-use super::{ClimateTimes, DayTime, SkyGameSettings};
+use super::{ClimateTimes, DayTime, SkyGameConfig, SkyGameSettings};
 
 /// The Commonwealth's `DefaultClimate`: sunrise 05:00-09:00, sunset 17:00-21:00.
-pub(super) fn default_climate() -> ClimateTimes {
+pub(crate) fn default_climate() -> ClimateTimes {
     ClimateTimes::new(5.0, 9.0, 17.0, 21.0).unwrap()
 }
 
@@ -23,6 +23,11 @@ pub(super) fn vanilla_settings() -> SkyGameSettings {
         10.0,
     )
     .unwrap()
+}
+
+/// The vanilla settings with the vanilla sun alpha transition time and moon sizes.
+pub(crate) fn vanilla_game_config() -> SkyGameConfig {
+    SkyGameConfig::new(vanilla_settings(), 0.15, 90.0, 75.0).unwrap()
 }
 
 pub(super) fn at(days_passed: u32, hour: f32) -> DayTime {

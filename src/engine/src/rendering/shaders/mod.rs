@@ -40,6 +40,7 @@ pub const OBJECT: ShaderSource = ShaderSource {
         include_str!("lamp_shadow.wgsl"),
         include_str!("mip_debug.wgsl"),
         include_str!("texture_feedback.wgsl"),
+        include_str!("fog.wgsl"),
         include_str!("lighting.wgsl"),
         include_str!("surface.wgsl"),
         include_str!("env_reflection.wgsl"),
@@ -63,6 +64,7 @@ pub const TERRAIN: ShaderSource = ShaderSource {
         include_str!("lamp_shadow.wgsl"),
         include_str!("mip_debug.wgsl"),
         include_str!("texture_feedback.wgsl"),
+        include_str!("fog.wgsl"),
         include_str!("lighting.wgsl"),
         include_str!("terrain.wgsl"),
     ),
@@ -74,6 +76,7 @@ pub const SKY: ShaderSource = ShaderSource {
         include_str!("light_data.wgsl"),
         include_str!("frame.wgsl"),
         include_str!("fullscreen.wgsl"),
+        include_str!("sky_gradient.wgsl"),
         include_str!("sky.wgsl"),
     ),
 };
@@ -105,6 +108,15 @@ pub const SKY_STARS: ShaderSource = ShaderSource {
     ),
 };
 
+pub const SKY_CLOUDS: ShaderSource = ShaderSource {
+    label: "sky_clouds_shader",
+    wgsl: concat!(
+        include_str!("light_data.wgsl"),
+        include_str!("frame.wgsl"),
+        include_str!("sky_clouds.wgsl"),
+    ),
+};
+
 pub const TONEMAP: ShaderSource = ShaderSource {
     label: "tonemap_shader",
     wgsl: concat!(
@@ -130,6 +142,16 @@ pub const SKELETON_OVERLAY: ShaderSource = ShaderSource {
         include_str!("light_data.wgsl"),
         include_str!("frame.wgsl"),
         include_str!("skeleton_overlay.wgsl"),
+    ),
+};
+
+pub const RAIN: ShaderSource = ShaderSource {
+    label: "rain_shader",
+    wgsl: concat!(
+        include_str!("light_data.wgsl"),
+        include_str!("frame.wgsl"),
+        include_str!("fog.wgsl"),
+        include_str!("rain.wgsl"),
     ),
 };
 
@@ -253,6 +275,7 @@ pub const SKINNED_OBJECT: ShaderSource = ShaderSource {
         include_str!("lamp_shadow.wgsl"),
         include_str!("mip_debug.wgsl"),
         include_str!("texture_feedback.wgsl"),
+        include_str!("fog.wgsl"),
         include_str!("lighting.wgsl"),
         include_str!("surface.wgsl"),
         include_str!("env_reflection.wgsl"),
@@ -292,9 +315,11 @@ const ALL: &[&ShaderSource] = &[
     &SKY_MOON,
     &SKY_SUN,
     &SKY_STARS,
+    &SKY_CLOUDS,
     &TONEMAP,
     &DEBUG_LINES,
     &SKELETON_OVERLAY,
+    &RAIN,
     &OBJECT_CULL,
     &TERRAIN_CULL,
     &SHADOW,

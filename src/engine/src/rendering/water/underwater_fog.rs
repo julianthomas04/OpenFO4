@@ -13,9 +13,8 @@ use crate::rendering::post::depth_of_field::{ImageSpaceDepthOfField, parse_image
 use crate::utils::warn_once;
 use crate::water_world::Immersion;
 
-/// The `w` of the water multiplier tint: the colour is
-/// `(weather Water Multiplier, 1.0)` or `(1, 1, 1, 1)`.
-const TINT_W: f32 = 1.0;
+/// The `w` of the fog colour register.
+const FOG_COLOUR_W: f32 = 1.0;
 
 /// What a WATR contributes to the fog: the underwater
 /// colour, `pow(byte / 255, 2.2)`, and the three distances. The amount is
@@ -38,11 +37,11 @@ impl UnderwaterFog {
         }
     }
 
-    /// `cb2[4]` = `(colour * tint, tint.w)` and `cb2[5]` = `(far, near, amount, 0)`
-    /// of the fogged pass.
-    pub fn registers(&self, tint: Vec3) -> [Vec4; 2] {
+    /// `cb2[4]` = `(colour, 1)` and `cb2[5]` = `(far, near, amount, 0)` of the fogged pass.
+    /// The weather's water multiplier is not applied: its reach under water is unmeasured.
+    pub fn registers(&self) -> [Vec4; 2] {
         [
-            (self.colour * tint).extend(TINT_W),
+            self.colour.extend(FOG_COLOUR_W),
             Vec4::new(self.far, self.near, self.amount, 0.0),
         ]
     }
@@ -171,11 +170,10 @@ mod tests {
     }
 
     #[test]
-    fn the_registers_are_tinted_colour_with_w_one_then_far_near_amount() {
+    fn the_registers_are_the_untinted_colour_with_w_one_then_far_near_amount() {
         let fog = UnderwaterFog::of_water(&synthetic_water());
-        let tint = Vec3::new(0.5, 2.0, 1.0);
-        let [colour, distances] = fog.registers(tint);
-        assert!(colour.truncate().abs_diff_eq(fog.colour * tint, 1e-7));
+        let [colour, distances] = fog.registers();
+        assert_eq!(colour.truncate(), fog.colour);
         assert_eq!(colour.w, 1.0);
         assert_eq!(distances, Vec4::new(2000.0, -5000.0, 0.5, 0.0));
     }

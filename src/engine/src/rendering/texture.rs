@@ -1,4 +1,10 @@
+use std::io;
+use std::path::Path;
+
 use image::GenericImageView;
+
+use crate::assets::resolve::resolve_below;
+use crate::assets::types::texture::TextureError;
 
 pub struct Texture {
     pub texture: wgpu::Texture,
@@ -135,7 +141,7 @@ pub fn load_dds_view(
     queue: &wgpu::Queue,
     asset_root: &str,
     path: &str,
-) -> Result<wgpu::TextureView, crate::assets::types::texture::TextureError> {
+) -> Result<wgpu::TextureView, TextureError> {
     load_dds_view_as(device, queue, asset_root, path, false)
 }
 
@@ -145,17 +151,18 @@ pub fn load_dds_view_srgb(
     queue: &wgpu::Queue,
     asset_root: &str,
     path: &str,
-) -> Result<wgpu::TextureView, crate::assets::types::texture::TextureError> {
+) -> Result<wgpu::TextureView, TextureError> {
     load_dds_view_as(device, queue, asset_root, path, true)
 }
 
-fn load_dds_view_as(
+/// [`load_dds_view`] or [`load_dds_view_srgb`], by `srgb`.
+pub fn load_dds_view_as(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     asset_root: &str,
     path: &str,
     srgb: bool,
-) -> Result<wgpu::TextureView, crate::assets::types::texture::TextureError> {
+) -> Result<wgpu::TextureView, TextureError> {
     use crate::assets::types::texture;
     let full_path = format!("{asset_root}/{path}");
     let layout = std::sync::Arc::new(texture::read_layout(&full_path)?);
@@ -163,6 +170,54 @@ fn load_dds_view_as(
     let gpu = texture::create_texture(device, &layout, 0, srgb, path);
     texture::write_payload(queue, &gpu, 0, &payload)?;
     Ok(gpu.create_view(&wgpu::TextureViewDescriptor::default()))
+}
+
+/// Why a texture of the install is not on the GPU.
+#[derive(Debug, thiserror::Error)]
+pub enum TextureAssetError {
+    #[error("texture '{key}' is not in the install: {source}")]
+    NotFound {
+        key: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("texture '{key}' cannot be read: {source}")]
+    Unreadable {
+        key: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("texture '{key}' is unusable: {source}")]
+    Unusable {
+        key: String,
+        #[source]
+        source: TextureError,
+    },
+}
+
+/// The sRGB-decoding view of the texture `key` (see `texture_key` in `assets::layout`) below
+/// `asset_root`, which may differ from the stored casing. A file that is not there is told apart
+/// from one that cannot be looked up (permissions, a broken disk).
+pub fn load_texture_asset_srgb(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    asset_root: &str,
+    key: &str,
+) -> Result<wgpu::TextureView, TextureAssetError> {
+    let relative = resolve_below(Path::new(asset_root), key).map_err(|source| {
+        let key = key.to_owned();
+        if source.kind() == io::ErrorKind::NotFound {
+            TextureAssetError::NotFound { key, source }
+        } else {
+            TextureAssetError::Unreadable { key, source }
+        }
+    })?;
+    load_dds_view_srgb(device, queue, asset_root, &relative).map_err(|source| {
+        TextureAssetError::Unusable {
+            key: key.to_owned(),
+            source,
+        }
+    })
 }
 
 #[cfg(test)]
@@ -207,5 +262,92 @@ mod tests {
 
         assert_eq!(plain.texture().format(), wgpu::TextureFormat::Rgba8Unorm);
         assert_eq!(srgb.texture().format(), wgpu::TextureFormat::Rgba8UnormSrgb);
+    }
+
+    #[test]
+    fn a_texture_asset_is_found_below_the_root_whatever_its_casing_and_decodes_srgb() {
+        let Some((device, queue)) = test_device("a_texture_asset_is_found_whatever_its_casing")
+        else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("Folder")).unwrap();
+        write_dds(&dir.path().join("Folder"));
+
+        let view = load_texture_asset_srgb(
+            &device,
+            &queue,
+            dir.path().to_str().unwrap(),
+            "folder\\TEXEL.dds",
+        )
+        .unwrap();
+
+        assert_eq!(view.texture().format(), wgpu::TextureFormat::Rgba8UnormSrgb);
+    }
+
+    #[test]
+    fn a_texture_asset_that_is_not_there_is_not_found_and_names_its_key() {
+        let Some((device, queue)) = test_device("a_texture_asset_that_is_not_there_is_not_found")
+        else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+
+        let error = load_texture_asset_srgb(
+            &device,
+            &queue,
+            dir.path().to_str().unwrap(),
+            "textures\\nothing.dds",
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(&error, TextureAssetError::NotFound { key, .. } if key == "textures\\nothing.dds"),
+            "{error}"
+        );
+        assert!(error.to_string().contains("not in the install"), "{error}");
+    }
+
+    #[test]
+    fn a_texture_asset_behind_a_file_is_unreadable_not_missing() {
+        let Some((device, queue)) = test_device("a_texture_asset_behind_a_file_is_unreadable")
+        else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("textures"),
+            b"a file where a folder belongs",
+        )
+        .unwrap();
+
+        let error = load_texture_asset_srgb(
+            &device,
+            &queue,
+            dir.path().to_str().unwrap(),
+            "textures\\wall_d.dds",
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(error, TextureAssetError::Unreadable { .. }),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_texture_asset_that_is_no_dds_file_is_unusable() {
+        let Some((device, queue)) = test_device("a_texture_asset_that_is_no_dds_file_is_unusable")
+        else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("broken.dds"), b"not a texture").unwrap();
+
+        let error =
+            load_texture_asset_srgb(&device, &queue, dir.path().to_str().unwrap(), "broken.dds")
+                .unwrap_err();
+
+        assert!(matches!(&error, TextureAssetError::Unusable { key, .. } if key == "broken.dds"));
     }
 }
