@@ -202,8 +202,10 @@ function Copy-InstallerResources([string] $Destination) {
         New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
         Copy-Item (Join-Path $RepoRoot $relative) $target
     }
+    $ffdecSources = Join-Path $BuildRoot 'ffdec-package-sources'
+    if (Test-Path -LiteralPath $ffdecSources) { Remove-Item -LiteralPath $ffdecSources -Recurse -Force }
     & (Join-Path $RepoRoot 'tools/ffdec/package.ps1') -Destination (Join-Path $Destination 'third_party/ffdec') `
-        -SourceDestination (Join-Path $BuildRoot 'ffdec-package-sources') | Out-Host
+        -SourceDestination $ffdecSources | Out-Host
     Copy-Librempeg (Join-Path $Destination 'third_party/librempeg')
     Copy-Bink2Decoder (Join-Path $Destination 'third_party/bink2-decoder')
 }
