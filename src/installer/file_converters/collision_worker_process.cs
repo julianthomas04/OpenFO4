@@ -79,6 +79,7 @@ namespace AssetConverter
             worker.RequireExitCodeZero();
             if (!outcome.Sent)
                 throw new InvalidOperationException("The FO4 collision worker exited before it was sent every collision candidate.");
+            worker.Progress.Seal();
             worker.Finish();
         }
 

@@ -51,6 +51,7 @@ namespace AssetConverter.ShaderTranslation.Installation
             {
                 var shaders = ShaderFamilyExpander.Expand(fxp, manifest);
                 InstallProgress.AddTotal(progressPhase, shaders.Count);
+                InstallProgress.SealTotal(progressPhase);
                 var translated = new List<TranslatedShader>(shaders.Count);
                 foreach (var shader in shaders)
                 {

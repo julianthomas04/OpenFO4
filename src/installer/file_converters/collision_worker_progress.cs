@@ -17,6 +17,9 @@ namespace AssetConverter
         private readonly object _lock = new();
         private long _total;
         private long _reported;
+        private long _processed;
+        private bool _finished;
+        private bool _sealed;
 
         public CollisionWorkerProgress(int phase, Action<string>? warn = null)
         {
@@ -36,17 +39,39 @@ namespace AssetConverter
             if (total.Success)
             {
                 if (TryParseCount(total.Groups[1].Value, line, out long count))
+                {
                     AddTotal(count);
+                    Seal();
+                }
                 return;
             }
 
             var done = DoneLine().Match(line);
-            if (done.Success && TryParseCount(done.Groups[1].Value, line, out long processed))
-                ReportDone(processed);
+            if (done.Success && TryParseCount(done.Groups[1].Value, line, out long processedCount))
+                ReportDone(processedCount);
         }
 
         /// <summary>The worker exited successfully: NIFs after its last progress line are done too.</summary>
-        public void Complete() => ReportDone(null);
+        public void Complete()
+        {
+            lock (_lock) _finished = true;
+            ReportDone(null);
+        }
+
+        /// <summary>
+        /// BRIDGE: fixes the total once every NIF is known (the worker's own total line, or the end of a streamed feed) and only then
+        /// ticks what was reported so far; to be replaced by a total known before the worker starts.
+        /// </summary>
+        public void Seal()
+        {
+            lock (_lock)
+            {
+                if (_sealed) return;
+                InstallProgress.SealTotal(_phase);
+                _sealed = true;
+            }
+            ReportDone(null);
+        }
 
         private bool TryParseCount(string digits, string line, out long count)
         {
@@ -68,7 +93,9 @@ namespace AssetConverter
             long delta;
             lock (_lock)
             {
-                delta = Math.Min(done ?? _total, _total) - _reported;
+                if (done is { } processed) _processed = Math.Max(_processed, processed);
+                if (!_sealed) return;
+                delta = Math.Min(_finished ? _total : _processed, _total) - _reported;
                 if (delta <= 0) return;
                 _reported += delta;
             }

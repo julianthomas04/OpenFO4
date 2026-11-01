@@ -54,6 +54,7 @@ namespace AssetConverter
             Console.WriteLine($"Loading ESM from: {path}");
             using var memory = await Memory.ReserveAsync(MemoryEstimates.EsmImportBytes, ct).ConfigureAwait(false);
             await EsmTiming.RunReportedAsync(() => ImportAsync(path)).ConfigureAwait(false);
+            DeferredPhaseProgress.Flush(progressPhase);
         }
 
         private async Task ImportAsync(string path)
@@ -244,7 +245,7 @@ namespace AssetConverter
                 return;
             }
             if (list.Count == 0) return;
-            InstallProgress.AddTotal(_progressPhase, list.Count);
+            DeferredPhaseProgress.AddTotal(_progressPhase, list.Count);
             InstallProgress.SetDetail(_progressPhase, recordType);
             Console.WriteLine($"Processing {typeof(T).Name} ({list.Count} records)...");
             await processor.ProcessRecordsAsync(list, recordType, conn, transaction, progressPhase: _progressPhase, ct: _ct);
@@ -254,7 +255,7 @@ namespace AssetConverter
         {
             var list = worldspaces.ToList();
             if (list.Count == 0) return;
-            InstallProgress.AddTotal(_progressPhase, list.Count);
+            DeferredPhaseProgress.AddTotal(_progressPhase, list.Count);
             InstallProgress.SetDetail(_progressPhase, "WRLD");
             Console.WriteLine($"Processing Worldspaces ({list.Count} records)...");
 
@@ -284,7 +285,7 @@ namespace AssetConverter
             if (file.Cells != null) ExtractCellsRecursive(file.Cells, topCells);
             if (topCells.Count == 0) return;
 
-            InstallProgress.AddTotal(_progressPhase, topCells.Count);
+            DeferredPhaseProgress.AddTotal(_progressPhase, topCells.Count);
             InstallProgress.SetDetail(_progressPhase, "CELL (interiors)");
             Console.WriteLine($"Processing Top-Level Cells ({topCells.Count})...");
             var cellProcessor = new CellProcessor(null, precombinedSet, refrSwaps, waterCurrents);
@@ -309,7 +310,7 @@ namespace AssetConverter
                 if (wrld.SubCells != null) ExtractCellsRecursive(wrld.SubCells, cells);
                 if (cells.Count == 0) continue;
 
-                InstallProgress.AddTotal(_progressPhase, cells.Count);
+                DeferredPhaseProgress.AddTotal(_progressPhase, cells.Count);
                 InstallProgress.SetDetail(_progressPhase, $"CELL ({wrld.EditorID ?? wrld.FormKey.ToString()})");
                 Console.WriteLine($"  Processing {cells.Count} cells in worldspace {wrld.FormKey}...");
                 var cellProcessor = new CellProcessor(wrld.FormKey.ToString(), precombinedSet, refrSwaps, waterCurrents);
@@ -950,7 +951,7 @@ namespace AssetConverter
                     BeginRecord(formKeys[i], editorIds[i]);
                     await ProcessSpecificRecordAsync(list[i], formKeys[i], conn, transaction);
                     TotalProcessed++;
-                    InstallProgress.Tick(progressPhase);
+                    DeferredPhaseProgress.Tick(progressPhase);
                     if (!silent && TotalProcessed % 5000 == 0)
                         Console.WriteLine($"  {TotalProcessed}/{total} {recordType} ({(100.0 * TotalProcessed / total):F1}%) — {sw.Elapsed:mm\\:ss} elapsed");
                 }
@@ -2205,7 +2206,7 @@ namespace AssetConverter
                 BatchInsert.Execute(conn, transaction, "cells",
                     EsmColumns.Cells,
                     cellRows);
-                InstallProgress.Tick(progressPhase, cellCount);
+                DeferredPhaseProgress.Tick(progressPhase, cellCount);
 
                 // ── Phase 1: Flatten all placed objects (sequential Mutagen reads) ──
                 var allPlaced = new List<PlacedObjectRow>(capacity: 600_000);
@@ -2230,8 +2231,8 @@ namespace AssetConverter
                         poRows[i] = allPlaced[i].ToPlacedObjectValues();
                     }
                     // Every row is inserted into placed_objects and records (REFR), plus one teleport row per door destination.
-                    InstallProgress.AddTotal(progressPhase, 2L * poCount + allTeleports.Count);
-                    Action<int> rowsInserted = count => InstallProgress.Tick(progressPhase, count);
+                    DeferredPhaseProgress.AddTotal(progressPhase, 2L * poCount + allTeleports.Count);
+                    Action<int> rowsInserted = count => DeferredPhaseProgress.Tick(progressPhase, count);
                     BatchInsert.Execute(conn, transaction, "placed_objects",
                         EsmColumns.PlacedObjects,
                         poRows, rowsInserted);
@@ -2273,14 +2274,14 @@ namespace AssetConverter
                     .Select(ci => (CellFormKey: cellFormKeys[ci], Landscape: list[ci].Landscape))
                     .Where(cell => cell.Landscape != null)
                     .ToList();
-                InstallProgress.AddTotal(progressPhase, landscapes.Count);
+                DeferredPhaseProgress.AddTotal(progressPhase, landscapes.Count);
                 foreach (var (cellFormKey, landscape) in landscapes)
                 {
                     var landProcessor = new LandscapeProcessor();
                     landProcessor.CellFormKey = cellFormKey;
                     await landProcessor.ProcessRecordsAsync(new[] { landscape! }, "LAND", conn, transaction, true, ct: ct);
                     _landscapesProcessed++;
-                    InstallProgress.Tick(progressPhase);
+                    DeferredPhaseProgress.Tick(progressPhase);
                 }
                 EsmTiming.Add("cells.landscapes", landscapesStart, _landscapesProcessed);
 

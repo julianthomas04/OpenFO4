@@ -17,11 +17,17 @@ namespace AssetConverter.Pipeline
             InstallerResources? resources = null;
             await InstallProgress.RunLane(InstallSteps.UnpackLane, () => Task.Run(() =>
             {
-                int phase = InstallProgress.BeginPhase(InstallSteps.UnpackPayload, 0);
-                resources = resolve(new UnpackProgress(count => InstallProgress.AddTotal(phase, count), () => InstallProgress.Tick(phase)));
+                int phase = InstallProgress.BeginPhase(InstallSteps.UnpackPayload, null);
+                resources = resolve(new UnpackProgress(count => AnnounceFiles(phase, count), () => InstallProgress.Tick(phase)));
                 InstallProgress.EndPhase(phase);
             })).ConfigureAwait(false);
             return resources!;
+        }
+
+        private static void AnnounceFiles(int phase, long count)
+        {
+            InstallProgress.AddTotal(phase, count);
+            InstallProgress.SealTotal(phase);
         }
     }
 }

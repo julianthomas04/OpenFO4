@@ -198,7 +198,7 @@ namespace AssetConverter.Pipeline
         /// <param name="onEsmCopied">Called as soon as the local ESM is complete, while the INIs are still copied.</param>
         public void CopyGameData(Action onEsmCopied)
         {
-            int phase = InstallProgress.BeginPhase(InstallSteps.CopyGameData, 3);
+            int phase = InstallProgress.BeginPhase(InstallSteps.CopyGameData, InstallSteps.CopyGameDataTotal);
             InstallProgress.SetDetail(phase, "Fallout4.esm");
             CopyEsm();
             _ct.ThrowIfCancellationRequested();
@@ -217,17 +217,22 @@ namespace AssetConverter.Pipeline
         /// </summary>
         public void ExtractInterfaceAssets()
         {
-            int phase = InstallProgress.BeginPhase(InstallSteps.ExtractInterface, 0);
-            RunExtraction(phase, "UI fonts", () => FontExtractor.Extract(_paths.Fo4Location, _paths.SettingsDirectory, _paths.StagingRoot, _paths.FontsOut, _memory, _ct));
-            RunExtraction(phase, "UI layout", () => UiLayoutExtractor.Extract(_paths.Fo4Location, _paths.SettingsDirectory, _paths.UiLayoutOut));
-            RunExtraction(phase, "Pip-Boy art", () => PipboyArtExtractor.Extract(_paths.Fo4Location, _paths.StagingRoot, _paths.PipboyArtOut, _memory, _ct));
+            int phase = InstallProgress.BeginPhase(InstallSteps.ExtractInterface, null);
+            int extracted = 0;
+            if (RunExtraction(phase, "UI fonts", () => FontExtractor.Extract(_paths.Fo4Location, _paths.SettingsDirectory, _paths.StagingRoot, _paths.FontsOut, _memory, _ct))) extracted++;
+            if (RunExtraction(phase, "UI layout", () => UiLayoutExtractor.Extract(_paths.Fo4Location, _paths.SettingsDirectory, _paths.UiLayoutOut))) extracted++;
+            if (RunExtraction(phase, "Pip-Boy art", () => PipboyArtExtractor.Extract(_paths.Fo4Location, _paths.StagingRoot, _paths.PipboyArtOut, _memory, _ct))) extracted++;
+            // BRIDGE: the extractors cannot be planned yet, so the total is only known after all three ran.
+            InstallProgress.AddTotal(phase, extracted);
+            InstallProgress.SealTotal(phase);
+            InstallProgress.Tick(phase, extracted);
             InstallProgress.EndPhase(phase);
         }
 
         /// <summary>FO4's shaders: Shaders.ba2 -> DXBC -> WGSL the engine composes with its own wrappers.</summary>
         public void TranslateShaders()
         {
-            int phase = InstallProgress.BeginPhase(InstallSteps.ConvertShaders, 0);
+            int phase = InstallProgress.BeginPhase(InstallSteps.ConvertShaders, null);
             ShaderTranslateStep.Run(_paths.Fo4Location, _paths.AssetsRoot, InstallerPaths.Require(ShaderManifestReader.RepoRelativePath), phase, _ct);
             _ct.ThrowIfCancellationRequested();
             InstallProgress.EndPhase(phase);
@@ -311,7 +316,9 @@ namespace AssetConverter.Pipeline
             InstallOperations.UseEffectShaderCatalog(_paths.Fo4Location);
             int converted = NifConverter.ConvertToGltfBatched(_paths.StagedMeshes, _paths.MeshesOut, meshes, bgsmScanRoot: _paths.StagingRoot,
                 progressPhase: phase, priorityFiles: skeletons, ct: _ct, memory: _memory);
-            InstallProgress.AddTotal(phase, converted - expected);
+            // BRIDGE: the total is sealed up front now, so a mismatch can only be reported; to be replaced by the planned warning.
+            if (converted != expected)
+                Console.Error.WriteLine($"WARNING: converted {converted:N0} meshes, expected {expected:N0}.");
             _ct.ThrowIfCancellationRequested();
             InstallProgress.EndPhase(phase);
         }
@@ -326,7 +333,7 @@ namespace AssetConverter.Pipeline
         /// </summary>
         public void ExtractCollision()
         {
-            int phase = InstallProgress.BeginPhase(InstallSteps.ExtractCollision, 0);
+            int phase = InstallProgress.BeginPhase(InstallSteps.ExtractCollision, null);
             CollisionSidecars.PurgeIfStale(_paths.MeshesOut, _ct);
             NifConverter.ExtractFo4Collision(_paths.StagedMeshes, _paths.MeshesOut, CollisionWork, phase, _memory, _ct);
             CollisionSidecars.RecordCurrent(_paths.MeshesOut);
@@ -363,7 +370,7 @@ namespace AssetConverter.Pipeline
         /// </summary>
         public void BakePalettes()
         {
-            int phase = InstallProgress.BeginPhase(InstallSteps.BakePalettes, 1);
+            int phase = InstallProgress.BeginPhase(InstallSteps.BakePalettes, InstallSteps.BakePalettesTotal);
             PaletteBaker.BakeAll(_paths.StagingRoot, _paths.TexturesOut, _ct);
             _ct.ThrowIfCancellationRequested();
             InstallProgress.Tick(phase);
@@ -378,7 +385,7 @@ namespace AssetConverter.Pipeline
                 Strings = new StringTableSet(StringTables.Directory(_paths.StagingRoot), Language),
                 Memory = _memory,
             };
-            int phase = InstallProgress.BeginPhase(InstallSteps.BuildDatabase, 0);
+            int phase = InstallProgress.BeginPhase(InstallSteps.BuildDatabase, null);
             await loader.LoadESMAsync(_paths.StagedEsm, ct: _ct, progressPhase: phase).ConfigureAwait(false);
             InstallProgress.EndPhase(phase);
         }
@@ -386,7 +393,7 @@ namespace AssetConverter.Pipeline
         /// <summary>Reads only the game's archives; the database write waits for <see cref="FinalizeDatabase"/>.</summary>
         public LodWaterHeights ScanLodWater()
         {
-            int phase = InstallProgress.BeginPhase(InstallSteps.ScanLodWater, 1);
+            int phase = InstallProgress.BeginPhase(InstallSteps.ScanLodWater, InstallSteps.ScanLodWaterTotal);
             var heights = LodWaterStage.Scan(_paths.GameDataDirectory, _ct);
             _ct.ThrowIfCancellationRequested();
             InstallProgress.Tick(phase);
@@ -445,7 +452,7 @@ namespace AssetConverter.Pipeline
         /// </summary>
         public StagingRemovalResult RemoveStaging()
         {
-            int phase = InstallProgress.BeginPhase(InstallSteps.RemoveStaging, 0);
+            int phase = InstallProgress.BeginPhase(InstallSteps.RemoveStaging, null);
             var elapsed = System.Diagnostics.Stopwatch.StartNew();
             var result = StagingRemoval.Run(_paths.StagingRoot, phase, ct: _ct);
             Console.WriteLine($"Removed temporary files: {result.FilesRemoved:N0} files and {result.FoldersRemoved:N0} folders in {ProgressFormatter.Invariant.Duration(elapsed.Elapsed)}.");
@@ -474,15 +481,13 @@ namespace AssetConverter.Pipeline
         }
 
         /// <summary>Counts the item as work only when <paramref name="extract"/> did extract it, so a step with everything cached shows as skipped.</summary>
-        private void RunExtraction(int phase, string detail, Func<bool> extract)
+        private bool RunExtraction(int phase, string detail, Func<bool> extract)
         {
             _ct.ThrowIfCancellationRequested();
             InstallProgress.SetDetail(phase, detail);
             bool extracted = extract();
             _ct.ThrowIfCancellationRequested();
-            if (!extracted) return;
-            InstallProgress.AddTotal(phase, 1);
-            InstallProgress.Tick(phase);
+            return extracted;
         }
 
         private void RunFinalizeStep(int phase, string detail, Action step)
