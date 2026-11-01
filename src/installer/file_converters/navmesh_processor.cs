@@ -60,7 +60,24 @@ namespace AssetConverter
 
         private static RecordJob NavMeshJob() => new(
             ["navigation_meshes"], ["NAVM", LegacyNavMeshRecordType],
-            (loader, context, conn, transaction) => loader.ProcessNavMeshesAsync(context.File, conn, transaction));
+            (loader, context, conn, transaction) => loader.ProcessNavMeshesAsync(context.File, conn, transaction),
+            CountWork: (loader, file) => loader.CountNavMeshes(file));
+
+        // Only the meshes that survive validation are ticked, so the count prepares them (encoding each) and drops the result;
+        // the load prepares them again. A systemic failure surfaces here, with the errors the load would have printed.
+        private long CountNavMeshes(IFallout4ModGetter file)
+        {
+            var errors = new StringWriter();
+            try
+            {
+                return PreparedNavMeshes.From(EnumerateCellScopes(file), errors, NavMeshMaxSkippedFraction).Entries.Count;
+            }
+            catch (NavMeshExtractionException)
+            {
+                Console.Error.Write(errors);
+                throw;
+            }
+        }
 
         private async Task ProcessNavMeshesAsync(IFallout4ModGetter file, SqliteConnection conn, SqliteTransaction? transaction)
         {

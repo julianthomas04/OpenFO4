@@ -54,7 +54,6 @@ namespace AssetConverter
             Console.WriteLine($"Loading ESM from: {path}");
             using var memory = await Memory.ReserveAsync(MemoryEstimates.EsmImportBytes, ct).ConfigureAwait(false);
             await EsmTiming.RunReportedAsync(() => ImportAsync(path)).ConfigureAwait(false);
-            DeferredPhaseProgress.Flush(progressPhase);
         }
 
         private async Task ImportAsync(string path)
@@ -73,6 +72,8 @@ namespace AssetConverter
             // links) need only the file bytes — start them now so they run
             // under Wave 1 instead of serializing after it.
             var rawScansTask = Task.Run(() => ScanRawEsm(path));
+
+            await DiscoverAndSealTotalAsync(file);
 
             await dbManager.Connection.ExecuteAsync("PRAGMA foreign_keys = OFF");
             Console.WriteLine("Wave 1: processing all independent record groups in parallel...");
@@ -237,15 +238,12 @@ namespace AssetConverter
         {
             List<T> list;
             try { list = records.ToList(); }
-            catch (Exception ex) when (
-                ex.Message.Contains("Unknown major record type") ||
-                (ex.InnerException?.Message.Contains("Unknown major record type") ?? false))
+            catch (Exception ex) when (IsUnknownRecordType(ex))
             {
                 Console.WriteLine($"Skipping {typeof(T).Name} — not a Fallout 4 record type.");
                 return;
             }
             if (list.Count == 0) return;
-            DeferredPhaseProgress.AddTotal(_progressPhase, list.Count);
             InstallProgress.SetDetail(_progressPhase, recordType);
             Console.WriteLine($"Processing {typeof(T).Name} ({list.Count} records)...");
             await processor.ProcessRecordsAsync(list, recordType, conn, transaction, progressPhase: _progressPhase, ct: _ct);
@@ -255,7 +253,6 @@ namespace AssetConverter
         {
             var list = worldspaces.ToList();
             if (list.Count == 0) return;
-            DeferredPhaseProgress.AddTotal(_progressPhase, list.Count);
             InstallProgress.SetDetail(_progressPhase, "WRLD");
             Console.WriteLine($"Processing Worldspaces ({list.Count} records)...");
 
@@ -281,11 +278,9 @@ namespace AssetConverter
             HashSet<string> precombinedSet, Dictionary<string, string> refrSwaps, Dictionary<string, string> waterCurrents)
         {
             _ct.ThrowIfCancellationRequested();
-            var topCells = new List<ICellGetter>();
-            if (file.Cells != null) ExtractCellsRecursive(file.Cells, topCells);
+            var topCells = TopLevelCells(file);
             if (topCells.Count == 0) return;
 
-            DeferredPhaseProgress.AddTotal(_progressPhase, topCells.Count);
             InstallProgress.SetDetail(_progressPhase, "CELL (interiors)");
             Console.WriteLine($"Processing Top-Level Cells ({topCells.Count})...");
             var cellProcessor = new CellProcessor(null, precombinedSet, refrSwaps, waterCurrents);
@@ -301,16 +296,10 @@ namespace AssetConverter
             foreach (var wrld in worldspaces)
             {
                 _ct.ThrowIfCancellationRequested();
-                var cells = new List<ICellGetter>();
-                if (wrld.TopCell != null)
-                {
-                    cells.Add(wrld.TopCell);
-                    topCellKeys.Add(wrld.TopCell.FormKey.ToString());
-                }
-                if (wrld.SubCells != null) ExtractCellsRecursive(wrld.SubCells, cells);
+                var cells = WorldspaceCells(wrld);
+                if (wrld.TopCell != null) topCellKeys.Add(wrld.TopCell.FormKey.ToString());
                 if (cells.Count == 0) continue;
 
-                DeferredPhaseProgress.AddTotal(_progressPhase, cells.Count);
                 InstallProgress.SetDetail(_progressPhase, $"CELL ({wrld.EditorID ?? wrld.FormKey.ToString()})");
                 Console.WriteLine($"  Processing {cells.Count} cells in worldspace {wrld.FormKey}...");
                 var cellProcessor = new CellProcessor(wrld.FormKey.ToString(), precombinedSet, refrSwaps, waterCurrents);
@@ -951,7 +940,7 @@ namespace AssetConverter
                     BeginRecord(formKeys[i], editorIds[i]);
                     await ProcessSpecificRecordAsync(list[i], formKeys[i], conn, transaction);
                     TotalProcessed++;
-                    DeferredPhaseProgress.Tick(progressPhase);
+                    InstallProgress.Tick(progressPhase);
                     if (!silent && TotalProcessed % 5000 == 0)
                         Console.WriteLine($"  {TotalProcessed}/{total} {recordType} ({(100.0 * TotalProcessed / total):F1}%) — {sw.Elapsed:mm\\:ss} elapsed");
                 }
@@ -2206,7 +2195,7 @@ namespace AssetConverter
                 BatchInsert.Execute(conn, transaction, "cells",
                     EsmColumns.Cells,
                     cellRows);
-                DeferredPhaseProgress.Tick(progressPhase, cellCount);
+                InstallProgress.Tick(progressPhase, cellCount);
 
                 // ── Phase 1: Flatten all placed objects (sequential Mutagen reads) ──
                 var allPlaced = new List<PlacedObjectRow>(capacity: 600_000);
@@ -2230,9 +2219,8 @@ namespace AssetConverter
                     {
                         poRows[i] = allPlaced[i].ToPlacedObjectValues();
                     }
-                    // Every row is inserted into placed_objects and records (REFR), plus one teleport row per door destination.
-                    DeferredPhaseProgress.AddTotal(progressPhase, 2L * poCount + allTeleports.Count);
-                    Action<int> rowsInserted = count => DeferredPhaseProgress.Tick(progressPhase, count);
+                    // Every row is ticked for placed_objects and records (REFR), plus one teleport row per door destination (see CellWorkCounts.Units).
+                    Action<int> rowsInserted = count => InstallProgress.Tick(progressPhase, count);
                     BatchInsert.Execute(conn, transaction, "placed_objects",
                         EsmColumns.PlacedObjects,
                         poRows, rowsInserted);
@@ -2274,14 +2262,13 @@ namespace AssetConverter
                     .Select(ci => (CellFormKey: cellFormKeys[ci], Landscape: list[ci].Landscape))
                     .Where(cell => cell.Landscape != null)
                     .ToList();
-                DeferredPhaseProgress.AddTotal(progressPhase, landscapes.Count);
                 foreach (var (cellFormKey, landscape) in landscapes)
                 {
                     var landProcessor = new LandscapeProcessor();
                     landProcessor.CellFormKey = cellFormKey;
                     await landProcessor.ProcessRecordsAsync(new[] { landscape! }, "LAND", conn, transaction, true, ct: ct);
                     _landscapesProcessed++;
-                    DeferredPhaseProgress.Tick(progressPhase);
+                    InstallProgress.Tick(progressPhase);
                 }
                 EsmTiming.Add("cells.landscapes", landscapesStart, _landscapesProcessed);
 
@@ -2306,9 +2293,7 @@ namespace AssetConverter
         {
             foreach (var obj in objects)
             {
-                // Deleted refs (record flag 0x20) never spawn in-game. Vanilla
-                // Fallout4.esm contains none; DLC/mod plugins can.
-                if ((obj.MajorRecordFlagsRaw & 0x20) != 0) continue;
+                if (!PlacedReferences.TryGetBase(obj, out string baseObj)) continue;
 
                 // No `dynamic` anywhere below: Mutagen binary overlays implement
                 // getters the runtime binder cannot bind (and float? -> float
@@ -2317,11 +2302,6 @@ namespace AssetConverter
                 // non-1.0 refs flattened to 1.0) and every XESP enable parent.
                 // IPlacedObjectGetter / IPlacedNpcGetter are sibling interfaces;
                 // each field needs explicit `is` branches.
-                string baseObj = "";
-                if (obj is IPlacedObjectGetter bPo && !bPo.Base.IsNull) baseObj = bPo.Base.FormKey.ToString();
-                else if (obj is IPlacedNpcGetter bNpc && !bNpc.Base.IsNull) baseObj = bNpc.Base.FormKey.ToString();
-                if (string.IsNullOrEmpty(baseObj)) continue;
-
                 float px = 0, py = 0, pz = 0, rx = 0, ry = 0, rz = 0, scale = 1;
                 if (obj is IPlacedObjectGetter pPo)
                 {
@@ -2375,13 +2355,7 @@ namespace AssetConverter
 
                 string? materialSwap = refrSwaps.TryGetValue(obj.FormKey.ToString(), out var swapKey) ? swapKey : null;
 
-                // XTEL: load-door teleport. Only IPlacedObjectGetter carries it (ACHR/PlacedNpc
-                // cannot). The filter is "has a non-null destination door link" — NOT base==DOOR,
-                // so modded teleport activators are kept. Resolution of the destination cell is
-                // left to the runtime (via destination_ref -> placed_objects.cell_form_key).
-                if (obj is IPlacedObjectGetter teleObj
-                    && teleObj.TeleportDestination is { } dest
-                    && !dest.Door.IsNull)
+                if (PlacedReferences.TryGetTeleport(obj, out var dest))
                 {
                     teleports.Add(new TeleportRow(
                         obj.FormKey.ToString(), dest.Door.FormKey.ToString(),
