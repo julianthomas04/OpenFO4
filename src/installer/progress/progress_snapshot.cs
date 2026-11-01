@@ -37,7 +37,7 @@ namespace AssetConverter.Progress
         public bool IsPreparing { get; init; }
 
         /// <summary>Whether <see cref="Total"/> can no longer change: for a step that has not begun, only when its total was declared up front.</summary>
-        public bool TotalIsFinal { get; init; } = true;
+        public required bool TotalIsFinal { get; init; }
 
         /// <summary>A step that finished without ever having work: it never started, or its phases ended with no total and nothing completed.</summary>
         public bool WasSkipped => Status == StepStatus.Done && (StartedAt == null || (Total <= 0 && Completed <= 0));

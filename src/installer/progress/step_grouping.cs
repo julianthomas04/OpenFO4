@@ -20,13 +20,14 @@ namespace AssetConverter.Progress
             var units = parts.Select(p => p.Unit).Where(u => u != null).Distinct().ToList();
             bool totalIsFinal = parts.All(p => p.TotalIsFinal);
             bool preparing = IsPreparing(status, parts);
+            bool hideCounters = !totalIsFinal && status is StepStatus.Running or StepStatus.Pending;
 
             return new StepSnapshot(
                 name,
                 units.Count == 1 ? units[0] : MixedUnit,
                 status,
-                totalIsFinal ? parts.Sum(p => p.Completed) : 0,
-                totalIsFinal ? parts.Sum(p => p.Total) : 0,
+                hideCounters ? 0 : parts.Sum(p => p.Completed),
+                hideCounters ? 0 : parts.Sum(p => p.Total),
                 parts.FirstOrDefault(p => p.Status == StepStatus.Running && p.Detail != null)?.Detail,
                 startedAt,
                 finishedAt,

@@ -56,6 +56,7 @@ namespace AssetConverter.Progress
             {
                 if (_state != RunState.Running) return -1;
                 var step = FindStep(name) ?? AddStep(new StepDefinition(name, unit));
+                RequireTotalMayStillChange(step, total);
                 if (step.DeclaredTotal is { } declared)
                 {
                     if (total != declared)
@@ -80,6 +81,18 @@ namespace AssetConverter.Progress
                 }
                 return id;
             }
+        }
+
+        /// <summary>A step's progress never goes backwards: once it is done, has ticks, or has a final total, a phase that would reopen, grow or unseal it is rejected.</summary>
+        private static void RequireTotalMayStillChange(StepState step, long? newTotal)
+        {
+            if (step.Status == StepStatus.Done)
+                throw new InvalidOperationException($"Step '{step.Name}' is done and cannot begin another phase.");
+            if (step.Status != StepStatus.Running) return;
+            if (Interlocked.Read(ref step.Completed) > 0)
+                throw new InvalidOperationException($"Step '{step.Name}' has already made progress, its total can no longer change.");
+            if (newTotal == null && step.UnsealedPhases == 0)
+                throw new InvalidOperationException($"Step '{step.Name}' has a final total and cannot go back to discovering.");
         }
 
         /// <summary>
