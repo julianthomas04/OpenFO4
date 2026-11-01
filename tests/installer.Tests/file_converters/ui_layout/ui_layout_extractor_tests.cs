@@ -178,6 +178,55 @@ namespace InstallerTests.UiLayout
         }
 
         [Fact]
+        public void Plan_NothingWrittenYet_HasPendingWorkAndWritesNothingUntilItRuns()
+        {
+            var pending = UiLayoutExtractor.Plan(Entries(), "xx", OutDir);
+
+            Assert.NotNull(pending);
+            Assert.Equal("UI layout", pending.Detail);
+            Assert.False(Directory.Exists(OutDir));
+
+            pending.Run();
+
+            Assert.True(File.Exists(Path.Combine(OutDir, "Menu.json")));
+        }
+
+        [Fact]
+        public void Plan_EveryDocumentCurrent_HasNoPendingWork()
+        {
+            Convert(Entries());
+
+            Assert.Null(UiLayoutExtractor.Plan(Entries(), "xx", OutDir));
+        }
+
+        [Fact]
+        public void Plan_ChangedMovie_HasPendingWorkThatConvertsIt()
+        {
+            Convert(Entries());
+            var changed = Entries().Select(e => e.Path.EndsWith("Menu.swf", StringComparison.Ordinal) ? (e.Path, Movie(frameRate: 12)) : e).ToList();
+
+            var pending = UiLayoutExtractor.Plan(changed, "xx", OutDir);
+            Assert.NotNull(pending);
+            pending.Run();
+
+            Assert.Equal(12, Read("Menu.json").GetProperty("fps").GetDouble());
+        }
+
+        [Fact]
+        public void Plan_OnlyADocumentOfAMovieNoLongerShipped_HasPendingWorkThatDeletesIt()
+        {
+            Convert(Entries((@"Interface\Old.swf", Movie())));
+
+            var pending = UiLayoutExtractor.Plan(Entries(), "xx", OutDir);
+            Assert.NotNull(pending);
+            Assert.True(File.Exists(Path.Combine(OutDir, "Old.json")));
+            pending.Run();
+
+            Assert.False(File.Exists(Path.Combine(OutDir, "Old.json")));
+            Assert.Null(UiLayoutExtractor.Plan(Entries(), "xx", OutDir));
+        }
+
+        [Fact]
         public void Convert_ChangedMovie_IsConvertedAgain()
         {
             Convert(Entries());

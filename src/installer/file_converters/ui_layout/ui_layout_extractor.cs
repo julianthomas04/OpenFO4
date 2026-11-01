@@ -24,12 +24,36 @@ namespace AssetConverter.UiLayout
         /// <returns><c>true</c> when any document was written.</returns>
         public static bool Extract(string fo4Location, string settingsDirectory, string outDir)
         {
+            (string language, var entries) = ReadEntries(fo4Location, settingsDirectory);
+            return Convert(entries, language, outDir);
+        }
+
+        /// <summary>Reads the archive and works out which documents are out of date or no longer produced; null when the folder is current.</summary>
+        internal static PendingExtraction? Plan(string fo4Location, string settingsDirectory, string outDir)
+        {
+            (string language, var entries) = ReadEntries(fo4Location, settingsDirectory);
+            return Plan(entries, language, outDir);
+        }
+
+        internal static PendingExtraction? Plan(IReadOnlyList<(string Path, byte[] Content)> entries, string language, string outDir)
+        {
+            var plan = PlanConversion(entries, language, outDir);
+            if (!plan.HasWork)
+            {
+                ReportSummary(plan);
+                return null;
+            }
+            return new PendingExtraction("UI layout", () => Run(plan));
+        }
+
+        private static (string Language, List<(string Path, byte[] Content)> Entries) ReadEntries(string fo4Location, string settingsDirectory)
+        {
             string language = GameLanguage.Resolve(fo4Location, settingsDirectory);
             var entries = InterfaceArchive.ReadMatching(fo4Location, path => IsMovie(path) || IsLanguageFile(path, language)).ToList();
             (string configPath, byte[] config) = SelectFontConfig(entries, language);
             IReadOnlyList<string> libraries = Guard(configPath, () => FontConfig.Parse(GameText.Decode(config))).FontLibraries;
             entries.AddRange(InterfaceArchive.ReadMatching(fo4Location, path => libraries.Contains(path, StringComparer.OrdinalIgnoreCase)));
-            return Convert(entries, language, outDir);
+            return (language, entries);
         }
 
         public static bool IsMovie(string archivePath)
@@ -69,7 +93,15 @@ namespace AssetConverter.UiLayout
         private static (string Path, byte[] Content)? Find(IReadOnlyList<(string Path, byte[] Content)> entries, string archivePath) =>
             entries.Where(e => string.Equals(e.Path, archivePath, StringComparison.OrdinalIgnoreCase)).Select(e => ((string, byte[])?)e).FirstOrDefault();
 
-        internal static bool Convert(IReadOnlyList<(string Path, byte[] Content)> entries, string language, string outDir)
+        internal static bool Convert(IReadOnlyList<(string Path, byte[] Content)> entries, string language, string outDir) =>
+            Run(PlanConversion(entries, language, outDir));
+
+        private sealed record ConversionPlan(string OutDir, string Language, IReadOnlyList<PendingDocument> Documents, IReadOnlyList<PendingDocument> Stale, IReadOnlyList<string> Unproduced)
+        {
+            public bool HasWork => Stale.Count > 0 || Unproduced.Count > 0;
+        }
+
+        private static ConversionPlan PlanConversion(IReadOnlyList<(string Path, byte[] Content)> entries, string language, string outDir)
         {
             var documents = new List<PendingDocument>();
             (string translatePath, byte[] translate) = Find(entries, TranslateEntry(language))
@@ -87,17 +119,26 @@ namespace AssetConverter.UiLayout
             }
             RejectCollisions(documents);
 
-            Directory.CreateDirectory(outDir);
             var stale = documents.Where(d => UiDocumentHeader.StaleReason(Path.Combine(outDir, d.RelativePath), d.Kind, d.Stamp) is not null).ToList();
+            return new ConversionPlan(outDir, language, documents, stale, FindUnproduced(outDir, documents.Select(d => d.RelativePath)));
+        }
+
+        /// <returns><c>true</c> when any document was written.</returns>
+        private static bool Run(ConversionPlan plan)
+        {
+            Directory.CreateDirectory(plan.OutDir);
             ConversionGuard.RunAll(
-                stale.Select(document => (Action)(() => AtomicPublish.File(Path.Combine(outDir, document.RelativePath), document.Convert(document.Stamp)))),
+                plan.Stale.Select(document => (Action)(() => AtomicPublish.File(Path.Combine(plan.OutDir, document.RelativePath), document.Convert(document.Stamp)))),
                 Environment.ProcessorCount,
                 failures => new UiLayoutException(ConversionGuard.Describe(failures), failures[0]));
 
-            DeleteUnproduced(outDir, documents.Select(d => d.RelativePath));
-            Console.WriteLine($"UI layout: {stale.Count} of {documents.Count} document(s) converted, the rest current, in {outDir} (language '{language}').");
-            return stale.Count > 0;
+            DeleteUnproduced(plan.Unproduced);
+            ReportSummary(plan);
+            return plan.Stale.Count > 0;
         }
+
+        private static void ReportSummary(ConversionPlan plan) =>
+            Console.WriteLine($"UI layout: {plan.Stale.Count} of {plan.Documents.Count} document(s) converted, the rest current, in {plan.OutDir} (language '{plan.Language}').");
 
         private sealed record PendingDocument(string RelativePath, string Kind, ConversionStamp Stamp, Func<ConversionStamp, byte[]> Convert);
 
@@ -138,17 +179,24 @@ namespace AssetConverter.UiLayout
 
         private static readonly string[] DocumentKinds = [UiDocumentHeader.MovieKind, UiDocumentHeader.TranslateKind, UiDocumentHeader.FontConfigKind];
 
-        /// <summary>Deletes the documents this step wrote for game files that no longer produce one, and its leftover temporary files; any other file stays.</summary>
-        private static void DeleteUnproduced(string outDir, IEnumerable<string> produced)
+        /// <summary>The documents this step wrote for game files that no longer produce one, and its leftover temporary files; any other file stays.</summary>
+        private static List<string> FindUnproduced(string outDir, IEnumerable<string> produced)
         {
+            if (!Directory.Exists(outDir)) return [];
             var keep = produced.Select(p => Path.GetFullPath(Path.Combine(outDir, p))).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            foreach (string file in Directory.EnumerateFiles(outDir, "*", SearchOption.AllDirectories))
+            return [.. Directory.EnumerateFiles(outDir, "*", SearchOption.AllDirectories).Where(file =>
             {
                 bool leftover = file.EndsWith(JsonExtension + AtomicPublish.TemporarySuffix, StringComparison.OrdinalIgnoreCase);
                 bool unproducedDocument = file.EndsWith(JsonExtension, StringComparison.OrdinalIgnoreCase)
                     && !keep.Contains(Path.GetFullPath(file)) && IsOwnDocument(file);
-                if (!leftover && !unproducedDocument)
-                    continue;
+                return leftover || unproducedDocument;
+            })];
+        }
+
+        private static void DeleteUnproduced(IEnumerable<string> files)
+        {
+            foreach (string file in files)
+            {
                 File.Delete(file);
                 Console.WriteLine($"UI layout: removed '{file}', which no game file produces any more.");
             }

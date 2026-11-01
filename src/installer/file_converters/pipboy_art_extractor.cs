@@ -26,6 +26,14 @@ namespace AssetConverter
         /// <returns><c>true</c> when the art was exported, <c>false</c> when it was already present.</returns>
         public static bool Extract(string fo4Location, string stagingRoot, string artRoot, MemoryBudget memory, CancellationToken ct = default)
         {
+            var pending = Plan(fo4Location, stagingRoot, artRoot, memory, ct);
+            pending?.Run();
+            return pending != null;
+        }
+
+        /// <summary>Checks whether the art in <paramref name="artRoot"/> is current (which may start an ffdec JVM to read its version); null when it is, else the export that renews it.</summary>
+        internal static PendingExtraction? Plan(string fo4Location, string stagingRoot, string artRoot, MemoryBudget memory, CancellationToken ct = default)
+        {
             var movies = ReadMovies(fo4Location);
             var plan = PipboyArtPlan.Build(movies);
             var stamp = new ConversionStamp(ExtractorVersion, null,
@@ -35,8 +43,14 @@ namespace AssetConverter
             if (reason is null)
             {
                 Console.WriteLine($"Pip-Boy art already present at {artRoot}; skipping.");
-                return false;
+                return null;
             }
+            return new PendingExtraction("Pip-Boy art", () => Export(movies, plan, stamp, reason, stagingRoot, artRoot, memory, ct));
+        }
+
+        static void Export(Dictionary<string, ArtMovie> movies, PipboyArtPlan plan, ConversionStamp stamp, string reason, string stagingRoot, string artRoot,
+            MemoryBudget memory, CancellationToken ct)
+        {
             Console.WriteLine($"Pip-Boy art at {artRoot} is exported again: {reason}.");
 
             var timer = Stopwatch.StartNew();
@@ -72,7 +86,6 @@ namespace AssetConverter
                 long bytes = Directory.EnumerateFiles(artRoot, "*", SearchOption.AllDirectories).Sum(f => new FileInfo(f).Length);
                 int files = Directory.EnumerateFiles(artRoot, "*", SearchOption.AllDirectories).Count();
                 Console.WriteLine($"Exported {clipCount} Pip-Boy art clip(s): {files} file(s), {bytes / (1024.0 * 1024.0):F1} MB in {timer.Elapsed:mm\\:ss}.");
-                return true;
             }
             finally
             {

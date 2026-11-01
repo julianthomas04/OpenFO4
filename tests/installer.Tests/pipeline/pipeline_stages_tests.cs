@@ -85,6 +85,23 @@ namespace InstallerTests.Pipeline
             }
         }
 
+        [Theory]
+        [InlineData(0, 0, null)]
+        [InlineData(7, 7, null)]
+        [InlineData(5, 6, "handled 5 NIFs but 6 were announced")]
+        [InlineData(8, 6, "handled 8 NIFs but 6 were announced")]
+        public void MeshCountMismatch_WarnsOnlyWhenTheHandledNumberDiffersFromTheAnnouncedOne(int processed, int announced, string? expectedFragment)
+        {
+            string? warning = PipelineStages.MeshCountMismatch(processed, announced);
+
+            if (expectedFragment == null) Assert.Null(warning);
+            else
+            {
+                Assert.StartsWith("WARNING:", warning, StringComparison.Ordinal);
+                Assert.Contains(expectedFragment, warning, StringComparison.Ordinal);
+            }
+        }
+
         [Fact]
         public void ExtractInterfaceAssets_EveryInterfaceAssetAlreadyExtracted_ShowsTheStepAsSkipped()
         {
@@ -94,6 +111,55 @@ namespace InstallerTests.Pipeline
 
             Assert.True(Step().WasSkipped);
             Assert.Equal(0, Step().Completed);
+        }
+
+        private PipelineStages Stages() => new(Locations, MemoryBudget.Unlimited(), TestContext.Current.CancellationToken);
+
+        private static PendingExtraction Pending(string detail, Action run) => new(detail, run);
+
+        [Fact]
+        public void ExtractInterfaceAssets_SomeExtractorsHaveWork_TotalsOnlyThemAndTicksEachWhenItIsDone()
+        {
+            var seenWhileRunning = new List<(string Detail, bool Preparing, long Total, long Completed)>();
+            PendingExtraction Extraction(string detail) => Pending(detail, () =>
+            {
+                var step = Step();
+                seenWhileRunning.Add((step.Detail!, step.IsPreparing, step.Total, step.Completed));
+            });
+
+            Stages().ExtractInterfaceAssets([() => Extraction("fonts"), () => null, () => Extraction("art")]);
+
+            Assert.Equal([("fonts", false, 2L, 0L), ("art", false, 2L, 1L)], seenWhileRunning);
+            Assert.Equal((StepStatus.Done, 2L, 2L), (Step().Status, Step().Total, Step().Completed));
+            Assert.False(Step().WasSkipped);
+        }
+
+        [Fact]
+        public void ExtractInterfaceAssets_EveryExtractorIsCurrent_ShowsTheStepAsSkippedWithoutATotal()
+        {
+            Stages().ExtractInterfaceAssets([() => null, () => null, () => null]);
+
+            Assert.True(Step().WasSkipped);
+            Assert.Equal(0, Step().Total);
+            Assert.Equal(0, Step().Completed);
+        }
+
+        [Fact]
+        public void ExtractInterfaceAssets_AllExtractorsArePlannedBeforeAnyRunsAndThePlanningReadsAsPreparing()
+        {
+            var order = new List<string>();
+            var preparingWhilePlanning = new List<bool>();
+            Func<PendingExtraction?> Planner(string name) => () =>
+            {
+                order.Add($"plan {name}");
+                preparingWhilePlanning.Add(Step().IsPreparing);
+                return Pending(name, () => order.Add($"run {name}"));
+            };
+
+            Stages().ExtractInterfaceAssets([Planner("fonts"), Planner("layout"), Planner("art")]);
+
+            Assert.Equal(["plan fonts", "plan layout", "plan art", "run fonts", "run layout", "run art"], order);
+            Assert.All(preparingWhilePlanning, Assert.True);
         }
 
         [Fact]

@@ -29,6 +29,14 @@ namespace AssetConverter
         /// <returns><c>true</c> when the fonts were extracted, <c>false</c> when they were already present.</returns>
         public static bool Extract(string fo4Location, string settingsDirectory, string stagingRoot, string fontsOut, MemoryBudget memory, CancellationToken ct = default)
         {
+            var pending = Plan(fo4Location, settingsDirectory, stagingRoot, fontsOut, memory, ct);
+            pending?.Run();
+            return pending != null;
+        }
+
+        /// <summary>Checks whether the fonts in <paramref name="fontsOut"/> are current (which may start an ffdec JVM to read its version); null when they are, else the extraction that renews them.</summary>
+        internal static PendingExtraction? Plan(string fo4Location, string settingsDirectory, string stagingRoot, string fontsOut, MemoryBudget memory, CancellationToken ct = default)
+        {
             string language = GameLanguage.Resolve(fo4Location, settingsDirectory);
             (SourceFingerprint config, IReadOnlyList<string> libraryNames) = FontLibraries(fo4Location, language);
             var libraries = InterfaceArchive.ReadMatching(fo4Location, path => libraryNames.Contains(path, StringComparer.OrdinalIgnoreCase))
@@ -41,8 +49,16 @@ namespace AssetConverter
             if (reason is null)
             {
                 Console.WriteLine($"Fonts of {string.Join(", ", libraryNames)} already present in {fontsOut}; skipping.");
-                return false;
+                return null;
             }
+            return new PendingExtraction(PendingDetail, () => Export(libraries, libraryNames, stamp, reason, stagingRoot, fontsOut, memory, ct));
+        }
+
+        const string PendingDetail = "UI fonts";
+
+        static void Export(IReadOnlyList<(string Path, byte[] Content)> libraries, IReadOnlyList<string> libraryNames, ConversionStamp stamp, string reason,
+            string stagingRoot, string fontsOut, MemoryBudget memory, CancellationToken ct)
+        {
             Console.WriteLine($"Fonts in {fontsOut} are extracted again: {reason}.");
             int count = 0;
             AtomicPublish.Folder(fontsOut, tmp =>
@@ -56,7 +72,6 @@ namespace AssetConverter
                 stamp.WriteSidecar(tmp);
             });
             Console.WriteLine($"Extracted {count} FO4 UI font(s) from {string.Join(", ", libraryNames)} -> {fontsOut}");
-            return true;
         }
 
         /// <summary>The installed language's font configuration and the font libraries it lists, in its order.</summary>

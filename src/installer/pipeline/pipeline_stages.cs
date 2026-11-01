@@ -212,20 +212,38 @@ namespace AssetConverter.Pipeline
         }
 
         /// <summary>
-        /// FO4's own UI fonts, Pip-Boy art and the UI layout documents. The fonts and the
-        /// art start ffdec JVMs unless an earlier run extracted them; the rest is read from the SWFs in process.
+        /// FO4's own UI fonts, Pip-Boy art and the UI layout documents. Each extractor first checks whether its output is current (the fonts
+        /// and the art may start an ffdec JVM to read its version); the step's total is the number of extractors that have work, so one
+        /// with everything cached shows as skipped, and the pending ones then run, each ticking once.
         /// </summary>
-        public void ExtractInterfaceAssets()
+        public void ExtractInterfaceAssets() =>
+            ExtractInterfaceAssets(
+            [
+                () => FontExtractor.Plan(_paths.Fo4Location, _paths.SettingsDirectory, _paths.StagingRoot, _paths.FontsOut, _memory, _ct),
+                () => UiLayoutExtractor.Plan(_paths.Fo4Location, _paths.SettingsDirectory, _paths.UiLayoutOut),
+                () => PipboyArtExtractor.Plan(_paths.Fo4Location, _paths.StagingRoot, _paths.PipboyArtOut, _memory, _ct),
+            ]);
+
+        internal void ExtractInterfaceAssets(IReadOnlyList<Func<PendingExtraction?>> plans)
         {
             int phase = InstallProgress.BeginPhase(InstallSteps.ExtractInterface, null);
-            int extracted = 0;
-            if (RunExtraction(phase, "UI fonts", () => FontExtractor.Extract(_paths.Fo4Location, _paths.SettingsDirectory, _paths.StagingRoot, _paths.FontsOut, _memory, _ct))) extracted++;
-            if (RunExtraction(phase, "UI layout", () => UiLayoutExtractor.Extract(_paths.Fo4Location, _paths.SettingsDirectory, _paths.UiLayoutOut))) extracted++;
-            if (RunExtraction(phase, "Pip-Boy art", () => PipboyArtExtractor.Extract(_paths.Fo4Location, _paths.StagingRoot, _paths.PipboyArtOut, _memory, _ct))) extracted++;
-            // BRIDGE: the extractors cannot be planned yet, so the total is only known after all three ran.
-            InstallProgress.AddTotal(phase, extracted);
+            InstallProgress.SetDetail(phase, "checking which assets are out of date");
+            var pending = new List<PendingExtraction>();
+            foreach (var plan in plans)
+            {
+                _ct.ThrowIfCancellationRequested();
+                if (plan() is { } extraction) pending.Add(extraction);
+            }
+            InstallProgress.AddTotal(phase, pending.Count);
             InstallProgress.SealTotal(phase);
-            InstallProgress.Tick(phase, extracted);
+            foreach (var extraction in pending)
+            {
+                _ct.ThrowIfCancellationRequested();
+                InstallProgress.SetDetail(phase, extraction.Detail);
+                extraction.Run();
+                _ct.ThrowIfCancellationRequested();
+                InstallProgress.Tick(phase);
+            }
             InstallProgress.EndPhase(phase);
         }
 
@@ -316,12 +334,20 @@ namespace AssetConverter.Pipeline
             InstallOperations.UseEffectShaderCatalog(_paths.Fo4Location);
             int converted = NifConverter.ConvertToGltfBatched(_paths.StagedMeshes, _paths.MeshesOut, meshes, bgsmScanRoot: _paths.StagingRoot,
                 progressPhase: phase, priorityFiles: skeletons, ct: _ct, memory: _memory);
-            // BRIDGE: the total is sealed up front now, so a mismatch can only be reported; to be replaced by the planned warning.
-            if (converted != expected)
-                Console.Error.WriteLine($"WARNING: converted {converted:N0} meshes, expected {expected:N0}.");
+            if (MeshCountMismatch(converted, expected) is { } mismatch)
+                Console.Error.WriteLine(mismatch);
             _ct.ThrowIfCancellationRequested();
             InstallProgress.EndPhase(phase);
         }
+
+        /// <summary>
+        /// The total of the step is fixed before the conversion starts, so a conversion that handled another number of NIFs than were
+        /// announced cannot adjust it; this is the warning for that, or null when the counts agree.
+        /// </summary>
+        internal static string? MeshCountMismatch(int processed, int announced) =>
+            processed == announced
+                ? null
+                : $"WARNING: the mesh conversion handled {processed:N0} NIFs but {announced:N0} were announced; the step's progress count was based on the announced number.";
 
         private string[] EnumerateStagedNifs() =>
             Directory.Exists(_paths.StagedMeshes) ? NifConverter.EnumerateNifs(_paths.StagedMeshes) : [];
@@ -478,16 +504,6 @@ namespace AssetConverter.Pipeline
             step();
             _ct.ThrowIfCancellationRequested();
             InstallProgress.Tick(phase);
-        }
-
-        /// <summary>Counts the item as work only when <paramref name="extract"/> did extract it, so a step with everything cached shows as skipped.</summary>
-        private bool RunExtraction(int phase, string detail, Func<bool> extract)
-        {
-            _ct.ThrowIfCancellationRequested();
-            InstallProgress.SetDetail(phase, detail);
-            bool extracted = extract();
-            _ct.ThrowIfCancellationRequested();
-            return extracted;
         }
 
         private void RunFinalizeStep(int phase, string detail, Action step)
