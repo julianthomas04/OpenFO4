@@ -133,14 +133,14 @@ namespace InstallerTests
             var (_, db) = await LoadWithProgress();
             var loader = NavMeshFixture.Loader(Path.Combine(_directory.Path, "count.db"));
             using (var file = Fallout4Mod.CreateFromBinaryOverlay(_fixture.EsmPath, Fallout4Release.Fallout4))
-                Assert.Equal(Count(db, "navigation_meshes"), loader.CountNavMeshes(file));
+                Assert.Equal(Count(db, "navigation_meshes"), loader.CountNavMeshes(file, TestContext.Current.CancellationToken));
 
             string withDeleted = Path.Combine(_directory.Path, "deleted.esm");
             File.Copy(_fixture.EsmPath, withDeleted);
             RawEsmBuilder.AddRecordFlags(withDeleted, "NAVM", _fixture.Plugin.FormKeyOf(NavMeshFixture.Neighbour).ID, RecordFlags.Deleted);
             using var edited = Fallout4Mod.CreateFromBinaryOverlay(withDeleted, Fallout4Release.Fallout4);
 
-            Assert.Equal(Count(db, "navigation_meshes") - 1, loader.CountNavMeshes(edited));
+            Assert.Equal(Count(db, "navigation_meshes") - 1, loader.CountNavMeshes(edited, TestContext.Current.CancellationToken));
         }
 
         sealed class UnknownRecordTypeGroup : IEnumerable<int>
