@@ -39,6 +39,32 @@ namespace InstallerTests.Progress
         }
 
         [Fact]
+        public void StepsWithAFixedAmountOfWorkDeclareTheirKnownTotal()
+        {
+            var known = InstallSteps.All.Where(s => s.KnownTotal != null).ToDictionary(s => s.Name, s => s.KnownTotal);
+
+            Assert.Equal(new Dictionary<string, long?>
+            {
+                [InstallSteps.CopyGameData] = 3,
+                [InstallSteps.BakePalettes] = 1,
+                [InstallSteps.ScanLodWater] = 1,
+                [InstallSteps.FinalizeDatabase] = 6,
+            }, known);
+        }
+
+        [Fact]
+        public void TheKnownTotalsAreFinalBeforeTheirStepsBegin()
+        {
+            var model = new ProgressModel(InstallSteps.All);
+
+            var pending = model.GetSnapshot().Steps.Single(s => s.Name == InstallSteps.Finalizing);
+
+            Assert.False(pending.IsPreparing);
+            Assert.Equal(InstallSteps.FinalizeDatabaseTotal, pending.Parts.Single(p => p.Name == InstallSteps.FinalizeDatabase).Total);
+            Assert.All(pending.Parts, p => Assert.True(p.TotalIsFinal));
+        }
+
+        [Fact]
         public void EveryLaneHasAtLeastOneStep()
         {
             Assert.All(InstallSteps.Lanes, lane => Assert.NotEmpty(lane));

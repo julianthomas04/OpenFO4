@@ -9,13 +9,19 @@ namespace InstallerTests.Progress
         private const string Group = "Setting up";
         private readonly ManualTimeProvider _clock = new();
 
-        private ProgressModel Model() => new(
-        [
-            new StepDefinition("First", "files", Weight: 1, Group: Group),
-            new StepDefinition("Second", "tasks", Weight: 3, Group: Group),
-            new StepDefinition("Alone", "items", Weight: 4),
-            new StepDefinition("Late", "tasks", Weight: 2, Group: Group),
-        ], _clock);
+        private ProgressModel Model(bool declareLate = true)
+        {
+            var model = new ProgressModel(
+            [
+                new StepDefinition("First", "files", Weight: 1, Group: Group),
+                new StepDefinition("Second", "tasks", Weight: 3, Group: Group),
+                new StepDefinition("Alone", "items", Weight: 4),
+                new StepDefinition("Late", "tasks", Weight: 2, Group: Group),
+            ], _clock);
+            model.Declare("Second", 1);
+            if (declareLate) model.Declare("Late", 1);
+            return model;
+        }
 
         private static StepSnapshot GroupOf(ProgressModel model) => model.GetSnapshot().Steps.Single(s => s.Name == Group);
 
@@ -35,14 +41,90 @@ namespace InstallerTests.Progress
             var model = Model();
             int first = model.BeginPhase("First", 10, null);
             model.Tick(first, 4);
-            int second = model.BeginPhase("Second", 5, null);
+            int second = model.BeginPhase("Second", 1, null);
             model.Tick(second, 1);
 
             var group = GroupOf(model);
 
             Assert.Equal(StepStatus.Running, group.Status);
-            Assert.Equal((5L, 15L), (group.Completed, group.Total));
+            Assert.Equal((5L, 12L), (group.Completed, group.Total));
             Assert.Equal("items", group.Unit);
+            Assert.False(group.IsPreparing);
+        }
+
+        [Fact]
+        public void TheGroupIsPreparingWhileAUnitThatHasNotBegunHasNoDeclaredTotal()
+        {
+            var model = Model(declareLate: false);
+            int first = model.BeginPhase("First", 10, null);
+            model.Tick(first, 4);
+
+            var group = GroupOf(model);
+
+            Assert.Equal(StepStatus.Running, group.Status);
+            Assert.True(group.IsPreparing);
+            Assert.Equal((0L, 0L), (group.Completed, group.Total));
+            Assert.Equal(0, group.Fraction);
+        }
+
+        [Fact]
+        public void TheGroupStopsPreparingOnceTheMissingTotalIsDeclared()
+        {
+            var model = Model(declareLate: false);
+            model.Tick(model.BeginPhase("First", 10, null), 5);
+            model.Declare("Late", 4);
+
+            var group = GroupOf(model);
+
+            Assert.False(group.IsPreparing);
+            Assert.Equal((5L, 15L), (group.Completed, group.Total));
+            Assert.Equal(1.0 / 12.0, group.Fraction, precision: 6);
+        }
+
+        [Fact]
+        public void TheGroupIsPreparingWhileAUnitIsStillDiscoveringItsTotal()
+        {
+            var model = Model();
+            int first = model.BeginPhase("First", null, null);
+            model.AddTotal(first, 10);
+
+            Assert.True(GroupOf(model).IsPreparing);
+            model.SealTotal(first);
+
+            var group = GroupOf(model);
+            Assert.False(group.IsPreparing);
+            Assert.Equal((0L, 12L), (group.Completed, group.Total));
+        }
+
+        [Fact]
+        public void AGroupWithNothingRunningIsNeverPreparing()
+        {
+            var pending = Model(declareLate: false).GetSnapshot().Steps[0];
+
+            Assert.Equal(StepStatus.Pending, pending.Status);
+            Assert.False(pending.IsPreparing);
+        }
+
+        [Fact]
+        public void TheGroupFractionNeverGoesBackwardsFromPreparingToTheLastTick()
+        {
+            var model = Model(declareLate: false);
+            var seen = new List<double> { GroupOf(model).Fraction };
+            int first = model.BeginPhase("First", null, null);
+            model.AddTotal(first, 10);
+            seen.Add(GroupOf(model).Fraction);
+            model.SealTotal(first);
+            model.Declare("Late", 2);
+            seen.Add(GroupOf(model).Fraction);
+            for (int i = 0; i < 10; i++)
+            {
+                model.Tick(first);
+                seen.Add(GroupOf(model).Fraction);
+            }
+            model.EndPhase(first);
+            seen.Add(GroupOf(model).Fraction);
+
+            Assert.Equal(seen.Order(), seen);
         }
 
         [Fact]

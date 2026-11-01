@@ -44,18 +44,20 @@ namespace InstallerTests.Ui
             return (bytes, framebuffer.RowBytes);
         }
 
-        private (RowPixels Done, RowPixels Half, RowPixels Pending) Render(ThemeVariant theme, string pngPath)
+        private (RowPixels Done, RowPixels Half, RowPixels Pending, RowPixels Preparing) Render(ThemeVariant theme, string pngPath)
         {
             return _session.Dispatch(() =>
             {
                 var model = new ProgressModel(
-                    [new StepDefinition("Extracting", "files"), new StepDefinition("Converting meshes", "meshes"), new StepDefinition("Packing archives", "files")],
+                    [new StepDefinition("Extracting", "files"), new StepDefinition("Converting meshes", "meshes"), new StepDefinition("Packing archives", "files"), new StepDefinition("Scanning", "files")],
                     new ManualTimeProvider());
                 int done = model.BeginPhase("Extracting", 10, null);
                 model.Tick(done, 10);
                 model.EndPhase(done);
                 int half = model.BeginPhase("Converting meshes", 100, null);
                 model.Tick(half, 50);
+                int preparing = model.BeginPhase("Scanning", null, null);
+                model.AddTotal(preparing, 100);
                 var viewModel = new InstallerViewModel(model.GetSnapshot, new LogBuffer(InstallerViewModel.LogCapacity), () => { }, culture: CultureInfo.InvariantCulture);
                 var window = new InstallerWindow { DataContext = viewModel, RequestedThemeVariant = theme };
                 window.Show();
@@ -69,7 +71,7 @@ namespace InstallerTests.Ui
                 var (frame, stride) = Pixels(bitmap);
                 var rows = window.GetVisualDescendants().OfType<ProgressBar>().Where(b => b.Classes.Contains("rowFill"))
                     .Select(b => new RowPixels(frame, stride, new Rect(b.TranslatePoint(default, window)!.Value, b.Bounds.Size))).ToList();
-                return (rows[0], rows[1], rows[2]);
+                return (rows[0], rows[1], rows[2], rows[3]);
             }, CancellationToken.None).GetAwaiter().GetResult();
         }
 
@@ -80,7 +82,7 @@ namespace InstallerTests.Ui
         {
             var variant = theme == "light" ? ThemeVariant.Light : ThemeVariant.Dark;
 
-            var (done, half, pending) = Render(variant, RenderOutput.PathFor(fileName));
+            var (done, half, pending, preparing) = Render(variant, RenderOutput.PathFor(fileName));
 
             var pendingBackground = pending.At(0.5);
             Assert.True(Differ(half.At(0.25), half.At(0.75)), "the left half of the half-full row must be filled and the right half not");
@@ -88,6 +90,8 @@ namespace InstallerTests.Ui
             Assert.False(Differ(half.At(0.75), pendingBackground), "the unfilled part must look like the pending row");
             Assert.True(Differ(done.At(0.9), pendingBackground), "a done row is filled across its width");
             Assert.False(Differ(pending.At(0.1), pendingBackground));
+            Assert.False(Differ(preparing.At(0.1), pendingBackground), "a preparing row shows no fill");
+            Assert.False(Differ(preparing.At(0.9), pendingBackground), "a preparing row shows no fill");
         }
     }
 }

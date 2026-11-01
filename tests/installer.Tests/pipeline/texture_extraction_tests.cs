@@ -84,9 +84,9 @@ namespace InstallerTests.Pipeline
             WriteArchive("t2.ba2", Texture(@"A\X.DDS", 10, 3), Texture(@"b\z.dds", 10, 4));
             using var set = Open("t1.ba2", "t2.ba2");
             var extraction = new TextureExtraction(set, MemoryBudget.Unlimited());
-            InstallProgress.AddTotal(_phase, extraction.FileCount);
+            int phase = InstallProgress.BeginPhase(Step, extraction.FileCount);
 
-            extraction.Run(Out, _phase, DefaultBudget, Ct);
+            extraction.Run(Out, phase, DefaultBudget, Ct);
 
             Assert.Equal(3, extraction.FileCount);
             Assert.Equal(3, Snapshot().Total);

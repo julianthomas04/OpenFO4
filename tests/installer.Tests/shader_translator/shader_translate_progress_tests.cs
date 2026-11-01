@@ -26,7 +26,7 @@ namespace InstallerTests.ShaderTranslation
         [Fact]
         public void Translate_TicksOncePerTranslatedShaderAndEndsAtTheShaderCount()
         {
-            int phase = InstallProgress.BeginPhase(InstallSteps.ConvertShaders, 0);
+            int phase = InstallProgress.BeginPhase(InstallSteps.ConvertShaders, null);
             using var root = new TempAssetRoot();
 
             int count = ShaderTranslateStep.Translate(Archive(), Manifest(5), root.Path, phase);

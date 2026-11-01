@@ -30,7 +30,7 @@ namespace InstallerTests
 
         async Task<(StepSnapshot Progress, string DatabasePath)> LoadWithProgress()
         {
-            int phase = InstallProgress.BeginPhase(Step, 0);
+            int phase = InstallProgress.BeginPhase(Step, null);
             string databasePath = Path.Combine(_directory.Path, "data.db");
             await NavMeshFixture.Loader(databasePath).LoadESMAsync(_fixture.EsmPath, phase, TestContext.Current.CancellationToken);
             return (InstallProgress.Model!.GetSnapshot().Steps.Single(s => s.Name == Step), databasePath);

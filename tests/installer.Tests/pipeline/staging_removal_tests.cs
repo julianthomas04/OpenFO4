@@ -275,7 +275,7 @@ namespace InstallerTests.Pipeline
         {
             InstallProgress.Start([new StepDefinition(InstallSteps.RemoveStaging, "items")]);
             PopulateLikeAnInstall();
-            int phase = InstallProgress.BeginPhase(InstallSteps.RemoveStaging, 0);
+            int phase = InstallProgress.BeginPhase(InstallSteps.RemoveStaging, null);
 
             StagingRemoval.Run(Staging, phase, ct: TestContext.Current.CancellationToken);
 

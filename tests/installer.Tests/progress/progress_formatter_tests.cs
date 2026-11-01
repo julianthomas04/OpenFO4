@@ -74,6 +74,17 @@ namespace InstallerTests.Progress
         }
 
         [Fact]
+        public void APreparingStepReadsAsPreparingInsteadOfCountersAndAPendingOneStaysBlank()
+        {
+            var preparing = Step(completed: 0, total: 40) with { IsPreparing = true };
+            var pending = Step(StepStatus.Pending, total: 6) with { IsPreparing = true };
+
+            Assert.Equal("Preparing...", ProgressText.Preparing);
+            Assert.Equal(ProgressText.Preparing, German.Compact(preparing));
+            Assert.Equal("", German.Compact(pending));
+        }
+
+        [Fact]
         public void CompactIsEmptyForPendingStepsAndSlashSeparatedOtherwise()
         {
             Assert.Equal("", ProgressFormatter.Invariant.Compact(Step(StepStatus.Pending, completed: 3, total: 10)));

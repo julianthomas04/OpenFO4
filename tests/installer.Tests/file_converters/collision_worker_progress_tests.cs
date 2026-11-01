@@ -15,7 +15,7 @@ namespace InstallerTests
         public CollisionWorkerProgressTests()
         {
             InstallProgress.Start([new StepDefinition(Step)]);
-            _phase = InstallProgress.BeginPhase(Step, 0);
+            _phase = InstallProgress.BeginPhase(Step, null);
         }
 
         public void Dispose() => InstallProgress.Stop();
