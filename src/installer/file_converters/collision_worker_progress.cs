@@ -17,6 +17,7 @@ namespace AssetConverter
         private long _reported;
         private long _processed;
         private bool _finished;
+        private bool _warnedOfMismatch;
 
         /// <param name="phase">The progress phase, which began with <paramref name="total"/> as its total.</param>
         public CollisionWorkerProgress(int phase, long total, Action<string>? warn = null)
@@ -27,14 +28,29 @@ namespace AssetConverter
             _warn = warn ?? Console.Error.WriteLine;
         }
 
-        [GeneratedRegex(@"^\s*\.\.\. (\d+)/\d+ NIFs processed\b")]
+        [GeneratedRegex(@"^\s*\.\.\. (\d+)/(\d+) NIFs processed\b")]
         private static partial Regex DoneLine();
 
         public void Handle(string line)
         {
             var done = DoneLine().Match(line);
-            if (done.Success && TryParseCount(done.Groups[1].Value, line, out long processedCount))
-                ReportDone(processedCount);
+            if (!done.Success
+                || !TryParseCount(done.Groups[1].Value, line, out long processedCount)
+                || !TryParseCount(done.Groups[2].Value, line, out long received))
+                return;
+            WarnOnceIfCountsDisagree(processedCount, received);
+            ReportDone(processedCount);
+        }
+
+        /// <summary>The total was fixed before the worker started; a worker that received another number of NIFs, or processed more than that, means the progress is off.</summary>
+        private void WarnOnceIfCountsDisagree(long processed, long received)
+        {
+            lock (_lock)
+            {
+                if (_warnedOfMismatch || (received == _total && processed <= _total)) return;
+                _warnedOfMismatch = true;
+            }
+            _warn($"WARNING: the collision worker processed {processed:N0} of {received:N0} NIFs but {_total:N0} were announced; the step's progress count was based on the announced number.");
         }
 
         /// <summary>The worker exited successfully: NIFs after its last progress line are done too.</summary>

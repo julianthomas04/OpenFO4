@@ -23,8 +23,8 @@ namespace InstallerTests
         {
             var progress = new CollisionWorkerProgress(BeginPhase(100), 100);
 
-            progress.Handle("  ... 40/80 NIFs processed, 3 sidecars written, 0 errors");
-            progress.Handle("  ... 75/80 NIFs processed, 5 sidecars written, 0 errors");
+            progress.Handle("  ... 40/100 NIFs processed, 3 sidecars written, 0 errors");
+            progress.Handle("  ... 75/100 NIFs processed, 5 sidecars written, 0 errors");
 
             Assert.Equal(100, Snapshot().Total);
             Assert.Equal(75, Snapshot().Completed);
@@ -47,7 +47,7 @@ namespace InstallerTests
         {
             var progress = new CollisionWorkerProgress(BeginPhase(100), 100);
             progress.Handle("  60 NIFs to process (40 existing sidecars skipped)");
-            progress.Handle("  ... 30/60 NIFs processed, 3 sidecars written, 0 errors");
+            progress.Handle("  ... 30/100 NIFs processed, 3 sidecars written, 0 errors");
 
             progress.Complete();
 
@@ -102,11 +102,39 @@ namespace InstallerTests
         [Fact]
         public void ProgressBeyondTheTotalNeverTicksPastIt()
         {
-            var progress = new CollisionWorkerProgress(BeginPhase(10), 10);
+            var progress = new CollisionWorkerProgress(BeginPhase(10), 10, _ => { });
 
-            progress.Handle("  ... 12/12 NIFs processed, 0 sidecars written, 0 errors");
+            progress.Handle("  ... 12/10 NIFs processed, 0 sidecars written, 0 errors");
 
             Assert.Equal(10, Snapshot().Completed);
+        }
+
+        [Theory]
+        [InlineData("  ... 5/12 NIFs processed, 0 sidecars written, 0 errors")]
+        [InlineData("  ... 12/10 NIFs processed, 0 sidecars written, 0 errors")]
+        public void AWorkerWhoseCountsDisagreeWithTheTotalIsWarnedOfOnceAndNeverThrown(string line)
+        {
+            var warnings = new List<string>();
+            var progress = new CollisionWorkerProgress(BeginPhase(10), 10, warnings.Add);
+
+            progress.Handle(line);
+            progress.Handle(line);
+
+            var warning = Assert.Single(warnings);
+            Assert.StartsWith("WARNING:", warning, StringComparison.Ordinal);
+            Assert.Contains("10 were announced", warning, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void AWorkerWhoseCountsAgreeWithTheTotalIsNotWarnedOf()
+        {
+            var warnings = new List<string>();
+            var progress = new CollisionWorkerProgress(BeginPhase(10), 10, warnings.Add);
+
+            progress.Handle("  ... 4/10 NIFs processed, 0 sidecars written, 0 errors");
+            progress.Handle("  ... 10/10 NIFs processed, 0 sidecars written, 0 errors");
+
+            Assert.Empty(warnings);
         }
 
         [Fact]
