@@ -33,11 +33,12 @@ namespace InstallerTests.Pipeline
             var resources = await PayloadUnpackStep.RunAsync(packaged: true, progress =>
             {
                 progress!.FileCount(3);
+                progress.GameFileCount(2);
                 progress.FileUnpacked();
                 progress.FileUnpacked();
                 midway = UnpackStep();
                 progress.FileUnpacked();
-                return Resources;
+                return PayloadWithGameFiles(2);
             });
 
             Assert.Equal(_root.Path, resources.Root);
@@ -45,6 +46,78 @@ namespace InstallerTests.Pipeline
             Assert.Equal((2L, 3L), (midway.Completed, midway.Total));
             Assert.Equal(StepStatus.Done, UnpackStep().Status);
             Assert.Equal(3, UnpackStep().Completed);
+        }
+
+        private static StepSnapshot InitializingStep() => InstallProgress.Model!.GetSnapshot().Steps.Single(step => step.Name == InstallSteps.Initializing);
+
+        private static StepSnapshot GamePart() => InitializingStep().Parts.Single(part => part.Name == InstallSteps.InstallGame);
+
+        /// <summary>A payload folder whose game folder holds the given number of files, found by <see cref="InstallerResources.ForPayload"/>.</summary>
+        private InstallerResources PayloadWithGameFiles(int count)
+        {
+            string game = Path.Combine(_root.Path, InstallerResources.GameFolder);
+            Directory.CreateDirectory(game);
+            for (int i = 0; i < count; i++) File.WriteAllText(Path.Combine(game, $"file{i}.dll"), "x");
+            return InstallerResources.ForPayload(_root.Path);
+        }
+
+        [Fact]
+        public async Task TheGameFileCountFromThePayloadListingGivesInitializingItsFinalTotalBeforeAnythingIsUnpacked()
+        {
+            InstallProgress.Start(InstallSteps.Planned(keepStaging: false, unpacksPayload: true));
+            StepSnapshot? beforeTheListing = null;
+            StepSnapshot? afterTheListing = null;
+
+            await PayloadUnpackStep.RunAsync(packaged: true, progress =>
+            {
+                beforeTheListing = InitializingStep();
+                progress!.FileCount(5);
+                progress.GameFileCount(2);
+                afterTheListing = InitializingStep();
+                return PayloadWithGameFiles(2);
+            });
+
+            Assert.True(beforeTheListing!.IsPreparing);
+            Assert.False(afterTheListing!.IsPreparing);
+            Assert.Equal(5 + 2 + InstallSteps.CopyGameDataTotal, afterTheListing.Total);
+            Assert.Equal(2, GamePart().Total);
+        }
+
+        [Fact]
+        public async Task APayloadUnpackedByAnEarlierRunDeclaresTheGameFilesItFindsInstead()
+        {
+            InstallProgress.Start(InstallSteps.Planned(keepStaging: false, unpacksPayload: true));
+
+            await PayloadUnpackStep.RunAsync(packaged: true, _ => PayloadWithGameFiles(4));
+
+            Assert.Equal(4, GamePart().Total);
+            Assert.False(InitializingStep().IsPreparing);
+        }
+
+        [Fact]
+        public async Task AnInstallerWithoutAPayloadDeclaresTheGameFilesItHasSoTheGameStepBeginsWithThatTotal()
+        {
+            InstallProgress.Start(InstallSteps.Planned(keepStaging: false));
+
+            await PayloadUnpackStep.RunAsync(packaged: false, _ => PayloadWithGameFiles(3));
+            int phase = InstallProgress.BeginPhase(InstallSteps.InstallGame, 3);
+
+            Assert.Equal(3, GamePart().Total);
+            Assert.True(phase >= 0);
+        }
+
+        [Fact]
+        public async Task AListingThatDisagreesWithTheUnpackedGameFilesIsRefusedInsteadOfShowingAWrongTotal()
+        {
+            InstallProgress.Start(InstallSteps.Planned(keepStaging: false, unpacksPayload: true));
+
+            var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => PayloadUnpackStep.RunAsync(packaged: true, progress =>
+            {
+                progress!.GameFileCount(2);
+                return PayloadWithGameFiles(3);
+            }));
+
+            Assert.Contains(InstallSteps.InstallGame, thrown.Message, StringComparison.Ordinal);
         }
 
         [Fact]
@@ -64,7 +137,7 @@ namespace InstallerTests.Pipeline
         public async Task AnInstallerWithoutAPayloadHasNothingToUnpackAndNoStep()
         {
             InstallProgress.Start(InstallSteps.Planned(keepStaging: false));
-            UnpackProgress? given = new(_ => { }, () => { });
+            UnpackProgress? given = new(_ => { }, _ => { }, () => { });
 
             var resources = await PayloadUnpackStep.RunAsync(packaged: false, progress =>
             {
