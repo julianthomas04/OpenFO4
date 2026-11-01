@@ -22,11 +22,14 @@ namespace AssetConverter
     // One unit of ESM import work: the processor(s) filling Tables, plus the
     // records-table rows (RecordTypes) it owns. Run writes through the given
     // connection; a null transaction lets the processor manage its own.
+    // CountWork counts the progress units Run will tick, reading the file without keeping anything;
+    // null for a job that ticks nothing.
     internal sealed record RecordJob(
         string[] Tables,
         string[] RecordTypes,
         Func<ESMLoader, ImportContext, SqliteConnection, SqliteTransaction?, Task> Run,
-        bool NeedsRawScans = false)
+        bool NeedsRawScans = false,
+        Func<ESMLoader, IFallout4ModGetter, CancellationToken, long>? CountWork = null)
     {
         // The name a job goes by in timing reports: its record types, or its tables when it owns no records rows.
         internal string Label => string.Join('+', RecordTypes.Length > 0 ? RecordTypes : Tables);
@@ -92,7 +95,7 @@ namespace AssetConverter
             where T : IMajorRecordGetter =>
             new(tables, [recordType], (loader, context, conn, transaction) =>
                 loader.ProcessGroupAsync(records(context.File), recordType, conn, processor(loader), transaction),
-                needsRawScans);
+                needsRawScans, CountWork: (_, file, _) => CountGroup(records(file)));
 
         private static RecordJob JobWithScans<T>(string recordType, string[] tables,
             Func<IFallout4ModGetter, IEnumerable<T>> records, Func<RawScans, IRecordProcessor<T>> processor)
@@ -102,7 +105,7 @@ namespace AssetConverter
                 var scans = await (context.RawScans
                     ?? throw new InvalidOperationException("Job requires raw ESM scans but the import plan did not schedule them."));
                 await loader.ProcessGroupAsync(records(context.File), recordType, conn, processor(scans), transaction);
-            }, NeedsRawScans: true);
+            }, NeedsRawScans: true, CountWork: (_, file, _) => CountGroup(records(file)));
 
         private static RecordJob Simple<T>(string recordType, string table,
             Func<IFallout4ModGetter, IEnumerable<T>> records)
@@ -110,10 +113,12 @@ namespace AssetConverter
             Job<T>(recordType, [table], records, _ => new SimpleRecordProcessor<T>(table));
 
         internal static readonly RecordJob PerkJob = new(["perks", "perk_chart"], ["PERK"],
-            (loader, context, conn, transaction) => loader.ProcessPerksAsync(context.File, conn, transaction));
+            (loader, context, conn, transaction) => loader.ProcessPerksAsync(context.File, conn, transaction),
+            CountWork: (_, file, _) => CountGroup(file.Perks));
 
         internal static readonly RecordJob ActorValueJob = new(["actor_value_informations", "special_attributes"], ["AVIF"],
-            (loader, context, conn, transaction) => loader.ProcessActorValuesAsync(context.File, conn, transaction));
+            (loader, context, conn, transaction) => loader.ProcessActorValuesAsync(context.File, conn, transaction),
+            CountWork: (_, file, _) => CountGroup(ActorValues(file)));
 
         // Record groups with no dependencies on each other: the full import
         // runs them concurrently, a partial reload runs the selected ones in turn.
@@ -255,7 +260,8 @@ namespace AssetConverter
 
         internal static readonly RecordJob WorldspaceJob = new(["worldspaces", "map_markers"], ["WRLD"],
             (loader, context, conn, transaction) =>
-                loader.ProcessWorldspaceRecordsAsync(context.File.Worldspaces, conn, transaction));
+                loader.ProcessWorldspaceRecordsAsync(context.File.Worldspaces, conn, transaction),
+            CountWork: (_, file, _) => CountGroup(file.Worldspaces));
 
         internal static readonly RecordJob CellsJob = new(
             ["cells", "placed_objects", "placed_teleports", "landscapes"], ["CELL", "REFR", "LAND"],
@@ -265,7 +271,7 @@ namespace AssetConverter
                     ?? throw new InvalidOperationException("Job requires raw ESM scans but the import plan did not schedule them."));
                 await loader.ProcessCellsAsync(context.File, conn, transaction, scans.Precombined, scans.RefrSwaps, scans.WaterCurrents);
             },
-            NeedsRawScans: true);
+            NeedsRawScans: true, CountWork: (_, file, ct) => CountCells(file, ct).Units);
 
         internal static readonly IReadOnlyList<RecordJob> AllJobs = [.. RecordJobs, WorldspaceJob, CellsJob];
     }

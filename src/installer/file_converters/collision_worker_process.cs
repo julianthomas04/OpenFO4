@@ -10,8 +10,9 @@ namespace AssetConverter
     /// <summary>
     /// Runs the FO4 collision worker, the python batch decoder <c>src/installer/python/fo4_collision_worker.py</c>, as one child process at
     /// below-normal priority, relays its output as installer log and step progress, and ends it on cancellation. The NIFs it looks at come
-    /// either from a list file that is complete before it starts, or from a <see cref="NifWorkQueue"/> that is written to its stdin while
-    /// the NIFs are still being extracted, so its decoding overlaps the extraction. The pool of processes the worker starts is sized to
+    /// either from a list file that is complete before it starts, or from a <see cref="NifWorkQueue"/> that is written to its stdin. The
+    /// number of NIFs is the progress total and is known before the worker starts: the length of the list, or what the queue has
+    /// announced by then; the worker's own count of NIFs to process never changes it. The pool of processes the worker starts is sized to
     /// a share of the <see cref="MemoryBudget"/> and holds that memory for as long as the worker runs.
     /// </summary>
     internal static class CollisionWorkerProcess
@@ -25,11 +26,11 @@ namespace AssetConverter
 
         private static readonly TimeSpan GraceAfterKill = TimeSpan.FromSeconds(10);
 
-        public static void RunFromList(string sourceDir, string destDir, string nifListPath, int progressPhase, MemoryBudget memory, CancellationToken ct)
+        public static void RunFromList(string sourceDir, string destDir, string nifListPath, int nifCount, int progressPhase, MemoryBudget memory, CancellationToken ct)
         {
             using var pool = ReservePool(memory, ct, out int jobs);
             using var covered = pool.CoverChildProcesses();
-            using var worker = Worker.Start(CreateStartInfo(sourceDir, destDir, nifListPath, jobs), progressPhase);
+            using var worker = Worker.Start(CreateStartInfo(sourceDir, destDir, nifListPath, jobs), progressPhase, nifCount);
             WaitForWorker(worker.Process, worker.Kill, ct);
             worker.RequireExitCodeZero();
             worker.Finish();
@@ -37,8 +38,9 @@ namespace AssetConverter
 
         /// <summary>
         /// Starts the worker on stdin input and sends it every file of <paramref name="candidates"/> as it is queued, closing its stdin once
-        /// the queue is finished and drained. Returns when the worker has processed them all and exited. The worker starts before the first
-        /// NIF is extracted, so <paramref name="sourceDir"/>, which it requires to exist, is created here when the extraction has not yet.
+        /// the queue is finished and drained. Returns when the worker has processed them all and exited. The progress total is what
+        /// <paramref name="candidates"/> has announced when the worker starts, so the queue should be final by then; <paramref name="sourceDir"/>,
+        /// which the worker requires to exist, is created here when the extraction has not yet.
         /// </summary>
         /// <exception cref="OperationCanceledException"><paramref name="ct"/> was cancelled; the worker is killed.</exception>
         /// <exception cref="InvalidOperationException">The worker failed or ended before it had every candidate, or sending to it failed (the cause is the inner exception).</exception>
@@ -54,7 +56,7 @@ namespace AssetConverter
         internal static void RunStreaming(ProcessStartInfo startInfo, string sourceDir, NifWorkQueue candidates, int progressPhase, CancellationToken ct)
         {
             startInfo.RedirectStandardInput = true;
-            using var worker = Worker.Start(startInfo, progressPhase);
+            using var worker = Worker.Start(startInfo, progressPhase, candidates.ExpectedCount);
             using var stopFeeding = CancellationTokenSource.CreateLinkedTokenSource(ct);
             var feeding = Task.Run(() => Feed(worker, sourceDir, candidates, stopFeeding.Token), CancellationToken.None);
             try
@@ -90,7 +92,7 @@ namespace AssetConverter
             try
             {
                 using (var stdin = CollisionNifList.OpenWriter(worker.Process.StandardInput.BaseStream))
-                    CollisionNifList.StreamTo(stdin, sourceDir, candidates, () => worker.Progress.AddTotal(1), stop);
+                    CollisionNifList.StreamTo(stdin, sourceDir, candidates, stop);
                 worker.Process.StandardInput.Close();
                 return new Feeding(true, null);
             }
@@ -181,16 +183,16 @@ namespace AssetConverter
 
             public Process Process { get; }
 
-            public CollisionWorkerProgress Progress { get; }
+            private CollisionWorkerProgress Progress { get; }
 
             public Stopwatch Elapsed { get; } = Stopwatch.StartNew();
 
-            public static Worker Start(ProcessStartInfo startInfo, int progressPhase)
+            public static Worker Start(ProcessStartInfo startInfo, int progressPhase, long nifCount)
             {
                 Console.WriteLine();
                 Console.WriteLine("Extracting FO4 collision via PyNifly (src/installer/python/fo4_collision_worker.py)…");
                 var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-                var progress = new CollisionWorkerProgress(progressPhase);
+                var progress = new CollisionWorkerProgress(progressPhase, nifCount);
                 process.OutputDataReceived += (_, e) =>
                 {
                     if (e.Data == null) return;

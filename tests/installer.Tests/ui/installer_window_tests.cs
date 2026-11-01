@@ -470,7 +470,7 @@ namespace InstallerTests.Ui
         {
             foreach (var step in InstallSteps.All.Take(InstallSteps.All.Count - 1))
             {
-                int phase = model.BeginPhase(step.Name, 1_234_567, step.Unit);
+                int phase = model.BeginPhase(step.Name, step.KnownTotal ?? 1_234_567, step.Unit);
                 _clock.Advance(TimeSpan.FromSeconds(5));
                 model.Tick(phase, 100);
                 _clock.Advance(TimeSpan.FromSeconds(5));

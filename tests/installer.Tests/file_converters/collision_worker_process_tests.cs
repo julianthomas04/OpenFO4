@@ -26,13 +26,11 @@ namespace InstallerTests
 
         private readonly LogBuffer _log = new(10_000);
         private readonly ConsoleCapture _capture;
-        private readonly int _phase;
 
         public CollisionWorkerProcessTests()
         {
             _capture = ConsoleCapture.Start(_log);
             InstallProgress.Start([new StepDefinition(Step)]);
-            _phase = InstallProgress.BeginPhase(Step, 0);
         }
 
         public void Dispose()
@@ -115,8 +113,14 @@ namespace InstallerTests
 
         private static StepSnapshot Snapshot() => InstallProgress.Model!.GetSnapshot().Steps.Single(step => step.Name == Step);
 
-        private Task RunInBackground(ProcessStartInfo worker, NifWorkQueue queue, CancellationToken ct) =>
-            Task.Run(() => CollisionWorkerProcess.RunStreaming(worker, Root, queue, _phase, ct), CancellationToken.None);
+        /// <summary>The phase of the step as the pipeline begins it: with the queue's announced count as its total, before the worker starts.</summary>
+        private static int BeginPhaseFor(NifWorkQueue queue) => InstallProgress.BeginPhase(Step, queue.ExpectedCount);
+
+        private static Task RunInBackground(ProcessStartInfo worker, NifWorkQueue queue, CancellationToken ct)
+        {
+            int phase = BeginPhaseFor(queue);
+            return Task.Run(() => CollisionWorkerProcess.RunStreaming(worker, Root, queue, phase, ct), CancellationToken.None);
+        }
 
         private async Task WaitUntilReceived(int count)
         {
@@ -163,8 +167,10 @@ namespace InstallerTests
             using var scratch = new TempDirectory();
             var budget = new MemoryBudget(4L * MemoryEstimates.CollisionPoolProcessBytes);
             using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+            var queue = Queued(finished: false);
+            int phase = BeginPhaseFor(queue);
             var run = Task.Run(() => CollisionWorkerProcess.RunStreaming(
-                Path.Combine(scratch.Path, "Meshes"), Path.Combine(scratch.Path, "out"), Queued(finished: false), _phase, budget, cancel.Token), CancellationToken.None);
+                Path.Combine(scratch.Path, "Meshes"), Path.Combine(scratch.Path, "out"), queue, phase, budget, cancel.Token), CancellationToken.None);
 
             Assert.True(SpinWait.SpinUntil(() => budget.ReservedBytes == MemoryEstimates.CollisionPoolProcessBytes, Patience));
             await cancel.CancelAsync();
@@ -184,11 +190,14 @@ namespace InstallerTests
         }
 
         [Fact]
-        public async Task EachSentNifIsCountedIntoTheStepTotalAndTheFinishedWorkerCompletesIt()
+        public async Task TheStepTotalIsTheQueuedNifCountFromTheStartAndTheFinishedWorkerCompletesIt()
         {
             RequireWindows();
+            var queue = Queued(finished: true, "a.nif", "b.nif", "c.nif", "d.nif");
 
-            await RunInBackground(NumberingWorker(), Queued(finished: true, "a.nif", "b.nif", "c.nif", "d.nif"), Ct).WaitAsync(Patience, Ct);
+            var run = RunInBackground(NumberingWorker(), queue, Ct);
+            Assert.Equal(4, Snapshot().Total);
+            await run.WaitAsync(Patience, Ct);
 
             Assert.Equal(4, Snapshot().Total);
             Assert.Equal(4, Snapshot().Completed);
@@ -227,8 +236,11 @@ namespace InstallerTests
             RequireWindows();
             string[] manyNifs = [.. Enumerable.Range(0, 5000).Select(i => $@"folder\a_long_enough_path_to_fill_a_pipe_buffer\nif{i}.nif")];
 
+            var queue = Queued(finished: true, manyNifs);
+            int phase = BeginPhaseFor(queue);
+
             var raised = Assert.Throws<InvalidOperationException>(() =>
-                CollisionWorkerProcess.RunStreaming(FailingWorker(3), Root, Queued(finished: true, manyNifs), _phase, Ct));
+                CollisionWorkerProcess.RunStreaming(FailingWorker(3), Root, queue, phase, Ct));
 
             Assert.Contains("code 3", raised.Message, StringComparison.Ordinal);
         }
@@ -277,7 +289,10 @@ namespace InstallerTests
             using var scratch = new TempDirectory();
             string stagedMeshes = Path.Combine(scratch.Path, "staging", "Meshes");
 
-            await Task.Run(() => CollisionWorkerProcess.RunStreaming(stagedMeshes, Path.Combine(scratch.Path, "out"), Queued(finished: true), _phase, MemoryBudget.Unlimited(), Ct), Ct)
+            var queue = Queued(finished: true);
+            int phase = BeginPhaseFor(queue);
+
+            await Task.Run(() => CollisionWorkerProcess.RunStreaming(stagedMeshes, Path.Combine(scratch.Path, "out"), queue, phase, MemoryBudget.Unlimited(), Ct), Ct)
                 .WaitAsync(Patience, Ct);
 
             Assert.True(Directory.Exists(stagedMeshes));
@@ -357,8 +372,11 @@ namespace InstallerTests
         {
             RequireWindows();
 
+            var queue = Queued(finished: false);
+            int phase = BeginPhaseFor(queue);
+
             Assert.ThrowsAny<Win32Exception>(() =>
-                CollisionWorkerProcess.RunStreaming(Command("no_such_collision_worker_program.exe"), Root, Queued(finished: false), _phase, Ct));
+                CollisionWorkerProcess.RunStreaming(Command("no_such_collision_worker_program.exe"), Root, queue, phase, Ct));
         }
     }
 }

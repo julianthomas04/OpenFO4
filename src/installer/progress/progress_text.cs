@@ -4,6 +4,7 @@ namespace AssetConverter.Progress
     public static class ProgressText
     {
         public const string Skipped = "skipped";
+        public const string Preparing = "Preparing...";
 
         /// <summary>"3 of 9 steps done · 2 running" while running, an outcome sentence afterwards.</summary>
         public static string Overall(ProgressSnapshot snapshot)

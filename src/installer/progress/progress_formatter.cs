@@ -26,11 +26,12 @@ namespace AssetConverter.Progress
             return step.Completed > 0 ? $"{Number(step.Completed)}{unit}" : "";
         }
 
-        /// <summary>"12,345 / 63,000" for the step list; empty for a step that has not started, "skipped" for one that had no work.</summary>
+        /// <summary>"12,345 / 63,000" for the step list; empty for a step that has not started, "Preparing..." while it discovers its work, "skipped" for one that had no work.</summary>
         public string Compact(StepSnapshot step)
         {
             if (step.WasSkipped) return ProgressText.Skipped;
             if (step.Status == StepStatus.Pending) return "";
+            if (step.IsPreparing) return ProgressText.Preparing;
             if (step.Total > 0) return $"{Number(step.Completed)} / {Number(step.Total)}";
             return step.Completed > 0 ? Number(step.Completed) : "";
         }

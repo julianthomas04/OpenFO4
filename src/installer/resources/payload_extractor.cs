@@ -6,8 +6,8 @@ namespace AssetConverter
     /// <summary>The payload archive a packaged installer carries and the content hash that identifies it.</summary>
     internal sealed record PayloadSource(Func<Stream> Open, string Id);
 
-    /// <summary>Reports the unpacking of the payload: the number of files it holds, known once the archive is open, and each file as it is written.</summary>
-    internal sealed record UnpackProgress(Action<long> FileCount, Action FileUnpacked);
+    /// <summary>Reports the unpacking of the payload: the number of files it holds and how many of them are game files, both known once the archive is open, and each file as it is written.</summary>
+    internal sealed record UnpackProgress(Action<long> FileCount, Action<long> GameFileCount, Action FileUnpacked);
 
     /// <summary>
     /// Unpacks the payload into a folder of its own per installer version and payload content, once: a folder that holds the completion
@@ -89,6 +89,7 @@ namespace AssetConverter
             string root = Path.GetFullPath(folder) + Path.DirectorySeparatorChar;
             Directory.CreateDirectory(folder);
             progress?.FileCount(archive.Entries.Count(entry => !IsDirectory(entry)));
+            progress?.GameFileCount(InstallerResources.CountPayloadGameFiles(archive.Entries.Select(entry => entry.FullName)));
             foreach (var entry in archive.Entries)
             {
                 string destination = Path.GetFullPath(Path.Combine(folder, entry.FullName));

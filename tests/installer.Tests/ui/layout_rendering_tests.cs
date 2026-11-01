@@ -26,7 +26,7 @@ namespace InstallerTests.Ui
 
         private static void Complete(ProgressModel model, string name, long total = 10)
         {
-            int phase = model.BeginPhase(name, total, null);
+            int phase = model.BeginPhase(name, InstallSteps.All.FirstOrDefault(step => step.Name == name)?.KnownTotal ?? total, null);
             model.Tick(phase, total);
             model.EndPhase(phase);
         }

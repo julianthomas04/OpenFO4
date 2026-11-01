@@ -60,6 +60,16 @@ namespace AssetConverter
                 new GameFiles(gameFiles, Required: true, Root: gameFolder), () => null);
         }
 
+        /// <summary>How many of the payload archive's entries <see cref="ForPayload"/> will list as game files once the payload is unpacked: the files below the game folder.</summary>
+        /// <param name="entryNames">The full names of every entry of the payload archive, directories included.</param>
+        public static long CountPayloadGameFiles(IEnumerable<string> entryNames) => entryNames.LongCount(IsPayloadGameFile);
+
+        private static bool IsPayloadGameFile(string entryName)
+        {
+            string path = entryName.Replace('\\', '/');
+            return !path.EndsWith('/') && path.StartsWith(GameFolder + '/', StringComparison.OrdinalIgnoreCase);
+        }
+
         /// <summary>Absolute path of a resource given relative to <see cref="Root"/>; throws if it does not exist.</summary>
         public string Require(string relativePath)
         {

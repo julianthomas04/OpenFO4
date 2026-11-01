@@ -27,6 +27,7 @@ namespace AssetConverter.Pipeline
             var failures = new ConcurrentBag<string>();
             var tree = StagingTree.Walk(root, failures);
             InstallProgress.AddTotal(progressPhase, tree.Files.Count + tree.Folders.Count + 1);
+            InstallProgress.SealTotal(progressPhase);
 
             int filesRemoved = 0;
             int foldersRemoved = 0;

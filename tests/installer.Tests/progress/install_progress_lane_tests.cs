@@ -35,7 +35,7 @@ namespace InstallerTests.Progress
             var failure = new InvalidOperationException("disk full");
             var other = InstallProgress.RunLane(["Database"], async () =>
             {
-                InstallProgress.BeginPhase("Database", 0);
+                InstallProgress.BeginPhase("Database", null);
                 await Task.Delay(Timeout.Infinite, InstallProgress.CancelToken);
             });
 
@@ -276,11 +276,15 @@ namespace InstallerTests.Progress
         [Fact]
         public void PhasesReportedThroughTheFacadeAreCountedAndCallsWithoutAPhaseAreIgnored()
         {
-            int phase = InstallProgress.BeginPhase("Meshes", 10, "meshes");
-            InstallProgress.Tick(phase, 4);
+            int phase = InstallProgress.BeginPhase("Meshes", null, "meshes");
+            InstallProgress.AddTotal(phase, 10);
             InstallProgress.AddTotal(phase, 5);
+            InstallProgress.SealTotal(phase);
+            InstallProgress.Tick(phase, 4);
             InstallProgress.SetDetail(phase, "a.nif");
             InstallProgress.Tick(-1);
+            InstallProgress.AddTotal(-1, 3);
+            InstallProgress.SealTotal(-1);
             InstallProgress.EndPhase(-1);
 
             var step = InstallProgress.Model!.GetSnapshot().Steps.Single(s => s.Name == "Meshes");

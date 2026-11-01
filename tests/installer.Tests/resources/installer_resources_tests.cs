@@ -263,6 +263,14 @@ namespace InstallerTests.Resources
         {
             Assert.False(InstallerResourceLocator.IsPackaged(typeof(InstallerResources).Assembly));
         }
+
+        [Fact]
+        public void OnlyFilesBelowTheGameFolderCountAsGameFilesWhateverTheCaseOrSeparator()
+        {
+            string[] entries = ["game/openfo4.exe", "GAME/plugins/a.dll", @"game\plugins.dll", "game/", "game/plugins/", "game", "games/x.dll", "runtime/game/y.dll", "readme.txt"];
+
+            Assert.Equal(3, InstallerResources.CountPayloadGameFiles(entries));
+        }
     }
 
     public sealed class InstallerVersionTests
