@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using AssetConverter.Progress;
 using Mutagen.Bethesda.Fallout4;
 
@@ -16,30 +17,15 @@ namespace AssetConverter
     // known and sealed once. Nothing is kept: the load reads the records again.
     public partial class ESMLoader
     {
-        private static bool IsUnknownRecordType(Exception ex) =>
-            ex.Message.Contains("Unknown major record type") ||
-            (ex.InnerException?.Message.Contains("Unknown major record type") ?? false);
+        // Enumerated rather than counted by Count(): a collection-backed group may know its size without ever reading the
+        // records, while the load reads them and fails on a record type Mutagen does not know.
+        internal static long CountGroup<T>(IEnumerable<T> records) => ReadGroup(records, CountEnumerated, skipped: 0L);
 
-        // A record type Mutagen does not know counts as empty, as ProcessGroupAsync skips it.
-        internal static long CountGroup<T>(IEnumerable<T> records)
+        private static long CountEnumerated<T>(IEnumerable<T> records)
         {
-            try { return records.Count(); }
-            catch (Exception ex) when (IsUnknownRecordType(ex)) { return 0; }
-        }
-
-        private static List<ICellGetter> WorldspaceCells(IWorldspaceGetter worldspace)
-        {
-            var cells = new List<ICellGetter>();
-            if (worldspace.TopCell != null) cells.Add(worldspace.TopCell);
-            if (worldspace.SubCells != null) ExtractCellsRecursive(worldspace.SubCells, cells);
-            return cells;
-        }
-
-        private static List<ICellGetter> TopLevelCells(IFallout4ModGetter file)
-        {
-            var cells = new List<ICellGetter>();
-            if (file.Cells != null) ExtractCellsRecursive(file.Cells, cells);
-            return cells;
+            long count = 0;
+            foreach (var _ in records) count++;
+            return count;
         }
 
         internal static CellWorkCounts CountCellBatch(IReadOnlyCollection<ICellGetter> cells)
@@ -49,29 +35,49 @@ namespace AssetConverter
         }
 
         // The cell batches of the load: one per worldspace plus the top-level interiors.
-        internal long CountCellWork(IFallout4ModGetter file)
+        internal static CellWorkCounts CountCells(IFallout4ModGetter file, CancellationToken ct)
         {
             var total = default(CellWorkCounts);
             foreach (var batch in file.Worldspaces.Select(WorldspaceCells).Append(TopLevelCells(file)))
             {
-                _ct.ThrowIfCancellationRequested();
+                ct.ThrowIfCancellationRequested();
                 total += CountCellBatch(batch);
             }
-            return total.Units;
+            return total;
         }
 
         private async Task DiscoverAndSealTotalAsync(IFallout4ModGetter file)
         {
             long total;
             using (EsmTiming.MeasurePhase("discovery.wall"))
-            {
-                var counts = AllJobs.Where(job => job.CountWork != null)
-                    .Select(job => Task.Run(() => job.CountWork!(this, file), _ct));
-                total = (await Task.WhenAll(counts)).Sum();
-            }
+                total = await CountPlannedWorkAsync(file);
             Console.WriteLine($"Discovery: {total:N0} units of work.");
             InstallProgress.AddTotal(_progressPhase, total);
             InstallProgress.SealTotal(_progressPhase);
+        }
+
+        // The first job to fail cancels the others, and its own exception is the one thrown, not a sibling's cancellation.
+        internal async Task<long> CountPlannedWorkAsync(IFallout4ModGetter file)
+        {
+            using var cancelOnFault = CancellationTokenSource.CreateLinkedTokenSource(_ct);
+            var counts = AllJobs.Where(job => job.CountWork != null).Select(job => Task.Run(() =>
+            {
+                try { return job.CountWork!(this, file, cancelOnFault.Token); }
+                catch { cancelOnFault.Cancel(); throw; }
+            }, cancelOnFault.Token)).ToList();
+
+            try
+            {
+                return (await Task.WhenAll(counts)).Sum();
+            }
+            catch
+            {
+                var cause = counts.Where(count => count.IsFaulted).SelectMany(count => count.Exception!.InnerExceptions)
+                    .FirstOrDefault(ex => ex is not OperationCanceledException);
+                if (cause == null) throw;
+                ExceptionDispatchInfo.Capture(cause).Throw();
+                throw;
+            }
         }
     }
 }

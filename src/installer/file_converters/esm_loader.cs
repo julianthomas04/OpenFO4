@@ -56,6 +56,19 @@ namespace AssetConverter
             await EsmTiming.RunReportedAsync(() => ImportAsync(path)).ConfigureAwait(false);
         }
 
+        // The raw scans are not awaited by anything once the discovery has failed; a failure of their own is reported, not lost.
+        private static async Task ReportRawScanOutcomeAsync(Task<RawScans> rawScansTask)
+        {
+            try
+            {
+                await rawScansTask;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Raw ESM scans also failed: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
         private async Task ImportAsync(string path)
         {
             using var dbManager = new DatabaseManager(_dbPath);
@@ -73,7 +86,15 @@ namespace AssetConverter
             // under Wave 1 instead of serializing after it.
             var rawScansTask = Task.Run(() => ScanRawEsm(path));
 
-            await DiscoverAndSealTotalAsync(file);
+            try
+            {
+                await DiscoverAndSealTotalAsync(file);
+            }
+            catch
+            {
+                await ReportRawScanOutcomeAsync(rawScansTask);
+                throw;
+            }
 
             await dbManager.Connection.ExecuteAsync("PRAGMA foreign_keys = OFF");
             Console.WriteLine("Wave 1: processing all independent record groups in parallel...");
@@ -236,9 +257,8 @@ namespace AssetConverter
         private async Task ProcessGroupAsync<T>(IEnumerable<T> records, string recordType, SqliteConnection conn, IRecordProcessor<T> processor, SqliteTransaction? transaction = null)
             where T : IMajorRecordGetter
         {
-            List<T> list;
-            try { list = records.ToList(); }
-            catch (Exception ex) when (IsUnknownRecordType(ex))
+            var list = ReadGroup(records, group => group.ToList(), skipped: null);
+            if (list == null)
             {
                 Console.WriteLine($"Skipping {typeof(T).Name} — not a Fallout 4 record type.");
                 return;
@@ -1550,8 +1570,6 @@ namespace AssetConverter
 
     public class WorldspaceProcessor : BaseRecordProcessor<IWorldspaceGetter>
     {
-        private const int DeletedRecordFlag = 0x20;
-
         protected override async Task ProcessSpecificRecordAsync(IWorldspaceGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
         {
             const string sql = @"
@@ -1594,7 +1612,7 @@ namespace AssetConverter
             foreach (var reference in worldspace.TopCell?.Persistent ?? [])
             {
                 if (reference is not IPlacedObjectGetter { MapMarker: { } marker } placed) continue;
-                if ((placed.MajorRecordFlagsRaw & DeletedRecordFlag) != 0) continue;
+                if ((placed.MajorRecordFlagsRaw & RecordFlags.Deleted) != 0) continue;
 
                 await conn.ExecuteAsync(sql, new
                 {
@@ -2317,7 +2335,7 @@ namespace AssetConverter
                 if (obj is IPlacedObjectGetter sPo && sPo.Scale.HasValue) scale = sPo.Scale.Value;
                 else if (obj is IPlacedNpcGetter sNpc && sNpc.Scale.HasValue) scale = sNpc.Scale.Value;
 
-                int disabled = (obj.MajorRecordFlagsRaw & 0x800) != 0 ? 1 : 0;
+                int disabled = (obj.MajorRecordFlagsRaw & RecordFlags.InitiallyDisabled) != 0 ? 1 : 0;
 
                 // XESP: the ref's visibility mirrors the parent's enable state
                 // (inverted when the opposite-of-parent flag is set). The final

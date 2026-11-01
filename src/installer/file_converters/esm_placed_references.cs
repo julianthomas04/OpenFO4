@@ -15,8 +15,6 @@ namespace AssetConverter
     /// </summary>
     internal static class PlacedReferences
     {
-        private const int DeletedRecordFlag = 0x20;
-
         /// <summary>
         /// False for deleted refs (record flag 0x20: they never spawn in-game; vanilla Fallout4.esm contains none, DLC/mod plugins
         /// can) and for refs without a base object.
@@ -24,12 +22,25 @@ namespace AssetConverter
         public static bool TryGetBase(IPlacedGetter placed, out string baseObject)
         {
             baseObject = "";
-            if ((placed.MajorRecordFlagsRaw & DeletedRecordFlag) != 0) return false;
+            if (!IsKept(placed)) return false;
 
-            if (placed is IPlacedObjectGetter placedObject && !placedObject.Base.IsNull) baseObject = placedObject.Base.FormKey.ToString();
-            else if (placed is IPlacedNpcGetter placedNpc && !placedNpc.Base.IsNull) baseObject = placedNpc.Base.FormKey.ToString();
-            return baseObject.Length > 0;
+            baseObject = placed switch
+            {
+                IPlacedObjectGetter placedObject => placedObject.Base.FormKey.ToString(),
+                IPlacedNpcGetter placedNpc => placedNpc.Base.FormKey.ToString(),
+                _ => throw new InvalidOperationException($"Placed reference {placed.FormKey} of type {placed.GetType().Name} has no base."),
+            };
+            return true;
         }
+
+        /// <summary>The filter of <see cref="TryGetBase"/> without building the base object's key.</summary>
+        public static bool IsKept(IPlacedGetter placed) =>
+            (placed.MajorRecordFlagsRaw & RecordFlags.Deleted) == 0 && placed switch
+            {
+                IPlacedObjectGetter placedObject => !placedObject.Base.IsNull,
+                IPlacedNpcGetter placedNpc => !placedNpc.Base.IsNull,
+                _ => false,
+            };
 
         /// <summary>
         /// XTEL: load-door teleport. Only IPlacedObjectGetter carries it (ACHR/PlacedNpc cannot). The filter is "has a non-null
@@ -49,7 +60,7 @@ namespace AssetConverter
             long placed = 0, teleports = 0;
             foreach (var reference in placedReferences)
             {
-                if (!TryGetBase(reference, out _)) continue;
+                if (!IsKept(reference)) continue;
                 placed++;
                 if (TryGetTeleport(reference, out _)) teleports++;
             }

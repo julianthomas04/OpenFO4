@@ -61,16 +61,18 @@ namespace AssetConverter
         private static RecordJob NavMeshJob() => new(
             ["navigation_meshes"], ["NAVM", LegacyNavMeshRecordType],
             (loader, context, conn, transaction) => loader.ProcessNavMeshesAsync(context.File, conn, transaction),
-            CountWork: (loader, file) => loader.CountNavMeshes(file));
+            CountWork: (loader, file, ct) => loader.CountNavMeshes(file, ct));
 
-        // Only the meshes that survive validation are ticked, so the count prepares them (encoding each) and drops the result;
+        // Only the meshes that survive validation are ticked, so the count validates (encodes) each and keeps none of them;
         // the load prepares them again. A systemic failure surfaces here, with the errors the load would have printed.
-        private long CountNavMeshes(IFallout4ModGetter file)
+        internal long CountNavMeshes(IFallout4ModGetter file, CancellationToken ct = default)
         {
             var errors = new StringWriter();
             try
             {
-                return PreparedNavMeshes.From(EnumerateCellScopes(file), errors, NavMeshMaxSkippedFraction).Entries.Count;
+                return PreparedNavMeshes.CountValid(
+                    EnumerateCellScopes(file).Select(scope => { ct.ThrowIfCancellationRequested(); return scope; }),
+                    errors, NavMeshMaxSkippedFraction);
             }
             catch (NavMeshExtractionException)
             {
@@ -91,17 +93,10 @@ namespace AssetConverter
         private static IEnumerable<NavMeshCellScope> EnumerateCellScopes(IFallout4ModGetter file)
         {
             foreach (var worldspace in file.Worldspaces)
-            {
-                var cells = new List<ICellGetter>();
-                if (worldspace.TopCell != null) cells.Add(worldspace.TopCell);
-                if (worldspace.SubCells != null) ExtractCellsRecursive(worldspace.SubCells, cells);
-                foreach (var cell in cells)
+                foreach (var cell in WorldspaceCells(worldspace))
                     yield return new NavMeshCellScope(cell, worldspace.FormKey);
-            }
 
-            var topCells = new List<ICellGetter>();
-            if (file.Cells != null) ExtractCellsRecursive(file.Cells, topCells);
-            foreach (var cell in topCells)
+            foreach (var cell in TopLevelCells(file))
                 yield return new NavMeshCellScope(cell, null);
         }
     }
