@@ -136,9 +136,10 @@ namespace AssetConverter.Progress
             }
         }
 
-        /// <summary>Records progress on a phase. Throws while the phase is still discovering its total, since the fraction would be meaningless.</summary>
+        /// <summary>Records progress on a phase; a count of zero changes nothing and a negative one is rejected. Throws while the phase is still discovering its total, since the fraction would be meaningless.</summary>
         public void Tick(int phase, long count = 1)
         {
+            ArgumentOutOfRangeException.ThrowIfNegative(count);
             if (TryGetPhase(phase) is not { } state) return;
             if (!state.Sealed)
                 throw new InvalidOperationException($"Step '{state.Step.Name}' ticked before its total was sealed.");

@@ -407,19 +407,30 @@ namespace InstallerTests.Progress
         }
 
         [Fact]
-        public void TheOverallFractionNeverDecreasesEvenWhenACounterIsCorrectedDownwards()
+        public void TheOverallFractionNeverDecreasesWhenAnUndeclaredStepJoinsTheRun()
+        {
+            var model = Model(Step("A"));
+            model.EndPhase(model.BeginPhase("A", 10, null));
+            Assert.Equal(1.0, model.GetSnapshot().OverallFraction);
+
+            model.BeginPhase("Joined late", 10, null);
+            var after = model.GetSnapshot();
+
+            Assert.Equal(0, after.Steps.Single(s => s.Name == "Joined late").Fraction);
+            Assert.Equal(1.0, after.OverallFraction);
+        }
+
+        [Fact]
+        public void ATickCountMustNotBeNegativeAndZeroChangesNothing()
         {
             var model = Model(Step("A"));
             int phase = model.BeginPhase("A", 10, null);
-            model.Tick(phase, 8);
-            double high = model.GetSnapshot().OverallFraction;
+            model.Tick(phase, 4);
 
-            model.Tick(phase, -4);
-            var after = model.GetSnapshot();
+            model.Tick(phase, 0);
+            Assert.Throws<ArgumentOutOfRangeException>(() => model.Tick(phase, -1));
 
-            Assert.Equal(0.4, after.Steps.Single().Fraction, precision: 10);
-            Assert.Equal(0.8, high, precision: 10);
-            Assert.Equal(high, after.OverallFraction);
+            Assert.Equal(4, model.GetSnapshot().Steps.Single().Completed);
         }
 
         [Fact]
