@@ -21,29 +21,34 @@ namespace AssetConverter.UiLayout
         private const string FontLibraryPrefix = "fonts_";
         private const string JsonExtension = ".json";
 
-        /// <returns><c>true</c> when any document was written.</returns>
+        /// <returns><c>true</c> when there was work: a document was written or an obsolete one deleted.</returns>
         public static bool Extract(string fo4Location, string settingsDirectory, string outDir)
         {
             (string language, var entries) = ReadEntries(fo4Location, settingsDirectory);
             return Convert(entries, language, outDir);
         }
 
-        /// <summary>Reads the archive and works out which documents are out of date or no longer produced; null when the folder is current.</summary>
-        internal static PendingExtraction? Plan(string fo4Location, string settingsDirectory, string outDir)
-        {
-            (string language, var entries) = ReadEntries(fo4Location, settingsDirectory);
-            return Plan(entries, language, outDir);
-        }
+        const string PendingDetail = "UI layout";
 
-        internal static PendingExtraction? Plan(IReadOnlyList<(string Path, byte[] Content)> entries, string language, string outDir)
+        /// <summary>Reads the archive and works out which documents are out of date or no longer produced; null when the folder is current.</summary>
+        internal static PendingExtraction? Plan(string fo4Location, string settingsDirectory, string outDir) =>
+            Plan(() => ReadEntries(fo4Location, settingsDirectory), outDir);
+
+        /// <param name="read">Reads the language and the archive entries; called again when the extraction runs, so the plan keeps none of them.</param>
+        internal static PendingExtraction? Plan(Func<(string Language, List<(string Path, byte[] Content)> Entries)> read, string outDir)
         {
+            (string language, var entries) = read();
             var plan = PlanConversion(entries, language, outDir);
             if (!plan.HasWork)
             {
                 ReportSummary(plan);
                 return null;
             }
-            return new PendingExtraction("UI layout", () => Run(plan));
+            return new PendingExtraction(PendingDetail, () =>
+            {
+                (string runLanguage, var runEntries) = read();
+                Convert(runEntries, runLanguage, outDir);
+            });
         }
 
         private static (string Language, List<(string Path, byte[] Content)> Entries) ReadEntries(string fo4Location, string settingsDirectory)
@@ -123,7 +128,7 @@ namespace AssetConverter.UiLayout
             return new ConversionPlan(outDir, language, documents, stale, FindUnproduced(outDir, documents.Select(d => d.RelativePath)));
         }
 
-        /// <returns><c>true</c> when any document was written.</returns>
+        /// <returns><c>true</c> when there was work: a document was written or an obsolete one deleted.</returns>
         private static bool Run(ConversionPlan plan)
         {
             Directory.CreateDirectory(plan.OutDir);
@@ -134,7 +139,7 @@ namespace AssetConverter.UiLayout
 
             DeleteUnproduced(plan.Unproduced);
             ReportSummary(plan);
-            return plan.Stale.Count > 0;
+            return plan.HasWork;
         }
 
         private static void ReportSummary(ConversionPlan plan) =>

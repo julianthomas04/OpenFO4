@@ -180,7 +180,7 @@ namespace InstallerTests.UiLayout
         [Fact]
         public void Plan_NothingWrittenYet_HasPendingWorkAndWritesNothingUntilItRuns()
         {
-            var pending = UiLayoutExtractor.Plan(Entries(), "xx", OutDir);
+            var pending = UiLayoutExtractor.Plan(() => ("xx", Entries()), OutDir);
 
             Assert.NotNull(pending);
             Assert.Equal("UI layout", pending.Detail);
@@ -196,7 +196,7 @@ namespace InstallerTests.UiLayout
         {
             Convert(Entries());
 
-            Assert.Null(UiLayoutExtractor.Plan(Entries(), "xx", OutDir));
+            Assert.Null(UiLayoutExtractor.Plan(() => ("xx", Entries()), OutDir));
         }
 
         [Fact]
@@ -205,7 +205,7 @@ namespace InstallerTests.UiLayout
             Convert(Entries());
             var changed = Entries().Select(e => e.Path.EndsWith("Menu.swf", StringComparison.Ordinal) ? (e.Path, Movie(frameRate: 12)) : e).ToList();
 
-            var pending = UiLayoutExtractor.Plan(changed, "xx", OutDir);
+            var pending = UiLayoutExtractor.Plan(() => ("xx", changed), OutDir);
             Assert.NotNull(pending);
             pending.Run();
 
@@ -217,13 +217,13 @@ namespace InstallerTests.UiLayout
         {
             Convert(Entries((@"Interface\Old.swf", Movie())));
 
-            var pending = UiLayoutExtractor.Plan(Entries(), "xx", OutDir);
+            var pending = UiLayoutExtractor.Plan(() => ("xx", Entries()), OutDir);
             Assert.NotNull(pending);
             Assert.True(File.Exists(Path.Combine(OutDir, "Old.json")));
             pending.Run();
 
             Assert.False(File.Exists(Path.Combine(OutDir, "Old.json")));
-            Assert.Null(UiLayoutExtractor.Plan(Entries(), "xx", OutDir));
+            Assert.Null(UiLayoutExtractor.Plan(() => ("xx", Entries()), OutDir));
         }
 
         [Fact]

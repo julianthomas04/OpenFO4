@@ -26,16 +26,15 @@ namespace AssetConverter
         /// <returns><c>true</c> when the art was exported, <c>false</c> when it was already present.</returns>
         public static bool Extract(string fo4Location, string stagingRoot, string artRoot, MemoryBudget memory, CancellationToken ct = default)
         {
-            var pending = Plan(fo4Location, stagingRoot, artRoot, memory, ct);
-            pending?.Run();
-            return pending != null;
+            return PendingExtraction.RunIfPending(Plan(fo4Location, stagingRoot, artRoot, memory, ct));
         }
+
+        const string PendingDetail = "Pip-Boy art";
 
         /// <summary>Checks whether the art in <paramref name="artRoot"/> is current (which may start an ffdec JVM to read its version); null when it is, else the export that renews it.</summary>
         internal static PendingExtraction? Plan(string fo4Location, string stagingRoot, string artRoot, MemoryBudget memory, CancellationToken ct = default)
         {
             var movies = ReadMovies(fo4Location);
-            var plan = PipboyArtPlan.Build(movies);
             var stamp = new ConversionStamp(ExtractorVersion, null,
                 [.. movies.Values.OrderBy(m => m.Source, StringComparer.OrdinalIgnoreCase).Select(m => SourceFingerprint.Of(InterfaceRoot + m.Source, m.Content))],
                 Ffdec.Version(memory, ct));
@@ -45,12 +44,13 @@ namespace AssetConverter
                 Console.WriteLine($"Pip-Boy art already present at {artRoot}; skipping.");
                 return null;
             }
-            return new PendingExtraction("Pip-Boy art", () => Export(movies, plan, stamp, reason, stagingRoot, artRoot, memory, ct));
+            return new PendingExtraction(PendingDetail, () => Export(fo4Location, stamp, reason, stagingRoot, artRoot, memory, ct));
         }
 
-        static void Export(Dictionary<string, ArtMovie> movies, PipboyArtPlan plan, ConversionStamp stamp, string reason, string stagingRoot, string artRoot,
-            MemoryBudget memory, CancellationToken ct)
+        static void Export(string fo4Location, ConversionStamp stamp, string reason, string stagingRoot, string artRoot, MemoryBudget memory, CancellationToken ct)
         {
+            var movies = ReadMovies(fo4Location);
+            var plan = PipboyArtPlan.Build(movies);
             Console.WriteLine($"Pip-Boy art at {artRoot} is exported again: {reason}.");
 
             var timer = Stopwatch.StartNew();
