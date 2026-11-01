@@ -46,19 +46,18 @@ namespace AssetConverter
 
         /// <summary>
         /// Writes each file taken from <paramref name="candidates"/> to <paramref name="destination"/> the moment it is taken, flushed so the
-        /// reader sees it at once, until the queue is finished and drained. <paramref name="onTaken"/> is called before each line is written.
+        /// reader sees it at once, until the queue is finished and drained.
         /// </summary>
         /// <returns>How many lines were written.</returns>
         /// <exception cref="ArgumentException">A file is not below <paramref name="sourceRoot"/>.</exception>
         /// <exception cref="OperationCanceledException"><paramref name="ct"/> was cancelled while waiting for the next file.</exception>
         /// <exception cref="Exception">The exception the queue failed with, or the one the destination threw (an <see cref="IOException"/> when its reader is gone).</exception>
-        public static int StreamTo(TextWriter destination, string sourceRoot, NifWorkQueue candidates, Action? onTaken, CancellationToken ct)
+        public static int StreamTo(TextWriter destination, string sourceRoot, NifWorkQueue candidates, CancellationToken ct)
         {
             int written = 0;
             while (candidates.TryTake(out string file, ct))
             {
                 string relative = RelativeToRoot(sourceRoot, file);
-                onTaken?.Invoke();
                 destination.WriteLine(relative);
                 destination.Flush();
                 written++;

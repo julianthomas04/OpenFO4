@@ -5,47 +5,33 @@ using AssetConverter.Progress;
 namespace AssetConverter
 {
     /// <summary>
-    /// Turns the collision worker's stdout into step progress: its "N NIFs to process" line sets the total (a streaming worker prints none; the
-    /// installer adds each NIF it sends instead) and each "... done/N NIFs processed" line ticks the NIFs since the previous one. Safe to call from the process's output-event thread and
-    /// from the thread that completes the run at once; a line it cannot read is reported and never thrown, since an exception in the
-    /// output event handler would end the installer.
+    /// Turns the collision worker's stdout into step progress against a total known before the worker starts: each
+    /// "... done/N NIFs processed" line ticks the NIFs since the previous one, up to the total, and finishing the worker ticks the rest.
     /// </summary>
     internal sealed partial class CollisionWorkerProgress
     {
         private readonly int _phase;
+        private readonly long _total;
         private readonly Action<string> _warn;
         private readonly object _lock = new();
-        private long _total;
         private long _reported;
         private long _processed;
         private bool _finished;
-        private bool _sealed;
 
-        public CollisionWorkerProgress(int phase, Action<string>? warn = null)
+        /// <param name="phase">The progress phase, which began with <paramref name="total"/> as its total.</param>
+        public CollisionWorkerProgress(int phase, long total, Action<string>? warn = null)
         {
+            ArgumentOutOfRangeException.ThrowIfNegative(total);
             _phase = phase;
+            _total = total;
             _warn = warn ?? Console.Error.WriteLine;
         }
-
-        [GeneratedRegex(@"^\s*(\d+) NIFs to process\b")]
-        private static partial Regex TotalLine();
 
         [GeneratedRegex(@"^\s*\.\.\. (\d+)/\d+ NIFs processed\b")]
         private static partial Regex DoneLine();
 
         public void Handle(string line)
         {
-            var total = TotalLine().Match(line);
-            if (total.Success)
-            {
-                if (TryParseCount(total.Groups[1].Value, line, out long count))
-                {
-                    AddTotal(count);
-                    Seal();
-                }
-                return;
-            }
-
             var done = DoneLine().Match(line);
             if (done.Success && TryParseCount(done.Groups[1].Value, line, out long processedCount))
                 ReportDone(processedCount);
@@ -58,33 +44,11 @@ namespace AssetConverter
             ReportDone(null);
         }
 
-        /// <summary>
-        /// BRIDGE: fixes the total once every NIF is known (the worker's own total line, or the end of a streamed feed) and only then
-        /// ticks what was reported so far; to be replaced by a total known before the worker starts.
-        /// </summary>
-        public void Seal()
-        {
-            lock (_lock)
-            {
-                if (_sealed) return;
-                InstallProgress.SealTotal(_phase);
-                _sealed = true;
-            }
-            ReportDone(null);
-        }
-
         private bool TryParseCount(string digits, string line, out long count)
         {
             if (long.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out count)) return true;
             _warn($"WARNING: ignoring a collision worker progress line with an unreadable count: {line.Trim()}");
             return false;
-        }
-
-        /// <summary>Counts NIFs more as work of the step: the worker's own total line, or NIFs the installer sends to a streaming worker.</summary>
-        public void AddTotal(long count)
-        {
-            lock (_lock) _total += count;
-            InstallProgress.AddTotal(_phase, count);
         }
 
         /// <summary>Ticks the NIFs done since the last report, up to the total; <c>null</c> means all of them.</summary>
@@ -94,7 +58,6 @@ namespace AssetConverter
             lock (_lock)
             {
                 if (done is { } processed) _processed = Math.Max(_processed, processed);
-                if (!_sealed) return;
                 delta = Math.Min(_finished ? _total : _processed, _total) - _reported;
                 if (delta <= 0) return;
                 _reported += delta;

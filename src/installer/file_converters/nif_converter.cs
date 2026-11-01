@@ -253,10 +253,10 @@ namespace AssetConverter
         public static void ExtractFo4Collision(string sourceDir, string destDir, IReadOnlyCollection<string> nifFiles, MemoryBudget memory, int progressPhase = -1, CancellationToken ct = default)
         {
             using var list = CollisionNifList.Create(sourceDir, nifFiles);
-            CollisionWorkerProcess.RunFromList(sourceDir, destDir, list.FilePath, progressPhase, memory, ct);
+            CollisionWorkerProcess.RunFromList(sourceDir, destDir, list.FilePath, nifFiles.Count, progressPhase, memory, ct);
         }
 
-        /// <summary>The same extraction for NIFs that are still being queued: the worker starts at once and decodes each as it arrives, until <paramref name="candidates"/> is finished and drained.</summary>
+        /// <summary>The same extraction for NIFs taken from a queue: the worker decodes each as it is sent, until <paramref name="candidates"/> is finished and drained. The queue's announced count is the progress total.</summary>
         internal static void ExtractFo4Collision(string sourceDir, string destDir, NifWorkQueue candidates, int progressPhase, MemoryBudget memory, CancellationToken ct) =>
             CollisionWorkerProcess.RunStreaming(sourceDir, destDir, candidates, progressPhase, memory, ct);
 

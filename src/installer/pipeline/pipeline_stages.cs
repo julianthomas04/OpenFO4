@@ -54,7 +54,7 @@ namespace AssetConverter.Pipeline
         /// Materials, the actor .hkx files, then the mesh archives: what the CPU stages need first, in the order they need it. Each NIF is
         /// handed to <paramref name="meshes"/> the moment it is complete, so the conversion runs while the archives are still extracting.
         /// A failure ends the queue with the same exception, so the workers waiting on it never hang. Each NIF that carries the collision
-        /// marker is handed to <see cref="CollisionWork"/> in the same way, so the collision worker decodes it while the archives extract.
+        /// marker is recorded in <see cref="CollisionWork"/> in the same way, which the collision step reads once the extraction is over.
         /// </summary>
         /// <param name="skeletons">Told which staged NIFs are the render skeletons, as soon as the .hkx files they derive from are staged.</param>
         /// <param name="onInputsReady">Called once the materials and the .hkx files are staged: all the NIF conversion needs besides the NIFs themselves. Material files in the mesh archives
@@ -353,13 +353,14 @@ namespace AssetConverter.Pipeline
             Directory.Exists(_paths.StagedMeshes) ? NifConverter.EnumerateNifs(_paths.StagedMeshes) : [];
 
         /// <summary>
-        /// Starts the collision worker and feeds it <see cref="CollisionWork"/> as the NIFs are queued; it writes *.col.json next to the
-        /// GLBs and ends once the queue is finished and drained. The NIFs extracted by this run were checked for the worker's marker while
-        /// they were written, and are queued the moment they are complete; the rest is queued by <see cref="QueueUnobservedCollisionCandidates"/>.
+        /// Starts the collision worker once <see cref="CollisionWork"/> is final and feeds it the queued NIFs; it writes *.col.json next to
+        /// the GLBs and ends once the queue is drained. The NIFs extracted by this run were checked for the worker's marker while they
+        /// were written and queued the moment they were complete; <see cref="QueueUnobservedCollisionCandidates"/> queued the rest and
+        /// finished the queue, so its size is the step's total.
         /// </summary>
         public void ExtractCollision()
         {
-            int phase = InstallProgress.BeginPhase(InstallSteps.ExtractCollision, null);
+            int phase = InstallProgress.BeginPhase(InstallSteps.ExtractCollision, CollisionWork.ExpectedCount);
             CollisionSidecars.PurgeIfStale(_paths.MeshesOut, _ct);
             NifConverter.ExtractFo4Collision(_paths.StagedMeshes, _paths.MeshesOut, CollisionWork, phase, _memory, _ct);
             CollisionSidecars.RecordCurrent(_paths.MeshesOut);

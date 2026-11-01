@@ -99,13 +99,7 @@ namespace AssetConverter.Pipeline
             var meshes = _lanes.Run(InstallSteps.MeshLane, () => _stages.ConvertMeshes(_meshWork, _skeletons), "NIF -> glTF",
                 after: [_meshInputsReady, _textureIndexReady], opens: [_skeletonGlbsReady]);
 
-            // Reads only the staged NIFs and writes only *.col.json and the manifest, and soaks up the CPU the other lanes leave idle.
-            // It starts at once and decodes each NIF with collision while the mesh archives are still extracting: the work is latency
-            // bound and runs at below-normal priority, so it takes only the CPU the extraction leaves. The staged NIFs the extraction
-            // did not see written are queued after it.
-            var collision = _lanes.Run(InstallSteps.CollisionLane, _stages.ExtractCollision, "collision sidecars");
-            var collisionBacklog = _lanes.Run([], _stages.QueueUnobservedCollisionCandidates, "collision candidates left by earlier runs",
-                after: [_meshesExtracted]);
+            var (collision, collisionBacklog) = StartCollisionLanes(_lanes, _meshesExtracted, _stages.QueueUnobservedCollisionCandidates, _stages.ExtractCollision);
 
             // Reads staged .hkx files and needs only the render skeleton GLBs of the NIF conversion, which come first there and only
             // after the GLB purge that would delete the clip packs; the rest of the NIF conversion runs beside it.
@@ -133,6 +127,19 @@ namespace AssetConverter.Pipeline
                 "MODC swaps + late palette bakes + LOD water + LOD backfill + normalize", after: [database, meshes, palettes, lodWater]);
 
             return [pump, shaders, interfaceAssets, audio, video, meshes, collision, collisionBacklog, animations, database, palettes, lodWater, tail];
+        }
+
+        /// <summary>
+        /// Collision reads only the staged NIFs and writes only *.col.json and the manifest, and soaks up the CPU the other lanes leave
+        /// idle: the work is latency bound and runs at below-normal priority. It waits for the mesh extraction and for the staged NIFs the
+        /// extraction did not see written to be queued, so the set of NIFs it decodes, which is the total of its progress, is final when
+        /// it starts. A failure of the queuing fails the collision lane without it ever starting.
+        /// </summary>
+        internal static (Task Collision, Task Backlog) StartCollisionLanes(LaneRunner lanes, Task meshesExtracted, Action queueUnobservedCandidates, Action extractCollision)
+        {
+            var backlog = lanes.Run([], queueUnobservedCandidates, "collision candidates left by earlier runs", after: [meshesExtracted]);
+            var collision = lanes.Run(InstallSteps.CollisionLane, extractCollision, "collision sidecars", after: [backlog]);
+            return (collision, backlog);
         }
 
         private void ConfigureConverters()

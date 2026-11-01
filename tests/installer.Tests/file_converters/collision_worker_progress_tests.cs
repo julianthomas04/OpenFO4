@@ -10,37 +10,44 @@ namespace InstallerTests
     {
         private const string Step = "Extracting collision";
 
-        private readonly int _phase;
-
-        public CollisionWorkerProgressTests()
-        {
-            InstallProgress.Start([new StepDefinition(Step)]);
-            _phase = InstallProgress.BeginPhase(Step, null);
-        }
+        public CollisionWorkerProgressTests() => InstallProgress.Start([new StepDefinition(Step)]);
 
         public void Dispose() => InstallProgress.Stop();
 
         private static StepSnapshot Snapshot() => InstallProgress.Model!.GetSnapshot().Steps.Single(s => s.Name == Step);
 
-        [Fact]
-        public void TheTotalLineSetsTheTotalAndEachProgressLineTicksTheNewNifs()
-        {
-            var progress = new CollisionWorkerProgress(_phase);
+        private static int BeginPhase(long total) => InstallProgress.BeginPhase(Step, total);
 
-            progress.Handle("  100 NIFs to process (20 existing sidecars skipped)");
-            progress.Handle("  ... 40/100 NIFs processed, 3 sidecars written, 0 errors");
-            progress.Handle("  ... 75/100 NIFs processed, 5 sidecars written, 0 errors");
+        [Fact]
+        public void EachProgressLineTicksTheNewNifsAgainstTheTotalTheStepBeganWith()
+        {
+            var progress = new CollisionWorkerProgress(BeginPhase(100), 100);
+
+            progress.Handle("  ... 40/80 NIFs processed, 3 sidecars written, 0 errors");
+            progress.Handle("  ... 75/80 NIFs processed, 5 sidecars written, 0 errors");
 
             Assert.Equal(100, Snapshot().Total);
             Assert.Equal(75, Snapshot().Completed);
         }
 
         [Fact]
-        public void CompletingTheWorkerTicksTheNifsAfterTheLastProgressLine()
+        public void TheWorkersOwnTotalLineNeverChangesTheTotal()
         {
-            var progress = new CollisionWorkerProgress(_phase);
-            progress.Handle("  100 NIFs to process (0 existing sidecars skipped)");
-            progress.Handle("  ... 60/100 NIFs processed, 3 sidecars written, 0 errors");
+            var progress = new CollisionWorkerProgress(BeginPhase(100), 100);
+
+            progress.Handle("  60 NIFs to process (40 existing sidecars skipped)");
+            progress.Handle("  99999999999999999999999 NIFs to process (0 existing sidecars skipped)");
+
+            Assert.Equal(100, Snapshot().Total);
+            Assert.Equal(0, Snapshot().Completed);
+        }
+
+        [Fact]
+        public void CompletingTheWorkerTicksTheNifsAfterTheLastProgressLineAndSkippedSidecarsToo()
+        {
+            var progress = new CollisionWorkerProgress(BeginPhase(100), 100);
+            progress.Handle("  60 NIFs to process (40 existing sidecars skipped)");
+            progress.Handle("  ... 30/60 NIFs processed, 3 sidecars written, 0 errors");
 
             progress.Complete();
 
@@ -50,13 +57,12 @@ namespace InstallerTests
         [Fact]
         public void LinesThatAreNotProgressAreIgnored()
         {
-            var progress = new CollisionWorkerProgress(_phase);
+            var progress = new CollisionWorkerProgress(BeginPhase(10), 10);
 
             progress.Handle("Collision worker: 10 NIFs, 4 sidecars written, 0 skipped (existing), 0 errors, 0 decode problems; manifest 4 entries");
             progress.Handle("  [manifest] skipping unreadable x");
-            progress.Complete();
 
-            Assert.Equal(0, Snapshot().Total);
+            Assert.Equal(10, Snapshot().Total);
             Assert.Equal(0, Snapshot().Completed);
         }
 
@@ -64,22 +70,19 @@ namespace InstallerTests
         public void ACountTooLargeToParseIsReportedAndNeverThrown()
         {
             var warnings = new List<string>();
-            var progress = new CollisionWorkerProgress(_phase, warnings.Add);
+            var progress = new CollisionWorkerProgress(BeginPhase(5), 5, warnings.Add);
 
-            progress.Handle("  99999999999999999999999 NIFs to process (0 existing sidecars skipped)");
             progress.Handle("  ... 99999999999999999999999/5 NIFs processed, 0 sidecars written, 0 errors");
-            progress.Complete();
 
-            Assert.Equal(2, warnings.Count);
-            Assert.All(warnings, warning => Assert.Contains("unreadable count", warning));
+            Assert.Single(warnings);
+            Assert.Contains("unreadable count", warnings[0]);
             Assert.Equal(0, Snapshot().Completed);
         }
 
         [Fact]
         public async Task ProgressLinesAndCompletionFromDifferentThreadsTickEveryNifExactlyOnce()
         {
-            var progress = new CollisionWorkerProgress(_phase);
-            progress.Handle("  4000 NIFs to process (0 existing sidecars skipped)");
+            var progress = new CollisionWorkerProgress(BeginPhase(4000), 4000);
             var lines = Task.Run(() =>
             {
                 for (int done = 1; done <= 4000; done++)
@@ -99,12 +102,24 @@ namespace InstallerTests
         [Fact]
         public void ProgressBeyondTheTotalNeverTicksPastIt()
         {
-            var progress = new CollisionWorkerProgress(_phase);
-            progress.Handle("  10 NIFs to process (0 existing sidecars skipped)");
+            var progress = new CollisionWorkerProgress(BeginPhase(10), 10);
 
             progress.Handle("  ... 12/12 NIFs processed, 0 sidecars written, 0 errors");
 
             Assert.Equal(10, Snapshot().Completed);
+        }
+
+        [Fact]
+        public void WithoutAProgressPhaseTheWorkersOutputIsHandledAndNothingIsReported()
+        {
+            var progress = new CollisionWorkerProgress(-1, 10);
+
+            progress.Handle("  10 NIFs to process (0 existing sidecars skipped)");
+            progress.Handle("  ... 7/10 NIFs processed, 0 sidecars written, 0 errors");
+            progress.Complete();
+
+            Assert.Equal(0, Snapshot().Completed);
+            Assert.Equal(0, Snapshot().Total);
         }
     }
 }
