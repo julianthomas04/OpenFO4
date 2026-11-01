@@ -116,7 +116,7 @@ namespace InstallerTests
         /// <summary>The phase of the step as the pipeline begins it: with the queue's announced count as its total, before the worker starts.</summary>
         private static int BeginPhaseFor(NifWorkQueue queue) => InstallProgress.BeginPhase(Step, queue.ExpectedCount);
 
-        private Task RunInBackground(ProcessStartInfo worker, NifWorkQueue queue, CancellationToken ct)
+        private static Task RunInBackground(ProcessStartInfo worker, NifWorkQueue queue, CancellationToken ct)
         {
             int phase = BeginPhaseFor(queue);
             return Task.Run(() => CollisionWorkerProcess.RunStreaming(worker, Root, queue, phase, ct), CancellationToken.None);

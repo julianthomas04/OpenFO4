@@ -51,7 +51,7 @@ namespace AssetConverter
         const string PendingDetail = "UI fonts";
 
         /// <summary>The font libraries in the order the configuration lists them.</summary>
-        static IReadOnlyList<(string Path, byte[] Content)> ReadLibraries(string fo4Location, IReadOnlyList<string> libraryNames)
+        static List<(string Path, byte[] Content)> ReadLibraries(string fo4Location, IReadOnlyList<string> libraryNames)
         {
             var libraries = InterfaceArchive.ReadMatching(fo4Location, path => libraryNames.Contains(path, StringComparer.OrdinalIgnoreCase))
                 .OrderBy(library => libraryNames.ToList().FindIndex(name => string.Equals(name, library.Path, StringComparison.OrdinalIgnoreCase)))
