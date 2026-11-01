@@ -53,6 +53,20 @@ namespace InstallerTests.Progress
         }
 
         [Fact]
+        public void OnlyInstallingTheGameLacksATotalBeforeItsGroupStartsAndItIsDeclaredFromTheUnpackedFiles()
+        {
+            var planned = InstallSteps.Planned(keepStaging: false, unpacksPayload: true);
+
+            var unknownFollowers = planned.Where(s => s.Group != null)
+                .GroupBy(s => s.Group)
+                .SelectMany(group => group.Skip(1))
+                .Where(s => s.KnownTotal == null)
+                .Select(s => s.Name);
+
+            Assert.Equal([InstallSteps.InstallGame], unknownFollowers);
+        }
+
+        [Fact]
         public void TheKnownTotalsAreFinalBeforeTheirStepsBegin()
         {
             var model = new ProgressModel(InstallSteps.All);

@@ -9,7 +9,7 @@ namespace InstallerTests.Progress
         private static readonly ProgressFormatter German = new(new CultureInfo("de-DE"));
 
         private static StepSnapshot Step(StepStatus status = StepStatus.Running, long completed = 0, long total = 0, TimeSpan? startedAt = null, TimeSpan? elapsed = null) =>
-            new("Converting meshes", "meshes", status, completed, total, null, status == StepStatus.Pending ? null : startedAt ?? TimeSpan.Zero, null, elapsed ?? TimeSpan.FromSeconds(23), 0);
+            new("Converting meshes", "meshes", status, completed, total, null, status == StepStatus.Pending ? null : startedAt ?? TimeSpan.Zero, null, elapsed ?? TimeSpan.FromSeconds(23), 0) { TotalIsFinal = true };
 
         [Fact]
         public void NumbersFollowTheCulture()
@@ -63,7 +63,7 @@ namespace InstallerTests.Progress
         [Fact]
         public void AStepThatNeverStartedShowsNoTimeAndOneThatCountedWorkWithoutATotalIsNotSkipped()
         {
-            var neverStarted = new StepSnapshot("Shaders", "files", StepStatus.Done, 0, 0, null, null, TimeSpan.FromSeconds(9), TimeSpan.Zero, 1.0);
+            var neverStarted = new StepSnapshot("Shaders", "files", StepStatus.Done, 0, 0, null, null, TimeSpan.FromSeconds(9), TimeSpan.Zero, 1.0) { TotalIsFinal = true };
             var uncounted = Step(StepStatus.Done, completed: 7, total: 0);
 
             Assert.True(neverStarted.WasSkipped);

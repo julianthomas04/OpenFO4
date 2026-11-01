@@ -53,6 +53,35 @@ namespace InstallerTests.Progress
         }
 
         [Fact]
+        public void ARunningGroupWithEveryUnitCountedReadsNinetyNinePercentUntilItEnds()
+        {
+            var model = Model();
+            foreach (var (name, total) in new[] { ("First", 10L), ("Second", 1L), ("Late", 1L) })
+                model.Tick(model.BeginPhase(name, total, null), total);
+
+            var group = GroupOf(model);
+
+            Assert.Equal(StepStatus.Running, group.Status);
+            Assert.Equal((12L, 12L), (group.Completed, group.Total));
+            Assert.Equal(0.99, group.Fraction, precision: 10);
+        }
+
+        [Fact]
+        public void AFailedGroupKeepsItsCountersEvenIfAUnitNeverGotItsTotal()
+        {
+            var model = Model(declareLate: false);
+            model.Tick(model.BeginPhase("First", 10, null), 4);
+            model.Fail(["First"]);
+
+            var group = GroupOf(model);
+
+            Assert.Equal(StepStatus.Failed, group.Status);
+            Assert.Equal(4, group.Completed);
+            Assert.Equal(11, group.Total);
+            Assert.False(group.IsPreparing);
+        }
+
+        [Fact]
         public void TheGroupIsPreparingWhileAUnitThatHasNotBegunHasNoDeclaredTotal()
         {
             var model = Model(declareLate: false);

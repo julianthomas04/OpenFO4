@@ -148,22 +148,6 @@ namespace InstallerTests.Progress
         }
 
         [Fact]
-        public void ALaterPhaseReopensAFinishedStepAndKeepsItsStartTime()
-        {
-            var model = Model(Step("A"));
-            _clock.Advance(TimeSpan.FromSeconds(2));
-            model.EndPhase(model.BeginPhase("A", 0, null));
-            _clock.Advance(TimeSpan.FromSeconds(3));
-
-            model.BeginPhase("A", 0, null);
-
-            var step = model.GetSnapshot().Steps.Single();
-            Assert.Equal(StepStatus.Running, step.Status);
-            Assert.Equal(TimeSpan.FromSeconds(2), step.StartedAt);
-            Assert.Null(step.FinishedAt);
-        }
-
-        [Fact]
         public void AStepThatIsStillDiscoveringItsTotalIsPreparingWithoutAFraction()
         {
             var model = Model(Step("A"));
@@ -240,8 +224,8 @@ namespace InstallerTests.Progress
         public void AStepStaysPreparingWhileAnyOfItsPhasesIsStillDiscovering()
         {
             var model = Model(Step("A"));
-            int sealedPhase = model.BeginPhase("A", 10, null);
             int discovering = model.BeginPhase("A", null, null);
+            int sealedPhase = model.BeginPhase("A", 10, null);
 
             Assert.True(model.GetSnapshot().Steps.Single().IsPreparing);
             model.SealTotal(discovering);
@@ -254,8 +238,8 @@ namespace InstallerTests.Progress
         public void AddingTotalToASealedPhaseThrows()
         {
             var model = Model(Step("A"));
-            int numbered = model.BeginPhase("A", 10, null);
             int discovered = model.BeginPhase("A", null, null);
+            int numbered = model.BeginPhase("A", 10, null);
             model.SealTotal(discovered);
 
             Assert.Throws<InvalidOperationException>(() => model.AddTotal(numbered, 1));
@@ -371,6 +355,74 @@ namespace InstallerTests.Progress
         }
 
         [Fact]
+        public void ADoneStepCannotBeReopened()
+        {
+            var model = Model(Step("A"));
+            model.EndPhase(model.BeginPhase("A", 10, null));
+
+            Assert.Throws<InvalidOperationException>(() => model.BeginPhase("A", 5, null));
+            Assert.Throws<InvalidOperationException>(() => model.BeginPhase("A", null, null));
+
+            Assert.Equal(StepStatus.Done, model.GetSnapshot().Steps.Single().Status);
+        }
+
+        [Fact]
+        public void AStepThatHasMadeProgressCannotChangeItsTotalWithAnotherPhase()
+        {
+            var model = Model(Step("A"));
+            int phase = model.BeginPhase("A", 10, null);
+            model.Tick(phase, 8);
+
+            Assert.Throws<InvalidOperationException>(() => model.BeginPhase("A", 10, null));
+            Assert.Throws<InvalidOperationException>(() => model.BeginPhase("A", null, null));
+
+            var step = model.GetSnapshot().Steps.Single();
+            Assert.Equal((8L, 10L), (step.Completed, step.Total));
+            Assert.Equal(0.8, step.Fraction, precision: 10);
+        }
+
+        [Fact]
+        public void AStepWithAFinalTotalCannotGoBackToDiscovering()
+        {
+            var model = Model(Step("A"));
+            model.BeginPhase("A", 10, null);
+
+            Assert.Throws<InvalidOperationException>(() => model.BeginPhase("A", null, null));
+
+            Assert.False(model.GetSnapshot().Steps.Single().IsPreparing);
+        }
+
+        [Fact]
+        public void ARunningStepReadsNinetyNinePercentWhenEveryUnitIsCountedUntilItEnds()
+        {
+            var model = Model(Step("A"));
+            int phase = model.BeginPhase("A", 10, null);
+
+            model.Tick(phase, 10);
+
+            var step = model.GetSnapshot().Steps.Single();
+            Assert.Equal((10L, 10L), (step.Completed, step.Total));
+            Assert.Equal(0.99, step.Fraction);
+            Assert.Equal(0.99, ProgressModel.RunningFractionCap);
+        }
+
+        [Fact]
+        public void TheOverallFractionNeverDecreasesEvenWhenACounterIsCorrectedDownwards()
+        {
+            var model = Model(Step("A"));
+            int phase = model.BeginPhase("A", 10, null);
+            model.Tick(phase, 8);
+            double high = model.GetSnapshot().OverallFraction;
+
+            model.Tick(phase, -4);
+            var after = model.GetSnapshot();
+
+            Assert.Equal(0.4, after.Steps.Single().Fraction, precision: 10);
+            Assert.Equal(0.8, high, precision: 10);
+            Assert.Equal(high, after.OverallFraction);
+        }
+
+        [Fact]
         public void TheOverallFractionNeverGoesBackwardsFromDiscoveryThroughTheLastTick()
         {
             var model = Model(Step("A"), Step("B"));
@@ -408,44 +460,6 @@ namespace InstallerTests.Progress
 
             Assert.Equal(ProgressModel.RunningFractionCap, whileRunning);
             Assert.Equal(1.0, model.GetSnapshot().Steps.Single().Fraction);
-        }
-
-        [Fact]
-        public void AStepThatIsReopenedCountsOnFromItsFinishedCounters()
-        {
-            var model = Model(Step("A"));
-            int first = model.BeginPhase("A", 10, null);
-            model.Tick(first, 10);
-            model.EndPhase(first);
-
-            int second = model.BeginPhase("A", 5, null);
-            model.Tick(second, 2);
-            var step = model.GetSnapshot().Steps.Single();
-
-            Assert.Equal((12L, 15L), (step.Completed, step.Total));
-        }
-
-        [Fact]
-        public void AReopenedStepKeepsItsOriginalStartAndItsElapsedTimeRunsOnAgain()
-        {
-            var model = Model(Step("A"));
-            _clock.Advance(TimeSpan.FromSeconds(1));
-            int first = model.BeginPhase("A", 0, null);
-            _clock.Advance(TimeSpan.FromSeconds(4));
-            model.EndPhase(first);
-            var finished = model.GetSnapshot().Steps.Single();
-
-            _clock.Advance(TimeSpan.FromSeconds(10));
-            model.BeginPhase("A", 0, null);
-            _clock.Advance(TimeSpan.FromSeconds(2));
-            var reopened = model.GetSnapshot().Steps.Single();
-
-            Assert.Equal(TimeSpan.FromSeconds(4), finished.Elapsed);
-            Assert.Equal(TimeSpan.FromSeconds(5), finished.FinishedAt);
-            Assert.Equal(StepStatus.Running, reopened.Status);
-            Assert.Equal(TimeSpan.FromSeconds(1), reopened.StartedAt);
-            Assert.Null(reopened.FinishedAt);
-            Assert.Equal(TimeSpan.FromSeconds(16), reopened.Elapsed);
         }
 
         [Fact]
@@ -657,7 +671,7 @@ namespace InstallerTests.Progress
 
             Parallel.For(0, phases, i =>
             {
-                int phase = model.BeginPhase($"Dynamic {i % 10}", 10, null);
+                int phase = model.BeginPhase($"Dynamic {i}", 10, null);
                 model.Tick(phase, 10);
                 model.Tick(ticker);
                 model.GetSnapshot();
@@ -666,7 +680,7 @@ namespace InstallerTests.Progress
 
             var snapshot = model.GetSnapshot();
             Assert.Equal(phases, Find(snapshot, "A").Completed);
-            Assert.Equal(11, snapshot.Steps.Count);
+            Assert.Equal(phases + 1, snapshot.Steps.Count);
             Assert.All(snapshot.Steps.Skip(1), s => Assert.Equal(StepStatus.Done, s.Status));
         }
 
