@@ -33,7 +33,11 @@ namespace AssetConverter.Progress
         /// <summary>The units of work a grouped step is made of, in declaration order; empty for a step that is a single unit.</summary>
         public IReadOnlyList<StepSnapshot> Parts { get; init; } = [];
 
-        public bool IsIndeterminate => Status == StepStatus.Running && Total <= 0;
+        /// <summary>The step is running but still discovering its work: its total is not final yet, so it shows no counters and no fill.</summary>
+        public bool IsPreparing { get; init; }
+
+        /// <summary>Whether <see cref="Total"/> can no longer change: for a step that has not begun, only when its total was declared up front.</summary>
+        public bool TotalIsFinal { get; init; } = true;
 
         /// <summary>A step that finished without ever having work: it never started, or its phases ended with no total and nothing completed.</summary>
         public bool WasSkipped => Status == StepStatus.Done && (StartedAt == null || (Total <= 0 && Completed <= 0));

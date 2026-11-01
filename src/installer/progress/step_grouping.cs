@@ -3,7 +3,7 @@ namespace AssetConverter.Progress
     /// <summary>
     /// Folds the units of one group into the single step shown for it. The step is running while any unit runs, or while some units are
     /// done and others have not begun (the group has started but is not complete); it is done only when every unit is done, and a
-    /// failed or cancelled unit fails or cancels it. Counters add up and the fraction is the weight-averaged fraction of the units, so
+    /// failed or cancelled unit fails or cancels it. Counters add up once every unit's total is final (until then the group is preparing and shows none) and the fraction is the weight-averaged fraction of the units, so
     /// a unit that has not begun yet keeps its share of the bar.
     /// </summary>
     internal static class StepGrouping
@@ -18,22 +18,30 @@ namespace AssetConverter.Progress
             TimeSpan? finishedAt = finished && parts.All(p => p.FinishedAt != null) ? parts.Max(p => p.FinishedAt) : null;
             TimeSpan elapsed = startedAt is { } start ? (finishedAt ?? now) - start : TimeSpan.Zero;
             var units = parts.Select(p => p.Unit).Where(u => u != null).Distinct().ToList();
+            bool totalIsFinal = parts.All(p => p.TotalIsFinal);
+            bool preparing = IsPreparing(status, parts);
 
             return new StepSnapshot(
                 name,
                 units.Count == 1 ? units[0] : MixedUnit,
                 status,
-                parts.Sum(p => p.Completed),
-                parts.Sum(p => p.Total),
+                totalIsFinal ? parts.Sum(p => p.Completed) : 0,
+                totalIsFinal ? parts.Sum(p => p.Total) : 0,
                 parts.FirstOrDefault(p => p.Status == StepStatus.Running && p.Detail != null)?.Detail,
                 startedAt,
                 finishedAt,
                 elapsed,
-                FractionOf(status, parts, weights))
+                FractionOf(status, preparing, parts, weights))
             {
                 Parts = parts,
+                IsPreparing = preparing,
+                TotalIsFinal = totalIsFinal,
             };
         }
+
+        /// <summary>A running group is preparing while any unit's total is not final; a unit that has not begun counts as final when its total was declared.</summary>
+        internal static bool IsPreparing(StepStatus status, IReadOnlyList<StepSnapshot> parts) =>
+            status == StepStatus.Running && parts.Any(p => !p.TotalIsFinal);
 
         private static StepStatus StatusOf(IReadOnlyList<StepSnapshot> parts)
         {
@@ -43,9 +51,10 @@ namespace AssetConverter.Progress
             return parts.All(p => p.Status == StepStatus.Pending) ? StepStatus.Pending : StepStatus.Running;
         }
 
-        private static double FractionOf(StepStatus status, IReadOnlyList<StepSnapshot> parts, IReadOnlyList<double> weights)
+        private static double FractionOf(StepStatus status, bool preparing, IReadOnlyList<StepSnapshot> parts, IReadOnlyList<double> weights)
         {
             if (status == StepStatus.Done) return 1.0;
+            if (preparing) return 0.0;
             double weighted = 0, total = 0;
             for (int i = 0; i < parts.Count; i++)
             {

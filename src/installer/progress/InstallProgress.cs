@@ -53,7 +53,12 @@ namespace AssetConverter.Progress
             FireCancel();
         }
 
-        public static int BeginPhase(string name, long total, string? unit = null) => _model?.BeginPhase(name, total, unit) ?? -1;
+        /// <summary>Starts a phase; a number is its final total, <c>null</c> a phase that is still discovering its work until <see cref="SealTotal"/>.</summary>
+        public static int BeginPhase(string name, long? total, string? unit = null) => _model?.BeginPhase(name, total, unit) ?? -1;
+
+        public static void Declare(string stepName, long total) => _model?.Declare(stepName, total);
+
+        public static void SealTotal(int phase) => _model?.SealTotal(phase);
 
         public static void AddTotal(int phase, long count) => _model?.AddTotal(phase, count);
 

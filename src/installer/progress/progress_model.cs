@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace AssetConverter.Progress
 {
     /// <summary>
@@ -7,7 +9,7 @@ namespace AssetConverter.Progress
     /// </summary>
     public sealed class ProgressModel
     {
-        /// <summary>A running step never reads as complete: its total may still grow, and only ending the step completes it.</summary>
+        /// <summary>A running step never reads as complete: it reads 100% only once its phases have ended, so a step whose last tick landed but whose work is still wrapping up stays just short.</summary>
         public const double RunningFractionCap = 0.99;
 
         private readonly object _gate = new();
@@ -41,19 +43,34 @@ namespace AssetConverter.Progress
 
         /// <summary>
         /// Starts a unit of work for the declared step called <paramref name="name"/>; an undeclared name appends a new step.
+        /// A number for <paramref name="total"/> is the phase's final total, a <c>null</c> total means the phase is still discovering its
+        /// work: it reports as preparing until <see cref="SealTotal"/> (or <see cref="EndPhase"/>) fixes the total, and work can only
+        /// be added with <see cref="AddTotal"/> while it is open. A step announced with <see cref="Declare"/> must begin with exactly that total.
         /// Returns the phase id, or -1 once the run has finished.
         /// </summary>
-        public int BeginPhase(string name, long total, string? unit)
+        public int BeginPhase(string name, long? total, string? unit)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(name);
+            if (total < 0) throw new ArgumentOutOfRangeException(nameof(total), total, "A total cannot be negative.");
             lock (_gate)
             {
                 if (_state != RunState.Running) return -1;
                 var step = FindStep(name) ?? AddStep(new StepDefinition(name, unit));
+                if (step.DeclaredTotal is { } declared)
+                {
+                    if (total != declared)
+                        throw new InvalidOperationException($"Step '{step.Name}' was declared with a total of {declared} but began with {(total.HasValue ? total.Value.ToString(CultureInfo.InvariantCulture) : "no total")}.");
+                    step.DeclaredTotal = null;
+                }
+                else if (total is > 0)
+                {
+                    Interlocked.Add(ref step.Total, total.Value);
+                }
                 step.Unit ??= unit;
                 int id = _phases.Length;
-                _phases = [.. _phases, new PhaseState(step)];
+                _phases = [.. _phases, new PhaseState(step) { Sealed = total != null }];
                 step.OpenPhases++;
+                if (total == null) step.UnsealedPhases++;
                 if (step.Status is StepStatus.Pending or StepStatus.Done)
                 {
                     step.Status = StepStatus.Running;
@@ -61,19 +78,58 @@ namespace AssetConverter.Progress
                     step.FinishTimestamp = null;
                     step.Final = null;
                 }
-                if (total > 0) Interlocked.Add(ref step.Total, total);
                 return id;
             }
         }
 
-        public void AddTotal(int phase, long count)
+        /// <summary>
+        /// Announces the total of a step that has not begun, so a group it belongs to can tell its total is known before the step runs.
+        /// The step's first phase must begin with the same total.
+        /// </summary>
+        public void Declare(string stepName, long total)
         {
-            if (TryGetStep(phase) is { } step) Interlocked.Add(ref step.Total, count);
+            ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+            ArgumentOutOfRangeException.ThrowIfNegative(total);
+            lock (_gate)
+            {
+                var step = FindStep(stepName) ?? throw new ArgumentException($"Step '{stepName}' is not declared.", nameof(stepName));
+                if (step.Status != StepStatus.Pending)
+                    throw new InvalidOperationException($"Step '{step.Name}' has already begun, its total cannot be declared.");
+                if (step.DeclaredTotal is { } known && known != total)
+                    throw new InvalidOperationException($"Step '{step.Name}' is already declared with a total of {known}, not {total}.");
+                step.DeclaredTotal = total;
+                Interlocked.Exchange(ref step.Total, total);
+            }
         }
 
+        /// <summary>Adds work to a phase that is still discovering its total. Throws once the total is sealed or the phase ended.</summary>
+        public void AddTotal(int phase, long count)
+        {
+            lock (_gate)
+            {
+                if (TryGetPhase(phase) is not { } state) return;
+                if (state.Sealed)
+                    throw new InvalidOperationException($"The total of step '{state.Step.Name}' is sealed, work can no longer be added.");
+                Interlocked.Add(ref state.Step.Total, count);
+            }
+        }
+
+        /// <summary>Fixes the total of a discovering phase; the step stops preparing and starts to fill. Sealing twice is harmless.</summary>
+        public void SealTotal(int phase)
+        {
+            lock (_gate)
+            {
+                if (TryGetPhase(phase) is { } state) Seal(state);
+            }
+        }
+
+        /// <summary>Records progress on a phase. Throws while the phase is still discovering its total, since the fraction would be meaningless.</summary>
         public void Tick(int phase, long count = 1)
         {
-            if (TryGetStep(phase) is { } step) Interlocked.Add(ref step.Completed, count);
+            if (TryGetPhase(phase) is not { } state) return;
+            if (!state.Sealed)
+                throw new InvalidOperationException($"Step '{state.Step.Name}' ticked before its total was sealed.");
+            Interlocked.Add(ref state.Step.Completed, count);
         }
 
         public void SetDetail(int phase, string? text)
@@ -87,6 +143,7 @@ namespace AssetConverter.Progress
             {
                 var phases = _phases;
                 if ((uint)phase >= (uint)phases.Length || phases[phase].Ended) return;
+                Seal(phases[phase]);
                 phases[phase].Ended = true;
                 var step = phases[phase].Step;
                 if (--step.OpenPhases == 0 && step.Status == StepStatus.Running)
@@ -149,6 +206,13 @@ namespace AssetConverter.Progress
             return visible;
         }
 
+        private static void Seal(PhaseState state)
+        {
+            if (state.Sealed) return;
+            state.Sealed = true;
+            state.Step.UnsealedPhases--;
+        }
+
         private StepSnapshot Snapshot(StepState step, long now)
         {
             long completed = step.Final?.Completed ?? Interlocked.Read(ref step.Completed);
@@ -158,14 +222,28 @@ namespace AssetConverter.Progress
             TimeSpan elapsed = step.StartTimestamp is { } begin
                 ? _clock.GetElapsedTime(begin, step.FinishTimestamp ?? now)
                 : TimeSpan.Zero;
+            bool totalIsFinal = TotalIsFinal(step.Status, step.UnsealedPhases, step.DeclaredTotal);
+            bool preparing = step.Status == StepStatus.Running && !totalIsFinal;
             return new StepSnapshot(step.Name, step.Unit, step.Status, completed, total, step.Detail,
-                startedAt, finishedAt, elapsed, StepFraction(step.Status, completed, total));
+                startedAt, finishedAt, elapsed, StepFraction(step.Status, preparing, completed, total))
+            {
+                IsPreparing = preparing,
+                TotalIsFinal = totalIsFinal,
+            };
         }
 
-        private static double StepFraction(StepStatus status, long completed, long total)
+        /// <summary>Whether a step's total can still change: a pending step knows it only when declared, a running one once none of its phases is discovering, a finished one always.</summary>
+        internal static bool TotalIsFinal(StepStatus status, int unsealedPhases, long? declaredTotal) => status switch
+        {
+            StepStatus.Pending => declaredTotal != null,
+            StepStatus.Running => unsealedPhases == 0,
+            _ => true,
+        };
+
+        internal static double StepFraction(StepStatus status, bool preparing, long completed, long total)
         {
             if (status == StepStatus.Done) return 1.0;
-            if (total <= 0 || completed <= 0) return 0.0;
+            if (preparing || total <= 0 || completed <= 0) return 0.0;
             double fraction = (double)completed / total;
             return status == StepStatus.Running ? Math.Min(RunningFractionCap, fraction) : Math.Min(1.0, fraction);
         }
@@ -202,10 +280,12 @@ namespace AssetConverter.Progress
 
         private TimeSpan Offset(long timestamp) => _clock.GetElapsedTime(_startTimestamp, timestamp);
 
-        private StepState? TryGetStep(int phase)
+        private StepState? TryGetStep(int phase) => TryGetPhase(phase)?.Step;
+
+        private PhaseState? TryGetPhase(int phase)
         {
             var phases = _phases;
-            return (uint)phase < (uint)phases.Length ? phases[phase].Step : null;
+            return (uint)phase < (uint)phases.Length ? phases[phase] : null;
         }
 
         private StepState? FindStep(string name) => _steps.Find(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
@@ -218,7 +298,11 @@ namespace AssetConverter.Progress
         }
 
         private static StepState NewStep(StepDefinition definition) =>
-            new(definition.Name, definition.Unit, definition.Weight, definition.VisibleName);
+            new(definition.Name, definition.Unit, definition.Weight, definition.VisibleName)
+            {
+                DeclaredTotal = definition.KnownTotal,
+                Total = definition.KnownTotal ?? 0,
+            };
 
         private sealed class StepState(string name, string? unit, double weight, string visibleName)
         {
@@ -229,6 +313,8 @@ namespace AssetConverter.Progress
             public StepStatus Status;
             public long Total;
             public long Completed;
+            public long? DeclaredTotal;
+            public int UnsealedPhases;
             public volatile string? Detail;
             public int OpenPhases;
             public long? StartTimestamp;
@@ -242,6 +328,7 @@ namespace AssetConverter.Progress
         {
             public readonly StepState Step = step;
             public bool Ended;
+            public volatile bool Sealed;
         }
     }
 }

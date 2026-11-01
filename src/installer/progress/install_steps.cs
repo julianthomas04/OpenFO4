@@ -30,10 +30,15 @@ namespace AssetConverter.Progress
         public const string FinalizeDatabase = "Finalizing database";
         public const string RemoveStaging = "Cleaning up";
 
+        public const long CopyGameDataTotal = 3;
+        public const long BakePalettesTotal = 1;
+        public const long ScanLodWaterTotal = 1;
+        public const long FinalizeDatabaseTotal = 6;
+
         public static IReadOnlyList<StepDefinition> All { get; } =
         [
             new(InstallGame, "files", Weight: 1, Group: Initializing),
-            new(CopyGameData, "items", Weight: 7, Group: Initializing),
+            new(CopyGameData, "items", Weight: 7, Group: Initializing, KnownTotal: CopyGameDataTotal),
             new(ExtractMeshes, "files", Weight: 89),
             new(ExtractInterface, "items", Weight: 7),
             new(ConvertShaders, "shaders", Weight: 10),
@@ -44,9 +49,9 @@ namespace AssetConverter.Progress
             new(ExtractCollision, "meshes", Weight: 50),
             new(ConvertAnimations, "creatures", Weight: 96),
             new(BuildDatabase, "records", Weight: 55),
-            new(BakePalettes, "tasks", Weight: 9, Group: Finalizing),
-            new(ScanLodWater, "tasks", Weight: 2, Group: Finalizing),
-            new(FinalizeDatabase, "tasks", Weight: 13, Group: Finalizing),
+            new(BakePalettes, "tasks", Weight: 9, Group: Finalizing, KnownTotal: BakePalettesTotal),
+            new(ScanLodWater, "tasks", Weight: 2, Group: Finalizing, KnownTotal: ScanLodWaterTotal),
+            new(FinalizeDatabase, "tasks", Weight: 13, Group: Finalizing, KnownTotal: FinalizeDatabaseTotal),
             new(RemoveStaging, "items", Weight: 15),
         ];
 

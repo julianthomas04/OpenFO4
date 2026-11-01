@@ -10,6 +10,7 @@ namespace AssetConverter.InstallerUi
         private string _countText = "";
         private string _elapsedText = "";
         private double _fraction;
+        private bool _isPreparing;
 
         public string Name
         {
@@ -29,11 +30,18 @@ namespace AssetConverter.InstallerUi
             private set => SetProperty(ref _elapsedText, value);
         }
 
-        /// <summary>How much of the step is done, 0..1; the fill of the row's background bar. Zero while the total is unknown.</summary>
+        /// <summary>How much of the step is done, 0..1; the fill of the row's background bar. Zero while the step is preparing.</summary>
         public double Fraction
         {
             get => _fraction;
             private set => SetProperty(ref _fraction, value);
+        }
+
+        /// <summary>The step is running but still discovering its total; its row shows neither counters nor fill.</summary>
+        public bool IsPreparing
+        {
+            get => _isPreparing;
+            private set => SetProperty(ref _isPreparing, value);
         }
 
         public StepStatus Status
@@ -72,6 +80,7 @@ namespace AssetConverter.InstallerUi
             CountText = format.Compact(step);
             ElapsedText = format.Elapsed(step);
             Fraction = step.Fraction;
+            IsPreparing = step.IsPreparing;
         }
 
         private void OnStatusChanged()
