@@ -33,7 +33,7 @@ namespace InstallerTests.Pipeline
         [Fact]
         public async Task CollisionRunsAfterTheMeshExtractionAndAfterTheBacklogIsQueued()
         {
-            var meshesExtracted = new TaskCompletionSource();
+            var meshesExtracted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var backlogStarted = new SemaphoreSlim(0);
             var releaseBacklog = new ManualResetEventSlim();
 
