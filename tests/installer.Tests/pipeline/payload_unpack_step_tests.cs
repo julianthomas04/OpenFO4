@@ -111,13 +111,14 @@ namespace InstallerTests.Pipeline
         {
             InstallProgress.Start(InstallSteps.Planned(keepStaging: false, unpacksPayload: true));
 
-            var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => PayloadUnpackStep.RunAsync(packaged: true, progress =>
+            var thrown = await Assert.ThrowsAsync<InstallStartupException>(() => PayloadUnpackStep.RunAsync(packaged: true, progress =>
             {
                 progress!.GameFileCount(2);
                 return PayloadWithGameFiles(3);
             }));
 
-            Assert.Contains(InstallSteps.InstallGame, thrown.Message, StringComparison.Ordinal);
+            Assert.Contains("lists 2 game files, but 3 were unpacked", thrown.Message, StringComparison.Ordinal);
+            Assert.Equal(StepStatus.Failed, UnpackStep().Status);
         }
 
         [Fact]
