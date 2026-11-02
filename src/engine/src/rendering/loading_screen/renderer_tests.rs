@@ -6,6 +6,7 @@ use super::test_support::{cube_art, layered_quads_art, write_solid_texture, writ
 use super::{ColourMode, CpuArt, LoadedArt, LoadingArt, LoadingArtRenderer, PanKey};
 use crate::rendering::gpu_test::{linear_to_srgb_byte, read_mip, test_device};
 use crate::rendering::post::tonemap::ui_gamma_format;
+use crate::rendering::ui_colour::UiTint;
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const SIZE: (u32, u32) = (320, 180);
@@ -131,8 +132,12 @@ struct Scene {
 
 impl Scene {
     fn new(test: &str) -> Option<Self> {
+        Self::with_tint(test, HUD_GREEN)
+    }
+
+    fn with_tint(test: &str, hud_tint: [f32; 3]) -> Option<Self> {
         let (device, queue) = test_device(test)?;
-        let renderer = LoadingArtRenderer::new(&device, &queue, ui_gamma_format(FORMAT), HUD_GREEN);
+        let renderer = LoadingArtRenderer::new(&device, &queue, ui_gamma_format(FORMAT), hud_tint);
         Some(Self {
             device,
             queue,
@@ -340,6 +345,14 @@ fn a_material_with_an_alpha_test_keeps_texels_above_its_cutoff() {
 }
 
 #[test]
+fn a_texel_exactly_at_the_cutoff_is_kept() {
+    let Some(lit) = lit_pixels_with("loading art alpha boundary", 51, "|test:51") else {
+        return;
+    };
+    assert!(lit > 0, "only texels below the cutoff are cut out");
+}
+
+#[test]
 fn a_material_without_an_alpha_test_never_discards() {
     let Some(lit) = lit_pixels_with("loading art no alpha test", 0, "") else {
         return;
@@ -433,6 +446,37 @@ fn a_monochrome_model_is_the_hud_colour_scaled_by_the_brightness_of_its_texture(
     );
     let expected = linear_to_srgb_byte(FRONT_FACE_LINEAR);
     assert_close(white[1], expected, 4);
+}
+
+#[test]
+fn a_monochrome_model_multiplies_in_the_encoded_space_of_the_huds_text() {
+    let hud_tint = [0.5, 0.2, 0.0];
+    let (Some(mut scene), Some(own)) = (
+        Scene::with_tint("loading art mono encoded", hud_tint),
+        centre_in(
+            "loading art mono encoded reference",
+            [255; 4],
+            ColourMode::Own,
+        ),
+    ) else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    write_solid_texture(dir.path(), "white.dds", [255; 4]);
+    scene.show(&cube_art(dir.path(), "white.dds"));
+    scene.renderer.toggle_colours();
+    let target = Target::new(&scene, SIZE, BLACK);
+
+    let mono = scene.draw(&target).centre();
+
+    let tint = UiTint {
+        color: hud_tint,
+        opacity: 1.0,
+    };
+    let text = tint.apply_to(own);
+    for (channel, expected) in mono.into_iter().zip(text) {
+        assert_close(channel, expected, 2);
+    }
 }
 
 #[test]

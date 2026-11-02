@@ -11,7 +11,7 @@ struct Scene {
     // The ambient and the diffuse strength of the light, 1 when the shader has to encode to
     // sRGB, and 1 when the model is drawn in the HUD colour alone.
     shading: vec4<f32>,
-    // The HUD colour in linear light.
+    // The HUD colour in linear light, for the monochrome look.
     tint: vec4<f32>,
 };
 
@@ -61,6 +61,12 @@ fn encode_srgb(linear: vec3<f32>) -> vec3<f32> {
     return select(high, low, linear <= vec3<f32>(0.0031308));
 }
 
+fn decode_srgb(encoded: vec3<f32>) -> vec3<f32> {
+    let low = encoded / 12.92;
+    let high = pow((encoded + 0.055) / 1.055, vec3<f32>(2.4));
+    return select(high, low, encoded <= vec3<f32>(0.04045));
+}
+
 // Whether a texel of `alpha` is cut out (hair, grates, foliage): only a material that asks for
 // an alpha test cuts anything out, like the world's alpha-test bucket.
 fn is_cut_out(alpha: f32) -> bool {
@@ -85,9 +91,17 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     if is_cut_out(texel.a) {
         discard;
     }
-    let brightness = dot(texel.rgb, LUMA);
-    let albedo = select(texel.rgb, vec3<f32>(brightness) * scene.tint.rgb, scene.shading.w > 0.5);
-    let lit = albedo * (scene.shading.x + scene.shading.y * light);
-    let colour = select(lit, encode_srgb(lit), scene.shading.z > 0.5);
+    let strength = scene.shading.x + scene.shading.y * light;
+    let to_encoded_target = scene.shading.z > 0.5;
+    var colour: vec3<f32>;
+    if scene.shading.w > 0.5 {
+        // Like the HUD's text: the encoded brightness times the encoded HUD colour.
+        let grey = vec3<f32>(dot(texel.rgb, LUMA) * strength);
+        let encoded = encode_srgb(grey) * encode_srgb(scene.tint.rgb);
+        colour = select(decode_srgb(encoded), encoded, to_encoded_target);
+    } else {
+        let lit = texel.rgb * strength;
+        colour = select(lit, encode_srgb(lit), to_encoded_target);
+    }
     return vec4<f32>(colour, 1.0);
 }

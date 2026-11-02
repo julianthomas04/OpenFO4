@@ -59,18 +59,23 @@ impl ArtCamera {
         let rotation_limits_deg = ordered(f32::from(rotation_min), f32::from(rotation_max));
         let (zoom_min, zoom_max) = ordered(art.zoom_limits.0, art.zoom_limits.1);
         let zoom_limits = (zoom_min.max(MIN_ZOOM), zoom_max.max(MIN_ZOOM));
+        let start_deg = if art.no_rotation {
+            0.0
+        } else {
+            0.0_f32.clamp(rotation_limits_deg.0, rotation_limits_deg.1)
+        };
         Self {
             transform: art.transform,
             rotation_limits_deg,
             zoom_limits,
             no_rotation: art.no_rotation,
-            yaw_deg: 0.0,
+            yaw_deg: start_deg,
             zoom: 0.0_f32.clamp(zoom_limits.0, zoom_limits.1),
             pan: (0.0, 0.0),
             pan_limit: pan_limit.max(0.0),
             pan_keys: PanKeys::default(),
             spin: (!art.no_rotation).then_some(Spin {
-                start_deg: 0.0,
+                start_deg,
                 travelled_deg: 0.0,
             }),
         }
@@ -286,6 +291,25 @@ mod tests {
         assert_eq!(camera.yaw_degrees(), 90.0);
         camera.drag(-100_000.0, 0.0);
         assert_eq!(camera.yaw_degrees(), -180.0);
+    }
+
+    #[test]
+    fn a_model_starts_inside_its_rotation_limits() {
+        let mut camera = camera(|art| art.rotation_limits_deg = (10, 45));
+        assert_eq!(camera.yaw_degrees(), 10.0);
+        camera.tick(0.5);
+        assert!((10.0..=45.0).contains(&camera.yaw_degrees()));
+        let camera = self::camera(|art| art.rotation_limits_deg = (-45, -10));
+        assert_eq!(camera.yaw_degrees(), -10.0);
+    }
+
+    #[test]
+    fn a_model_that_cannot_rotate_starts_at_its_placement_whatever_the_limits() {
+        let camera = camera(|art| {
+            art.no_rotation = true;
+            art.rotation_limits_deg = (10, 45);
+        });
+        assert_eq!(camera.yaw_degrees(), 0.0);
     }
 
     #[test]
