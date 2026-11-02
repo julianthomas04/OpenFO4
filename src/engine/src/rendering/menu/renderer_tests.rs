@@ -834,7 +834,7 @@ fn the_loading_art_sits_above_the_backdrop_and_below_the_logo() {
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
     let view = menu.target_view(&target.texture);
     menu.render_backdrop(&device, &queue, &mut encoder, &view, SIZE, 1.0);
-    art_renderer.render(&mut encoder, &view, SIZE, 1.0);
+    art_renderer.render(&mut encoder, &view, SIZE);
     let foreground = OverlayForeground {
         alpha: 1.0,
         loading_seconds: Some(0.0),

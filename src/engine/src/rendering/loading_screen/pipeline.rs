@@ -24,12 +24,12 @@ pub(super) struct SceneUniform {
 }
 
 impl SceneUniform {
-    pub fn new(view_proj: Mat4, model: Mat4, alpha: f32, encode_srgb: bool) -> Self {
+    pub fn new(view_proj: Mat4, model: Mat4, encode_srgb: bool) -> Self {
         Self {
             view_proj: view_proj.to_cols_array_2d(),
             model: model.to_cols_array_2d(),
             light_direction: LIGHT_TOWARDS.normalize().extend(0.0).to_array(),
-            shading: [alpha, AMBIENT, DIFFUSE, if encode_srgb { 1.0 } else { 0.0 }],
+            shading: [AMBIENT, DIFFUSE, if encode_srgb { 1.0 } else { 0.0 }, 0.0],
         }
     }
 }
@@ -116,9 +116,9 @@ impl ArtPipeline {
                 cache: None,
             })
         };
-        // The nearest surface is found first, without colour; the colour pass then blends only
-        // the fragments at exactly that depth, so a faded model never shows its far parts
-        // through its near ones.
+        // The nearest surface is found first, without colour, and cut-out texels write no depth;
+        // the colour pass then draws only the fragments at exactly that depth, so overlapping
+        // parts show their nearest surface whatever the order they are drawn in.
         let depth_prepass = build(
             "Loading Art Depth Pipeline",
             Stage {
@@ -133,7 +133,7 @@ impl ArtPipeline {
             "Loading Art Pipeline",
             Stage {
                 entry_point: "fs_main",
-                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                blend: None,
                 write_mask: wgpu::ColorWrites::ALL,
                 depth_write: false,
                 depth_compare: wgpu::CompareFunction::Equal,

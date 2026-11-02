@@ -1,14 +1,14 @@
 // The 3D model of a large loading screen: the diffuse texture under one directional light and a
-// flat ambient term, faded by the screen's reveal alpha. The pass draws through the non-sRGB
+// flat ambient term. The pass draws through the non-sRGB
 // view of the swapchain like the rest of the menu, so the shader encodes the colour itself when
-// `shading.w` is 1.
+// `shading.z` is 1.
 
 struct Scene {
     view_proj: mat4x4<f32>,
     model: mat4x4<f32>,
     // Unit vector towards the light, in engine space.
     light_direction: vec4<f32>,
-    // Opacity of the whole model, the ambient and the diffuse strength of the light, and 1 when
+    // The ambient and the diffuse strength of the light, and 1 when
     // the shader has to encode to sRGB.
     shading: vec4<f32>,
 };
@@ -71,7 +71,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         discard;
     }
     let albedo = texel.rgb;
-    let lit = albedo * (scene.shading.y + scene.shading.z * light);
-    let colour = select(lit, encode_srgb(lit), scene.shading.w > 0.5);
-    return vec4<f32>(colour, scene.shading.x);
+    let lit = albedo * (scene.shading.x + scene.shading.y * light);
+    let colour = select(lit, encode_srgb(lit), scene.shading.z > 0.5);
+    return vec4<f32>(colour, 1.0);
 }

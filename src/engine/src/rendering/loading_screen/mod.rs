@@ -139,25 +139,22 @@ impl LoadingArtRenderer {
         self.active.as_ref().map(|active| &active.art.camera)
     }
 
-    /// Draws the model over what `view`, of `size` pixels, holds, faded by `alpha`, in a pass of
-    /// its own. Nothing is encoded without a model, at alpha 0 or for an empty target.
+    /// Draws the model over what `view`, of `size` pixels, holds, opaque, in a pass of
+    /// its own. Nothing is encoded without a model or for an empty target.
     pub fn render(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         size: (u32, u32),
-        alpha: f32,
     ) {
-        let alpha = alpha.clamp(0.0, 1.0);
         let Some(active) = &self.active else { return };
-        if alpha <= 0.0 || alpha.is_nan() || size.0 == 0 || size.1 == 0 {
+        if size.0 == 0 || size.1 == 0 {
             return;
         }
         let aspect = size.0 as f32 / size.1 as f32;
         let scene = SceneUniform::new(
             active.art.camera.view_proj(aspect),
             active.art.camera.model_matrix(),
-            alpha,
             self.encode_srgb,
         );
         self.queue

@@ -144,12 +144,12 @@ impl Scene {
         self.renderer.set_art(Some(loaded));
     }
 
-    fn draw(&mut self, target: &Target, alpha: f32) -> Pixels {
+    fn draw(&mut self, target: &Target) -> Pixels {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         self.renderer
-            .render(&mut encoder, &target.view(), target.size, alpha);
+            .render(&mut encoder, &target.view(), target.size);
         self.queue.submit(std::iter::once(encoder.finish()));
         Pixels::read(&self.device, &self.queue, target)
     }
@@ -171,7 +171,7 @@ fn a_cube_draws_in_the_centre_lit_and_encoded_and_leaves_the_corners_black() {
     scene.show(&cube_art(dir.path(), ""));
     let target = Target::new(&scene, SIZE, BLACK);
 
-    let pixels = scene.draw(&target, 1.0);
+    let pixels = scene.draw(&target);
 
     let expected = linear_to_srgb_byte(FRONT_FACE_LINEAR);
     for channel in pixels.centre() {
@@ -197,7 +197,7 @@ fn a_part_whose_texture_is_missing_draws_white() {
     scene.show(&cube_art(dir.path(), "no_such_folder\\no_such_texture.dds"));
     let target = Target::new(&scene, SIZE, BLACK);
 
-    let pixels = scene.draw(&target, 1.0);
+    let pixels = scene.draw(&target);
 
     let expected = linear_to_srgb_byte(FRONT_FACE_LINEAR);
     for channel in pixels.centre() {
@@ -206,51 +206,19 @@ fn a_part_whose_texture_is_missing_draws_white() {
 }
 
 #[test]
-fn the_model_fades_with_alpha_and_alpha_zero_draws_nothing() {
-    let Some(mut scene) = Scene::new("loading art alpha") else {
-        return;
-    };
-    let dir = tempfile::tempdir().unwrap();
-    scene.show(&cube_art(dir.path(), ""));
-    let green = wgpu::Color {
-        r: 0.0,
-        g: 0.4,
-        b: 0.0,
-        a: 1.0,
-    };
-    let target = Target::new(&scene, SIZE, green);
-    let background = scene.draw(&target, 0.0);
-    assert_eq!(
-        background.centre(),
-        background.at(0, 0),
-        "alpha 0 changes nothing"
-    );
-
-    let faded = scene.draw(&target, 0.5);
-
-    let face = linear_to_srgb_byte(FRONT_FACE_LINEAR);
-    let [red, green_channel, _] = faded.centre();
-    assert_close(red, face / 2, 4);
-    assert!(
-        green_channel > red,
-        "half of the green background still shows: {green_channel}"
-    );
-}
-
-#[test]
 fn nothing_draws_without_art_or_after_it_is_cleared() {
     let Some(mut scene) = Scene::new("loading art cleared") else {
         return;
     };
     let target = Target::new(&scene, SIZE, BLACK);
-    assert_eq!(scene.draw(&target, 1.0).lit_count(), 0, "no art yet");
+    assert_eq!(scene.draw(&target).lit_count(), 0, "no art yet");
 
     let dir = tempfile::tempdir().unwrap();
     scene.show(&cube_art(dir.path(), ""));
-    assert!(scene.draw(&target, 1.0).lit_count() > 0);
+    assert!(scene.draw(&target).lit_count() > 0);
     scene.renderer.set_art(None);
     target.clear(&scene, BLACK);
-    assert_eq!(scene.draw(&target, 1.0).lit_count(), 0, "art cleared");
+    assert_eq!(scene.draw(&target).lit_count(), 0, "art cleared");
 }
 
 #[test]
@@ -263,11 +231,11 @@ fn dragging_turns_the_cube_within_its_limits() {
     art.rotation_limits_deg = (-45, 45);
     scene.show(&art);
     let target = Target::new(&scene, SIZE, BLACK);
-    let head_on = scene.draw(&target, 1.0).lit_width();
+    let head_on = scene.draw(&target).lit_width();
 
     scene.renderer.drag(100_000.0);
     target.clear(&scene, BLACK);
-    let turned = scene.draw(&target, 1.0).lit_width();
+    let turned = scene.draw(&target).lit_width();
 
     assert_eq!(scene.renderer.camera().unwrap().yaw_degrees().round(), 45.0);
     assert!(
@@ -286,14 +254,14 @@ fn a_model_that_cannot_be_zoomed_in_on_keeps_its_size() {
     art.zoom_limits = (0.0, 1.0);
     scene.show(&art);
     let target = Target::new(&scene, SIZE, BLACK);
-    let before = scene.draw(&target, 1.0).lit_count();
+    let before = scene.draw(&target).lit_count();
 
     scene.renderer.wheel(-50.0);
     target.clear(&scene, BLACK);
-    let zoomed_out = scene.draw(&target, 1.0).lit_count();
+    let zoomed_out = scene.draw(&target).lit_count();
     scene.renderer.wheel(5.0);
     target.clear(&scene, BLACK);
-    let zoomed_in = scene.draw(&target, 1.0).lit_count();
+    let zoomed_in = scene.draw(&target).lit_count();
 
     assert_eq!(
         zoomed_out, before,
@@ -313,7 +281,7 @@ fn resizing_the_target_recreates_the_depth_buffer_without_a_validation_error() {
 
     for size in [SIZE, (200, 200), SIZE] {
         let target = Target::new(&scene, size, BLACK);
-        assert!(scene.draw(&target, 1.0).lit_count() > 0, "{size:?}");
+        assert!(scene.draw(&target).lit_count() > 0, "{size:?}");
     }
 
     let error = pollster::block_on(error_scope.pop());
@@ -321,7 +289,7 @@ fn resizing_the_target_recreates_the_depth_buffer_without_a_validation_error() {
 }
 
 #[test]
-fn a_faded_model_shows_only_its_nearest_surface() {
+fn overlapping_surfaces_show_the_nearest_whatever_the_draw_order() {
     let Some(mut scene) = Scene::new("loading art layered surfaces") else {
         return;
     };
@@ -329,11 +297,11 @@ fn a_faded_model_shows_only_its_nearest_surface() {
     scene.show(&layered_quads_art(dir.path()));
     let target = Target::new(&scene, SIZE, BLACK);
 
-    let faded = scene.draw(&target, 0.5);
+    let pixels = scene.draw(&target);
 
     let near = linear_to_srgb_byte(FRONT_FACE_LINEAR);
-    for channel in faded.centre() {
-        assert_close(channel, near / 2, 3);
+    for channel in pixels.centre() {
+        assert_close(channel, near, 3);
     }
 }
 
@@ -347,7 +315,7 @@ fn texels_below_half_alpha_are_cut_out() {
     scene.show(&cube_art(dir.path(), "cut.dds"));
     let target = Target::new(&scene, SIZE, BLACK);
     assert_eq!(
-        scene.draw(&target, 1.0).lit_count(),
+        scene.draw(&target).lit_count(),
         0,
         "a fully transparent texture leaves nothing"
     );
@@ -355,7 +323,7 @@ fn texels_below_half_alpha_are_cut_out() {
     write_texture(dir.path(), "solid.dds", 255);
     scene.show(&cube_art(dir.path(), "solid.dds"));
     assert!(
-        scene.draw(&target, 1.0).lit_count() > 0,
+        scene.draw(&target).lit_count() > 0,
         "an opaque texture draws"
     );
 }

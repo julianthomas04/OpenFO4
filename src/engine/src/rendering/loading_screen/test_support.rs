@@ -147,15 +147,15 @@ pub fn cube_art(dir: &Path, material: &str) -> LoadingArt {
     }
 }
 
-/// A GLB of two overlapping quads facing the viewer, indexed far one first so that a pass
-/// that blends in index order draws the near one over the far one. The near quad (normal
-/// towards the viewer) is at depth 0, the far quad (normal up) 3 units behind it.
+/// A GLB of two overlapping quads facing the viewer, indexed near one first so that a pass
+/// without a depth test would paint the far one over it. The near quad (normal towards the
+/// viewer) is at depth 0, the far quad (normal up) 3 units behind it.
 pub fn layered_quads_glb(material: &str) -> Vec<u8> {
     let mut positions: Vec<f32> = Vec::new();
     let mut normals: Vec<f32> = Vec::new();
     let mut uvs: Vec<f32> = Vec::new();
     let mut indices: Vec<u16> = Vec::new();
-    for (quad, (depth, half, normal)) in [(-3.0, 6.0, [0.0, 1.0, 0.0]), (0.0, 5.0, [0.0, 0.0, 1.0])]
+    for (quad, (depth, half, normal)) in [(0.0, 5.0, [0.0, 0.0, 1.0]), (-3.0, 6.0, [0.0, 1.0, 0.0])]
         .into_iter()
         .enumerate()
     {
