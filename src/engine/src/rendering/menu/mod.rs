@@ -6,9 +6,10 @@ mod loading_icon;
 mod renderer;
 #[cfg(test)]
 mod renderer_tests;
+mod tip;
 mod video_layer;
 #[cfg(test)]
 mod video_layer_tests;
 
 pub use layout::{LAYOUT_KEYS, MenuLayout, RowRect};
-pub use renderer::{MenuError, MenuRenderer, MenuScene};
+pub use renderer::{MenuError, MenuRenderer, MenuScene, OverlayForeground};

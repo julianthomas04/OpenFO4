@@ -2611,6 +2611,7 @@ impl State {
                 MenuScene::Overlay {
                     alpha: overlay_alpha,
                     loading_seconds: self.flow.loading_seconds(),
+                    tip: None,
                 },
             );
         }

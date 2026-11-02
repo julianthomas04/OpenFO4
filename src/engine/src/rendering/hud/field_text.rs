@@ -50,6 +50,8 @@ pub struct TextItem {
     pub shrink: bool,
     pub colour: [u8; 4],
     pub shadow: Option<Shadow>,
+    /// The width in framebuffer pixels the text wraps at, or `None` for a single line.
+    pub wrap_width: Option<f32>,
 }
 
 struct Placed {
@@ -199,7 +201,7 @@ fn shape_at(
     let scale = item.map.scale;
     let size = geometry.size * scale;
     buffer.set_metrics(Metrics::new(size, geometry.line_pitch() * scale));
-    buffer.set_size(None, None);
+    buffer.set_size(item.wrap_width, None);
     // Stand-in S2: the face is chosen by family name only. The font configuration's style
     // (Normal / Bold) is not applied as a weight; the bold classes map to their own family.
     let attrs = Attrs::new()
@@ -242,6 +244,8 @@ fn shape(font_system: &mut FontSystem, buffer: &mut Buffer, item: &TextItem) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rendering::ui_fonts::test_support as fonts;
+    use crate::ui_layout::scaleform_text::FontMetrics;
 
     #[test]
     fn the_screen_map_scales_then_shifts() {
@@ -250,5 +254,56 @@ mod tests {
             scale: 2.0,
         };
         assert_eq!(map.point(3.0, 4.0), (16.0, 28.0));
+    }
+
+    const TIP: &str = "Wrapped text breaks into lines at the width of its column and no line is wider                        than the column, however long the whole text is.";
+    const COLUMN: f32 = 200.0;
+
+    fn item(wrap_width: Option<f32>) -> TextItem {
+        let metrics = FontMetrics {
+            ascent: 0.9,
+            descent: 0.2,
+        };
+        TextItem {
+            text: TIP.to_owned(),
+            family: fonts::family(),
+            geometry: FieldGeometry::content_box(
+                (0.0, 0.0),
+                COLUMN,
+                100.0,
+                16.0,
+                Align::Left,
+                metrics,
+            ),
+            map: ScreenMap {
+                origin: (0.0, 0.0),
+                scale: 1.0,
+            },
+            shrink: false,
+            colour: [255; 4],
+            shadow: None,
+            wrap_width,
+        }
+    }
+
+    fn line_widths(item: &TextItem) -> Vec<f32> {
+        let mut font_system = fonts::ui_fonts().font_system();
+        let mut buffer = Buffer::new(&mut font_system, Metrics::new(1.0, 1.0));
+        shape(&mut font_system, &mut buffer, item);
+        buffer.layout_runs().map(|run| run.line_w).collect()
+    }
+
+    #[test]
+    fn text_with_a_wrap_width_breaks_into_lines_that_fit_it() {
+        let widths = line_widths(&item(Some(COLUMN)));
+        assert!(widths.len() > 1, "{widths:?}");
+        assert!(widths.iter().all(|&width| width <= COLUMN), "{widths:?}");
+    }
+
+    #[test]
+    fn text_without_a_wrap_width_stays_on_one_line() {
+        let widths = line_widths(&item(None));
+        assert_eq!(widths.len(), 1);
+        assert!(widths[0] > COLUMN, "{widths:?}");
     }
 }

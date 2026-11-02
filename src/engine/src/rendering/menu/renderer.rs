@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use super::layout::MenuLayout;
 use super::loading_icon::{IconScene, LoadingIcon, LoadingIconError};
+use super::tip;
 use super::video_layer::VideoLayer;
 use crate::assets::pipboy_art::ArtLibrary;
 use crate::game_flow::MenuView;
@@ -49,7 +50,17 @@ pub enum MenuScene<'a> {
     Overlay {
         alpha: f32,
         loading_seconds: Option<f64>,
+        /// A tip shown in the lower part of the screen, fading with the layer.
+        tip: Option<&'a str>,
     },
+}
+
+/// What an overlay draws above its backdrop and the loading art.
+#[derive(Debug, Clone, Copy)]
+pub struct OverlayForeground<'a> {
+    pub alpha: f32,
+    pub loading_seconds: Option<f64>,
+    pub tip: Option<&'a str>,
 }
 
 pub struct MenuRenderer {
@@ -172,7 +183,7 @@ impl MenuRenderer {
 
     /// Encodes the pass for `scene` over `view`, a surface view of `fb` pixels. A list scene
     /// clears the view to black and draws the video, fitted with black bars, behind its rows; an
-    /// overlay scene draws over its contents.
+    /// overlay scene draws its backdrop and then its foreground over the view's contents.
     pub fn render(
         &mut self,
         device: &wgpu::Device,
@@ -182,32 +193,128 @@ impl MenuRenderer {
         fb: (u32, u32),
         scene: MenuScene<'_>,
     ) {
-        let load = match scene {
-            MenuScene::List(_) => wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-            MenuScene::Overlay { .. } => wgpu::LoadOp::Load,
-        };
+        match scene {
+            MenuScene::List(list) => self.render_list(device, queue, encoder, view, fb, list),
+            MenuScene::Overlay {
+                alpha,
+                loading_seconds,
+                tip,
+            } => {
+                self.render_backdrop(device, queue, encoder, view, fb, alpha);
+                let foreground = OverlayForeground {
+                    alpha,
+                    loading_seconds,
+                    tip,
+                };
+                self.render_foreground(device, queue, encoder, view, fb, foreground);
+            }
+        }
+    }
+
+    fn render_list(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        fb: (u32, u32),
+        list: MenuView<'_>,
+    ) {
         let mut verts = std::mem::take(&mut self.verts);
         let mut quads = QuadBuilder::new(&mut verts, fb.0 as f32, fb.1 as f32, 0.0, [0.0; 4]);
         let mut items = Vec::new();
-        match scene {
-            MenuScene::List(list) => self.draw_list(fb, list, &mut quads, &mut items),
-            MenuScene::Overlay { alpha, .. } => Self::draw_overlay(fb, alpha, &mut quads),
-        }
+        self.draw_list(fb, list, &mut quads, &mut items);
         self.verts = verts;
-        let video_visible = matches!(scene, MenuScene::List(_)) && self.video.prepare(queue, fb);
-        let icon_visible = match scene {
-            MenuScene::Overlay {
-                alpha,
-                loading_seconds: Some(seconds),
-            } => self.prepare_loading_icon(device, queue, fb, alpha, seconds),
-            MenuScene::List(_) | MenuScene::Overlay { .. } => false,
-        };
+        let video_visible = self.video.prepare(queue, fb);
 
         self.text.prepare(device, queue, fb, &items);
         self.upload_vertices(device, queue);
 
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Menu Pass"),
+        let mut pass = Self::begin_pass(
+            encoder,
+            "Menu Pass",
+            view,
+            wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+        );
+        if video_visible {
+            self.video.draw(&mut pass);
+        }
+        self.draw_quads(&mut pass);
+        self.text.render_into(&mut pass);
+    }
+
+    /// Encodes the pass of an overlay's black layer of opacity `alpha` over `view`'s contents.
+    /// An overlay is drawn in three steps so that the loading art can be drawn between the
+    /// layer and the foreground: this, the art's own pass, then [`Self::render_foreground`].
+    pub fn render_backdrop(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        fb: (u32, u32),
+        alpha: f32,
+    ) {
+        let mut verts = std::mem::take(&mut self.verts);
+        let mut quads = QuadBuilder::new(&mut verts, fb.0 as f32, fb.1 as f32, 0.0, [0.0; 4]);
+        Self::draw_overlay(fb, alpha, &mut quads);
+        self.verts = verts;
+        self.upload_vertices(device, queue);
+
+        let mut pass = Self::begin_pass(encoder, "Menu Backdrop Pass", view, wgpu::LoadOp::Load);
+        self.draw_quads(&mut pass);
+    }
+
+    /// Encodes the pass of an overlay's loading logo and tip text over `view`'s contents.
+    pub fn render_foreground(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        fb: (u32, u32),
+        foreground: OverlayForeground<'_>,
+    ) {
+        let OverlayForeground {
+            alpha,
+            loading_seconds,
+            tip,
+        } = foreground;
+        let icon_visible = match loading_seconds {
+            Some(seconds) => self.prepare_loading_icon(device, queue, fb, alpha, seconds),
+            None => false,
+        };
+        let items: Vec<TextItem> = tip
+            .filter(|_| alpha > 0.0)
+            .map(|text| {
+                tip::item(
+                    &self.layout,
+                    self.safe_zone,
+                    &self.tint,
+                    fb,
+                    text,
+                    alpha.clamp(0.0, 1.0),
+                )
+            })
+            .into_iter()
+            .collect();
+        self.text.prepare(device, queue, fb, &items);
+
+        let mut pass = Self::begin_pass(encoder, "Menu Foreground Pass", view, wgpu::LoadOp::Load);
+        if icon_visible {
+            self.loading_icon.draw(&mut pass);
+        }
+        self.text.render_into(&mut pass);
+    }
+
+    fn begin_pass<'encoder>(
+        encoder: &'encoder mut wgpu::CommandEncoder,
+        label: &'static str,
+        view: &wgpu::TextureView,
+        load: wgpu::LoadOp<wgpu::Color>,
+    ) -> wgpu::RenderPass<'encoder> {
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(label),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view,
                 resolve_target: None,
@@ -221,20 +328,17 @@ impl MenuRenderer {
             occlusion_query_set: None,
             timestamp_writes: None,
             multiview_mask: None,
-        });
-        if video_visible {
-            self.video.draw(&mut pass);
+        })
+    }
+
+    fn draw_quads(&self, pass: &mut wgpu::RenderPass<'_>) {
+        if self.verts.is_empty() {
+            return;
         }
-        if !self.verts.is_empty() {
-            pass.set_pipeline(&self.pipeline.pipeline);
-            pass.set_bind_group(0, &self.tint_bind_group, &[]);
-            pass.set_vertex_buffer(0, self.vbuf.slice(..));
-            pass.draw(0..self.verts.len() as u32, 0..1);
-        }
-        if icon_visible {
-            self.loading_icon.draw(&mut pass);
-        }
-        self.text.render_into(&mut pass);
+        pass.set_pipeline(&self.pipeline.pipeline);
+        pass.set_bind_group(0, &self.tint_bind_group, &[]);
+        pass.set_vertex_buffer(0, self.vbuf.slice(..));
+        pass.draw(0..self.verts.len() as u32, 0..1);
     }
 
     fn upload_vertices(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
@@ -290,6 +394,7 @@ impl MenuRenderer {
                 shrink: true,
                 colour: [r, g, b, 255],
                 shadow: None,
+                wrap_width: None,
             });
         }
     }

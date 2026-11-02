@@ -5,10 +5,13 @@ use super::layout::{
     test_support::{standard, ui_layout},
 };
 use super::loading_icon::test_support::{library, svg};
-use super::renderer::{MenuError, MenuRenderer, MenuScene};
+use super::renderer::{MenuError, MenuRenderer, MenuScene, OverlayForeground};
 use crate::game_flow::{GameFlow, MenuView, StartMode};
 use crate::rendering::game_settings::SafeZone;
 use crate::rendering::gpu_test::test_device;
+use crate::rendering::loading_screen::test_support::cube_art;
+use crate::rendering::loading_screen::{CpuArt, LoadedArt, LoadingArtRenderer};
+use crate::rendering::post::tonemap::ui_gamma_format;
 use crate::rendering::ui_colour::UiTint;
 use crate::rendering::ui_fonts::{UiFontError, test_support as fonts};
 
@@ -297,6 +300,7 @@ fn overlay(alpha: f32, loading_seconds: Option<f64>) -> MenuScene<'static> {
     MenuScene::Overlay {
         alpha,
         loading_seconds,
+        tip: None,
     }
 }
 
@@ -706,5 +710,132 @@ fn a_new_load_restarts_the_logo_and_the_reveal_continues_it() {
         lit_half(&flow, &mut renderer),
         (continued == 0, continued == 1),
         "the reveal shows the frame the load's clock gives, at {seconds} s"
+    );
+}
+
+const TIP: &str = "A tip is a sentence the loading screen shows while the world loads, and it is \
+                   long enough that it cannot fit on one line of the column it is set in.";
+
+fn tip_overlay(alpha: f32, tip: &str) -> MenuScene<'_> {
+    MenuScene::Overlay {
+        alpha,
+        loading_seconds: None,
+        tip: Some(tip),
+    }
+}
+
+/// The pixels of the tip's HUD green, over the black the overlay leaves.
+fn text_pixels(pixels: &Pixels) -> Vec<(u32, u32)> {
+    pixels.positions_where(|[red, green, blue]| green > 60 && red < 40 && blue < 40)
+}
+
+fn extent_of(positions: &[(u32, u32)]) -> ((u32, u32), (u32, u32)) {
+    let xs = positions.iter().map(|&(x, _)| x);
+    let ys = positions.iter().map(|&(_, y)| y);
+    (
+        (xs.clone().min().unwrap(), xs.max().unwrap()),
+        (ys.clone().min().unwrap(), ys.max().unwrap()),
+    )
+}
+
+#[test]
+fn a_long_tip_wraps_inside_its_column_in_the_lower_part_of_the_screen() {
+    let Some((device, queue)) = test_device("menu tip wrapping") else {
+        return;
+    };
+    let target = Target::new(&device);
+    let item = {
+        let renderer = renderer(&device, &queue, HUD_GREEN);
+        super::tip::item(renderer.layout(), SAFE_ZONE, &HUD_GREEN, SIZE, TIP, 1.0)
+    };
+    let column_left = item.map.origin.0 + item.geometry.content_left() * item.map.scale;
+    let column_right = column_left + item.wrap_width.expect("a tip wraps");
+
+    target.render(&device, &queue, tip_overlay(1.0, "Hxg"));
+    let (_, (one_top, one_bottom)) = extent_of(&text_pixels(&target.pixels(&device, &queue)));
+    let one_line = one_bottom - one_top + 1;
+    target.render(&device, &queue, tip_overlay(1.0, TIP));
+    let wrapped = text_pixels(&target.pixels(&device, &queue));
+    let ((left, right), (top, bottom)) = extent_of(&wrapped);
+
+    assert!(
+        bottom - top + 1 > one_line * 3 / 2,
+        "the tip spans several lines: {one_line} px for one, {} for all",
+        bottom - top + 1
+    );
+    assert!(
+        left as f32 >= column_left - 2.0 && right as f32 <= column_right + 1.0,
+        "the text spans x {left}..={right} in the column {column_left}..{column_right}"
+    );
+    assert!(top >= SIZE.1 * 7 / 10, "the tip starts at y {top}");
+    assert!(bottom < SIZE.1, "the tip ends on the screen");
+}
+
+#[test]
+fn a_tip_fades_with_the_overlay() {
+    let Some((device, queue)) = test_device("menu tip fade") else {
+        return;
+    };
+    let target = Target::new(&device);
+    let brightest = |alpha: f32| {
+        target.render(&device, &queue, tip_overlay(alpha, TIP));
+        let pixels = target.pixels(&device, &queue);
+        pixels
+            .positions_where(|rgb| rgb != [0, 0, 0])
+            .iter()
+            .map(|&(x, y)| pixels.at(x, y)[1])
+            .max()
+    };
+
+    assert_eq!(brightest(0.0), None, "a transparent overlay shows no tip");
+    let half = brightest(0.5).expect("half of the tip shows");
+    assert!((100..=156).contains(&half), "half green: {half}");
+    let full = brightest(1.0).expect("the tip shows");
+    assert!(full >= 250, "full green up to antialiasing: {full}");
+}
+
+#[test]
+fn the_loading_art_sits_above_the_backdrop_and_below_the_logo() {
+    let Some((device, queue)) = test_device("menu art between backdrop and foreground") else {
+        return;
+    };
+    let target = Target::new(&device);
+    target.fill(&device, &queue, RED);
+    let mut menu = renderer(&device, &queue, HUD_GREEN);
+    let mut art_renderer = LoadingArtRenderer::new(&device, &queue, ui_gamma_format(FORMAT));
+    let dir = tempfile::tempdir().unwrap();
+    let mut art = cube_art(dir.path(), "");
+    // The cube stands over the logo's corner of the screen.
+    art.transform.position = [218.0, 300.0, -122.0];
+    let cpu = CpuArt::load(&art).expect("the synthetic cube loads");
+    art_renderer.set_art(Some(
+        LoadedArt::upload(&device, &queue, cpu).expect("the cube uploads"),
+    ));
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    let view = menu.target_view(&target.texture);
+    menu.render_backdrop(&device, &queue, &mut encoder, &view, SIZE, 1.0);
+    art_renderer.render(&mut encoder, &view, SIZE, 1.0);
+    let foreground = OverlayForeground {
+        alpha: 1.0,
+        loading_seconds: Some(0.0),
+        tip: None,
+    };
+    menu.render_foreground(&device, &queue, &mut encoder, &view, SIZE, foreground);
+    queue.submit(std::iter::once(encoder.finish()));
+    let pixels = target.pixels(&device, &queue);
+
+    assert_eq!(pixels.at(2, 2), [0, 0, 0], "the backdrop hid the red frame");
+    assert_eq!(
+        pixels
+            .at(LOGO_LEFT_HALF.0 - 8, LOGO_LEFT_HALF.1 + 8)
+            .map(|c| c > 100),
+        [true; 3],
+        "the cube is drawn over the backdrop"
+    );
+    assert_eq!(
+        pixels.at(LOGO_LEFT_HALF.0, LOGO_LEFT_HALF.1),
+        [0, 255, 0],
+        "the logo is drawn over the cube"
     );
 }

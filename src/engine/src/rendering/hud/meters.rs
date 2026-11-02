@@ -198,6 +198,7 @@ pub fn label_item(layout: &Layout, spec: &MeterSpec, bar: PxRect, tint: &UiTint)
             offset: label.geometry.size * scale * shadow::TEXT_OFFSET_EM,
             colour: [0, 0, 0, tint.shadow_alpha(shadow::TEXT_ALPHA)],
         }),
+        wrap_width: None,
     }
 }
 
