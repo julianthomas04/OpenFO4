@@ -25,6 +25,7 @@ pub mod music;
 pub mod navigation_meshes;
 pub mod perks;
 pub mod placed_objects;
+mod rows;
 pub mod schema;
 pub mod sound_catalog;
 pub mod special_attributes;

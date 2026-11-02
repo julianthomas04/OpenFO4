@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 
 use rusqlite::Connection;
 
-use crate::assets::db::music::{collect_rows, narrow, required};
+use crate::assets::db::rows::{collect_rows, narrow, required};
 use crate::assets::db::schema::require_footstep_tables;
 use crate::assets::db::sound_catalog::SoundCatalog;
 use crate::footsteps::events::{FootTag, Gait};

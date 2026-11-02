@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use rusqlite::Connection;
 
-use crate::assets::db::music::{collect_rows, flag, narrow, real32, required};
+use crate::assets::db::rows::{collect_rows, flag, narrow, real32, required};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompareOp {
