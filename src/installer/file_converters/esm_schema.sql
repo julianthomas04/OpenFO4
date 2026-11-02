@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS worldspaces (
     default_water_height REAL,          -- DNAM: water plane height of cells without an XCLW override
     water_environment_map TEXT,         -- XWEM: water cubemap path
     parent_flags INTEGER,               -- PNAM raw u16: which data the worldspace inherits from parent_worldspace (0x01 land, 0x02 LOD, 0x04 map, 0x08 water, 0x10 climate, 0x40 sky cell)
-    map_image TEXT                      -- ICON: world map texture path relative to Textures, NULL when the worldspace has none
+    map_image TEXT,                     -- ICON: world map texture path relative to Textures, NULL when the worldspace has none
+    location TEXT                       -- XLCN: LCTN form_key of the worldspace's location, NULL when it names none
 );
 
 -- Map-marker references of a worldspace's persistent cell (Pip-Boy MAP).

@@ -673,6 +673,7 @@ namespace AssetConverter
             ("transforms", "zoom_min", "REAL"),
             ("transforms", "zoom_max", "REAL"),
             ("placed_teleports", "flags", "INTEGER NOT NULL DEFAULT 0"),
+            ("worldspaces", "location", "TEXT"),
         };
 
         private async Task AddColumnIfMissingAsync(string table, string column, string type)
@@ -1593,9 +1594,9 @@ namespace AssetConverter
         {
             const string sql = @"
                 INSERT OR REPLACE INTO worldspaces (form_key, editor_id, name, parent_worldspace, flags, world_map_data, climate,
-                    water_type, lod_water_type, lod_water_height, default_land_height, default_water_height, water_environment_map, parent_flags, map_image)
+                    water_type, lod_water_type, lod_water_height, default_land_height, default_water_height, water_environment_map, parent_flags, map_image, location)
                 VALUES (@FormKey, @EditorId, @Name, @Parent, @Flags, @MapData, @Climate,
-                    @WaterType, @LodWaterType, @LodWaterHeight, @DefaultLandHeight, @DefaultWaterHeight, @WaterEnvironmentMap, @ParentFlags, @MapImage)";
+                    @WaterType, @LodWaterType, @LodWaterHeight, @DefaultLandHeight, @DefaultWaterHeight, @WaterEnvironmentMap, @ParentFlags, @MapImage, @Location)";
 
             string? parent = record.Parent?.Worldspace?.FormKey.ToString();
             string? mapData = SafeSerialize(record.MapData);
@@ -1616,7 +1617,8 @@ namespace AssetConverter
                 DefaultLandHeight = record.LandDefaults?.DefaultLandHeight,
                 DefaultWaterHeight = record.LandDefaults?.DefaultWaterHeight,
                 WaterEnvironmentMap = record.WaterEnvironmentMap,
-                MapImage = record.MapImage
+                MapImage = record.MapImage,
+                Location = LinkKey.Text(record.Location)
             }, transaction);
 
             await InsertMapMarkersAsync(record, formKey, conn, transaction);
