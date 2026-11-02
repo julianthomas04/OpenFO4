@@ -111,6 +111,10 @@ impl State {
                 self.mouse_capture.set_locked(!self.freeze_camera);
                 self.mouse_capture.apply(&self.window);
             }
+            FlowAction::UnlockCursor => {
+                self.mouse_capture.set_locked(false);
+                self.mouse_capture.apply(&self.window);
+            }
             FlowAction::Quit => self.quit_requested = true,
         }
     }

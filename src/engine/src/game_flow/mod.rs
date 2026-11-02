@@ -84,7 +84,34 @@ pub enum FlowAction {
     BeginPlay(SpawnLocation),
     ReleaseFoldHold,
     LockCursor,
+    /// A large loading screen is up: the mouse is needed to turn its model.
+    UnlockCursor,
     Quit,
+}
+
+/// Which loading screen a load shows: the black one with the logo, or a large one that also
+/// shows a model and a tip while the load runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScreenKind {
+    Small,
+    Large,
+}
+
+/// The layers a loading overlay draws above its black backdrop; the logo is always drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OverlayLayers {
+    pub art: bool,
+    pub tip: bool,
+}
+
+/// A large screen shows its model and tip only while the load runs. Its reveal cuts to the small
+/// screen and fades that one out, so the model and the tip never fade.
+pub fn overlay_layers(phase: Phase, kind: ScreenKind) -> OverlayLayers {
+    let large_and_loading = phase == Phase::Loading && kind == ScreenKind::Large;
+    OverlayLayers {
+        art: large_and_loading,
+        tip: large_and_loading,
+    }
 }
 
 pub struct GameFlow {
@@ -98,6 +125,8 @@ pub struct GameFlow {
     /// The list row the pointer button went down on in the current phase.
     pressed_row: Option<usize>,
     since_phase_change: f32,
+    /// The screen of the current or last load.
+    screen: ScreenKind,
     /// Seconds since the current load began; the reveal that ends it continues the count.
     loading_seconds: f64,
 }
@@ -122,6 +151,7 @@ impl GameFlow {
             pressed_row: None,
             since_phase_change: 0.0,
             loading_seconds: 0.0,
+            screen: ScreenKind::Large,
         };
         if mode == StartMode::Direct {
             flow.begin_loading();
@@ -287,9 +317,47 @@ impl GameFlow {
     }
 
     fn begin_loading(&mut self) {
+        self.begin_load(ScreenKind::Large);
+    }
+
+    /// Enters the loading screen from play for a load of the world, resetting the load gate and
+    /// the logo's clock like the first load. Does nothing, and answers `FlowAction::None`, in any
+    /// phase but `InGame`: a load already running or fading in is not restarted. The answer asks
+    /// for the cursor to be released when the screen is large.
+    pub fn begin_transition(&mut self, kind: ScreenKind) -> FlowAction {
+        if self.phase != Phase::InGame {
+            return FlowAction::None;
+        }
+        self.begin_load(kind);
+        match kind {
+            ScreenKind::Small => FlowAction::None,
+            ScreenKind::Large => FlowAction::UnlockCursor,
+        }
+    }
+
+    fn begin_load(&mut self, kind: ScreenKind) {
         self.enter(Phase::Loading);
         self.gate = LoadGate::default();
         self.loading_seconds = 0.0;
+        self.screen = kind;
+    }
+
+    /// The screen of the current or last load; the first load of a session is large.
+    pub fn screen_kind(&self) -> ScreenKind {
+        self.screen
+    }
+
+    /// Shows the small screen for the load in progress, because the large one has nothing to
+    /// show. Does nothing outside a load.
+    pub fn fall_back_to_small(&mut self) {
+        if self.phase == Phase::Loading {
+            self.screen = ScreenKind::Small;
+        }
+    }
+
+    /// What the loading overlay draws above the black layer in the current phase.
+    pub fn overlay_layers(&self) -> OverlayLayers {
+        overlay_layers(self.phase, self.screen)
     }
 
     /// The list of the current phase; only called in a phase that shows one.
@@ -973,6 +1041,168 @@ mod tests {
         assert!(toasts(&flow), "in game");
     }
 
+    fn in_game_flow() -> GameFlow {
+        let mut flow = revealing_flow();
+        for _ in 0..100 {
+            flow.tick(0.05);
+        }
+        assert_eq!(flow.phase(), Phase::InGame);
+        flow
+    }
+
+    fn waiting_for_colliders() -> Readiness {
+        Readiness {
+            full_ring_complete: true,
+            colliders_pending: true,
+            player_ready: true,
+            ..Readiness::default()
+        }
+    }
+
+    #[test]
+    fn the_first_load_of_a_session_is_a_large_screen() {
+        assert_eq!(loading_flow().screen_kind(), ScreenKind::Large);
+        let direct = GameFlow::new(Vec::new(), VISIBLE_ROWS, StartMode::Direct);
+        assert_eq!(direct.screen_kind(), ScreenKind::Large);
+    }
+
+    #[test]
+    fn a_transition_from_play_loads_again_with_the_kind_asked_for() {
+        for kind in [ScreenKind::Small, ScreenKind::Large] {
+            let mut flow = in_game_flow();
+            flow.begin_transition(kind);
+            assert_eq!(flow.phase(), Phase::Loading);
+            assert_eq!(flow.screen_kind(), kind);
+            assert_eq!(flow.overlay_alpha(), 1.0);
+            assert_eq!(flow.loading_seconds(), Some(0.0), "the logo starts over");
+        }
+    }
+
+    #[test]
+    fn only_a_large_transition_asks_for_the_cursor() {
+        let mut flow = in_game_flow();
+        assert_eq!(flow.begin_transition(ScreenKind::Small), FlowAction::None);
+        let mut flow = in_game_flow();
+        assert_eq!(
+            flow.begin_transition(ScreenKind::Large),
+            FlowAction::UnlockCursor
+        );
+    }
+
+    #[test]
+    fn a_transition_runs_the_whole_gate_again_and_reveals_into_play() {
+        let mut flow = in_game_flow();
+        flow.begin_transition(ScreenKind::Small);
+        // The ring and the player are ready but the colliders are not: still loading.
+        assert_eq!(run_load(&mut flow, 20, waiting_for_colliders()), []);
+        assert_eq!(flow.phase(), Phase::Loading);
+        // One ready frame is not enough for the reveal; the fold hold is released once.
+        let actions = run_load(&mut flow, 1, streamed_with_player());
+        assert_eq!(actions, [FlowAction::ReleaseFoldHold]);
+        assert_eq!(flow.phase(), Phase::Loading);
+        let actions = run_load(&mut flow, 10, streamed_with_player());
+        assert_eq!(actions, [FlowAction::LockCursor]);
+        assert_eq!(flow.phase(), Phase::Revealing);
+        for _ in 0..200 {
+            flow.tick(0.05);
+        }
+        assert_eq!(flow.phase(), Phase::InGame);
+        assert_eq!(flow.overlay_alpha(), 0.0);
+    }
+
+    #[test]
+    fn a_second_transition_releases_the_fold_hold_again() {
+        let mut flow = in_game_flow();
+        for _ in 0..2 {
+            flow.begin_transition(ScreenKind::Small);
+            let actions = run_load(&mut flow, 20, streamed_with_player());
+            assert_eq!(
+                actions,
+                [FlowAction::ReleaseFoldHold, FlowAction::LockCursor]
+            );
+            for _ in 0..200 {
+                flow.tick(0.05);
+            }
+            assert_eq!(flow.phase(), Phase::InGame);
+        }
+    }
+
+    #[test]
+    fn a_transition_outside_play_is_ignored() {
+        let mut loading = loading_flow();
+        loading.tick(0.3);
+        let mut revealing = revealing_flow();
+        for flow in [&mut loading, &mut revealing, &mut menu_flow()] {
+            let phase = flow.phase();
+            let seconds = flow.loading_seconds();
+            assert_eq!(flow.begin_transition(ScreenKind::Small), FlowAction::None);
+            assert_eq!(flow.phase(), phase);
+            assert_eq!(flow.loading_seconds(), seconds);
+            assert_eq!(flow.screen_kind(), ScreenKind::Large);
+        }
+    }
+
+    #[test]
+    fn the_kind_lasts_through_the_reveal_and_into_play() {
+        let mut flow = in_game_flow();
+        flow.begin_transition(ScreenKind::Small);
+        run_load(&mut flow, 20, streamed_with_player());
+        assert_eq!(flow.phase(), Phase::Revealing);
+        assert_eq!(flow.screen_kind(), ScreenKind::Small);
+    }
+
+    #[test]
+    fn a_large_screen_without_anything_to_show_falls_back_to_small_during_the_load() {
+        let mut flow = in_game_flow();
+        flow.begin_transition(ScreenKind::Large);
+        flow.fall_back_to_small();
+        assert_eq!(flow.screen_kind(), ScreenKind::Small);
+        assert_eq!(flow.phase(), Phase::Loading);
+    }
+
+    #[test]
+    fn falling_back_outside_a_load_changes_nothing() {
+        let mut flow = in_game_flow();
+        flow.begin_transition(ScreenKind::Large);
+        run_load(&mut flow, 20, streamed_with_player());
+        flow.fall_back_to_small();
+        assert_eq!(flow.screen_kind(), ScreenKind::Large, "revealing");
+    }
+
+    #[test]
+    fn only_a_large_screen_that_is_loading_draws_the_model_and_the_tip() {
+        let both = OverlayLayers {
+            art: true,
+            tip: true,
+        };
+        let neither = OverlayLayers {
+            art: false,
+            tip: false,
+        };
+        for phase in [
+            Phase::MainMenu,
+            Phase::SpawnSelect,
+            Phase::Revealing,
+            Phase::InGame,
+        ] {
+            for kind in [ScreenKind::Small, ScreenKind::Large] {
+                assert_eq!(overlay_layers(phase, kind), neither, "{phase:?} {kind:?}");
+            }
+        }
+        assert_eq!(overlay_layers(Phase::Loading, ScreenKind::Small), neither);
+        assert_eq!(overlay_layers(Phase::Loading, ScreenKind::Large), both);
+    }
+
+    #[test]
+    fn the_flow_cuts_from_the_large_screen_to_the_small_one_at_the_reveal() {
+        let mut flow = loading_flow();
+        assert_eq!(flow.screen_kind(), ScreenKind::Large);
+        assert!(flow.overlay_layers().art && flow.overlay_layers().tip);
+        run_load(&mut flow, 20, streamed_with_player());
+        assert_eq!(flow.phase(), Phase::Revealing);
+        assert_eq!(flow.overlay_alpha(), 1.0, "the small screen starts opaque");
+        assert!(!flow.overlay_layers().art && !flow.overlay_layers().tip);
+    }
     #[test]
     fn a_direct_start_loads_without_a_menu_and_reveals() {
         let mut flow = GameFlow::new(Vec::new(), VISIBLE_ROWS, StartMode::Direct);
