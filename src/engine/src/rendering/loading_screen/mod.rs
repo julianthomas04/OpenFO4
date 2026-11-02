@@ -6,6 +6,7 @@
 //! needs the frame thread. [`LoadingArtRenderer::set_art`] only builds bind groups.
 
 mod art;
+mod background;
 mod camera;
 mod model;
 mod pipeline;
@@ -15,6 +16,7 @@ mod renderer_tests;
 pub(crate) mod test_support;
 
 pub use art::{LoadingArt, ModelTransform};
+pub use background::LoadingBackground;
 pub use camera::ArtCamera;
 pub use model::{CpuArt, LoadedArt, LoadingArtError};
 

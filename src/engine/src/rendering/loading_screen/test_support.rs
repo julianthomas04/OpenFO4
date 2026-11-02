@@ -180,6 +180,12 @@ pub fn layered_quads_art(dir: &Path) -> LoadingArt {
 
 /// Writes `textures/<name>`, a 2x2 texture whose texels all have the given alpha and are white.
 pub fn write_texture(dir: &Path, name: &str, alpha: u8) {
+    write_solid_texture(dir, name, [255, 255, 255, alpha]);
+}
+
+/// Writes `textures/<name>`, a 2x2 texture whose texels all are `rgba`; `name` may name a
+/// folder below `textures`.
+pub fn write_solid_texture(dir: &Path, name: &str, rgba: [u8; 4]) {
     let mut dds = ddsfile::Dds::new_dxgi(ddsfile::NewDxgiParams {
         height: 2,
         width: 2,
@@ -194,10 +200,11 @@ pub fn write_texture(dir: &Path, name: &str, alpha: u8) {
     })
     .expect("a valid texture description");
     for texel in dds.data.as_chunks_mut::<4>().0 {
-        *texel = [255, 255, 255, alpha];
+        *texel = rgba;
     }
-    let folder = dir.join("textures");
-    std::fs::create_dir_all(&folder).expect("the temp folder is writable");
-    let mut file = std::fs::File::create(folder.join(name)).expect("the texture is writable");
+    let path = dir.join("textures").join(name);
+    std::fs::create_dir_all(path.parent().expect("a texture is in a folder"))
+        .expect("the temp folder is writable");
+    let mut file = std::fs::File::create(path).expect("the texture is writable");
     dds.write(&mut file).expect("the texture is written");
 }

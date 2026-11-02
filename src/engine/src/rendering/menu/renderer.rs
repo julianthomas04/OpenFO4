@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use super::image_quad::{BackgroundQuad, ImageQuadPipeline};
 use super::layout::MenuLayout;
 use super::loading_icon::{IconScene, LoadingIcon, LoadingIconError};
 use super::tip;
@@ -55,6 +56,15 @@ pub enum MenuScene<'a> {
     },
 }
 
+/// What an overlay draws first: its black layer and, on a large loading screen, the image behind
+/// the loading art.
+#[derive(Debug, Clone, Copy)]
+pub struct Backdrop<'a> {
+    pub alpha: f32,
+    /// Stretched over the whole target above the black layer.
+    pub image: Option<&'a wgpu::TextureView>,
+}
+
 /// What an overlay draws above its backdrop and the loading art.
 #[derive(Debug, Clone, Copy)]
 pub struct OverlayForeground<'a> {
@@ -77,6 +87,8 @@ pub struct MenuRenderer {
     verts: Vec<HudVertex>,
     text: FieldText,
     video: VideoLayer,
+    image_pipeline: ImageQuadPipeline,
+    background: BackgroundQuad,
     loading_icon: LoadingIcon,
     icon_state: IconState,
     safe_zone: SafeZone,
@@ -113,6 +125,8 @@ impl MenuRenderer {
         let pipeline = HudPipeline::new(device, format);
         let tint_bind_group = pipeline.create_tint_bind_group(device, &NEUTRAL_TINT);
         let loading_icon = LoadingIcon::new(device, format, art)?;
+        let image_pipeline = ImageQuadPipeline::new(device, format);
+        let background = BackgroundQuad::new(&image_pipeline, device);
         Ok(Self {
             gamma_format: format,
             layout,
@@ -125,6 +139,8 @@ impl MenuRenderer {
             verts: Vec::new(),
             text: FieldText::new(device, queue, format, fonts, glyphon::ColorMode::Web),
             video: VideoLayer::new(device, format),
+            image_pipeline,
+            background,
             loading_icon,
             icon_state: IconState::default(),
             safe_zone,
@@ -200,7 +216,8 @@ impl MenuRenderer {
                 loading_seconds,
                 tip,
             } => {
-                self.render_backdrop(device, queue, encoder, view, fb, alpha);
+                let backdrop = Backdrop { alpha, image: None };
+                self.render_backdrop(device, queue, encoder, view, fb, backdrop);
                 let foreground = OverlayForeground {
                     alpha,
                     loading_seconds,
@@ -243,9 +260,10 @@ impl MenuRenderer {
         self.text.render_into(&mut pass);
     }
 
-    /// Encodes the pass of an overlay's black layer of opacity `alpha` over `view`'s contents.
-    /// An overlay is drawn in three steps so that the loading art can be drawn between the
-    /// layer and the foreground: this, the art's own pass, then [`Self::render_foreground`].
+    /// Encodes the pass of an overlay's black layer and, over it, its image, over `view`'s
+    /// contents. An overlay is drawn in three steps so that the loading art can be drawn between
+    /// the backdrop and the foreground: this, the art's own pass, then
+    /// [`Self::render_foreground`].
     pub fn render_backdrop(
         &mut self,
         device: &wgpu::Device,
@@ -253,16 +271,28 @@ impl MenuRenderer {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         fb: (u32, u32),
-        alpha: f32,
+        backdrop: Backdrop<'_>,
     ) {
         let mut verts = std::mem::take(&mut self.verts);
         let mut quads = QuadBuilder::new(&mut verts, fb.0 as f32, fb.1 as f32, 0.0, [0.0; 4]);
-        Self::draw_overlay(fb, alpha, &mut quads);
+        Self::draw_overlay(fb, backdrop.alpha, &mut quads);
         self.verts = verts;
         self.upload_vertices(device, queue);
+        match backdrop.image {
+            Some(image) => self.background.prepare(
+                &self.image_pipeline,
+                device,
+                queue,
+                image,
+                fb,
+                backdrop.alpha,
+            ),
+            None => self.background.clear(),
+        }
 
         let mut pass = Self::begin_pass(encoder, "Menu Backdrop Pass", view, wgpu::LoadOp::Load);
         self.draw_quads(&mut pass);
+        self.background.draw(&self.image_pipeline, &mut pass);
     }
 
     /// Encodes the pass of an overlay's loading logo and tip text over `view`'s contents.

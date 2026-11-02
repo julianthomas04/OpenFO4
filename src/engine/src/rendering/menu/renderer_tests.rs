@@ -5,12 +5,12 @@ use super::layout::{
     test_support::{standard, ui_layout},
 };
 use super::loading_icon::test_support::{library, svg};
-use super::renderer::{MenuError, MenuRenderer, MenuScene, OverlayForeground};
+use super::renderer::{Backdrop, MenuError, MenuRenderer, MenuScene, OverlayForeground};
 use crate::game_flow::{GameFlow, MenuView, StartMode};
 use crate::rendering::game_settings::SafeZone;
 use crate::rendering::gpu_test::test_device;
-use crate::rendering::loading_screen::test_support::cube_art;
-use crate::rendering::loading_screen::{CpuArt, LoadedArt, LoadingArtRenderer};
+use crate::rendering::loading_screen::test_support::{cube_art, write_solid_texture};
+use crate::rendering::loading_screen::{CpuArt, LoadedArt, LoadingArtRenderer, LoadingBackground};
 use crate::rendering::post::tonemap::ui_gamma_format;
 use crate::rendering::ui_colour::UiTint;
 use crate::rendering::ui_fonts::{UiFontError, test_support as fonts};
@@ -831,7 +831,11 @@ fn the_loading_art_sits_above_the_backdrop_and_below_the_logo() {
 
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
     let view = menu.target_view(&target.texture);
-    menu.render_backdrop(&device, &queue, &mut encoder, &view, SIZE, 1.0);
+    let backdrop = Backdrop {
+        alpha: 1.0,
+        image: None,
+    };
+    menu.render_backdrop(&device, &queue, &mut encoder, &view, SIZE, backdrop);
     art_renderer.render(&mut encoder, &view, SIZE);
     let foreground = OverlayForeground {
         alpha: 1.0,
@@ -854,5 +858,140 @@ fn the_loading_art_sits_above_the_backdrop_and_below_the_logo() {
         pixels.at(LOGO_LEFT_HALF.0, LOGO_LEFT_HALF.1),
         [0, 255, 0],
         "the logo is drawn over the cube"
+    );
+}
+
+const BACKGROUND_COLOUR: [u8; 3] = [200, 100, 50];
+
+/// A background image of one colour that the install's folder layout names.
+fn background_in(dir: &std::path::Path) -> LoadingBackground {
+    write_solid_texture(
+        dir,
+        "Interface/LoadingMenuBG.DDS",
+        [
+            BACKGROUND_COLOUR[0],
+            BACKGROUND_COLOUR[1],
+            BACKGROUND_COLOUR[2],
+            255,
+        ],
+    );
+    LoadingBackground::new(dir.to_path_buf())
+}
+
+fn corners_and_centre(pixels: &Pixels) -> [[u8; 3]; 5] {
+    let (width, height) = SIZE;
+    [
+        pixels.at(0, 0),
+        pixels.at(width - 1, 0),
+        pixels.at(0, height - 1),
+        pixels.at(width - 1, height - 1),
+        pixels.at(width / 2, height / 2),
+    ]
+}
+
+fn assert_close(actual: [u8; 3], expected: [u8; 3], context: &str) {
+    for (a, e) in actual.into_iter().zip(expected) {
+        assert!(
+            a.abs_diff(e) <= 2,
+            "{context}: {actual:?} is not {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn a_backdrop_image_covers_the_whole_target_as_stored() {
+    let Some((device, queue)) = test_device("menu backdrop image") else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let mut background = background_in(dir.path());
+    let image = background.view(&device, &queue).expect("the image loads");
+    let target = Target::new(&device);
+    target.fill(&device, &queue, RED);
+    let mut menu = renderer(&device, &queue, HUD_GREEN);
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    let view = menu.target_view(&target.texture);
+    let backdrop = Backdrop {
+        alpha: 1.0,
+        image: Some(image),
+    };
+    menu.render_backdrop(&device, &queue, &mut encoder, &view, SIZE, backdrop);
+    queue.submit(std::iter::once(encoder.finish()));
+
+    for pixel in corners_and_centre(&target.pixels(&device, &queue)) {
+        assert_close(
+            pixel,
+            BACKGROUND_COLOUR,
+            "the image fills the target untinted",
+        );
+    }
+}
+
+#[test]
+fn a_backdrop_without_an_image_is_only_the_black_layer() {
+    let Some((device, queue)) = test_device("menu backdrop without image") else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let mut background = background_in(dir.path());
+    let image = background.view(&device, &queue).expect("the image loads");
+    let target = Target::new(&device);
+    let mut menu = renderer(&device, &queue, HUD_GREEN);
+    let draw = |menu: &mut MenuRenderer, image: Option<&wgpu::TextureView>| {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        let view = menu.target_view(&target.texture);
+        let backdrop = Backdrop { alpha: 1.0, image };
+        menu.render_backdrop(&device, &queue, &mut encoder, &view, SIZE, backdrop);
+        queue.submit(std::iter::once(encoder.finish()));
+    };
+
+    draw(&mut menu, Some(image));
+    draw(&mut menu, None);
+
+    for pixel in corners_and_centre(&target.pixels(&device, &queue)) {
+        assert_eq!(pixel, [0, 0, 0], "the image of an earlier frame is gone");
+    }
+}
+
+#[test]
+fn the_loading_art_is_drawn_over_the_backdrop_image() {
+    let Some((device, queue)) = test_device("menu art over backdrop image") else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let mut background = background_in(dir.path());
+    let image = background.view(&device, &queue).expect("the image loads");
+    let target = Target::new(&device);
+    let mut menu = renderer(&device, &queue, HUD_GREEN);
+    let mut art_renderer = LoadingArtRenderer::new(&device, &queue, ui_gamma_format(FORMAT));
+    let cpu = CpuArt::load(&cube_art(dir.path(), "")).expect("the synthetic cube loads");
+    art_renderer.set_art(Some(
+        LoadedArt::upload(&device, &queue, cpu).expect("the cube uploads"),
+    ));
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    let view = menu.target_view(&target.texture);
+    let backdrop = Backdrop {
+        alpha: 1.0,
+        image: Some(image),
+    };
+    menu.render_backdrop(&device, &queue, &mut encoder, &view, SIZE, backdrop);
+    art_renderer.render(&mut encoder, &view, SIZE);
+    queue.submit(std::iter::once(encoder.finish()));
+    let pixels = target.pixels(&device, &queue);
+
+    assert_close(
+        pixels.at(0, 0),
+        BACKGROUND_COLOUR,
+        "the corner shows the image",
+    );
+    let centre = pixels.at(SIZE.0 / 2, SIZE.1 / 2);
+    assert!(
+        centre
+            .iter()
+            .zip(BACKGROUND_COLOUR)
+            .any(|(a, b)| a.abs_diff(b) > 20),
+        "the cube hides the image at the centre: {centre:?}"
     );
 }

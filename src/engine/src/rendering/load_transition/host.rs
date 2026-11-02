@@ -9,7 +9,9 @@ use crate::assets::db::load_screens::{LoadScreen, LoadScreenCatalog};
 use crate::assets::types::glb_key::glb_key;
 use crate::loading_screen::{LoadScreenContext, Place, select};
 use crate::random::SplitMix64;
-use crate::rendering::loading_screen::{LoadedArt, LoadingArt, LoadingArtRenderer, ModelTransform};
+use crate::rendering::loading_screen::{
+    LoadedArt, LoadingArt, LoadingArtRenderer, LoadingBackground, ModelTransform,
+};
 
 /// Names the editor id of the loading screen to show on every large screen, to tune its camera.
 pub(super) const FORCED_SCREEN_VAR: &str = "OPENFO4_LOADSCREEN";
@@ -57,6 +59,7 @@ pub(in crate::rendering) struct LoadScreenHost {
     forced: Option<String>,
     loader: ArtLoader,
     renderer: LoadingArtRenderer,
+    background: LoadingBackground,
     device: wgpu::Device,
     queue: wgpu::Queue,
     pending: Option<Showing>,
@@ -80,6 +83,7 @@ impl LoadScreenHost {
             forced: forced_screen_from_env(),
             loader: ArtLoader::default(),
             renderer: LoadingArtRenderer::new(device, queue, target_format),
+            background: LoadingBackground::new(asset_root.to_path_buf()),
             device: device.clone(),
             queue: queue.clone(),
             pending: None,
@@ -186,6 +190,12 @@ impl LoadScreenHost {
         self.shown_tip
             .as_deref()
             .filter(|_| self.renderer.has_art())
+    }
+
+    /// The image behind a large screen's model, loaded on first use; none when the install lacks
+    /// it.
+    pub fn background(&mut self) -> Option<&wgpu::TextureView> {
+        self.background.view(&self.device, &self.queue)
     }
 
     pub fn drag(&mut self, dx_px: f32) {

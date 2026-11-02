@@ -9,14 +9,13 @@
 
 use std::path::PathBuf;
 
-use bytemuck::{Pod, Zeroable};
 use resvg::usvg;
 
+use super::image_quad::{ImageQuadParams, ImageQuadPipeline};
 use crate::assets::pipboy_art::{ArtClip, ArtLibrary, FixedArt};
 use crate::rendering::game_settings::SafeZone;
 use crate::rendering::hud::layout::Layout;
 use crate::rendering::hud::quad::PxRect;
-use crate::rendering::shaders;
 use crate::rendering::svg_raster::{self, BadRasterSize};
 use crate::ui_layout::values::{ColorTransform, Matrix};
 use crate::ui_layout::{PlacementKey, StageKey, UiLayout, UiLayoutError};
@@ -124,14 +123,6 @@ pub enum LoadingIconError {
     Parse { path: PathBuf, source: usvg::Error },
 }
 
-/// The uniform block of `menu_icon.wgsl`.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Pod, Zeroable)]
-struct IconParams {
-    rect: [f32; 4],
-    colour: [f32; 4],
-}
-
 /// The texture the current frame is rasterised into, and what it shows.
 struct Surface {
     texture: wgpu::Texture,
@@ -170,9 +161,7 @@ pub struct IconScene {
 pub struct LoadingIcon {
     clip: ArtClip,
     frames: Vec<usvg::Tree>,
-    pipeline: wgpu::RenderPipeline,
-    bind_group_layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
+    pipeline: ImageQuadPipeline,
     params: wgpu::Buffer,
     surface: Option<Surface>,
 }
@@ -197,91 +186,12 @@ impl LoadingIcon {
                     .map_err(|source| LoadingIconError::Parse { path, source })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("menu_icon_bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("menu_icon_layout"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
-        });
-        let shader = shaders::MENU_ICON.compile(device);
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Menu Icon Pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("menu_icon_sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-        let params = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("menu_icon_params"),
-            size: std::mem::size_of::<IconParams>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let pipeline = ImageQuadPipeline::new(device, format);
+        let params = pipeline.params_buffer(device);
         Ok(Self {
             clip,
             frames,
             pipeline,
-            bind_group_layout,
-            sampler,
             params,
             surface: None,
         })
@@ -337,7 +247,7 @@ impl LoadingIcon {
             surface.shown_frame = Some(frame);
         }
         let [red, green, blue, opacity] = scene.tint.map(|byte| f32::from(byte) / 255.0);
-        let params = IconParams {
+        let params = ImageQuadParams {
             rect: rect.clip_edges(scene.target),
             colour: [red, green, blue, opacity * scene.fade.clamp(0.0, 1.0)],
         };
@@ -350,9 +260,7 @@ impl LoadingIcon {
         let Some(surface) = &self.surface else {
             return;
         };
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &surface.bind_group, &[]);
-        pass.draw(0..4, 0..1);
+        self.pipeline.draw(pass, &surface.bind_group);
     }
 
     fn create_surface(&self, device: &wgpu::Device, size: (u32, u32)) -> Surface {
@@ -371,24 +279,7 @@ impl LoadingIcon {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("menu_icon_bind_group"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.params.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
+        let bind_group = self.pipeline.bind_group(device, &self.params, &view);
         Surface {
             texture,
             bind_group,

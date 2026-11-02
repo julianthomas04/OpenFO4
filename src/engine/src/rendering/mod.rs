@@ -213,7 +213,7 @@ use lighting::frame_uniform::FrameUniform;
 use load_transition::{
     Destination, DragTracker, LoadHistory, LoadScreenHost, LoadScreens, spawn_report_title,
 };
-use menu::{MenuRenderer, OverlayForeground};
+use menu::{Backdrop, MenuRenderer, OverlayForeground};
 use particles::CameraBasis;
 use ragdoll_objects::RagdollObjects;
 use refraction::{RefractionFrameInputs, RefractionStage};
@@ -2659,13 +2659,21 @@ impl State {
             let menu_view = self.menu.target_view(&output.texture);
             let framebuffer = (self.config.width, self.config.height);
             let layers = self.flow.overlay_layers();
+            let backdrop = Backdrop {
+                alpha: overlay_alpha,
+                image: if layers.art {
+                    self.load_screens.host.background()
+                } else {
+                    None
+                },
+            };
             self.menu.render_backdrop(
                 &self.device,
                 &self.queue,
                 &mut encoder,
                 &menu_view,
                 framebuffer,
-                overlay_alpha,
+                backdrop,
             );
             if layers.art {
                 self.load_screens
