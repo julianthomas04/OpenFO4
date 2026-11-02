@@ -15,7 +15,7 @@ namespace InstallerTests
     {
         const int DisplaysInMainMenu = 1 << 10;
         const int NoRotation = 1 << 15;
-        const int AroundOrigin = 1 << 15;
+        const int AroundOrigin = 0x10000;
 
         readonly TempDirectory _directory = new();
         readonly string _dbPath;
@@ -55,7 +55,8 @@ namespace InstallerTests
                 transform.Scale = 1.5f;
                 transform.ZoomMin = -0.5f;
                 transform.ZoomMax = 1.5f;
-                transform.MajorFlags = Transform.MajorFlag.AroundOrigin;
+                // Mutagen's named AroundOrigin constant (32768) is not the bit the game sets (0x10000).
+                transform.MajorFlags = (Transform.MajorFlag)AroundOrigin;
             });
             return (plugin, model, camera);
         }
@@ -167,6 +168,101 @@ namespace InstallerTests
             var flags = connection.Query<long>("SELECT flags FROM load_screen_conditions WHERE screen = @key ORDER BY ord", new { key = plugin["AliasScreen"] }).ToList();
 
             Assert.Equal([0L, 2L], flags);
+        }
+
+        [Fact]
+        public async Task LoadScreenCondition_ComparedWithAGlobal_StoresTheGlobalKeyAndNoLiteral()
+        {
+            var (plugin, model, camera) = PluginWithModelAndCamera();
+            var threshold = plugin.AddGlobal("Threshold", mod => new GlobalFloat(mod) { Data = 4f });
+            plugin.AddLoadScreen("GlobalCompare", screen =>
+            {
+                Describe(screen, model, camera);
+                screen.Conditions.Add(new ConditionGlobal
+                {
+                    Data = new FunctionConditionData { Function = Condition.Function.GetRandomPercent },
+                    CompareOperator = CompareOperator.LessThanOrEqualTo,
+                    ComparisonValue = new FormLink<IGlobalGetter>(threshold.FormKey),
+                });
+            });
+
+            using var connection = await LoadAsync(plugin);
+            var row = connection.QuerySingle("SELECT * FROM load_screen_conditions WHERE screen = @key", new { key = plugin["GlobalCompare"] });
+
+            Assert.Equal(plugin["Threshold"], (string)row.compare_global);
+            Assert.Null(row.compare_value);
+        }
+
+        [Fact]
+        public async Task LoadScreenCondition_RunOnReference_StoresTheRunOnTypeAndTheReference()
+        {
+            var (plugin, model, camera) = PluginWithModelAndCamera();
+            var target = plugin.AddStatic("ReferenceTarget", @"Meshes\Target.nif");
+            plugin.AddLoadScreen("RunOnReference", screen =>
+            {
+                Describe(screen, model, camera);
+                screen.Conditions.Add(new ConditionFloat
+                {
+                    Data = new FunctionConditionData
+                    {
+                        Function = Condition.Function.GetRandomPercent,
+                        RunOnType = Condition.RunOnType.Reference,
+                        Reference = new FormLink<ILinkedReferenceGetter>(target.FormKey),
+                    },
+                    CompareOperator = CompareOperator.EqualTo,
+                    ComparisonValue = 1f,
+                });
+            });
+
+            using var connection = await LoadAsync(plugin);
+            var row = connection.QuerySingle("SELECT * FROM load_screen_conditions WHERE screen = @key", new { key = plugin["RunOnReference"] });
+
+            Assert.Equal(2L, row.run_on);
+            Assert.Equal(plugin["ReferenceTarget"], (string)row.reference);
+        }
+
+        [Fact]
+        public async Task LoadScreenCondition_GlobalComparisonWithoutGlobal_IsRejectedNamingTheRecordAndCondition()
+        {
+            var (plugin, model, camera) = PluginWithModelAndCamera();
+            plugin.AddLoadScreen("NullGlobal", screen =>
+            {
+                Describe(screen, model, camera);
+                screen.Conditions.Add(Literal(Condition.Function.GetRandomPercent, CompareOperator.LessThan, 1f));
+                screen.Conditions.Add(new ConditionGlobal { Data = new FunctionConditionData { Function = Condition.Function.GetRandomPercent } });
+            });
+
+            var error = await Assert.ThrowsAsync<UnsupportedEsmDataException>(() => Load(plugin));
+
+            Assert.Contains("NullGlobal", error.Message);
+            Assert.Contains("condition 1", error.Message);
+        }
+
+        [Fact]
+        public async Task Reload_OverAnOldStubTable_AddsTheColumnsAndReplacesTheStubRow()
+        {
+            var (plugin, model, camera) = PluginWithModelAndCamera();
+            plugin.AddLoadScreen("Migrated", screen =>
+            {
+                Describe(screen, model, camera);
+                screen.Description = "Migrated tip.";
+                screen.Conditions.Add(Literal(Condition.Function.GetRandomPercent, CompareOperator.LessThan, 5f));
+            });
+            string esmPath = plugin.Write(_directory.Path);
+            using (var stub = Open())
+            {
+                stub.Execute("CREATE TABLE load_screens (form_key TEXT PRIMARY KEY, editor_id TEXT)");
+                stub.Execute("INSERT INTO load_screens (form_key, editor_id) VALUES ('0FFFFF:Fixture.esm', 'Stale')");
+            }
+
+            await new ESMLoader(_dbPath) { Memory = MemoryBudget.Unlimited() }.ReloadTablesAsync(esmPath, TableReloadPlan.Create(["load_screens"]), TestContext.Current.CancellationToken);
+
+            using var connection = Open();
+            var rows = connection.Query("SELECT * FROM load_screens").ToList();
+            var row = Assert.Single(rows);
+            Assert.Equal(plugin["Migrated"], (string)row.form_key);
+            Assert.Equal(("Migrated tip.", plugin["ScreenModel"], plugin["ScreenCamera"], -180L), ((string)row.tip, (string)row.model, (string)row.transform, row.rotation_min));
+            Assert.Equal(1, connection.ExecuteScalar<long>("SELECT COUNT(*) FROM load_screen_conditions WHERE screen = @key", new { key = plugin["Migrated"] }));
         }
 
         [Fact]
