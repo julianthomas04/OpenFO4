@@ -321,7 +321,7 @@ type CellPlaceRow = (
     i64,
 );
 
-fn load_cell_places(conn: &Connection) -> anyhow::Result<Vec<CellPlace>> {
+pub(super) fn load_cell_places(conn: &Connection) -> anyhow::Result<Vec<CellPlace>> {
     let rows: Vec<CellPlaceRow> = collect_rows(
         conn,
         "SELECT p.cell, p.music_type, p.location, c.form_key, c.worldspace, c.grid_x, c.grid_y, \

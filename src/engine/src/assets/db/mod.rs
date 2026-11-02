@@ -16,6 +16,7 @@ pub mod landscape_textures;
 pub mod landscapes;
 pub mod lighting_templates;
 pub mod lights;
+pub mod load_screens;
 pub mod map_markers;
 pub mod material_swaps;
 pub mod material_types;
@@ -129,6 +130,18 @@ impl DbClient {
             path: self.path.clone(),
             schema: self.schema,
         })
+    }
+
+    /// The loading screens with their location data, or `None` for a database converted before
+    /// the installer exported them; errors when a screen row is incomplete or malformed.
+    #[instrument(skip(self))]
+    pub fn get_load_screen_catalog(
+        &self,
+    ) -> anyhow::Result<Option<load_screens::LoadScreenCatalog>> {
+        if !self.schema.load_screen_columns_present {
+            return Ok(None);
+        }
+        load_screens::LoadScreenCatalog::from_connection(&self.conn).map(Some)
     }
 
     /// The ambient music tables; errors when the installer has not extracted them.
@@ -392,7 +405,7 @@ impl DbClient {
 
     #[instrument(skip(self))]
     pub fn get_placed_teleports(&self) -> anyhow::Result<Vec<teleports::TeleportRecord>> {
-        teleports::get_all(&self.conn)
+        teleports::get_all(&self.conn, self.schema)
     }
 
     /// Enabled automatic load doors with their trigger volumes.
@@ -406,7 +419,7 @@ impl DbClient {
         &self,
         cell_form_key: &str,
     ) -> anyhow::Result<Option<teleports::TeleportRecord>> {
-        teleports::get_into_cell(cell_form_key, &self.conn)
+        teleports::get_into_cell(cell_form_key, &self.conn, self.schema)
     }
 
     #[instrument(skip(self))]

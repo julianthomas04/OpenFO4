@@ -87,6 +87,39 @@ const PIPBOY_TABLES_FIX: &str =
 const WEAPON_DEFAULT_MODS_COLUMNS: &[&str] = &["default_mods"];
 const OBJECT_MOD_MODEL_COLUMNS: &[&str] = &["model_path", "attach_point_name"];
 const DOOR_TRIGGER_BOUNDS_COLUMNS: &[&str] = &["trigger_bounds"];
+const LOAD_SCREEN_COLUMNS: &[&str] = &[
+    "tip",
+    "model",
+    "flags",
+    "transform",
+    "rotation_min",
+    "rotation_max",
+    "zoom_min",
+    "zoom_max",
+];
+const LOAD_SCREEN_CONDITION_COLUMNS: &[&str] = &[
+    "screen",
+    "ord",
+    "function",
+    "compare_op",
+    "or_flag",
+    "flags",
+    "compare_value",
+    "compare_global",
+    "run_on",
+    "reference",
+    "param1_num",
+    "param1_record",
+    "param1_string",
+    "param2_num",
+    "param2_record",
+    "param2_string",
+    "param3",
+];
+const TRANSFORM_COLUMNS: &[&str] = &[
+    "pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "scale", "flags", "zoom_min", "zoom_max",
+];
+const TELEPORT_FLAGS_COLUMNS: &[&str] = &["flags"];
 const COLLISION_LAYER_COLUMNS: &[&str] = &["layer_index", "flags", "collides_with"];
 const NAVMESH_COLUMNS: &[&str] = &[
     "form_id",
@@ -134,6 +167,10 @@ pub enum ColumnGroup {
     Navmesh,
     CollisionLayer,
     DoorTriggerBounds,
+    LoadScreen,
+    LoadScreenCondition,
+    Transform,
+    TeleportFlags,
 }
 
 impl std::fmt::Display for ColumnGroup {
@@ -165,6 +202,10 @@ impl std::fmt::Display for ColumnGroup {
             Self::Navmesh => "navmesh",
             Self::CollisionLayer => "collision layer",
             Self::DoorTriggerBounds => "door trigger bounds",
+            Self::LoadScreen => "load screen",
+            Self::LoadScreenCondition => "load screen condition",
+            Self::Transform => "transform",
+            Self::TeleportFlags => "teleport flags",
         })
     }
 }
@@ -387,6 +428,10 @@ pub struct DbSchema {
     pub navmesh_columns_present: bool,
     pub collision_layer_columns_present: bool,
     pub door_trigger_bounds_column_present: bool,
+    /// The load screen, load screen condition and transform tables the loading screen catalog
+    /// reads, all or none.
+    pub load_screen_columns_present: bool,
+    pub teleport_flags_column_present: bool,
 }
 
 impl DbSchema {
@@ -545,6 +590,28 @@ impl DbSchema {
                 "doors",
                 DOOR_TRIGGER_BOUNDS_COLUMNS,
             )?,
+            load_screen_columns_present: column_group_present(
+                conn,
+                ColumnGroup::LoadScreen,
+                "load_screens",
+                LOAD_SCREEN_COLUMNS,
+            )? & column_group_present(
+                conn,
+                ColumnGroup::LoadScreenCondition,
+                "load_screen_conditions",
+                LOAD_SCREEN_CONDITION_COLUMNS,
+            )? & column_group_present(
+                conn,
+                ColumnGroup::Transform,
+                "transforms",
+                TRANSFORM_COLUMNS,
+            )?,
+            teleport_flags_column_present: column_group_present(
+                conn,
+                ColumnGroup::TeleportFlags,
+                "placed_teleports",
+                TELEPORT_FLAGS_COLUMNS,
+            )?,
         })
     }
 
@@ -617,6 +684,16 @@ impl DbSchema {
                     "navigation_meshes geometry columns missing (database predates navmesh extraction); no navigation meshes are loaded"
                 );
             }
+            if !self.load_screen_columns_present {
+                tracing::warn!(
+                    "load screen columns missing (database predates the load screen extraction); large loading screens fall back to the small one"
+                );
+            }
+            if !self.teleport_flags_column_present {
+                tracing::warn!(
+                    "placed_teleports.flags column missing (database predates the teleport flags export); every load door shows its loading screen"
+                );
+            }
         });
     }
 }
@@ -681,6 +758,14 @@ pub fn door_trigger_bounds_select_list(schema: DbSchema, prefix: &str) -> String
     select_list(
         DOOR_TRIGGER_BOUNDS_COLUMNS,
         schema.door_trigger_bounds_column_present,
+        prefix,
+    )
+}
+
+pub fn teleport_flags_select_list(schema: DbSchema, prefix: &str) -> String {
+    select_list(
+        TELEPORT_FLAGS_COLUMNS,
+        schema.teleport_flags_column_present,
         prefix,
     )
 }
