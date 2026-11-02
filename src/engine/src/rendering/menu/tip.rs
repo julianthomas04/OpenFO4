@@ -39,6 +39,7 @@ pub(super) fn item(
         entry.text.metrics,
     )
     .wrapping();
+    let whole_lines = (column_height / geometry.line_pitch()).floor().max(1.0);
     let mut colour = tint.text_rgba();
     colour[3] = (f32::from(colour[3]) * alpha.clamp(0.0, 1.0)).round() as u8;
     let (origin_x, origin_y) = fit.stage_point(0.0, 0.0);
@@ -54,5 +55,49 @@ pub(super) fn item(
         colour,
         shadow: None,
         wrap_width: Some(fit.s(column_width)),
+        // Half a line short of the last whole line, so no rounding shows a line past the safe zone.
+        max_height: Some(fit.s((whole_lines - 0.5) * geometry.line_pitch())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rendering::menu::layout::test_support::standard;
+
+    const SAFE_ZONE: SafeZone = SafeZone { x: 64.0, y: 36.0 };
+    const TINT: UiTint = UiTint {
+        color: [0.0, 1.0, 0.0],
+        opacity: 1.0,
+    };
+
+    fn tip(fb: (u32, u32)) -> (TextItem, f32) {
+        let layout = standard();
+        let item = item(&layout, SAFE_ZONE, &TINT, fb, "A tip", 1.0);
+        let bottom_limit = layout.fit(fb.0, fb.1).visible_stage_rect()[3] - SAFE_ZONE.y;
+        (item, bottom_limit)
+    }
+
+    #[test]
+    fn the_tip_column_ends_above_the_bottom_safe_zone_on_every_screen_shape() {
+        for fb in [(1280, 720), (640, 360), (1000, 1000), (3440, 1440)] {
+            let (item, bottom_limit) = tip(fb);
+            let scale = item.map.scale;
+            let top = item.geometry.top + item.geometry.vertical_inset;
+            let height = item.max_height.expect("the tip is bounded") / scale;
+            assert!(
+                top + height <= bottom_limit,
+                "{fb:?}: the column ends at {} below the limit {bottom_limit}",
+                top + height
+            );
+            assert!(height > 0.0, "{fb:?}: at least one line fits");
+        }
+    }
+
+    #[test]
+    fn the_tip_fades_by_scaling_the_hud_colour_alpha() {
+        let layout = standard();
+        let half = item(&layout, SAFE_ZONE, &TINT, (640, 360), "A tip", 0.5);
+        assert_eq!(half.colour, [0, 255, 0, 128]);
     }
 }

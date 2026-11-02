@@ -772,6 +772,25 @@ fn a_long_tip_wraps_inside_its_column_in_the_lower_part_of_the_screen() {
 }
 
 #[test]
+fn a_tip_too_long_for_the_column_stops_above_the_bottom_safe_zone() {
+    let Some((device, queue)) = test_device("menu tip clipping") else {
+        return;
+    };
+    let target = Target::new(&device);
+    let endless = TIP.repeat(8);
+
+    target.render(&device, &queue, tip_overlay(1.0, &endless));
+    let (_, (top, bottom)) = extent_of(&text_pixels(&target.pixels(&device, &queue)));
+
+    let safe_bottom = SIZE.1 - (SAFE_ZONE.y * 0.5) as u32;
+    assert!(
+        bottom <= safe_bottom,
+        "the tip from y {top} reaches {bottom}, past the safe zone at {safe_bottom}"
+    );
+    assert!(bottom - top > 20, "several lines still show");
+}
+
+#[test]
 fn a_tip_fades_with_the_overlay() {
     let Some((device, queue)) = test_device("menu tip fade") else {
         return;

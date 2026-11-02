@@ -199,6 +199,7 @@ pub fn label_item(layout: &Layout, spec: &MeterSpec, bar: PxRect, tint: &UiTint)
             colour: [0, 0, 0, tint.shadow_alpha(shadow::TEXT_ALPHA)],
         }),
         wrap_width: None,
+        max_height: None,
     }
 }
 

@@ -108,6 +108,7 @@ impl VersionOverlay {
             colour: WHITE,
             shadow: None,
             wrap_width: None,
+            max_height: None,
         }
     }
 }

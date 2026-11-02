@@ -395,6 +395,7 @@ impl MenuRenderer {
                 colour: [r, g, b, 255],
                 shadow: None,
                 wrap_width: None,
+                max_height: None,
             });
         }
     }

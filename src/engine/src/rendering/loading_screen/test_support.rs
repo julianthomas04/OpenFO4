@@ -193,8 +193,8 @@ pub fn write_texture(dir: &Path, name: &str, alpha: u8) {
         alpha_mode: ddsfile::AlphaMode::Unknown,
     })
     .expect("a valid texture description");
-    for texel in dds.data.chunks_exact_mut(4) {
-        texel.copy_from_slice(&[255, 255, 255, alpha]);
+    for texel in dds.data.as_chunks_mut::<4>().0 {
+        *texel = [255, 255, 255, alpha];
     }
     let folder = dir.join("textures");
     std::fs::create_dir_all(&folder).expect("the temp folder is writable");

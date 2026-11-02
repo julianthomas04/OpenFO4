@@ -52,6 +52,8 @@ pub struct TextItem {
     pub shadow: Option<Shadow>,
     /// The width in framebuffer pixels the text wraps at, or `None` for a single line.
     pub wrap_width: Option<f32>,
+    /// The height in framebuffer pixels below which no line is drawn, or `None` for no limit.
+    pub max_height: Option<f32>,
 }
 
 struct Placed {
@@ -201,7 +203,7 @@ fn shape_at(
     let scale = item.map.scale;
     let size = geometry.size * scale;
     buffer.set_metrics(Metrics::new(size, geometry.line_pitch() * scale));
-    buffer.set_size(item.wrap_width, None);
+    buffer.set_size(item.wrap_width, item.max_height);
     // Stand-in S2: the face is chosen by family name only. The font configuration's style
     // (Normal / Bold) is not applied as a weight; the bold classes map to their own family.
     let attrs = Attrs::new()
@@ -283,6 +285,7 @@ mod tests {
             colour: [255; 4],
             shadow: None,
             wrap_width,
+            max_height: None,
         }
     }
 
