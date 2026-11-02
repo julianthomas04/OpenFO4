@@ -11,7 +11,7 @@
 const VERTS_PER_RECT: usize = 6;
 
 /// A rectangle in framebuffer pixels (origin top-left, y down).
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct PxRect {
     pub x: f32,
     pub y: f32,

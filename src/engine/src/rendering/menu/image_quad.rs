@@ -160,7 +160,21 @@ impl ImageQuadPipeline {
     }
 }
 
-/// The large loading screen's background: one texture stretched over the whole target.
+/// The rectangle of an image of `image` pixels that fills a target of `target` pixels with its
+/// aspect kept: scaled until both sides are covered, centred, the overflow cropped by the target.
+pub(super) fn cover_rect(image: (u32, u32), target: (u32, u32)) -> PxRect {
+    let (target_w, target_h) = (target.0 as f32, target.1 as f32);
+    let scale = (target_w / image.0 as f32).max(target_h / image.1 as f32);
+    let (w, h) = (image.0 as f32 * scale, image.1 as f32 * scale);
+    PxRect {
+        x: (target_w - w) / 2.0,
+        y: (target_h - h) / 2.0,
+        w,
+        h,
+    }
+}
+
+/// The large loading screen's background: one texture covering the whole target.
 pub(super) struct BackgroundQuad {
     params: wgpu::Buffer,
     bind_group: Option<wgpu::BindGroup>,
@@ -174,7 +188,7 @@ impl BackgroundQuad {
         }
     }
 
-    /// Readies `view` to cover a target of `target` pixels at `opacity`.
+    /// Readies `view` to cover a target of `target` pixels at `opacity`, its aspect kept.
     pub fn prepare(
         &mut self,
         pipeline: &ImageQuadPipeline,
@@ -184,13 +198,9 @@ impl BackgroundQuad {
         target: (u32, u32),
         opacity: f32,
     ) {
-        let whole = PxRect {
-            x: 0.0,
-            y: 0.0,
-            w: target.0 as f32,
-            h: target.1 as f32,
-        };
-        let params = ImageQuadParams::plain(whole, target, opacity);
+        let size = view.texture().size();
+        let cover = cover_rect((size.width, size.height), target);
+        let params = ImageQuadParams::plain(cover, target, opacity);
         queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
         self.bind_group = Some(pipeline.bind_group(device, &self.params, view));
     }
@@ -204,5 +214,51 @@ impl BackgroundQuad {
         if let Some(bind_group) = &self.bind_group {
             pipeline.draw(pass, bind_group);
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "the arithmetic below stays on exactly representable values"
+)]
+mod tests {
+    use super::*;
+
+    fn rect(x: f32, y: f32, w: f32, h: f32) -> PxRect {
+        PxRect { x, y, w, h }
+    }
+
+    #[test]
+    fn an_image_of_the_targets_aspect_fills_it_exactly() {
+        assert_eq!(
+            cover_rect((640, 360), (1280, 720)),
+            rect(0.0, 0.0, 1280.0, 720.0)
+        );
+    }
+
+    #[test]
+    fn a_square_image_on_a_wide_target_is_scaled_to_its_width_and_cropped_top_and_bottom() {
+        assert_eq!(
+            cover_rect((100, 100), (400, 200)),
+            rect(0.0, -100.0, 400.0, 400.0)
+        );
+    }
+
+    #[test]
+    fn a_square_image_on_a_tall_target_is_scaled_to_its_height_and_cropped_left_and_right() {
+        assert_eq!(
+            cover_rect((100, 100), (200, 400)),
+            rect(-100.0, 0.0, 400.0, 400.0)
+        );
+    }
+
+    #[test]
+    fn the_opacity_stays_between_clear_and_opaque() {
+        let whole = rect(0.0, 0.0, 10.0, 10.0);
+        let opacity = |value| ImageQuadParams::plain(whole, (10, 10), value).colour[3];
+        assert_eq!(opacity(-1.0), 0.0);
+        assert_eq!(opacity(0.25), 0.25);
+        assert_eq!(opacity(3.0), 1.0);
     }
 }
