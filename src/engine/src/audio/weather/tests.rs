@@ -8,7 +8,6 @@ use crate::assets::db::conditions::{Comparand, CompareOp, Condition};
 use crate::assets::db::sound_catalog::{COMPOUND_DESCRIPTOR, SoundDescriptor};
 use crate::audio::file_probe::ProbeError;
 use crate::audio::sound_resolve::SoundError;
-use crate::audio::test_support::condition::{condition, day};
 use crate::audio::test_support::weather::{
     CLEAR, GUSTS, GUSTS_FILE, ONLY_THUNDER, RAIN, RAIN_BED, RAIN_FILES, STORM, STORM_BED,
     STORM_FILE, THUNDER, THUNDER_HIGH, THUNDER_HIGH_FILES, THUNDER_LOW, THUNDER_LOW_FILE, WIND_BED,
@@ -20,6 +19,7 @@ use crate::audio::test_support::{
 };
 use crate::audio::weather_output::LOOP_FADE;
 use crate::audio::{AudioFrame, AudioSystem, MenuMusicSettings};
+use crate::conditions::test_support::{condition, day};
 use crate::conditions::{ConditionError, IS_IN_INTERIOR};
 use crate::game_flow::Phase;
 use crate::weather::{FadeRange, SoundKind, TransitionSide, WeatherId, WeatherSound};

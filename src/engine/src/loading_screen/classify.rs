@@ -18,8 +18,9 @@ pub enum LoadKind {
 }
 
 /// `origin` is `None` for the initial load. No public source documents the vanilla rule; this one
-/// is inferred: a large screen for the initial load and for a change of worldspace, a small one for
-/// everything else, and none for a load door flagged to skip its screen.
+/// is inferred: a large screen for the initial load and for a change of worldspace, a small one
+/// for everything else, and none for a load door flagged to skip its screen. Form keys, worldspaces
+/// included, compare without regard to case.
 pub fn classify(origin: Option<&Place>, destination: &Place, no_load_screen: bool) -> LoadKind {
     let Some(origin) = origin else {
         return LoadKind::Large;
@@ -29,7 +30,7 @@ pub fn classify(origin: Option<&Place>, destination: &Place, no_load_screen: boo
     }
     match (origin, destination) {
         (Place::Exterior { worldspace: from }, Place::Exterior { worldspace: to })
-            if from != to =>
+            if !from.eq_ignore_ascii_case(to) =>
         {
             LoadKind::Large
         }
@@ -86,6 +87,18 @@ mod tests {
                 false
             ),
             LoadKind::Large
+        );
+    }
+
+    #[test]
+    fn worldspace_form_keys_compare_without_regard_to_case() {
+        assert_eq!(
+            classify(
+                Some(&exterior("003C:Fallout4.esm")),
+                &exterior("003c:fallout4.esm"),
+                false
+            ),
+            LoadKind::Small
         );
     }
 

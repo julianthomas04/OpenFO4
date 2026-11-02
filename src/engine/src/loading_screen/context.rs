@@ -10,6 +10,7 @@ use crate::random::RandomSource;
 /// The clock of a fresh game; loading screen conditions do not read it.
 const FRESH_GAME_HOUR: f32 = 0.0;
 const PERCENT_SCALE: f32 = 100.0;
+const MAX_PERCENT: f32 = 99.0;
 
 /// Answers location, worldspace, cell and random conditions for the destination, and everything
 /// else (quests, globals, the clock) like a game that has just started: there is no quest system.
@@ -106,7 +107,8 @@ impl<R: RandomSource> ConditionContext for LoadScreenContext<R> {
     }
 
     fn random_percent(&self) -> Option<f32> {
-        Some(self.rolls.borrow_mut().unit() * PERCENT_SCALE)
+        let roll = self.rolls.borrow_mut().unit() * PERCENT_SCALE;
+        Some(roll.floor().min(MAX_PERCENT))
     }
 
     fn in_worldspace(&self, worldspace: &str) -> Option<bool> {
@@ -130,7 +132,7 @@ impl<R: RandomSource> ConditionContext for LoadScreenContext<R> {
 mod tests {
     use super::*;
     use crate::assets::db::conditions::{Comparand, CompareOp, Condition, ConditionParam};
-    use crate::audio::test_support::condition::{
+    use crate::conditions::test_support::{
         condition, number_param, record_param, text_param, with_params,
     };
     use crate::conditions::{
@@ -138,7 +140,7 @@ mod tests {
         GET_QUEST_COMPLETED, GET_QUEST_RUNNING, GET_RANDOM_PERCENT, GET_STAGE, GET_STAGE_DONE,
         GET_VM_QUEST_VARIABLE, IS_IN_INTERIOR, evaluate,
     };
-    use crate::loading_screen::test_support::ScriptedRandom;
+    use crate::random::test_support::ScriptedRandom;
 
     const COMMONWEALTH: &str = "003C:Fallout4.esm";
     const SANCTUARY_CELL: &str = "0A01:Fallout4.esm";
@@ -175,7 +177,7 @@ mod tests {
     }
 
     fn at(destination: &Place, cell: &str) -> LoadScreenContext<ScriptedRandom> {
-        LoadScreenContext::new(&catalog(), destination, cell, ScriptedRandom::default())
+        LoadScreenContext::new(&catalog(), destination, cell, ScriptedRandom::silent())
     }
 
     fn holds(ctx: &impl ConditionContext, condition: Condition) -> bool {
@@ -259,12 +261,8 @@ mod tests {
         let mut data = catalog();
         data.cell_locations
             .insert(SANCTUARY_CELL.to_string(), SANCTUARY_HILLS.to_string());
-        let hills = LoadScreenContext::new(
-            &data,
-            &exterior(),
-            SANCTUARY_CELL,
-            ScriptedRandom::default(),
-        );
+        let hills =
+            LoadScreenContext::new(&data, &exterior(), SANCTUARY_CELL, ScriptedRandom::silent());
 
         assert!(holds(
             &hills,
@@ -285,12 +283,8 @@ mod tests {
         let mut data = catalog();
         data.location_parents
             .insert(COMMONWEALTH_LOCATION.to_string(), SANCTUARY.to_string());
-        let ctx = LoadScreenContext::new(
-            &data,
-            &exterior(),
-            SANCTUARY_CELL,
-            ScriptedRandom::default(),
-        );
+        let ctx =
+            LoadScreenContext::new(&data, &exterior(), SANCTUARY_CELL, ScriptedRandom::silent());
 
         assert!(holds(
             &ctx,
@@ -346,18 +340,18 @@ mod tests {
     }
 
     #[test]
-    fn random_percent_scales_a_fresh_roll_to_zero_up_to_one_hundred() {
-        let rolls = ScriptedRandom::with_units([0.0, 0.5, 0.75]);
+    fn random_percent_is_a_whole_number_from_zero_to_ninety_nine() {
+        let rolls = ScriptedRandom::new(&[], &[0.0, 0.0099, 0.2599, 0.5, 0.75, 0.999]);
         let ctx = LoadScreenContext::new(&catalog(), &exterior(), SANCTUARY_CELL, rolls);
 
-        let drawn: Vec<f32> = (0..3).map(|_| ctx.random_percent().unwrap()).collect();
+        let drawn: Vec<f32> = (0..6).map(|_| ctx.random_percent().unwrap()).collect();
 
-        assert_eq!(drawn, vec![0.0, 50.0, 75.0]);
+        assert_eq!(drawn, vec![0.0, 0.0, 25.0, 50.0, 75.0, 99.0]);
     }
 
     #[test]
     fn every_random_condition_gets_its_own_roll() {
-        let rolls = ScriptedRandom::with_units([0.25, 0.75]);
+        let rolls = ScriptedRandom::new(&[], &[0.25, 0.75]);
         let ctx = LoadScreenContext::new(&catalog(), &exterior(), SANCTUARY_CELL, rolls);
         let at_most_50 = condition(
             GET_RANDOM_PERCENT,

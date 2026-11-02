@@ -466,10 +466,10 @@ mod tests {
         MASTER_CATEGORY_MULTIPLIER, MUSIC_CATEGORY_MULTIPLIER, exterior_place, palette, silent,
         single, timed_music_type as typed, world_catalog,
     };
-    use crate::audio::test_support::condition::{condition, day, night};
     use crate::audio::test_support::{
         HALF_SECOND_SAMPLES, SAMPLE_RATE, SEED, SharedBuffer, sine_flac, undecodable_flac,
     };
+    use crate::conditions::test_support::{condition, day, night};
     use crate::conditions::{GET_STAGE, IS_IN_INTERIOR};
 
     const CYCLES: u32 = FLAG_CYCLE_TRACKS;

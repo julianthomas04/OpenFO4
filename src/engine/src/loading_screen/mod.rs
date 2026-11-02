@@ -4,8 +4,6 @@
 mod classify;
 mod context;
 mod select;
-#[cfg(test)]
-mod test_support;
 
 pub use classify::{LoadKind, Place, classify};
 pub use context::LoadScreenContext;

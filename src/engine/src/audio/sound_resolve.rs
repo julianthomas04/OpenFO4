@@ -298,12 +298,12 @@ mod tests {
     use super::*;
     use crate::assets::db::conditions::{Comparand, CompareOp};
     use crate::audio::test_support::SEED;
-    use crate::audio::test_support::condition::condition;
     use crate::audio::test_support::footsteps::{
         DIRT_FIRST_PERSON_FILES, DIRT_QUIET_FILE, STONE_FILE, catalog, compound, expected_gain_db,
         silent_running,
     };
     use crate::conditions::FreshWorldContext;
+    use crate::conditions::test_support::condition;
     use crate::random::SplitMix64;
 
     const GAIN_TOLERANCE: f32 = 1e-4;

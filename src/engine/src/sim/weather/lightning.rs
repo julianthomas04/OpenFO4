@@ -143,9 +143,10 @@ fn pick_source(sources: &[StrikeSource], rng: &mut dyn RandomSource) -> Option<S
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::{A, B, ScriptedRandom, calm, stormy};
+    use super::super::test_support::{A, B, calm, stormy};
     use super::*;
     use crate::random::SplitMix64;
+    use crate::random::test_support::ScriptedRandom;
     use crate::weather::FadeRange;
 
     fn assert_close(actual: f32, expected: f32) {

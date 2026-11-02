@@ -48,7 +48,8 @@ pub trait ConditionContext {
     /// Whether the player is in an interior cell; `None` where the context does not know, which
     /// leaves the function unsupported rather than guessed.
     fn is_in_interior(&self) -> Option<bool>;
-    /// A fresh roll in `[0, 100)` per call; `None` where the context has no random source.
+    /// A fresh whole-number roll from 0 to 99 per call, as the GECK documents `GetRandomPercent`;
+    /// `None` where the context has no random source.
     fn random_percent(&self) -> Option<f32> {
         None
     }
@@ -78,7 +79,6 @@ pub struct GlobalEntry {
     pub value: f32,
 }
 
-/// Every global of the catalog with its editor id where it has one.
 /// Every global with its editor id where it has one; `form_keys` maps editor ids to form keys.
 pub fn global_entries<V: BuildHasher, K: BuildHasher>(
     values: &HashMap<String, f32, V>,

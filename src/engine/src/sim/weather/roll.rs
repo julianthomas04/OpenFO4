@@ -34,9 +34,10 @@ pub(super) fn pick_weighted(table: &WeatherRollTable, rng: &mut dyn RandomSource
 mod tests {
     use proptest::prelude::*;
 
-    use super::super::test_support::{A, ScriptedRandom, calm, table};
+    use super::super::test_support::{A, calm, table};
     use super::*;
     use crate::random::SplitMix64;
+    use crate::random::test_support::ScriptedRandom;
 
     fn assert_close(actual: f64, expected: f64) {
         assert!(

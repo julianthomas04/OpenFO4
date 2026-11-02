@@ -12,7 +12,7 @@ use crate::assets::db::sound_catalog::{
     COMPOUND_DESCRIPTOR, OutputChannel, STANDARD_DESCRIPTOR_TYPE, SoundCatalog, SoundDescriptor,
     SoundOutputModel,
 };
-use crate::audio::test_support::condition::condition;
+use crate::conditions::test_support::condition;
 use crate::conditions::{HAS_SILENT_RUNNING_PERK, IS_FIRST_PERSON};
 use crate::footsteps::{FootTag, Gait};
 

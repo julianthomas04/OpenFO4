@@ -6,10 +6,10 @@
 
 use crate::assets::db::conditions::{Comparand, CompareOp, Condition};
 use crate::assets::db::sound_catalog::{SoundCatalog, SoundDescriptor};
-use crate::audio::test_support::condition::condition;
 use crate::audio::test_support::footsteps::{self, compound, standard};
 use crate::audio::weather::WeatherSoundTable;
 use crate::conditions::IS_IN_INTERIOR;
+use crate::conditions::test_support::condition;
 use crate::weather::{SoundKind, WeatherId, WeatherSound};
 
 pub const CLEAR: WeatherId = WeatherId::new(0);

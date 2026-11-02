@@ -207,9 +207,10 @@ mod tests {
     use crate::audio::test_support::catalog::{
         music_type, palette as catalog_palette, silent, single, track_map,
     };
-    use crate::audio::test_support::condition::{condition, day, night};
     use crate::conditions::FreshWorldContext;
+    use crate::conditions::test_support::{condition, day, night};
     use crate::random::SplitMix64;
+    use crate::random::test_support::ScriptedRandom;
 
     fn clock(hour: f32) -> FreshWorldContext {
         FreshWorldContext::new(hour, [])
@@ -219,17 +220,6 @@ mod tests {
         match plan {
             Some(PlayPlan::Single { file_key }) => file_key,
             other => panic!("expected a single track, got {other:?}"),
-        }
-    }
-
-    /// Replays fixed answers so a test can steer the pick exactly.
-    struct ScriptedRng(Vec<usize>);
-
-    impl RandomSource for ScriptedRng {
-        fn below(&mut self, n: usize) -> usize {
-            let answer = self.0.remove(0);
-            assert!(answer < n, "scripted {answer} is out of range 0..{n}");
-            answer
         }
     }
 
@@ -365,7 +355,7 @@ mod tests {
             &music_type("type", 0, &["p"]),
             tracks,
             &clock(hour),
-            &mut ScriptedRng(vec![0]),
+            &mut ScriptedRandom::new(&[0], &[]),
         )
     }
 
@@ -468,7 +458,7 @@ mod tests {
                 &music_type("type", 0, &["outer"]),
                 &tracks,
                 &clock(12.0),
-                &mut ScriptedRng(vec![0]),
+                &mut ScriptedRandom::new(&[0], &[]),
             ),
             Err(SchedulerError::NestedPalette("inner".to_string()))
         );
@@ -477,7 +467,7 @@ mod tests {
                 &music_type("type", 0, &["absent"]),
                 &tracks,
                 &clock(12.0),
-                &mut ScriptedRng(vec![]),
+                &mut ScriptedRandom::new(&[], &[]),
             ),
             Err(SchedulerError::UnknownTrack("absent".to_string()))
         );
@@ -496,7 +486,7 @@ mod tests {
             &music_type("type", 0, &["bad"]),
             &tracks,
             &clock(12.0),
-            &mut ScriptedRng(vec![]),
+            &mut ScriptedRandom::new(&[], &[]),
         );
         assert_eq!(
             result,

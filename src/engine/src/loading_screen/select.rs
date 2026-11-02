@@ -73,11 +73,11 @@ mod tests {
     use super::*;
     use crate::assets::db::conditions::{Comparand, CompareOp, Condition, ConditionParam};
     use crate::assets::db::load_screens::ModelTransform;
-    use crate::audio::test_support::condition::{condition, record_param, with_params};
+    use crate::conditions::test_support::{condition, record_param, with_params};
     use crate::conditions::{GET_GLOBAL_VALUE, GET_IN_WORLDSPACE, GET_RANDOM_PERCENT};
     use crate::loading_screen::classify::Place;
     use crate::loading_screen::context::LoadScreenContext;
-    use crate::loading_screen::test_support::ScriptedRandom;
+    use crate::random::test_support::ScriptedRandom;
 
     const COMMONWEALTH: &str = "003C:Fallout4.esm";
     const CELL: &str = "0A01:Fallout4.esm";
@@ -137,38 +137,30 @@ mod tests {
     }
 
     /// Selects for the Commonwealth with scripted percent rolls and scripted picks.
-    fn run(
-        catalog: &LoadScreenCatalog,
-        rolls: impl IntoIterator<Item = f32>,
-        picks: impl IntoIterator<Item = usize>,
-    ) -> Outcome {
+    fn run(catalog: &LoadScreenCatalog, rolls: &[f32], picks: &[usize]) -> Outcome {
         let ctx = LoadScreenContext::new(
             catalog,
             &Place::Exterior {
                 worldspace: COMMONWEALTH.to_string(),
             },
             CELL,
-            ScriptedRandom::with_units(rolls),
+            ScriptedRandom::new(&[], rolls),
         );
-        let mut picker = ScriptedRandom::with_picks(picks);
+        let mut picker = ScriptedRandom::new(picks, &[]);
         let chosen = select(catalog, &ctx, &mut picker).map(|s| s.form_key.clone());
         Outcome {
             chosen,
-            pick_sizes: picker.below_calls,
+            pick_sizes: picker.asked_below().to_vec(),
         }
     }
 
-    fn chosen(
-        catalog: &LoadScreenCatalog,
-        rolls: impl IntoIterator<Item = f32>,
-        picks: impl IntoIterator<Item = usize>,
-    ) -> Option<String> {
+    fn chosen(catalog: &LoadScreenCatalog, rolls: &[f32], picks: &[usize]) -> Option<String> {
         run(catalog, rolls, picks).chosen
     }
 
     #[test]
     fn a_catalog_without_screens_selects_nothing_and_asks_for_no_pick() {
-        let outcome = run(&catalog(vec![]), [], []);
+        let outcome = run(&catalog(vec![]), &[], &[]);
 
         assert_eq!(outcome.chosen, None);
         assert_eq!(outcome.pick_sizes, Vec::<usize>::new());
@@ -178,15 +170,23 @@ mod tests {
     fn the_percent_boundary_is_inclusive_for_at_most() {
         let data = catalog(vec![screen("A", vec![percent_at_most(25.0)])]);
 
-        assert_eq!(chosen(&data, [0.25], [0]).as_deref(), Some("A"));
-        assert_eq!(chosen(&data, [0.26], [0]), None);
+        assert_eq!(chosen(&data, &[0.25], &[0]).as_deref(), Some("A"));
+        assert_eq!(chosen(&data, &[0.26], &[0]), None);
+    }
+
+    #[test]
+    fn a_fraction_of_a_percent_is_the_integer_zero_so_it_passes_only_at_zero() {
+        let data = catalog(vec![screen("A", vec![percent_at_most(0.25)])]);
+
+        assert_eq!(chosen(&data, &[0.0099], &[0]).as_deref(), Some("A"));
+        assert_eq!(chosen(&data, &[0.0199], &[0]), None);
     }
 
     #[test]
     fn a_percent_of_zero_passes_an_at_most_zero_condition() {
         let data = catalog(vec![screen("A", vec![percent_at_most(0.0)])]);
 
-        assert_eq!(chosen(&data, [0.0], [0]).as_deref(), Some("A"));
+        assert_eq!(chosen(&data, &[0.0], &[0]).as_deref(), Some("A"));
     }
 
     #[test]
@@ -196,9 +196,9 @@ mod tests {
             screen("COMMON", vec![percent_at_most(50.0)]),
         ]);
 
-        assert_eq!(chosen(&data, [0.4, 0.4], [0]).as_deref(), Some("COMMON"));
-        assert_eq!(chosen(&data, [0.1, 0.9], [0]).as_deref(), Some("RARE"));
-        assert_eq!(chosen(&data, [0.9, 0.9], [0]), None);
+        assert_eq!(chosen(&data, &[0.4, 0.4], &[0]).as_deref(), Some("COMMON"));
+        assert_eq!(chosen(&data, &[0.1, 0.9], &[0]).as_deref(), Some("RARE"));
+        assert_eq!(chosen(&data, &[0.9, 0.9], &[0]), None);
     }
 
     #[test]
@@ -209,11 +209,11 @@ mod tests {
             screen("C", vec![in_commonwealth(1.0)]),
         ]);
 
-        let outcome = run(&data, [], [1]);
+        let outcome = run(&data, &[], &[1]);
 
         assert_eq!(outcome.chosen.as_deref(), Some("C"));
         assert_eq!(outcome.pick_sizes, vec![2]);
-        assert_eq!(chosen(&data, [], [0]).as_deref(), Some("A"));
+        assert_eq!(chosen(&data, &[], &[0]).as_deref(), Some("A"));
     }
 
     #[test]
@@ -224,7 +224,7 @@ mod tests {
             screen("TIP_B", vec![]),
         ]);
 
-        let outcome = run(&data, [], [0]);
+        let outcome = run(&data, &[], &[0]);
 
         assert_eq!(outcome.chosen.as_deref(), Some("PLACE"));
         assert_eq!(outcome.pick_sizes, vec![1]);
@@ -238,7 +238,7 @@ mod tests {
             screen("TIP_B", vec![]),
         ]);
 
-        let outcome = run(&data, [], [1]);
+        let outcome = run(&data, &[], &[1]);
 
         assert_eq!(outcome.chosen.as_deref(), Some("TIP_B"));
         assert_eq!(outcome.pick_sizes, vec![2]);
@@ -248,7 +248,7 @@ mod tests {
     fn nothing_is_selected_when_no_screen_passes() {
         let data = catalog(vec![screen("ELSEWHERE", vec![in_commonwealth(0.0)])]);
 
-        assert_eq!(chosen(&data, [], []), None);
+        assert_eq!(chosen(&data, &[], &[]), None);
     }
 
     #[test]
@@ -257,7 +257,7 @@ mod tests {
         menu.displays_in_main_menu = true;
         let data = catalog(vec![menu]);
 
-        assert_eq!(chosen(&data, [], []), None);
+        assert_eq!(chosen(&data, &[], &[]), None);
     }
 
     #[test]
@@ -266,7 +266,7 @@ mod tests {
         aliased.flags = 2;
         let data = catalog(vec![screen("ALIASED", vec![aliased])]);
 
-        assert_eq!(chosen(&data, [], []), None);
+        assert_eq!(chosen(&data, &[], &[]), None);
     }
 
     #[test]
@@ -281,7 +281,7 @@ mod tests {
             screen("TIP", vec![]),
         ]);
 
-        assert_eq!(chosen(&data, [], [0]).as_deref(), Some("TIP"));
+        assert_eq!(chosen(&data, &[], &[0]).as_deref(), Some("TIP"));
     }
 
     #[test]
@@ -293,7 +293,7 @@ mod tests {
         );
         let data = catalog(vec![screen("GLOBAL", vec![unknown])]);
 
-        assert_eq!(chosen(&data, [], []), None);
+        assert_eq!(chosen(&data, &[], &[]), None);
     }
 
     #[test]
@@ -305,7 +305,7 @@ mod tests {
         ]);
 
         // Two rolls are scripted for the two random conditions; a third would panic.
-        let outcome = run(&data, [0.25, 0.75], [0]);
+        let outcome = run(&data, &[0.25, 0.75], &[0]);
 
         assert_eq!(outcome.chosen.as_deref(), Some("A"));
         assert_eq!(outcome.pick_sizes, vec![1]);

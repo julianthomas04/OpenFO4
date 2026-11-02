@@ -8,6 +8,8 @@
 use crate::assets::db::conditions::{Comparand, CompareOp, Condition};
 
 mod context;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 
 pub use context::{
     ConditionContext, FreshWorldContext, GAME_DAYS_PASSED_EDITOR_ID, GAME_HOUR_EDITOR_ID, GameTime,
@@ -183,7 +185,7 @@ pub fn evaluate(
 mod tests {
     use super::*;
     use crate::assets::db::conditions::ConditionParam;
-    use crate::audio::test_support::condition::{
+    use crate::conditions::test_support::{
         condition, day, night, number_param, or, record_param, text_param, time, with_params,
     };
 
