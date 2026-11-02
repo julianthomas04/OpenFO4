@@ -16,6 +16,10 @@ namespace AssetConverter
             string transform = LinkKey.Text(record.Transform)
                 ?? throw new UnsupportedEsmDataException($"{subject}: the record has no TNAM, so it names no camera transform.");
 
+            string? tip = record.Description?.String;
+            if (string.IsNullOrEmpty(tip))
+                tip = null;
+
             await conn.ExecuteAsync(
                 @"INSERT OR REPLACE INTO load_screens (form_key, editor_id, tip, model, flags, transform, rotation_min, rotation_max, zoom_min, zoom_max)
                   VALUES (@FormKey, @EditorId, @Tip, @Model, @Flags, @Transform, @RotationMin, @RotationMax, @ZoomMin, @ZoomMax)",
@@ -23,7 +27,7 @@ namespace AssetConverter
                 {
                     FormKey = formKey,
                     EditorId = record.EditorID,
-                    Tip = string.IsNullOrEmpty(record.Description?.String) ? null : record.Description.String,
+                    Tip = tip,
                     Model = model,
                     Flags = (int)record.MajorFlags,
                     Transform = transform,
