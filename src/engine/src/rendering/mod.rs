@@ -39,6 +39,7 @@ pub mod instance;
 pub mod light_anim;
 pub mod lighting;
 mod line_buffer;
+mod load_transition;
 pub mod loading_screen;
 pub mod local_lights;
 pub mod mega_buffer;
@@ -209,7 +210,10 @@ use cube_array::CubeArray;
 use effects::stage::{EffectFrameInputs, EffectStage};
 use light_anim::LightAnimator;
 use lighting::frame_uniform::FrameUniform;
-use menu::{MenuRenderer, MenuScene};
+use load_transition::{
+    DragTracker, LoadHistory, LoadScreenHost, LoadScreens, spawn_report_title, take_if_accepted,
+};
+use menu::{MenuRenderer, OverlayForeground};
 use particles::CameraBasis;
 use ragdoll_objects::RagdollObjects;
 use refraction::{RefractionFrameInputs, RefractionStage};
@@ -294,6 +298,8 @@ struct ResolvedTarget {
     /// `None` keeps the current look direction: spawns without a stored heading,
     /// and the initial spawn when `OPENFO4_SPAWN_LOOK` is set.
     yaw: Option<f32>,
+    /// The door skips the loading screen (XTEL flag); the spawn cell and the debug pickers do not.
+    no_load_screen: bool,
 }
 
 impl ResolvedTarget {
@@ -314,6 +320,7 @@ impl ResolvedTarget {
                     .heading
                     .map(|heading| crate::bethesda_space::yaw_from_rotation_z(heading as f32))
             },
+            no_load_screen: false,
         }
     }
 
@@ -339,6 +346,7 @@ impl ResolvedTarget {
                     yaw: location
                         .heading
                         .map(|heading| crate::bethesda_space::yaw_from_rotation_z(heading as f32)),
+                    no_load_screen: false,
                 }
             }
         }
@@ -720,6 +728,8 @@ pub struct State {
     pointer_px: (f32, f32),
     /// The grid cell the load in progress spawns the player in; only the stall report reads it.
     load_spawn_cell: (i32, i32),
+    /// The large loading screen's model and tip, its drag input and the loads so far.
+    load_screens: LoadScreens,
     quit_requested: bool,
 
     // Debug UI
@@ -860,6 +870,7 @@ impl State {
             // to (0,0); trusting that would stream the wrong ring and drop the
             // player through unloaded terrain far from the origin.
             let grid = WorldStreamer::camera_to_grid(start_pos);
+            let no_load_screen = r.no_load_screen();
             map.insert(
                 r.source_ref,
                 ResolvedTarget {
@@ -871,6 +882,7 @@ impl State {
                     yaw: Some(crate::bethesda_space::yaw_from_rotation_z(
                         r.dest_rot_z as f32,
                     )),
+                    no_load_screen,
                 },
             );
         }
@@ -934,11 +946,15 @@ impl State {
     }
 
     /// Queues the teleport of the walk-in door the player just entered, if any. Only while
-    /// walking with the world running: sampling during a pending teleport would spend the
-    /// entering edge on a refused request.
+    /// walking in play, not while a load runs or fades in: sampling during a pending teleport
+    /// would spend the entering edge on a refused request.
     fn sample_walk_in(&mut self, pipboy_open: bool, dt: f32) {
         self.walk_in_fired = None;
-        if self.input_mode != InputMode::Walk || pipboy_open || self.pending_teleport.is_some() {
+        if self.input_mode != InputMode::Walk
+            || pipboy_open
+            || self.pending_teleport.is_some()
+            || self.flow.phase() != Phase::InGame
+        {
             return;
         }
         let body = self.sim.player_body();
@@ -1105,11 +1121,12 @@ impl State {
     }
 
     /// The one entry for every request to teleport through a load door, by the door's ref id.
-    /// Only a spawned player with no teleport already pending may queue one; the teleport
-    /// itself runs in `update`. The menu spawn path (`begin_play`) bypasses this gate: the
+    /// Only a spawned player with no teleport pending and no loading screen up may queue one; the
+    /// teleport itself runs in `update`. The menu spawn path (`begin_play`) bypasses this gate: the
     /// player is not spawned there by design.
     fn queue_teleport(&mut self, source_ref: &str) -> Result<(), TeleportRefusal> {
         teleport_gate(
+            self.flow.transition_active(),
             self.sim.player_eye().is_some(),
             self.pending_teleport.is_some(),
         )?;
@@ -1731,6 +1748,18 @@ impl State {
         timer.mark("sim_and_profiler")?;
 
         let material_bg_built_len = texture_array.bind_group_len();
+        let load_screens = LoadScreens {
+            host: LoadScreenHost::new(
+                &device,
+                &queue,
+                tonemap::ui_gamma_format(surface_format),
+                Path::new(asset_server.asset_location()),
+                db_path.clone(),
+                seed_from_clock(),
+            ),
+            drag: DragTracker::default(),
+            history: LoadHistory::default(),
+        };
         Ok(Self {
             surface,
             device,
@@ -1873,6 +1902,7 @@ impl State {
             menu,
             pointer_px: (0.0, 0.0),
             load_spawn_cell: WorldStreamer::camera_to_grid(start_pos),
+            load_screens,
             quit_requested: false,
             debug_ui,
             mouse_capture,
@@ -2602,17 +2632,33 @@ impl State {
         let overlay_alpha = self.flow.overlay_alpha();
         if overlay_alpha > 0.0 {
             let menu_view = self.menu.target_view(&output.texture);
-            self.menu.render(
+            let framebuffer = (self.config.width, self.config.height);
+            let layers = self.flow.overlay_layers();
+            self.menu.render_backdrop(
                 &self.device,
                 &self.queue,
                 &mut encoder,
                 &menu_view,
-                (self.config.width, self.config.height),
-                MenuScene::Overlay {
-                    alpha: overlay_alpha,
-                    loading_seconds: self.flow.loading_seconds(),
-                    tip: None,
-                },
+                framebuffer,
+                overlay_alpha,
+            );
+            if layers.art {
+                self.load_screens
+                    .host
+                    .render(&mut encoder, &menu_view, framebuffer);
+            }
+            let foreground = OverlayForeground {
+                alpha: overlay_alpha,
+                loading_seconds: self.flow.loading_seconds(),
+                tip: self.load_screens.host.tip().filter(|_| layers.tip),
+            };
+            self.menu.render_foreground(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                &menu_view,
+                framebuffer,
+                foreground,
             );
         }
 
@@ -3539,7 +3585,10 @@ impl State {
         // camera this frame: the streamer tears the old content down and reports
         // the new start. The input-mode block below recomputes camera.target
         // from the controller, so only eye is set here (in apply_stream_teleport).
-        if let Some(ws) = self.pending_worldspace.take() {
+        let accepting = self.accepts_transition();
+        if let Some(ws) =
+            take_if_accepted(&mut self.pending_worldspace, accepting, "worldspace pick")
+        {
             // Re-picking the current worldspace is a no-op — unless we're in an
             // interior, where it is the way back out and must reload.
             if ws != self.streamer.worldspace || self.streamer.in_interior() {
@@ -3550,9 +3599,18 @@ impl State {
                     .iter()
                     .find(|w| w.form_key == ws)
                     .map_or((0, 0), |w| w.start_cell);
+                let plan = self.plan_transition(
+                    crate::loading_screen::Place::Exterior {
+                        worldspace: ws.clone(),
+                    },
+                    "",
+                    start_cell,
+                    false,
+                );
                 let start = self.with_stream_targets(asset_server, |streamer, targets| {
                     streamer.switch_worldspace(&ws, start_cell, targets)
                 });
+                self.begin_transition(&plan);
                 if leaving_interior {
                     // Restore terrain-gated walking for the worldspace spawn.
                     self.sim.apply(SimCommand::SetInteriorMode(false));
@@ -3565,7 +3623,8 @@ impl State {
         // Apply a debug-UI interior selection: drop the worldspace cells and
         // load the single interior cell as a walkable unit (sim interior mode on
         // so the player grounds on its object-mesh floors).
-        if let Some(fk) = self.pending_interior.take() {
+        let accepting = self.accepts_transition();
+        if let Some(fk) = take_if_accepted(&mut self.pending_interior, accepting, "interior pick") {
             // Copy out grid + start (Copy) so the &self.interiors borrow ends
             // before with_stream_targets takes &mut self.
             let target = self
@@ -3574,9 +3633,12 @@ impl State {
                 .find(|i| i.form_key == fk)
                 .map(|i| (i.grid, i.start_pos));
             if let Some((grid, start_pos)) = target {
+                let plan =
+                    self.plan_transition(crate::loading_screen::Place::Interior, &fk, grid, false);
                 let start = self.with_stream_targets(asset_server, |streamer, targets| {
                     streamer.enter_interior(&fk, grid, start_pos, targets)
                 })?;
+                self.begin_transition(&plan);
                 self.sim.apply(SimCommand::SetInteriorMode(true));
                 self.input_mode = InputMode::Walk;
                 self.apply_stream_teleport(start);
@@ -3621,7 +3683,22 @@ impl State {
         // the debug pickers, but the arrival position, grid and facing all come
         // from the door's XTEL. `switch_worldspace`'s returned default start is
         // intentionally discarded — we always arrive at the door's destination.
-        if let Some(t) = self.pending_teleport.take() {
+        let accepting = self.accepts_transition();
+        if let Some(t) =
+            take_if_accepted(&mut self.pending_teleport, accepting, "load door teleport")
+        {
+            let plan = self.plan_transition(
+                if t.is_interior {
+                    crate::loading_screen::Place::Interior
+                } else {
+                    crate::loading_screen::Place::Exterior {
+                        worldspace: t.worldspace.clone(),
+                    }
+                },
+                if t.is_interior { &t.cell_form_key } else { "" },
+                t.grid,
+                t.no_load_screen,
+            );
             self.with_stream_targets(asset_server, |streamer, targets| {
                 if t.is_interior {
                     streamer
@@ -3632,6 +3709,7 @@ impl State {
                     Ok(())
                 }
             })?;
+            self.begin_transition(&plan);
             self.sim.apply(SimCommand::SetInteriorMode(t.is_interior));
             self.input_mode = InputMode::Walk;
             if let Some(yaw) = t.yaw {
@@ -3648,6 +3726,9 @@ impl State {
                 DebugWorldMode::Worldspace
             };
         }
+
+        self.begin_unstarted_initial_load();
+        self.sync_load_screen();
 
         self.tick_animated_objects(world_dt);
 
@@ -3875,7 +3956,8 @@ impl State {
         if let Some(report) = &stream.spawn_complete {
             self.toast_queue.push((
                 format!(
-                    "Initial spawn: {:.1}s total — detail {:.1}s ({} cells), LOD {:.1}s ({} cells)",
+                    "{}: {:.1}s total — detail {:.1}s ({} cells), LOD {:.1}s ({} cells)",
+                    spawn_report_title(self.load_screens.history.current()),
                     report.total.as_secs_f32(),
                     report.full.as_secs_f32(),
                     report.full_cells,
@@ -4258,6 +4340,14 @@ impl State {
         }
     }
 
+    /// Drops the movement keys the player holds, as if they were let go, in both camera modes.
+    fn release_held_movement(&mut self) {
+        self.walk_keys.release_held();
+        for code in FLY_CAMERA_KEYS {
+            self.camera_controller.handle_key(code, false);
+        }
+    }
+
     /// Follows the model's open flag: opening frees the mouse, drops held movement keys and the
     /// developer menu's keyboard focus,
     /// closing restores the capture the player had.
@@ -4270,10 +4360,7 @@ impl State {
             self.capture_before_pipboy = self.mouse_capture.is_locked();
             self.mouse_capture.set_locked(false);
             self.debug_ui.release_keyboard_focus();
-            self.walk_keys.release_held();
-            for code in FLY_CAMERA_KEYS {
-                self.camera_controller.handle_key(code, false);
-            }
+            self.release_held_movement();
         } else {
             self.mouse_capture.set_locked(self.capture_before_pipboy);
         }

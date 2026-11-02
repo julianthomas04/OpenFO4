@@ -347,6 +347,11 @@ impl GameFlow {
         self.screen
     }
 
+    /// Whether a loading screen is up, loading or fading out: no new load may start meanwhile.
+    pub fn transition_active(&self) -> bool {
+        matches!(self.phase, Phase::Loading | Phase::Revealing)
+    }
+
     /// Shows the small screen for the load in progress, because the large one has nothing to
     /// show. Does nothing outside a load.
     pub fn fall_back_to_small(&mut self) {
@@ -1191,6 +1196,19 @@ mod tests {
         }
         assert_eq!(overlay_layers(Phase::Loading, ScreenKind::Small), neither);
         assert_eq!(overlay_layers(Phase::Loading, ScreenKind::Large), both);
+    }
+
+    #[test]
+    fn a_transition_is_active_while_loading_and_while_revealing_only() {
+        assert!(!menu_flow().transition_active());
+        assert!(!spawn_select_flow().transition_active());
+        assert!(loading_flow().transition_active());
+        let mut flow = revealing_flow();
+        assert!(flow.transition_active());
+        for _ in 0..100 {
+            flow.tick(0.05);
+        }
+        assert!(!flow.transition_active(), "in game");
     }
 
     #[test]

@@ -55,6 +55,13 @@ impl SplitMix64 {
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         z ^ (z >> 31)
     }
+
+    /// A generator seeded from this one's next value, so every consumer of randomness gets a
+    /// sequence of its own.
+    #[must_use]
+    pub fn fork(&mut self) -> Self {
+        Self::new(self.next_u64())
+    }
 }
 
 impl RandomSource for SplitMix64 {
@@ -74,6 +81,21 @@ mod tests {
         assert!((0..20).all(|_| a.below(1000) == b.below(1000)));
     }
 
+    #[test]
+    fn forks_are_deterministic_and_each_one_continues_from_the_parent() {
+        let mut parent = SplitMix64::new(9);
+        let mut twin = SplitMix64::new(9);
+        let mut fork = parent.fork();
+        let mut twin_fork = twin.fork();
+        assert!((0..20).all(|_| fork.below(1000) == twin_fork.below(1000)));
+        let mut sibling = parent.fork();
+        let mut first = SplitMix64::new(9).fork();
+        assert_ne!(
+            (0..20).map(|_| sibling.below(1000)).collect::<Vec<_>>(),
+            (0..20).map(|_| first.below(1000)).collect::<Vec<_>>(),
+            "the second fork continues from where the first left the parent"
+        );
+    }
     #[test]
     fn unit_stays_in_the_half_open_interval() {
         let mut rng = SplitMix64::new(1);

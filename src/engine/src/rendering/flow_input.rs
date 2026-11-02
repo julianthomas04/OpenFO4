@@ -32,25 +32,36 @@ impl State {
 
     pub fn handle_pointer_moved(&mut self, x: f64, y: f64) {
         self.pointer_px = (x as f32, y as f32);
+        if let Some(dx) = self.load_screens.drag.moved(self.pointer_px.0) {
+            self.load_screens.host.drag(dx);
+        }
         if let Some(row) = self.row_under_pointer() {
             self.handle_flow_event(FlowEvent::RowHovered(row));
         }
     }
 
     pub fn handle_pointer_pressed(&mut self) {
+        if self.art_interactive() {
+            self.load_screens.drag.press(self.pointer_px.0);
+        }
         if let Some(row) = self.row_under_pointer() {
             self.handle_flow_event(FlowEvent::RowPressed(row));
         }
     }
 
     pub fn handle_pointer_released(&mut self) {
+        self.load_screens.drag.release();
         let row = self.row_under_pointer();
         self.handle_flow_event(FlowEvent::RowReleased(row));
     }
 
     /// `lines` is the wheel's travel in lines, positive away from the user.
     pub fn handle_wheel(&mut self, lines: f32) {
-        self.flow.scroll(lines);
+        if self.art_interactive() {
+            self.load_screens.host.wheel(lines);
+        } else {
+            self.flow.scroll(lines);
+        }
     }
 
     /// Whether the developer window is shown and so takes pointer and keyboard input.
@@ -102,7 +113,7 @@ impl State {
         self.dispatch(action);
     }
 
-    fn dispatch(&mut self, action: FlowAction) {
+    pub(super) fn dispatch(&mut self, action: FlowAction) {
         match action {
             FlowAction::None => {}
             FlowAction::BeginPlay(location) => self.begin_play(&location),
