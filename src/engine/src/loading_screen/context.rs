@@ -39,15 +39,30 @@ impl<R: RandomSource> LoadScreenContext<R> {
                 Place::Exterior { worldspace } => Some(worldspace.clone()),
             },
             cell: cell.to_string(),
-            locations: location_chain(catalog, cell),
+            locations: location_chain(catalog, destination_location(catalog, destination, cell)),
             rolls: RefCell::new(rolls),
         }
     }
 }
 
-fn location_chain(catalog: &LoadScreenCatalog, cell: &str) -> Vec<String> {
+/// The location the cell names; an exterior cell that names none stands in its worldspace's.
+fn destination_location<'a>(
+    catalog: &'a LoadScreenCatalog,
+    destination: &Place,
+    cell: &str,
+) -> Option<&'a String> {
+    catalog
+        .cell_locations
+        .get(cell)
+        .or_else(|| match destination {
+            Place::Interior => None,
+            Place::Exterior { worldspace } => catalog.worldspace_locations.get(worldspace),
+        })
+}
+
+fn location_chain(catalog: &LoadScreenCatalog, start: Option<&String>) -> Vec<String> {
     let mut chain: Vec<String> = Vec::new();
-    let mut next = catalog.cell_locations.get(cell);
+    let mut next = start;
     while let Some(location) = next {
         if chain.contains(location) {
             crate::utils::warn_once(&format!("location-cycle:{location}"), || {
@@ -269,6 +284,67 @@ mod tests {
             is(GET_IN_CURRENT_LOCATION, SANCTUARY_HILLS, 1.0)
         ));
         assert!(holds(&hills, is(GET_IN_CURRENT_LOCATION, SANCTUARY, 0.0)));
+    }
+
+    fn diamond_city_catalog() -> LoadScreenCatalog {
+        let mut data = catalog();
+        data.worldspace_locations
+            .insert(COMMONWEALTH.to_string(), SANCTUARY_HILLS.to_string());
+        data
+    }
+
+    #[test]
+    fn an_exterior_cell_without_a_location_stands_in_its_worldspaces_location_and_its_parents() {
+        let ctx = LoadScreenContext::new(
+            &diamond_city_catalog(),
+            &exterior(),
+            "NOLOC:Fallout4.esm",
+            ScriptedRandom::silent(),
+        );
+
+        assert!(holds(
+            &ctx,
+            is(GET_IN_CURRENT_LOCATION, SANCTUARY_HILLS, 1.0)
+        ));
+        assert!(holds(
+            &ctx,
+            is(GET_IN_CURRENT_LOCATION, COMMONWEALTH_LOCATION, 1.0)
+        ));
+        assert!(holds(&ctx, is(GET_IN_CURRENT_LOCATION, SANCTUARY, 0.0)));
+    }
+
+    #[test]
+    fn the_location_a_cell_names_wins_over_its_worldspaces() {
+        let ctx = LoadScreenContext::new(
+            &diamond_city_catalog(),
+            &exterior(),
+            VAULT_CELL,
+            ScriptedRandom::silent(),
+        );
+
+        assert!(holds(
+            &ctx,
+            is(GET_IN_CURRENT_LOCATION, OTHER_LOCATION, 1.0)
+        ));
+        assert!(holds(
+            &ctx,
+            is(GET_IN_CURRENT_LOCATION, SANCTUARY_HILLS, 0.0)
+        ));
+    }
+
+    #[test]
+    fn an_interior_without_a_location_is_in_none_even_when_a_worldspace_has_one() {
+        let ctx = LoadScreenContext::new(
+            &diamond_city_catalog(),
+            &Place::Interior,
+            "NOLOC:Fallout4.esm",
+            ScriptedRandom::silent(),
+        );
+
+        assert!(holds(
+            &ctx,
+            is(GET_IN_CURRENT_LOCATION, SANCTUARY_HILLS, 0.0)
+        ));
     }
 
     #[test]

@@ -141,7 +141,7 @@ impl DbClient {
         if !self.schema.load_screen_columns_present {
             return Ok(None);
         }
-        load_screens::LoadScreenCatalog::from_connection(&self.conn).map(Some)
+        load_screens::LoadScreenCatalog::from_connection(&self.conn, self.schema).map(Some)
     }
 
     /// The ambient music tables; errors when the installer has not extracted them.

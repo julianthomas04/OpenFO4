@@ -8,6 +8,7 @@ use rusqlite::Connection;
 
 use crate::assets::db::conditions::{Condition, load_conditions, load_globals};
 use crate::assets::db::rows::{collect_rows, narrow, real32, required};
+use crate::assets::db::schema::DbSchema;
 
 /// LSCR record flag bit 10.
 const FLAG_DISPLAYS_IN_MAIN_MENU: u32 = 1 << 10;
@@ -57,6 +58,9 @@ pub struct LoadScreenCatalog {
     pub screens: Vec<LoadScreen>,
     /// Cell form key to the location (XLCN) it names; cells naming none are absent.
     pub cell_locations: HashMap<String, String>,
+    /// Worldspace form key to its own location; the exterior cells of the worldspace that name no
+    /// location stand there. Empty for a database without the column.
+    pub worldspace_locations: HashMap<String, String>,
     /// Location form key to its parent location; root locations are absent.
     pub location_parents: HashMap<String, String>,
     pub globals: HashMap<String, f32>,
@@ -68,11 +72,12 @@ impl LoadScreenCatalog {
     /// Loads everything once; errors when a row is malformed or incomplete, such as a stub screen
     /// the installer migrated but has not filled yet. Callers check
     /// `DbSchema::load_screen_columns_present` first.
-    pub(crate) fn from_connection(conn: &Connection) -> anyhow::Result<Self> {
+    pub(crate) fn from_connection(conn: &Connection, schema: DbSchema) -> anyhow::Result<Self> {
         let (globals, global_form_keys) = load_globals(conn)?;
         Ok(Self {
             screens: load_screens(conn)?,
             cell_locations: load_cell_locations(conn)?,
+            worldspace_locations: load_worldspace_locations(conn, schema)?,
             location_parents: load_location_parents(conn)?,
             globals,
             global_form_keys,
@@ -288,6 +293,22 @@ fn load_cell_locations(conn: &Connection) -> anyhow::Result<HashMap<String, Stri
     .collect())
 }
 
+fn load_worldspace_locations(
+    conn: &Connection,
+    schema: DbSchema,
+) -> anyhow::Result<HashMap<String, String>> {
+    if !schema.worldspace_location_column_present {
+        return Ok(HashMap::new());
+    }
+    Ok(collect_rows(
+        conn,
+        "SELECT form_key, location FROM worldspaces WHERE location IS NOT NULL",
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )?
+    .into_iter()
+    .collect())
+}
+
 fn load_location_parents(conn: &Connection) -> anyhow::Result<HashMap<String, String>> {
     Ok(collect_rows(
         conn,
@@ -381,6 +402,10 @@ mod tests {
         );
     }
 
+    fn load_catalog(conn: &Connection) -> anyhow::Result<LoadScreenCatalog> {
+        LoadScreenCatalog::from_connection(conn, DbSchema::detect(conn).unwrap())
+    }
+
     fn world_with_one_screen() -> Connection {
         let conn = connection();
         static_model(&conn, "STAT", Some(r"Interface\LoadScreen\Truck.nif"));
@@ -394,16 +419,13 @@ mod tests {
     }
 
     fn only_screen(conn: &Connection) -> LoadScreen {
-        let mut screens = LoadScreenCatalog::from_connection(conn).unwrap().screens;
+        let mut screens = load_catalog(conn).unwrap().screens;
         assert_eq!(screens.len(), 1);
         screens.remove(0)
     }
 
     fn error_text(conn: &Connection) -> String {
-        format!(
-            "{:#}",
-            LoadScreenCatalog::from_connection(conn).unwrap_err()
-        )
+        format!("{:#}", load_catalog(conn).unwrap_err())
     }
 
     #[test]
@@ -704,6 +726,36 @@ mod tests {
     }
 
     #[test]
+    fn worldspace_locations_are_loaded_for_worldspaces_that_name_one() {
+        let conn = connection();
+        insert(
+            &conn,
+            "worldspaces",
+            &[("form_key", text("WS_A")), ("location", text("LOC_A"))],
+        );
+        insert(&conn, "worldspaces", &[("form_key", text("WS_B"))]);
+
+        let catalog = load_catalog(&conn).unwrap();
+
+        assert_eq!(
+            catalog.worldspace_locations,
+            HashMap::from([("WS_A".to_string(), "LOC_A".to_string())])
+        );
+    }
+
+    #[test]
+    fn a_database_without_the_worldspace_location_column_has_no_worldspace_locations() {
+        let conn = connection();
+        insert(&conn, "worldspaces", &[("form_key", text("WS_A"))]);
+        conn.execute_batch("ALTER TABLE worldspaces DROP COLUMN location")
+            .unwrap();
+
+        let catalog = load_catalog(&conn).unwrap();
+
+        assert_eq!(catalog.worldspace_locations, HashMap::new());
+    }
+
+    #[test]
     fn cell_locations_and_location_parents_are_loaded() {
         let conn = connection();
         for (cell, location) in [("CELL_A", Some("LOC_CHILD")), ("CELL_B", None)] {
@@ -729,7 +781,7 @@ mod tests {
             );
         }
 
-        let catalog = LoadScreenCatalog::from_connection(&conn).unwrap();
+        let catalog = load_catalog(&conn).unwrap();
 
         assert_eq!(
             catalog.cell_locations,
@@ -750,7 +802,7 @@ mod tests {
             &[("cell", text("NO_CELL_ROW")), ("location", text("LOC"))],
         );
 
-        let catalog = LoadScreenCatalog::from_connection(&conn).unwrap();
+        let catalog = load_catalog(&conn).unwrap();
 
         assert_eq!(
             catalog
@@ -774,7 +826,7 @@ mod tests {
             ],
         );
 
-        let catalog = LoadScreenCatalog::from_connection(&conn).unwrap();
+        let catalog = load_catalog(&conn).unwrap();
 
         assert_eq!(catalog.globals.get("GLOB"), Some(&1.0));
         assert_eq!(

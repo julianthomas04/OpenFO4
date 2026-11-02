@@ -119,6 +119,7 @@ const LOAD_SCREEN_CONDITION_COLUMNS: &[&str] = &[
 const TRANSFORM_COLUMNS: &[&str] = &[
     "pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "scale", "flags", "zoom_min", "zoom_max",
 ];
+const WORLDSPACE_LOCATION_COLUMNS: &[&str] = &["location"];
 const TELEPORT_FLAGS_COLUMNS: &[&str] = &["flags"];
 const COLLISION_LAYER_COLUMNS: &[&str] = &["layer_index", "flags", "collides_with"];
 const NAVMESH_COLUMNS: &[&str] = &[
@@ -171,6 +172,7 @@ pub enum ColumnGroup {
     LoadScreenCondition,
     Transform,
     TeleportFlags,
+    WorldspaceLocation,
 }
 
 impl std::fmt::Display for ColumnGroup {
@@ -206,6 +208,7 @@ impl std::fmt::Display for ColumnGroup {
             Self::LoadScreenCondition => "load screen condition",
             Self::Transform => "transform",
             Self::TeleportFlags => "teleport flags",
+            Self::WorldspaceLocation => "worldspace location",
         })
     }
 }
@@ -434,6 +437,7 @@ pub struct DbSchema {
     /// reads, all or none.
     pub load_screen_columns_present: bool,
     pub teleport_flags_column_present: bool,
+    pub worldspace_location_column_present: bool,
 }
 
 impl DbSchema {
@@ -599,6 +603,12 @@ impl DbSchema {
                 "placed_teleports",
                 TELEPORT_FLAGS_COLUMNS,
             )?,
+            worldspace_location_column_present: column_group_present(
+                conn,
+                ColumnGroup::WorldspaceLocation,
+                "worldspaces",
+                WORLDSPACE_LOCATION_COLUMNS,
+            )?,
         })
     }
 
@@ -674,6 +684,11 @@ impl DbSchema {
             if !self.load_screen_columns_present {
                 tracing::warn!(
                     "load screen columns missing (database predates the load screen extraction); large loading screens fall back to the small one"
+                );
+            }
+            if !self.worldspace_location_column_present {
+                tracing::warn!(
+                    "worldspaces.location column missing (database predates the worldspace location export); exterior cells without a location of their own are in no location"
                 );
             }
             if !self.teleport_flags_column_present {
