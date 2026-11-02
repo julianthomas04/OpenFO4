@@ -9,8 +9,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::conditions::{ConditionContext, ConditionError, evaluate};
 use crate::assets::db::music::{MusicTrack, MusicTrackKind, MusicType};
+use crate::conditions::{ConditionContext, ConditionError, evaluate};
 use crate::random::RandomSource;
 
 pub const FLAG_ABRUPT_TRANSITION: u32 = 0x02;
@@ -203,12 +203,12 @@ impl TrackScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::db::music::{Comparand, CompareOp};
-    use crate::audio::conditions::FreshWorldContext;
+    use crate::assets::db::conditions::{Comparand, CompareOp};
     use crate::audio::test_support::catalog::{
         music_type, palette as catalog_palette, silent, single, track_map,
     };
     use crate::audio::test_support::condition::{condition, day, night};
+    use crate::conditions::FreshWorldContext;
     use crate::random::SplitMix64;
 
     fn clock(hour: f32) -> FreshWorldContext {

@@ -6,8 +6,9 @@ use std::collections::{HashMap, HashSet};
 
 use rusqlite::Connection;
 
-use crate::assets::db::music::{Condition, SoundCategory};
-use crate::assets::db::music::{collect_rows, load_conditions, narrow, real32, required};
+use crate::assets::db::conditions::{Condition, load_conditions};
+use crate::assets::db::music::SoundCategory;
+use crate::assets::db::music::{collect_rows, narrow, real32, required};
 
 /// `descriptor_type` of a standard descriptor, the only kind that carries the BNAM mix values and looping flags.
 pub const STANDARD_DESCRIPTOR_TYPE: u32 = 0x1EEF_540A;

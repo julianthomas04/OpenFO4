@@ -2,6 +2,7 @@ pub mod activators;
 pub mod addon_nodes;
 pub mod cells;
 pub mod collision_layers;
+pub mod conditions;
 pub mod containers;
 pub mod doors;
 pub mod flora;

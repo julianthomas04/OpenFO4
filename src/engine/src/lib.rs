@@ -10,6 +10,7 @@ pub mod anim;
 pub mod assets;
 pub mod audio;
 pub mod bethesda_space;
+pub mod conditions;
 pub mod footsteps;
 pub mod game_flow;
 #[cfg(test)]

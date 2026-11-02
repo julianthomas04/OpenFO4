@@ -3,7 +3,6 @@
 
 mod backend;
 mod backend_errors;
-pub mod conditions;
 mod decibels;
 mod decoded_files;
 mod error;

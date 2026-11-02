@@ -12,7 +12,6 @@ use std::time::Duration;
 use kira::Decibels;
 use kira::sound::FromFileError;
 
-use super::conditions::{self, ConditionError, FreshWorldContext, GameTime, global_entries};
 use super::decibels::amplitude_to_db;
 use super::file_probe::{ProbeError, probe_files};
 use super::music_output::open_stream;
@@ -22,6 +21,7 @@ use super::scheduler::{LOG_TARGET, PlayPlan, SchedulerError, TrackScheduler};
 use crate::assets::db::music::{
     MusicCatalog, MusicTrack, MusicTrackKind, MusicType, SoundCategory,
 };
+use crate::conditions::{self, ConditionError, FreshWorldContext, GameTime, global_entries};
 use crate::random::SplitMix64;
 
 pub const MUSIC_CATEGORY_EDITOR_ID: &str = "AudioCategoryMUS";
@@ -122,7 +122,10 @@ impl WorldMusic {
     ) -> Result<Self, WorldMusicError> {
         let gain = music_category_gain(&catalog.sound_categories)?;
         let index = PlaceIndex::from_catalog(&catalog)?;
-        let context = FreshWorldContext::new(0.0, global_entries(&catalog));
+        let context = FreshWorldContext::new(
+            0.0,
+            global_entries(&catalog.globals, &catalog.global_form_keys),
+        );
         let reachable_types = reachable_type_keys(&catalog);
         let music_types = keyed(catalog.music_types, |music_type| {
             music_type.form_key.clone()
@@ -456,8 +459,8 @@ fn single_file_keys<'a>(reachable: &[&'a MusicTrack]) -> Vec<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::db::music::{CellPlace, Comparand, CompareOp};
-    use crate::audio::conditions::{GET_STAGE, IS_IN_INTERIOR};
+    use crate::assets::db::conditions::{Comparand, CompareOp};
+    use crate::assets::db::music::CellPlace;
     use crate::audio::scheduler::{FLAG_CYCLE_TRACKS, LayerStep};
     use crate::audio::test_support::catalog::{
         MASTER_CATEGORY_MULTIPLIER, MUSIC_CATEGORY_MULTIPLIER, exterior_place, palette, silent,
@@ -467,6 +470,7 @@ mod tests {
     use crate::audio::test_support::{
         HALF_SECOND_SAMPLES, SAMPLE_RATE, SEED, SharedBuffer, sine_flac, undecodable_flac,
     };
+    use crate::conditions::{GET_STAGE, IS_IN_INTERIOR};
 
     const CYCLES: u32 = FLAG_CYCLE_TRACKS;
 

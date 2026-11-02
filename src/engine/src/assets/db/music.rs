@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Context;
 use rusqlite::{Connection, Row};
 
+use crate::assets::db::conditions::{Condition, load_conditions, load_globals};
 use crate::assets::db::schema::require_music_tables;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -46,43 +47,6 @@ pub enum MusicTrackKind {
         duration: f32,
         fade_out: Option<f32>,
     },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompareOp {
-    Equal,
-    NotEqual,
-    Greater,
-    GreaterOrEqual,
-    Less,
-    LessOrEqual,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Comparand {
-    Value(f32),
-    Global(String),
-}
-
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct ConditionParam {
-    pub num: Option<i64>,
-    pub record: Option<String>,
-    pub string: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Condition {
-    pub function: u16,
-    pub op: CompareOp,
-    /// True when this condition is OR-ed with the next one.
-    pub or_flag: bool,
-    pub comparand: Comparand,
-    pub run_on: u8,
-    pub reference: Option<String>,
-    pub param1: ConditionParam,
-    pub param2: ConditionParam,
-    pub param3: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -385,100 +349,6 @@ fn load_layers(conn: &Connection) -> anyhow::Result<HashMap<String, Vec<Vec<Stri
     Ok(layers)
 }
 
-struct ConditionRow {
-    track: String,
-    ord: i64,
-    function: i64,
-    compare_op: i64,
-    or_flag: i64,
-    compare_value: Option<f64>,
-    compare_global: Option<String>,
-    run_on: i64,
-    reference: Option<String>,
-    param1: ConditionParam,
-    param2: ConditionParam,
-    param3: Option<i64>,
-}
-
-pub(super) fn load_conditions(
-    conn: &Connection,
-    table: &str,
-    owner_column: &str,
-    owner_label: &str,
-) -> anyhow::Result<HashMap<String, Vec<Condition>>> {
-    let rows = collect_rows(
-        conn,
-        &format!(
-            "SELECT {owner_column}, ord, function, compare_op, or_flag, compare_value, compare_global, run_on, \
-         reference, param1_num, param1_record, param1_string, param2_num, param2_record, \
-         param2_string, param3 FROM {table} ORDER BY {owner_column}, ord"
-        ),
-        |row| {
-            Ok(ConditionRow {
-                track: row.get(0)?,
-                ord: row.get(1)?,
-                function: row.get(2)?,
-                compare_op: row.get(3)?,
-                or_flag: row.get(4)?,
-                compare_value: row.get(5)?,
-                compare_global: row.get(6)?,
-                run_on: row.get(7)?,
-                reference: row.get(8)?,
-                param1: ConditionParam {
-                    num: row.get(9)?,
-                    record: row.get(10)?,
-                    string: row.get(11)?,
-                },
-                param2: ConditionParam {
-                    num: row.get(12)?,
-                    record: row.get(13)?,
-                    string: row.get(14)?,
-                },
-                param3: row.get(15)?,
-            })
-        },
-    )?;
-    let mut grouped: HashMap<String, Vec<Condition>> = HashMap::new();
-    for row in rows {
-        let name = format!("{owner_label} {} condition {}", row.track, row.ord);
-        let comparand = match (row.compare_value, row.compare_global) {
-            (Some(value), None) => Comparand::Value(real32(value)),
-            (None, Some(global)) => Comparand::Global(global),
-            (Some(_), Some(_)) => {
-                anyhow::bail!("{name}: both compare_value and compare_global are set")
-            }
-            (None, None) => {
-                anyhow::bail!("{name}: neither compare_value nor compare_global is set")
-            }
-        };
-        let condition = Condition {
-            function: narrow(row.function, "function", &name)?,
-            op: compare_op(row.compare_op, &name)?,
-            or_flag: flag(row.or_flag, "or_flag", &name)?,
-            comparand,
-            run_on: narrow(row.run_on, "run_on", &name)?,
-            reference: row.reference,
-            param1: row.param1,
-            param2: row.param2,
-            param3: row.param3,
-        };
-        grouped.entry(row.track).or_default().push(condition);
-    }
-    Ok(grouped)
-}
-
-fn compare_op(value: i64, row: &str) -> anyhow::Result<CompareOp> {
-    Ok(match value {
-        0 => CompareOp::Equal,
-        1 => CompareOp::NotEqual,
-        2 => CompareOp::Greater,
-        3 => CompareOp::GreaterOrEqual,
-        4 => CompareOp::Less,
-        5 => CompareOp::LessOrEqual,
-        other => anyhow::bail!("{row}: unknown compare_op {other}"),
-    })
-}
-
 type CellPlaceRow = (
     String,
     Option<String>,
@@ -642,37 +512,12 @@ fn decode_points(blob: &[u8], row: &str) -> anyhow::Result<Vec<(f32, f32)>> {
         .collect())
 }
 
-type Globals = (HashMap<String, f32>, HashMap<String, String>);
-
-fn load_globals(conn: &Connection) -> anyhow::Result<Globals> {
-    let rows = collect_rows(
-        conn,
-        "SELECT form_key, editor_id, value FROM globals",
-        |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, Option<f64>>(2)?,
-            ))
-        },
-    )?;
-    let mut values = HashMap::new();
-    let mut form_keys = HashMap::new();
-    for (form_key, editor_id, value) in rows {
-        let value = required(value, "value", &format!("global {form_key}"))?;
-        if let Some(editor_id) = editor_id {
-            form_keys.insert(editor_id, form_key.clone());
-        }
-        values.insert(form_key, real32(value));
-    }
-    Ok((values, form_keys))
-}
-
 #[cfg(test)]
 mod tests {
     use rusqlite::types::Value;
 
     use super::*;
+    use crate::assets::db::conditions::{Comparand, CompareOp};
 
     const SCHEMA: &str = include_str!("../../../../installer/file_converters/esm_schema.sql");
 

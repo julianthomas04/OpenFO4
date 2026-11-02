@@ -3,16 +3,17 @@
 
 use std::collections::HashMap;
 
+use crate::assets::db::conditions::{Comparand, CompareOp, Condition};
 use crate::assets::db::footsteps::{
     Footstep, FootstepCatalog, FootstepSet, Impact, ImpactDataSet, MaterialImpact,
 };
-use crate::assets::db::music::{Comparand, CompareOp, Condition, SoundCategory};
+use crate::assets::db::music::SoundCategory;
 use crate::assets::db::sound_catalog::{
     COMPOUND_DESCRIPTOR, OutputChannel, STANDARD_DESCRIPTOR_TYPE, SoundCatalog, SoundDescriptor,
     SoundOutputModel,
 };
-use crate::audio::conditions::{HAS_SILENT_RUNNING_PERK, IS_FIRST_PERSON};
 use crate::audio::test_support::condition::condition;
+use crate::conditions::{HAS_SILENT_RUNNING_PERK, IS_FIRST_PERSON};
 use crate::footsteps::{FootTag, Gait};
 
 pub const DIRT: u32 = 0xD1;

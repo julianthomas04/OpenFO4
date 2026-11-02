@@ -2,8 +2,9 @@
 
 use std::collections::HashMap;
 
+use crate::assets::db::conditions::Condition;
 use crate::assets::db::music::{
-    Condition, MusicCatalog, MusicTrack, MusicTrackKind, MusicType, SoundCategory,
+    MusicCatalog, MusicTrack, MusicTrackKind, MusicType, SoundCategory,
 };
 use crate::audio::place::PlaceSnapshot;
 
