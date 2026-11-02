@@ -24,7 +24,8 @@ struct VsIn {
 };
 
 struct VsOut {
-    @builtin(position) clip: vec4<f32>,
+    // Invariant so that the depth prepass and the colour pass agree to the bit.
+    @invariant @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) normal: vec3<f32>,
 };
@@ -48,12 +49,28 @@ fn encode_srgb(linear: vec3<f32>) -> vec3<f32> {
     return select(high, low, linear <= vec3<f32>(0.0031308));
 }
 
+// Texels at or below this alpha are cut out (hair, grates, foliage).
+const ALPHA_CUTOFF: f32 = 0.5;
+
+// The depth prepass: only the cut-out decides what is written.
+@fragment
+fn fs_depth(in: VsOut) -> @location(0) vec4<f32> {
+    if textureSample(diffuse, diffuse_sampler, in.uv).a < ALPHA_CUTOFF {
+        discard;
+    }
+    return vec4<f32>(0.0);
+}
+
 @fragment
 fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let facing = select(-in.normal, in.normal, front);
     let normal = normalize(facing);
     let light = max(dot(normal, scene.light_direction.xyz), 0.0);
-    let albedo = textureSample(diffuse, diffuse_sampler, in.uv).rgb;
+    let texel = textureSample(diffuse, diffuse_sampler, in.uv);
+    if texel.a < ALPHA_CUTOFF {
+        discard;
+    }
+    let albedo = texel.rgb;
     let lit = albedo * (scene.shading.y + scene.shading.z * light);
     let colour = select(lit, encode_srgb(lit), scene.shading.w > 0.5);
     return vec4<f32>(colour, scene.shading.x);

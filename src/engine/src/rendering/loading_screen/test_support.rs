@@ -48,6 +48,21 @@ pub fn cube_glb(material: &str) -> Vec<u8> {
         indices.extend([first, first + 1, first + 2, first, first + 2, first + 3]);
     }
 
+    pack_glb(&positions, &normals, &uvs, &indices, material)
+}
+
+/// A single-primitive GLB of the given vertex data, whose one material is named `material`.
+fn pack_glb(
+    positions: &[f32],
+    normals: &[f32],
+    uvs: &[f32],
+    indices: &[u16],
+    material: &str,
+) -> Vec<u8> {
+    let vertex_count = positions.len() / 3;
+    let axis = |axis: usize| positions.iter().skip(axis).step_by(3).copied();
+    let min: Vec<f32> = (0..3).map(|a| axis(a).fold(f32::MAX, f32::min)).collect();
+    let max: Vec<f32> = (0..3).map(|a| axis(a).fold(f32::MIN, f32::max)).collect();
     let mut bin: Vec<u8> = Vec::new();
     let mut views = Vec::new();
     let mut push = |bytes: Vec<u8>| {
@@ -77,11 +92,11 @@ pub fn cube_glb(material: &str) -> Vec<u8> {
         "buffers": [{"byteLength": bin.len()}],
         "bufferViews": views,
         "accessors": [
-            {"bufferView": 0, "componentType": 5126, "count": 24, "type": "VEC3",
-             "min": [-HALF_EDGE, -HALF_EDGE, -HALF_EDGE], "max": [HALF_EDGE, HALF_EDGE, HALF_EDGE]},
-            {"bufferView": 1, "componentType": 5126, "count": 24, "type": "VEC3"},
-            {"bufferView": 2, "componentType": 5126, "count": 24, "type": "VEC2"},
-            {"bufferView": 3, "componentType": 5123, "count": 36, "type": "SCALAR"},
+            {"bufferView": 0, "componentType": 5126, "count": vertex_count, "type": "VEC3",
+             "min": min, "max": max},
+            {"bufferView": 1, "componentType": 5126, "count": vertex_count, "type": "VEC3"},
+            {"bufferView": 2, "componentType": 5126, "count": vertex_count, "type": "VEC2"},
+            {"bufferView": 3, "componentType": 5123, "count": indices.len(), "type": "SCALAR"},
         ],
     });
     let mut json = serde_json::to_vec(&document).expect("the document serialises");
@@ -130,4 +145,59 @@ pub fn cube_art(dir: &Path, material: &str) -> LoadingArt {
         zoom_limits: (-0.5, 1.5),
         no_rotation: false,
     }
+}
+
+/// A GLB of two overlapping quads facing the viewer, indexed far one first so that a pass
+/// that blends in index order draws the near one over the far one. The near quad (normal
+/// towards the viewer) is at depth 0, the far quad (normal up) 3 units behind it.
+pub fn layered_quads_glb(material: &str) -> Vec<u8> {
+    let mut positions: Vec<f32> = Vec::new();
+    let mut normals: Vec<f32> = Vec::new();
+    let mut uvs: Vec<f32> = Vec::new();
+    let mut indices: Vec<u16> = Vec::new();
+    for (quad, (depth, half, normal)) in [(-3.0, 6.0, [0.0, 1.0, 0.0]), (0.0, 5.0, [0.0, 0.0, 1.0])]
+        .into_iter()
+        .enumerate()
+    {
+        let first = u16::try_from(quad * 4).expect("two quads have few vertices");
+        for (u, v) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+            positions.extend([u * half, v * half, depth]);
+            normals.extend(normal);
+            uvs.extend([u * 0.5 + 0.5, v * 0.5 + 0.5]);
+        }
+        indices.extend([first, first + 1, first + 2, first, first + 2, first + 3]);
+    }
+    pack_glb(&positions, &normals, &uvs, &indices, material)
+}
+
+/// Art like [`cube_art`] but of the layered quads.
+pub fn layered_quads_art(dir: &Path) -> LoadingArt {
+    let mut art = cube_art(dir, "");
+    art.model_path = dir.join("quads.glb");
+    std::fs::write(&art.model_path, layered_quads_glb("")).expect("the temp folder is writable");
+    art
+}
+
+/// Writes `textures/<name>`, a 2x2 texture whose texels all have the given alpha and are white.
+pub fn write_texture(dir: &Path, name: &str, alpha: u8) {
+    let mut dds = ddsfile::Dds::new_dxgi(ddsfile::NewDxgiParams {
+        height: 2,
+        width: 2,
+        depth: None,
+        format: ddsfile::DxgiFormat::R8G8B8A8_UNorm,
+        mipmap_levels: Some(1),
+        array_layers: None,
+        caps2: None,
+        is_cubemap: false,
+        resource_dimension: ddsfile::D3D10ResourceDimension::Texture2D,
+        alpha_mode: ddsfile::AlphaMode::Unknown,
+    })
+    .expect("a valid texture description");
+    for texel in dds.data.chunks_exact_mut(4) {
+        texel.copy_from_slice(&[255, 255, 255, alpha]);
+    }
+    let folder = dir.join("textures");
+    std::fs::create_dir_all(&folder).expect("the temp folder is writable");
+    let mut file = std::fs::File::create(folder.join(name)).expect("the texture is writable");
+    dds.write(&mut file).expect("the texture is written");
 }

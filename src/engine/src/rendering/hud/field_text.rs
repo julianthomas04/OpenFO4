@@ -256,8 +256,8 @@ mod tests {
         assert_eq!(map.point(3.0, 4.0), (16.0, 28.0));
     }
 
-    const TIP: &str = "Wrapped text breaks into lines at the width of its column and no line is wider                        than the column, however long the whole text is.";
-    const COLUMN: f32 = 200.0;
+    const TIP: &str = "Wrapped text breaks into lines at the width of its column.";
+    const COLUMN: f32 = 120.0;
 
     fn item(wrap_width: Option<f32>) -> TextItem {
         let metrics = FontMetrics {

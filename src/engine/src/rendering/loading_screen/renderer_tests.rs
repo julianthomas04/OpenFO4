@@ -2,7 +2,7 @@
 
 use glam::UVec2;
 
-use super::test_support::cube_art;
+use super::test_support::{cube_art, layered_quads_art, write_texture};
 use super::{CpuArt, LoadedArt, LoadingArt, LoadingArtRenderer};
 use crate::rendering::gpu_test::{linear_to_srgb_byte, read_mip, test_device};
 use crate::rendering::post::tonemap::ui_gamma_format;
@@ -318,4 +318,44 @@ fn resizing_the_target_recreates_the_depth_buffer_without_a_validation_error() {
 
     let error = pollster::block_on(error_scope.pop());
     assert!(error.is_none(), "{error:?}");
+}
+
+#[test]
+fn a_faded_model_shows_only_its_nearest_surface() {
+    let Some(mut scene) = Scene::new("loading art layered surfaces") else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    scene.show(&layered_quads_art(dir.path()));
+    let target = Target::new(&scene, SIZE, BLACK);
+
+    let faded = scene.draw(&target, 0.5);
+
+    let near = linear_to_srgb_byte(FRONT_FACE_LINEAR);
+    for channel in faded.centre() {
+        assert_close(channel, near / 2, 3);
+    }
+}
+
+#[test]
+fn texels_below_half_alpha_are_cut_out() {
+    let Some(mut scene) = Scene::new("loading art alpha test") else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    write_texture(dir.path(), "cut.dds", 0);
+    scene.show(&cube_art(dir.path(), "cut.dds"));
+    let target = Target::new(&scene, SIZE, BLACK);
+    assert_eq!(
+        scene.draw(&target, 1.0).lit_count(),
+        0,
+        "a fully transparent texture leaves nothing"
+    );
+
+    write_texture(dir.path(), "solid.dds", 255);
+    scene.show(&cube_art(dir.path(), "solid.dds"));
+    assert!(
+        scene.draw(&target, 1.0).lit_count() > 0,
+        "an opaque texture draws"
+    );
 }

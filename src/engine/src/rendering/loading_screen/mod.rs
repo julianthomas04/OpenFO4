@@ -186,13 +186,15 @@ impl LoadingArtRenderer {
             timestamp_writes: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&self.pipeline.pipeline);
         pass.set_bind_group(0, &self.scene_group, &[]);
         pass.set_vertex_buffer(0, active.art.vertices.slice(..));
         pass.set_index_buffer(active.art.indices.slice(..), wgpu::IndexFormat::Uint32);
-        for (draw, group) in active.art.draws.iter().zip(&active.texture_groups) {
-            pass.set_bind_group(1, group, &[]);
-            pass.draw_indexed(draw.indices.clone(), draw.base_vertex, 0..1);
+        for pipeline in [&self.pipeline.depth_prepass, &self.pipeline.pipeline] {
+            pass.set_pipeline(pipeline);
+            for (draw, group) in active.art.draws.iter().zip(&active.texture_groups) {
+                pass.set_bind_group(1, group, &[]);
+                pass.draw_indexed(draw.indices.clone(), draw.base_vertex, 0..1);
+            }
         }
     }
 }

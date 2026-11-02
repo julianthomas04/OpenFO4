@@ -209,6 +209,15 @@ mod tests {
     }
 
     #[test]
+    fn limits_that_cover_only_one_side_of_the_full_turn_still_clamp() {
+        let mut camera = camera(|art| art.rotation_limits_deg = (-180, 90));
+        camera.drag(100_000.0);
+        assert_eq!(camera.yaw_degrees(), 90.0);
+        camera.drag(-100_000.0);
+        assert_eq!(camera.yaw_degrees(), -180.0);
+    }
+
+    #[test]
     fn no_rotation_ignores_drags() {
         let mut camera = camera(|art| art.no_rotation = true);
         camera.drag(500.0);

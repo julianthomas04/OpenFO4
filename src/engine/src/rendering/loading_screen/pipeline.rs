@@ -35,6 +35,7 @@ impl SceneUniform {
 }
 
 pub(super) struct ArtPipeline {
+    pub depth_prepass: wgpu::RenderPipeline,
     pub pipeline: wgpu::RenderPipeline,
     pub scene_layout: wgpu::BindGroupLayout,
     pub texture_layout: wgpu::BindGroupLayout,
@@ -82,43 +83,78 @@ impl ArtPipeline {
             immediate_size: 0,
         });
         let shader = shaders::LOADING_ART.compile(device);
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Loading Art Pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(Vertex::desc())],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+        let build = |label: &str, stage: Stage| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[Some(Vertex::desc())],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(stage.entry_point),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: target_format,
+                        blend: stage.blend,
+                        write_mask: stage.write_mask,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: Texture::DEPTH_FORMAT,
+                    depth_write_enabled: Some(stage.depth_write),
+                    depth_compare: Some(stage.depth_compare),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        // The nearest surface is found first, without colour; the colour pass then blends only
+        // the fragments at exactly that depth, so a faded model never shows its far parts
+        // through its near ones.
+        let depth_prepass = build(
+            "Loading Art Depth Pipeline",
+            Stage {
+                entry_point: "fs_depth",
+                blend: None,
+                write_mask: wgpu::ColorWrites::empty(),
+                depth_write: true,
+                depth_compare: wgpu::CompareFunction::Less,
             },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: Texture::DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        );
+        let pipeline = build(
+            "Loading Art Pipeline",
+            Stage {
+                entry_point: "fs_main",
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+                depth_write: false,
+                depth_compare: wgpu::CompareFunction::Equal,
+            },
+        );
         Self {
+            depth_prepass,
             pipeline,
             scene_layout,
             texture_layout,
         }
     }
+}
+
+/// What differs between the depth prepass and the colour pass.
+struct Stage {
+    entry_point: &'static str,
+    blend: Option<wgpu::BlendState>,
+    write_mask: wgpu::ColorWrites,
+    depth_write: bool,
+    depth_compare: wgpu::CompareFunction,
 }
 
 /// The depth buffer of the loading art, sized like the target it draws into.
