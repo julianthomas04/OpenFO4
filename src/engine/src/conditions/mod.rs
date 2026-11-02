@@ -29,6 +29,12 @@ pub const HAS_SILENT_RUNNING_PERK: u16 = 448;
 /// Function 300; the name is inferred from the sound conditions it guards: the exterior ambience
 /// beds require it to be 0 and the interior layer of a hammer sound requires it to be 1.
 pub const IS_IN_INTERIOR: u16 = 300;
+// The function ids below are the `Condition+Function` values of Mutagen 0.50.1.
+pub const GET_IN_CELL: u16 = 67;
+pub const GET_RANDOM_PERCENT: u16 = 77;
+pub const GET_IN_WORLDSPACE: u16 = 310;
+pub const GET_IN_CURRENT_LOCATION: u16 = 359;
+pub const GET_QUEST_COMPLETED: u16 = 543;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ConditionError {
@@ -75,6 +81,13 @@ fn quest_param(condition: &Condition) -> Result<&str, ConditionError> {
         .ok_or_else(|| bad_parameter(condition, 1, "a record"))
 }
 
+/// A yes/no answer as the function value; `None` is a context that does not know.
+fn flag_value(answer: Option<bool>, function: u16) -> Result<f32, ConditionError> {
+    answer
+        .map(|yes| f32::from(u8::from(yes)))
+        .ok_or(ConditionError::UnsupportedFunction(function))
+}
+
 fn function_value(
     condition: &Condition,
     ctx: &dyn ConditionContext,
@@ -110,10 +123,23 @@ fn function_value(
         }
         IS_FIRST_PERSON => Ok(f32::from(u8::from(ctx.is_first_person()))),
         HAS_SILENT_RUNNING_PERK => Ok(f32::from(u8::from(ctx.has_silent_running_perk()))),
-        IS_IN_INTERIOR => ctx
-            .is_in_interior()
-            .map(|interior| f32::from(u8::from(interior)))
-            .ok_or(ConditionError::UnsupportedFunction(IS_IN_INTERIOR)),
+        IS_IN_INTERIOR => flag_value(ctx.is_in_interior(), IS_IN_INTERIOR),
+        GET_RANDOM_PERCENT => ctx
+            .random_percent()
+            .ok_or(ConditionError::UnsupportedFunction(GET_RANDOM_PERCENT)),
+        GET_IN_WORLDSPACE => flag_value(
+            ctx.in_worldspace(quest_param(condition)?),
+            GET_IN_WORLDSPACE,
+        ),
+        GET_IN_CELL => flag_value(ctx.in_cell(quest_param(condition)?), GET_IN_CELL),
+        GET_IN_CURRENT_LOCATION => flag_value(
+            ctx.in_current_location(quest_param(condition)?),
+            GET_IN_CURRENT_LOCATION,
+        ),
+        GET_QUEST_COMPLETED => flag_value(
+            ctx.quest_completed(quest_param(condition)?),
+            GET_QUEST_COMPLETED,
+        ),
         other => Err(ConditionError::UnsupportedFunction(other)),
     }
 }
@@ -371,6 +397,40 @@ mod tests {
         ctx.set_interior(true);
         assert!(!evaluate(&exterior_only, &ctx).unwrap());
         assert!(evaluate(&interior_only, &ctx).unwrap());
+    }
+
+    #[test]
+    fn contexts_that_do_not_know_the_player_place_leave_those_functions_unsupported() {
+        let ctx = clock(0.0);
+        let located = |function| {
+            with_params(
+                condition(function, CompareOp::Equal, Comparand::Value(1.0)),
+                record_param("place"),
+                ConditionParam::default(),
+            )
+        };
+        for function in [
+            GET_RANDOM_PERCENT,
+            GET_IN_WORLDSPACE,
+            GET_IN_CELL,
+            GET_IN_CURRENT_LOCATION,
+        ] {
+            assert_eq!(
+                evaluate(&[located(function)], &ctx),
+                Err(ConditionError::UnsupportedFunction(function)),
+                "function {function}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_quest_is_completed_in_a_fresh_world() {
+        let completed = with_params(
+            condition(GET_QUEST_COMPLETED, CompareOp::Equal, Comparand::Value(0.0)),
+            record_param("quest"),
+            ConditionParam::default(),
+        );
+        assert!(evaluate(&[completed], &clock(0.0)).unwrap());
     }
 
     #[test]

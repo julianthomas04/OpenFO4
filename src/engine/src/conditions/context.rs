@@ -48,6 +48,27 @@ pub trait ConditionContext {
     /// Whether the player is in an interior cell; `None` where the context does not know, which
     /// leaves the function unsupported rather than guessed.
     fn is_in_interior(&self) -> Option<bool>;
+    /// A fresh roll in `[0, 100)` per call; `None` where the context has no random source.
+    fn random_percent(&self) -> Option<f32> {
+        None
+    }
+    /// Whether the player is in the worldspace with this form key; `None` where unknown.
+    fn in_worldspace(&self, _worldspace: &str) -> Option<bool> {
+        None
+    }
+    /// Whether the player is in the cell with this form key; `None` where unknown.
+    fn in_cell(&self, _cell: &str) -> Option<bool> {
+        None
+    }
+    /// Whether the player's current location is this location or one of its descendants; `None`
+    /// where unknown.
+    fn in_current_location(&self, _location: &str) -> Option<bool> {
+        None
+    }
+    /// Whether the quest is completed; `None` where the context has no quest state.
+    fn quest_completed(&self, _quest: &str) -> Option<bool> {
+        None
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -173,5 +194,9 @@ impl ConditionContext for FreshWorldContext {
 
     fn is_in_interior(&self) -> Option<bool> {
         self.interior
+    }
+
+    fn quest_completed(&self, _quest: &str) -> Option<bool> {
+        Some(false)
     }
 }
