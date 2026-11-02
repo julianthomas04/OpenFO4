@@ -90,7 +90,7 @@ pub enum FlowAction {
 }
 
 /// Which loading screen a load shows: the black one with the logo, or a large one that also
-/// shows a model and a tip while the load runs.
+/// shows a model and a text panel while the load runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScreenKind {
     Small,
@@ -101,16 +101,16 @@ pub enum ScreenKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OverlayLayers {
     pub art: bool,
-    pub tip: bool,
+    pub panel: bool,
 }
 
-/// A large screen shows its model and tip only while the load runs. Its reveal cuts to the small
-/// screen and fades that one out, so the model and the tip never fade.
+/// A large screen shows its model and panel only while the load runs. Its reveal cuts to the small
+/// screen and fades that one out, so the model and the panel never fade.
 pub fn overlay_layers(phase: Phase, kind: ScreenKind) -> OverlayLayers {
     let large_and_loading = phase == Phase::Loading && kind == ScreenKind::Large;
     OverlayLayers {
         art: large_and_loading,
-        tip: large_and_loading,
+        panel: large_and_loading,
     }
 }
 
@@ -1178,11 +1178,11 @@ mod tests {
     fn only_a_large_screen_that_is_loading_draws_the_model_and_the_tip() {
         let both = OverlayLayers {
             art: true,
-            tip: true,
+            panel: true,
         };
         let neither = OverlayLayers {
             art: false,
-            tip: false,
+            panel: false,
         };
         for phase in [
             Phase::MainMenu,
@@ -1215,11 +1215,11 @@ mod tests {
     fn the_flow_cuts_from_the_large_screen_to_the_small_one_at_the_reveal() {
         let mut flow = loading_flow();
         assert_eq!(flow.screen_kind(), ScreenKind::Large);
-        assert!(flow.overlay_layers().art && flow.overlay_layers().tip);
+        assert!(flow.overlay_layers().art && flow.overlay_layers().panel);
         run_load(&mut flow, 20, streamed_with_player());
         assert_eq!(flow.phase(), Phase::Revealing);
         assert_eq!(flow.overlay_alpha(), 1.0, "the small screen starts opaque");
-        assert!(!flow.overlay_layers().art && !flow.overlay_layers().tip);
+        assert!(!flow.overlay_layers().art && !flow.overlay_layers().panel);
     }
 
     #[test]

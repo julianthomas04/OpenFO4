@@ -1,0 +1,728 @@
+//! The text panel of a large loading screen: the tip with the box drawn around it, the level, the
+//! experience meter and the catalogue number. The loading screen's layout document places every
+//! element on the stage; like the rest of the menu, white art and text are multiplied by the HUD
+//! colour.
+//!
+//! The document does not store the box: the screen's script draws it at run time as a 2 pixel
+//! white outline without fill around the tip. Its line style and the four numbers of the
+//! rectangle the script creates when it starts are in the document's literals. What the
+//! rectangle is used for is inferred here: padding around the tip's lines, left, top, right and
+//! bottom.
+
+use super::loading_icon::MOVIE;
+use crate::rendering::hud::field_text::{ScreenMap, TextExtent, TextItem};
+use crate::rendering::hud::layout::Layout;
+use crate::rendering::hud::quad::PxRect;
+use crate::rendering::hud::shape::{StageRect, shown_fill, stage_rect};
+use crate::rendering::ui_colour::UiTint;
+use crate::ui_layout::scaleform_text::FieldGeometry;
+use crate::ui_layout::{
+    KeyGroup, LiteralKey, ShapeKey, TextKey, TranslateKey, UiLayout, UiLayoutError,
+};
+
+const MAX_COLOUR: f64 = 16_777_215.0;
+const OPAQUE: u8 = 255;
+
+/// Until the engine has a player to show: the level and catalogue number are these and the
+/// experience meter is this full.
+pub const PLACEHOLDER_LEVEL: u32 = 1;
+pub const PLACEHOLDER_CATALOGUE_NUMBER: u32 = 1;
+pub const PLACEHOLDER_EXPERIENCE: f32 = 0.0;
+
+pub static TIP: TextKey = TextKey::new(
+    MOVIE,
+    "FilterHolder_mc/Menu_mc/LeftText_mc/LoadScreenText_tf",
+);
+pub static LEVEL: TextKey = TextKey::new(MOVIE, "FilterHolder_mc/Menu_mc/LeftText_mc/LevelText_tf");
+pub static CATALOGUE: TextKey =
+    TextKey::new(MOVIE, "FilterHolder_mc/Menu_mc/LeftText_mc/VDSGText_tf");
+pub static METER_OUTLINE: ShapeKey = ShapeKey::new(
+    MOVIE,
+    "FilterHolder_mc/Menu_mc/LeftText_mc/LevelMeter_mc/@1",
+);
+pub static METER_FILL: ShapeKey = ShapeKey::new(
+    MOVIE,
+    "FilterHolder_mc/Menu_mc/LeftText_mc/LevelMeter_mc/Fill_mc/@1",
+);
+static LEVEL_PREFIX: TranslateKey = TranslateKey::text("$LEVEL");
+static CATALOGUE_PREFIX: TranslateKey = TranslateKey::text("$VDSGPrepend");
+static BORDER_WIDTH: LiteralKey = LiteralKey::new(
+    MOVIE,
+    "LoadingMenu.SetLoadingText#BorderRectangle.graphics.lineStyle(0)",
+    1,
+);
+static BORDER_COLOUR: LiteralKey = LiteralKey::new(
+    MOVIE,
+    "LoadingMenu.SetLoadingText#BorderRectangle.graphics.lineStyle(1)",
+    1,
+);
+static BORDER_INSET: [LiteralKey; 4] = [
+    LiteralKey::new(MOVIE, "LoadingMenu.<init>#new Rectangle(0)", 1),
+    LiteralKey::new(MOVIE, "LoadingMenu.<init>#new Rectangle(1)", 1),
+    LiteralKey::new(MOVIE, "LoadingMenu.<init>#new Rectangle(2)", 1),
+    LiteralKey::new(MOVIE, "LoadingMenu.<init>#new Rectangle(3)", 1),
+];
+
+/// Every layout key the panel reads.
+pub static KEYS: KeyGroup = KeyGroup(&[
+    &TIP,
+    &LEVEL,
+    &CATALOGUE,
+    &METER_OUTLINE,
+    &METER_FILL,
+    &LEVEL_PREFIX,
+    &CATALOGUE_PREFIX,
+    &BORDER_WIDTH,
+    &BORDER_COLOUR,
+    &BORDER_INSET,
+]);
+
+/// Distances in stage pixels from the sides of the tip's lines out to the box's outline.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Padding {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct TextStyle {
+    geometry: FieldGeometry,
+    family: String,
+    colour: [u8; 3],
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Outline {
+    /// The path the line follows, in stage pixels.
+    rect: StageRect,
+    /// The line's thickness across and down, in stage pixels.
+    thickness: (f32, f32),
+    colour: [u8; 3],
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Meter {
+    frame: Outline,
+    fill: StageRect,
+    fill_colour: [u8; 3],
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PanelLayout {
+    tip: TextStyle,
+    level: TextStyle,
+    catalogue: TextStyle,
+    level_prefix: String,
+    catalogue_prefix: String,
+    meter: Meter,
+    border_width: f32,
+    border_colour: [u8; 3],
+    pub border_padding: Padding,
+}
+
+/// What the panel shows.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PanelContent<'a> {
+    pub tip: Option<&'a str>,
+    pub level: u32,
+    /// How full the experience meter is, 0 to 1.
+    pub experience: f32,
+    pub catalogue_number: u32,
+}
+
+impl<'a> PanelContent<'a> {
+    /// The panel of a screen with `tip`, showing the placeholders for the player.
+    pub fn placeholder(tip: Option<&'a str>) -> Self {
+        Self {
+            tip,
+            level: PLACEHOLDER_LEVEL,
+            experience: PLACEHOLDER_EXPERIENCE,
+            catalogue_number: PLACEHOLDER_CATALOGUE_NUMBER,
+        }
+    }
+}
+
+/// The text fields of the panel for one frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PanelText {
+    pub tip: Option<TextItem>,
+    pub level: TextItem,
+    pub catalogue: TextItem,
+}
+
+impl PanelText {
+    pub fn into_items(self) -> Vec<TextItem> {
+        [self.tip, Some(self.level), Some(self.catalogue)]
+            .into_iter()
+            .flatten()
+            .collect()
+    }
+}
+
+/// A rectangle with its colour, for the quad pass.
+pub type ColouredRect = (PxRect, [f32; 4]);
+
+fn text_style(layout: &UiLayout, key: &TextKey) -> Result<TextStyle, UiLayoutError> {
+    let field = layout.get(key)?;
+    let [red, green, blue, _] = field
+        .color
+        .ok_or_else(|| UiLayoutError::unresolved(key.movie, key.path, "the field has no colour"))?;
+    Ok(TextStyle {
+        geometry: FieldGeometry::of(&field, layout.font_metrics(&field.font)?),
+        family: layout.font_family(&field.font)?,
+        colour: [red, green, blue],
+    })
+}
+
+fn rgb_of(key: &LiteralKey, value: f64) -> Result<[u8; 3], UiLayoutError> {
+    if value >= 0.0 && value.fract() == 0.0 && value <= MAX_COLOUR {
+        let rgb = value as u32;
+        Ok([(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8])
+    } else {
+        Err(UiLayoutError::unresolved(
+            key.movie,
+            key.path,
+            format!("{value} is not a colour number"),
+        ))
+    }
+}
+
+fn shown_rgb(
+    movie: &str,
+    key: &str,
+    shape: &crate::ui_layout::values::Shape,
+) -> Result<[u8; 3], UiLayoutError> {
+    let [red, green, blue, _] = shown_fill(movie, key, shape)?;
+    let byte = |channel: f32| (channel * 255.0).round() as u8;
+    Ok([byte(red), byte(green), byte(blue)])
+}
+
+impl Meter {
+    fn resolve(layout: &UiLayout) -> Result<Self, UiLayoutError> {
+        let frame = layout.get(&METER_OUTLINE)?;
+        let line = frame.lines.first().ok_or_else(|| {
+            UiLayoutError::unresolved(
+                METER_OUTLINE.movie,
+                METER_OUTLINE.path,
+                "the meter's frame has no line",
+            )
+        })?;
+        let [red, green, blue, _] = line.color.ok_or_else(|| {
+            UiLayoutError::unresolved(
+                METER_OUTLINE.movie,
+                METER_OUTLINE.path,
+                "the meter's line has no colour",
+            )
+        })?;
+        let matrix = frame.placement.world.matrix;
+        let fill = layout.get(&METER_FILL)?;
+        Ok(Self {
+            frame: Outline {
+                rect: stage_rect(METER_OUTLINE.movie, METER_OUTLINE.path, &frame)?,
+                thickness: (line.width * matrix.a.abs(), line.width * matrix.d.abs()),
+                colour: [red, green, blue],
+            },
+            fill: stage_rect(METER_FILL.movie, METER_FILL.path, &fill)?,
+            fill_colour: shown_rgb(METER_FILL.movie, METER_FILL.path, &fill)?,
+        })
+    }
+}
+
+impl PanelLayout {
+    /// Reads the panel from the loading screen's layout and the translation of its labels.
+    pub fn resolve(layout: &UiLayout) -> Result<Self, UiLayoutError> {
+        let inset = |index: usize| layout.lit_number(&BORDER_INSET[index], 0).map(|n| n as f32);
+        Ok(Self {
+            tip: text_style(layout, &TIP)?,
+            level: text_style(layout, &LEVEL)?,
+            catalogue: text_style(layout, &CATALOGUE)?,
+            level_prefix: layout.get(&LEVEL_PREFIX)?,
+            catalogue_prefix: layout.get(&CATALOGUE_PREFIX)?,
+            meter: Meter::resolve(layout)?,
+            border_width: layout.lit_number(&BORDER_WIDTH, 0)? as f32,
+            border_colour: rgb_of(&BORDER_COLOUR, layout.lit_number(&BORDER_COLOUR, 0)?)?,
+            border_padding: Padding {
+                left: inset(0)?,
+                top: inset(1)?,
+                right: inset(2)?,
+                bottom: inset(3)?,
+            },
+        })
+    }
+
+    /// The text of `content` on a framebuffer fitted by `fit`, in the colour of `tint`.
+    pub fn text(&self, fit: &Layout, tint: &UiTint, content: &PanelContent<'_>) -> PanelText {
+        let level = format!("{} {}", self.level_prefix, content.level);
+        let catalogue = format!("{} {}", self.catalogue_prefix, content.catalogue_number);
+        PanelText {
+            tip: content
+                .tip
+                .filter(|tip| !tip.trim().is_empty())
+                .map(|tip| wrapped_item(&self.tip, fit, tint, tip)),
+            level: item(&self.level, fit, tint, level),
+            catalogue: item(&self.catalogue, fit, tint, catalogue),
+        }
+    }
+
+    /// The rectangles of the panel: the box around the tip's lines when there are some, and the
+    /// experience meter filled to `experience`.
+    pub fn rects(
+        &self,
+        fit: &Layout,
+        tint: &UiTint,
+        tip: Option<TextExtent>,
+        experience: f32,
+    ) -> Vec<ColouredRect> {
+        let colour = |rgb: [u8; 3]| tinted(tint, rgb);
+        let mut rects = Vec::new();
+        if let Some(extent) = tip {
+            let path = padded(extent, self.border_padding, fit.scale());
+            let width = fit.s(self.border_width);
+            rects.extend(
+                outline_rects(path, (width, width))
+                    .into_iter()
+                    .map(|rect| (rect, colour(self.border_colour))),
+            );
+        }
+        let meter = &self.meter;
+        let frame = screen_rect(fit, meter.frame.rect);
+        let thickness = (
+            fit.s(meter.frame.thickness.0),
+            fit.s(meter.frame.thickness.1),
+        );
+        rects.extend(
+            outline_rects(frame, thickness)
+                .into_iter()
+                .map(|rect| (rect, colour(meter.frame.colour))),
+        );
+        let fill = filled(screen_rect(fit, meter.fill), experience);
+        rects.push((fill, colour(meter.fill_colour)));
+        rects
+    }
+}
+
+fn tinted(tint: &UiTint, rgb: [u8; 3]) -> [f32; 4] {
+    let [red, green, blue] = tint.apply_to(rgb).map(|channel| f32::from(channel) / 255.0);
+    [red, green, blue, 1.0]
+}
+
+fn item(style: &TextStyle, fit: &Layout, tint: &UiTint, text: String) -> TextItem {
+    let (origin_x, origin_y) = fit.stage_point(0.0, 0.0);
+    let [red, green, blue] = tint.apply_to(style.colour);
+    TextItem {
+        text,
+        family: style.family.clone(),
+        geometry: style.geometry,
+        map: ScreenMap {
+            origin: (origin_x, origin_y),
+            scale: fit.scale(),
+        },
+        shrink: false,
+        colour: [red, green, blue, OPAQUE],
+        shadow: None,
+        wrap_width: None,
+        max_height: None,
+    }
+}
+
+/// `text` wrapped to the field's width and cut off after the last whole line that fits its height.
+fn wrapped_item(style: &TextStyle, fit: &Layout, tint: &UiTint, text: &str) -> TextItem {
+    let geometry = style.geometry.wrapping();
+    let pitch = geometry.line_pitch();
+    let whole_lines = (geometry.content_height() / pitch).floor().max(1.0);
+    TextItem {
+        wrap_width: Some(fit.s(geometry.content_width())),
+        // Half a line short of the last whole line, so no rounding shows a line past the field.
+        max_height: Some(fit.s((whole_lines - 0.5) * pitch)),
+        ..item(
+            &TextStyle {
+                geometry,
+                ..style.clone()
+            },
+            fit,
+            tint,
+            text.to_owned(),
+        )
+    }
+}
+
+fn screen_rect(fit: &Layout, rect: StageRect) -> PxRect {
+    let (x, y) = fit.stage_point(rect.x, rect.y);
+    PxRect {
+        x,
+        y,
+        w: fit.s(rect.w),
+        h: fit.s(rect.h),
+    }
+}
+
+/// The path of the tip's box: the lines in `extent` and `padding` stage pixels more on each
+/// side, `scale` framebuffer pixels per stage pixel.
+fn padded(extent: TextExtent, padding: Padding, scale: f32) -> PxRect {
+    PxRect {
+        x: extent.left - padding.left * scale,
+        y: extent.top - padding.top * scale,
+        w: extent.width + (padding.left + padding.right) * scale,
+        h: extent.height + (padding.top + padding.bottom) * scale,
+    }
+}
+
+/// The left `fraction` of `rect`; 0 for a fraction that is not a number.
+fn filled(rect: PxRect, fraction: f32) -> PxRect {
+    let fraction = if fraction.is_nan() {
+        0.0
+    } else {
+        fraction.clamp(0.0, 1.0)
+    };
+    PxRect {
+        w: rect.w * fraction,
+        ..rect
+    }
+}
+
+/// The four bars of a line of `thickness` (across, down) drawn along the edges of `path`, centred
+/// on them like a stroke: top, bottom, left and right, the left and right ones between the
+/// other two.
+fn outline_rects(path: PxRect, thickness: (f32, f32)) -> [PxRect; 4] {
+    let (across, down) = thickness;
+    let (outer_x, outer_y) = (path.x - across / 2.0, path.y - down / 2.0);
+    let (outer_w, outer_h) = (path.w + across, path.h + down);
+    let inner_h = (outer_h - 2.0 * down).max(0.0);
+    [
+        PxRect {
+            x: outer_x,
+            y: outer_y,
+            w: outer_w,
+            h: down,
+        },
+        PxRect {
+            x: outer_x,
+            y: outer_y + outer_h - down,
+            w: outer_w,
+            h: down,
+        },
+        PxRect {
+            x: outer_x,
+            y: outer_y + down,
+            w: across,
+            h: inner_h,
+        },
+        PxRect {
+            x: outer_x + outer_w - across,
+            y: outer_y + down,
+            w: across,
+            h: inner_h,
+        },
+    ]
+}
+
+/// A synthetic panel in the layout format, with the numbers of the real one, for the tests of
+/// this and sibling modules.
+#[cfg(test)]
+pub(super) mod test_support {
+    use serde_json::{Value, json};
+
+    use crate::rendering::menu::layout::test_support::FIXTURE_CLASS;
+    use crate::ui_layout::test_support::instance;
+
+    const LEFT_TEXT: &str = "FilterHolder_mc/Menu_mc/LeftText_mc";
+
+    fn text_field(bounds: [f64; 4], size: u32, colour: [u8; 4], wrap: bool) -> Value {
+        json!({
+            "kind": "text", "bounds": bounds, "font": FIXTURE_CLASS, "size": size,
+            "color": colour, "align": "left", "leftMargin": 0, "rightMargin": 0,
+            "indent": 0, "leading": 0,
+            "flags": {"wordWrap": wrap, "multiline": wrap, "autoSize": false, "html": false},
+        })
+    }
+
+    fn placed(char: u32, kind: &str, matrix: [f64; 6]) -> Value {
+        let mut value = instance(char, kind, 0.0, 0.0);
+        value["world"]["matrix"] = json!(matrix);
+        value["local"]["matrix"] = json!(matrix);
+        value
+    }
+
+    /// Where the fixture puts the tip's field: its origin, in stage pixels.
+    pub const TIP_ORIGIN: (f64, f64) = (152.0, 588.0);
+    /// The tip field's authored width, wider than the content by the gutters.
+    pub const TIP_WIDTH: f64 = 504.95;
+
+    /// The characters, instances and literals of the panel, to merge into the loading screen's
+    /// movie parts.
+    pub fn parts() -> Value {
+        let literal = |value: Value| json!({ "values": [value] });
+        json!({
+            "characters": {
+                "16": text_field([-2.0, -2.0, 502.95, 115.6], 19, [221, 221, 221, 255], true),
+                "17": text_field([-2.0, -2.0, 398.0, 24.8], 17, [255, 255, 255, 255], false),
+                "18": text_field([-2.0, -2.0, 102.0, 26.0], 19, [255, 255, 255, 255], false),
+                "1": {"kind": "shape", "bounds": [-1.3, -1.3, 201.3, 26.3],
+                      "edgeBounds": [0, 0, 200, 25], "fills": [],
+                      "lines": [{"width": 2, "color": [255, 255, 255, 255]}], "paths": []},
+                "2": {"kind": "shape", "bounds": [0, 0, 30, 30],
+                      "fills": [{"type": "solid", "color": [255, 255, 255, 255]}],
+                      "lines": [], "paths": []},
+            },
+            "instances": {
+                format!("{LEFT_TEXT}/LoadScreenText_tf"):
+                    placed(16, "text", [1.0, 0.0, 0.0, 1.0, TIP_ORIGIN.0, TIP_ORIGIN.1]),
+                format!("{LEFT_TEXT}/VDSGText_tf"):
+                    placed(17, "text", [1.0, 0.0, 0.0, 1.0, 141.0, 559.25]),
+                format!("{LEFT_TEXT}/LevelText_tf"):
+                    placed(18, "text", [1.0, 0.0, 0.0, 1.0, 141.0, 488.65]),
+                format!("{LEFT_TEXT}/LevelMeter_mc/@1"):
+                    placed(1, "shape", [1.09491, 0.0, 0.0, 0.440_002, 142.55, 513.05]),
+                format!("{LEFT_TEXT}/LevelMeter_mc/Fill_mc/@1"):
+                    placed(2, "shape", [7.299_387, 0.0, 0.0, 0.366_666, 142.55, 513.05]),
+            },
+            "literals": {
+                "LoadingMenu.SetLoadingText#BorderRectangle.graphics.lineStyle(0)": literal(json!(2)),
+                "LoadingMenu.SetLoadingText#BorderRectangle.graphics.lineStyle(1)":
+                    literal(json!(16_777_215)),
+                "LoadingMenu.<init>#new Rectangle(0)": literal(json!(8)),
+                "LoadingMenu.<init>#new Rectangle(1)": literal(json!(3)),
+                "LoadingMenu.<init>#new Rectangle(2)": literal(json!(5)),
+                "LoadingMenu.<init>#new Rectangle(3)": literal(json!(10)),
+            },
+        })
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "the layout arithmetic below stays on exactly representable values"
+)]
+mod tests {
+    use super::*;
+    use crate::rendering::menu::layout::test_support::standard;
+
+    const GREEN: UiTint = UiTint {
+        color: [0.0, 1.0, 0.0],
+        opacity: 1.0,
+    };
+
+    fn panel() -> PanelLayout {
+        standard().loading_panel
+    }
+
+    /// The fixture's stage on a 1280 x 720 target, one framebuffer pixel per stage pixel.
+    fn fit() -> Layout {
+        Layout::for_stage(1280.0, 720.0, 1280.0, 720.0)
+    }
+
+    fn close(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < 1e-2,
+            "expected about {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn the_fields_are_placed_by_the_document() {
+        let panel = panel();
+        close(panel.tip.geometry.content_left(), 152.0);
+        close(panel.tip.geometry.line_top(), 588.0);
+        close(panel.level.geometry.content_left(), 141.0);
+        close(panel.level.geometry.line_top(), 488.65);
+        close(panel.catalogue.geometry.line_top(), 559.25);
+        assert_eq!(
+            (panel.tip.geometry.size, panel.catalogue.geometry.size),
+            (19.0, 17.0)
+        );
+        assert_eq!(panel.tip.colour, [221, 221, 221]);
+        assert_eq!(panel.level.colour, [255, 255, 255]);
+        assert_eq!(panel.tip.family, "Test Family");
+    }
+
+    #[test]
+    fn the_box_style_and_padding_come_from_the_document() {
+        let panel = panel();
+        assert_eq!(panel.border_width, 2.0);
+        assert_eq!(panel.border_colour, [255, 255, 255]);
+        assert_eq!(
+            panel.border_padding,
+            Padding {
+                left: 8.0,
+                top: 3.0,
+                right: 5.0,
+                bottom: 10.0
+            }
+        );
+    }
+
+    #[test]
+    fn the_labels_are_translated_and_the_placeholders_follow_them() {
+        let text = panel().text(&fit(), &GREEN, &PanelContent::placeholder(Some("tip")));
+        assert_eq!(text.level.text, "LEVEL 1");
+        assert_eq!(text.catalogue.text, "VDSG No. 1");
+        assert_eq!(text.tip.expect("a tip").text, "tip");
+    }
+
+    #[test]
+    fn a_blank_tip_is_no_tip() {
+        let text = panel().text(
+            &fit(),
+            &GREEN,
+            &PanelContent::placeholder(Some(
+                "  
+ ",
+            )),
+        );
+        assert!(text.tip.is_none());
+    }
+
+    #[test]
+    fn a_screen_without_a_tip_still_has_its_level_and_catalogue_number() {
+        let text = panel().text(&fit(), &GREEN, &PanelContent::placeholder(None));
+        assert!(text.tip.is_none());
+        assert_eq!(text.into_items().len(), 2);
+    }
+
+    #[test]
+    fn text_is_the_hud_colour_times_the_field_colour() {
+        let text = panel().text(&fit(), &GREEN, &PanelContent::placeholder(Some("tip")));
+        assert_eq!(text.level.colour, [0, 255, 0, 255]);
+        let tip = text.tip.expect("a tip").colour;
+        assert_eq!((tip[0], tip[2], tip[3]), (0, 0, 255));
+        assert!((218..=224).contains(&tip[1]), "{tip:?}");
+    }
+
+    #[test]
+    fn the_tip_wraps_at_the_field_width_and_stops_after_its_last_whole_line() {
+        let fit = Layout::for_stage(1280.0, 720.0, 640.0, 360.0);
+        let text = panel().text(&fit, &GREEN, &PanelContent::placeholder(Some("tip")));
+        let tip = text.tip.expect("a tip");
+        close(
+            tip.wrap_width.expect("a tip wraps"),
+            (super::test_support::TIP_WIDTH as f32 - 4.0) * 0.5,
+        );
+        let height = tip.max_height.expect("a tip is bounded") / fit.scale();
+        let pitch = tip.geometry.line_pitch();
+        let lines = ((height + 0.5 * pitch) / pitch).round();
+        close(height, (lines - 0.5) * pitch);
+        assert!(
+            lines * pitch <= tip.geometry.content_height() + 0.01,
+            "{lines} lines in {}",
+            tip.geometry.content_height()
+        );
+    }
+
+    #[test]
+    fn the_single_line_fields_neither_wrap_nor_stop() {
+        let text = panel().text(&fit(), &GREEN, &PanelContent::placeholder(None));
+        assert!(text.level.wrap_width.is_none() && text.level.max_height.is_none());
+        assert!(text.catalogue.wrap_width.is_none());
+    }
+
+    #[test]
+    fn the_box_path_surrounds_the_lines_by_the_padding_at_the_screen_scale() {
+        let extent = TextExtent {
+            left: 100.0,
+            top: 200.0,
+            width: 300.0,
+            height: 60.0,
+        };
+        let path = padded(extent, panel().border_padding, 0.5);
+        assert_eq!((path.x, path.y), (96.0, 198.5));
+        assert_eq!((path.w, path.h), (306.5, 66.5));
+    }
+
+    #[test]
+    fn an_outline_is_four_bars_centred_on_the_path_that_leave_the_inside_empty() {
+        let path = PxRect {
+            x: 10.0,
+            y: 20.0,
+            w: 100.0,
+            h: 50.0,
+        };
+        let [top, bottom, left, right] = outline_rects(path, (4.0, 2.0));
+        assert_eq!((top.x, top.y, top.w, top.h), (8.0, 19.0, 104.0, 2.0));
+        assert_eq!(
+            (bottom.x, bottom.y, bottom.w, bottom.h),
+            (8.0, 69.0, 104.0, 2.0)
+        );
+        assert_eq!((left.x, left.y, left.w, left.h), (8.0, 21.0, 4.0, 48.0));
+        assert_eq!(
+            (right.x, right.y, right.w, right.h),
+            (108.0, 21.0, 4.0, 48.0)
+        );
+        let covered: f32 = [top, bottom, left, right].iter().map(|r| r.w * r.h).sum();
+        assert_eq!(
+            covered,
+            104.0 * 52.0 - 96.0 * 48.0,
+            "the bars tile the ring"
+        );
+    }
+
+    #[test]
+    fn a_line_thicker_than_the_path_is_tall_leaves_no_negative_bars() {
+        let path = PxRect {
+            x: 0.0,
+            y: 0.0,
+            w: 10.0,
+            h: 1.0,
+        };
+        let [_, _, left, right] = outline_rects(path, (2.0, 4.0));
+        assert_eq!((left.h, right.h), (0.0, 0.0));
+    }
+
+    #[test]
+    fn the_fill_is_the_given_fraction_of_the_meter_and_never_leaves_it() {
+        let meter = PxRect {
+            x: 5.0,
+            y: 6.0,
+            w: 200.0,
+            h: 10.0,
+        };
+        assert_eq!(filled(meter, 0.25).w, 50.0);
+        assert_eq!(filled(meter, 0.0).w, 0.0);
+        assert_eq!(filled(meter, 3.0).w, 200.0);
+        assert_eq!(filled(meter, -1.0).w, 0.0);
+        assert_eq!(filled(meter, f32::NAN).w, 0.0);
+        let half = filled(meter, 0.5);
+        assert_eq!((half.x, half.y, half.h), (5.0, 6.0, 10.0));
+    }
+
+    #[test]
+    fn the_meter_sits_where_the_document_puts_it_and_is_drawn_in_the_hud_colour() {
+        let rects = panel().rects(&fit(), &GREEN, None, 0.5);
+        // Four frame bars and the fill, and no box without a tip.
+        assert_eq!(rects.len(), 5);
+        let (fill, colour) = rects[4];
+        close(fill.x, 142.55);
+        close(fill.y, 513.05);
+        close(fill.w, 219.0 / 2.0);
+        close(fill.h, 11.0);
+        assert_eq!(colour, [0.0, 1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn the_frame_of_the_meter_has_the_stroke_scaled_by_the_documents_matrix() {
+        let rects = panel().rects(&fit(), &GREEN, None, 0.0);
+        let (top, _) = rects[0];
+        let (left, _) = rects[2];
+        close(top.h, 2.0 * 0.440_002);
+        close(left.w, 2.0 * 1.09491);
+    }
+
+    #[test]
+    fn the_tip_box_is_four_more_bars_around_the_extent() {
+        let extent = TextExtent {
+            left: 152.0,
+            top: 588.0,
+            width: 400.0,
+            height: 80.0,
+        };
+        let with_box = panel().rects(&fit(), &GREEN, Some(extent), 0.0);
+        let without = panel().rects(&fit(), &GREEN, None, 0.0);
+        assert_eq!(with_box.len(), without.len() + 4);
+        let (top, _) = with_box[0];
+        close(top.x, 152.0 - 8.0 - 1.0);
+        close(top.y, 588.0 - 3.0 - 1.0);
+        close(top.w, 400.0 + 13.0 + 2.0);
+    }
+}

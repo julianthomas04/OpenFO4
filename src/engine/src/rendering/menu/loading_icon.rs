@@ -315,13 +315,28 @@ pub(super) mod test_support {
         let mut clip = crate::ui_layout::test_support::instance(15, "sprite", 0.0, 0.0);
         clip["world"]["matrix"] = json!(ORIGIN);
         clip["local"]["matrix"] = json!(ORIGIN);
-        json!({
+        let mut parts = json!({
             "stage": [0, 0, 1280, 720],
             "instances": {
                 "FilterHolder_mc/Menu_mc/VaultTecLogo_mc": clip,
                 "FilterHolder_mc/Menu_mc/VaultTecLogo_mc/@1": placed,
             },
-        })
+        });
+        let panel = crate::rendering::menu::loading_panel::test_support::parts();
+        for section in ["characters", "instances", "literals"] {
+            let additions = panel[section]
+                .as_object()
+                .expect("the panel has the section");
+            let base = parts
+                .as_object_mut()
+                .expect("parts are an object")
+                .entry(section)
+                .or_insert_with(|| json!({}));
+            base.as_object_mut()
+                .expect("the section is an object")
+                .extend(additions.clone());
+        }
+        parts
     }
 
     pub fn svg(left: u32) -> String {

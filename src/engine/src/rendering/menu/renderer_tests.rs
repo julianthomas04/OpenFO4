@@ -5,10 +5,12 @@ use super::layout::{
     test_support::{standard, ui_layout},
 };
 use super::loading_icon::test_support::{library, svg};
+use super::loading_panel::{PanelContent, PanelText};
 use super::renderer::{Backdrop, MenuError, MenuRenderer, MenuScene, OverlayForeground};
 use crate::game_flow::{GameFlow, MenuView, StartMode};
 use crate::rendering::game_settings::SafeZone;
 use crate::rendering::gpu_test::test_device;
+use crate::rendering::hud::field_text::TextItem;
 use crate::rendering::loading_screen::test_support::{cube_art, write_solid_texture};
 use crate::rendering::loading_screen::{CpuArt, LoadedArt, LoadingArtRenderer, LoadingBackground};
 use crate::rendering::post::tonemap::ui_gamma_format;
@@ -300,7 +302,7 @@ fn overlay(alpha: f32, loading_seconds: Option<f64>) -> MenuScene<'static> {
     MenuScene::Overlay {
         alpha,
         loading_seconds,
-        tip: None,
+        panel: None,
     }
 }
 
@@ -716,16 +718,20 @@ fn a_new_load_restarts_the_logo_and_the_reveal_continues_it() {
 const TIP: &str = "A tip is a sentence the loading screen shows while the world loads, and it is \
                    long enough that it cannot fit on one line of the column it is set in.";
 
-fn tip_overlay(alpha: f32, tip: &str) -> MenuScene<'_> {
+fn panel_overlay(alpha: f32, content: PanelContent<'_>) -> MenuScene<'_> {
     MenuScene::Overlay {
         alpha,
         loading_seconds: None,
-        tip: Some(tip),
+        panel: Some(content),
     }
 }
 
-/// The pixels of the tip's HUD green, over the black the overlay leaves.
-fn text_pixels(pixels: &Pixels) -> Vec<(u32, u32)> {
+fn tip_overlay(alpha: f32, tip: &str) -> MenuScene<'_> {
+    panel_overlay(alpha, PanelContent::placeholder(Some(tip)))
+}
+
+/// The pixels of the panel's HUD green, over the black the overlay leaves.
+fn green_pixels(pixels: &Pixels) -> Vec<(u32, u32)> {
     pixels.positions_where(|[red, green, blue]| green > 60 && red < 40 && blue < 40)
 }
 
@@ -738,61 +744,233 @@ fn extent_of(positions: &[(u32, u32)]) -> ((u32, u32), (u32, u32)) {
     )
 }
 
-#[test]
-fn a_long_tip_wraps_inside_its_column_in_the_lower_part_of_the_screen() {
-    let Some((device, queue)) = test_device("menu tip wrapping") else {
-        return;
-    };
-    let target = Target::new(&device);
-    let item = {
-        let renderer = renderer(&device, &queue, HUD_GREEN);
-        super::tip::item(renderer.layout(), SAFE_ZONE, &HUD_GREEN, SIZE, TIP)
-    };
-    let column_left = item.map.origin.0 + item.geometry.content_left() * item.map.scale;
-    let column_right = column_left + item.wrap_width.expect("a tip wraps");
+/// The panel's text items for `SIZE`, to say where its pieces belong on the screen.
+fn panel_text(device: &wgpu::Device, queue: &wgpu::Queue, tip: Option<&str>) -> PanelText {
+    let renderer = renderer(device, queue, HUD_GREEN);
+    let fit = renderer.layout().fit(SIZE.0, SIZE.1);
+    renderer
+        .layout()
+        .loading_panel
+        .text(&fit, &HUD_GREEN, &PanelContent::placeholder(tip))
+}
 
-    target.render(&device, &queue, tip_overlay(1.0, "Hxg"));
-    let (_, (one_top, one_bottom)) = extent_of(&text_pixels(&target.pixels(&device, &queue)));
-    let one_line = one_bottom - one_top + 1;
-    target.render(&device, &queue, tip_overlay(1.0, TIP));
-    let wrapped = text_pixels(&target.pixels(&device, &queue));
-    let ((left, right), (top, bottom)) = extent_of(&wrapped);
+/// The framebuffer position of the top of the first line of `item`'s field.
+fn line_top_px(item: &TextItem) -> f32 {
+    item.map.origin.1 + item.geometry.line_top() * item.map.scale
+}
 
-    assert!(
-        bottom - top + 1 > one_line * 3 / 2,
-        "the tip spans several lines: {one_line} px for one, {} for all",
-        bottom - top + 1
-    );
-    assert!(
-        left as f32 >= column_left - 2.0 && right as f32 <= column_right + 1.0,
-        "the text spans x {left}..={right} in the column {column_left}..{column_right}"
-    );
-    assert!(top >= SIZE.1 * 7 / 10, "the tip starts at y {top}");
-    assert!(bottom < SIZE.1, "the tip ends on the screen");
+fn content_left_px(item: &TextItem) -> f32 {
+    item.map.origin.0 + item.geometry.content_left() * item.map.scale
+}
+
+/// The four sides of the outline the tip's box draws, found as the long straight runs of green
+/// below row `from_row`.
+struct BoxEdges {
+    left: u32,
+    right: u32,
+    top: u32,
+    bottom: u32,
+}
+
+impl BoxEdges {
+    fn find(pixels: &Pixels, from_row: u32) -> Self {
+        let lit = |x: u32, y: u32| {
+            let [red, green, blue] = pixels.at(x, y);
+            green > 60 && red < 40 && blue < 40
+        };
+        let long_runs = |counts: Vec<(u32, u32)>| -> Vec<u32> {
+            let longest = counts.iter().map(|&(_, count)| count).max().unwrap_or(0);
+            counts
+                .into_iter()
+                .filter(|&(_, count)| longest > 0 && count * 10 >= longest * 8)
+                .map(|(at, _)| at)
+                .collect()
+        };
+        let rows = long_runs(
+            (from_row..SIZE.1)
+                .map(|y| (y, (0..SIZE.0).filter(|&x| lit(x, y)).count() as u32))
+                .collect(),
+        );
+        let columns = long_runs(
+            (0..SIZE.0)
+                .map(|x| (x, (from_row..SIZE.1).filter(|&y| lit(x, y)).count() as u32))
+                .collect(),
+        );
+        let (Some(&top), Some(&bottom), Some(&left), Some(&right)) =
+            (rows.first(), rows.last(), columns.first(), columns.last())
+        else {
+            panic!("no box outline below row {from_row}");
+        };
+        Self {
+            left,
+            right,
+            top,
+            bottom,
+        }
+    }
+
+    /// The green pixels strictly inside the box.
+    fn ink(&self, pixels: &Pixels) -> Vec<(u32, u32)> {
+        green_pixels(pixels)
+            .into_iter()
+            .filter(|&(x, y)| x > self.left && x < self.right && y > self.top && y < self.bottom)
+            .collect()
+    }
 }
 
 #[test]
-fn a_tip_too_long_for_the_column_stops_above_the_bottom_safe_zone() {
+fn the_panel_puts_the_level_and_the_catalogue_number_where_the_layout_does() {
+    let Some((device, queue)) = test_device("menu panel placement") else {
+        return;
+    };
+    let target = Target::new(&device);
+    let text = panel_text(&device, &queue, None);
+
+    target.render(
+        &device,
+        &queue,
+        panel_overlay(1.0, PanelContent::placeholder(None)),
+    );
+    let pixels = target.pixels(&device, &queue);
+
+    for (name, item) in [
+        ("level", &text.level),
+        ("catalogue number", &text.catalogue),
+    ] {
+        let top = line_top_px(item);
+        let band: Vec<_> = green_pixels(&pixels)
+            .into_iter()
+            .filter(|&(_, y)| {
+                (y as f32) >= top - 1.0 && (y as f32) < top + item.geometry.line_pitch()
+            })
+            .collect();
+        assert!(!band.is_empty(), "the {name} is drawn at y {top}");
+        let ((left, _), (first, _)) = extent_of(&band);
+        assert!(
+            (left as f32 - content_left_px(item)).abs() <= 3.0,
+            "the {name} starts at x {left}, not {}",
+            content_left_px(item)
+        );
+        assert!(
+            (first as f32 - top).abs() <= 6.0,
+            "the {name} starts at y {first}, not {top}"
+        );
+    }
+}
+
+#[test]
+fn the_meter_is_a_frame_with_a_fill_from_the_left_up_to_the_experience() {
+    let Some((device, queue)) = test_device("menu panel meter") else {
+        return;
+    };
+    let target = Target::new(&device);
+    let content = |experience: f32| PanelContent {
+        experience,
+        ..PanelContent::placeholder(None)
+    };
+    // The fixture's meter covers the stage rectangle (142.55, 513.05) to (361.55, 524.05), the
+    // pixels (71.3, 256.5) to (180.8, 262).
+    let (left, right) = (72, 180);
+    let inside_y = 259;
+    let quarter = (left + (right - left) / 4, inside_y);
+    let three_quarters = (right - (right - left) / 4, inside_y);
+
+    target.render(&device, &queue, panel_overlay(1.0, content(0.5)));
+    let half = target.pixels(&device, &queue);
+    target.render(&device, &queue, panel_overlay(1.0, content(0.0)));
+    let empty = target.pixels(&device, &queue);
+
+    assert_eq!(
+        half.at(quarter.0, quarter.1),
+        [0, 255, 0],
+        "filled up to half"
+    );
+    assert_eq!(
+        half.at(three_quarters.0, three_quarters.1),
+        [0, 0, 0],
+        "empty beyond"
+    );
+    assert_eq!(
+        empty.at(quarter.0, quarter.1),
+        [0, 0, 0],
+        "no fill at no experience"
+    );
+    let frame = empty.at(71, inside_y);
+    assert!(
+        frame[1] > 100 && frame[0] == 0,
+        "the frame stays: {frame:?}"
+    );
+}
+
+#[test]
+fn the_tip_wraps_inside_its_field_and_a_box_surrounds_the_lines_it_wrapped_into() {
+    let Some((device, queue)) = test_device("menu tip box") else {
+        return;
+    };
+    let target = Target::new(&device);
+    let tip = panel_text(&device, &queue, Some(TIP)).tip.expect("a tip");
+    let top = line_top_px(&tip);
+    let column_left = content_left_px(&tip);
+    let column_right = column_left + tip.wrap_width.expect("a tip wraps");
+    let from_row = top as u32 - 4;
+
+    target.render(&device, &queue, tip_overlay(1.0, "Hxg"));
+    let one = target.pixels(&device, &queue);
+    let one_box = BoxEdges::find(&one, from_row);
+    let (_, (one_top, one_bottom)) = extent_of(&one_box.ink(&one));
+    let one_line = one_bottom - one_top + 1;
+    target.render(&device, &queue, tip_overlay(1.0, TIP));
+    let wrapped = target.pixels(&device, &queue);
+    let edges = BoxEdges::find(&wrapped, from_row);
+    let ink = edges.ink(&wrapped);
+    let ((ink_left, ink_right), (ink_top, ink_bottom)) = extent_of(&ink);
+
+    assert!(
+        ink_bottom - ink_top + 1 > one_line * 3 / 2,
+        "the tip spans several lines: {one_line} px for one, {} for all",
+        ink_bottom - ink_top + 1
+    );
+    assert!(
+        ink_left as f32 >= column_left - 2.0 && ink_right as f32 <= column_right + 1.0,
+        "the text spans x {ink_left}..={ink_right} in the field {column_left}..{column_right}"
+    );
+    assert!(
+        edges.bottom - edges.top > one_box.bottom - one_box.top,
+        "the box grows with the lines"
+    );
+    // The padding is 8, 3, 5 and 10 stage pixels, half as many here, around the lines.
+    assert!((2..=8).contains(&(ink_left - edges.left)), "left");
+    assert!(edges.right - ink_right >= 1, "right");
+    assert!(ink_top - edges.top >= 1, "top");
+    assert!(edges.bottom - ink_bottom >= 4, "bottom");
+}
+
+#[test]
+fn a_tip_too_long_for_its_field_stops_after_the_last_whole_line_that_fits() {
     let Some((device, queue)) = test_device("menu tip clipping") else {
         return;
     };
     let target = Target::new(&device);
+    let tip = panel_text(&device, &queue, Some(TIP)).tip.expect("a tip");
+    let field_bottom = tip.map.origin.1
+        + (tip.geometry.line_top() + tip.geometry.content_height()) * tip.map.scale;
     let endless = TIP.repeat(8);
 
     target.render(&device, &queue, tip_overlay(1.0, &endless));
-    let (_, (top, bottom)) = extent_of(&text_pixels(&target.pixels(&device, &queue)));
+    let pixels = target.pixels(&device, &queue);
+    let edges = BoxEdges::find(&pixels, line_top_px(&tip) as u32 - 4);
+    let (_, (top, bottom)) = extent_of(&edges.ink(&pixels));
 
-    let safe_bottom = SIZE.1 - (SAFE_ZONE.y * 0.5) as u32;
     assert!(
-        bottom <= safe_bottom,
-        "the tip from y {top} reaches {bottom}, past the safe zone at {safe_bottom}"
+        bottom as f32 <= field_bottom,
+        "the tip from y {top} reaches {bottom}, past the field's bottom {field_bottom}"
     );
     assert!(bottom - top > 20, "several lines still show");
 }
 
 #[test]
-fn a_tip_shows_in_full_strength_and_not_at_all_on_a_transparent_overlay() {
-    let Some((device, queue)) = test_device("menu tip strength") else {
+fn a_panel_shows_in_full_strength_and_not_at_all_on_a_transparent_overlay() {
+    let Some((device, queue)) = test_device("menu panel strength") else {
         return;
     };
     let target = Target::new(&device);
@@ -806,9 +984,19 @@ fn a_tip_shows_in_full_strength_and_not_at_all_on_a_transparent_overlay() {
             .max()
     };
 
-    assert_eq!(brightest(0.0), None, "a transparent overlay shows no tip");
-    let full = brightest(1.0).expect("the tip shows");
+    assert_eq!(brightest(0.0), None, "a transparent overlay shows no panel");
+    let full = brightest(1.0).expect("the panel shows");
     assert!(full >= 250, "full green up to antialiasing: {full}");
+}
+
+#[test]
+fn an_overlay_without_a_panel_draws_none() {
+    let Some((device, queue)) = test_device("menu overlay without panel") else {
+        return;
+    };
+    let target = Target::new(&device);
+    target.render(&device, &queue, overlay(1.0, None));
+    assert!(green_pixels(&target.pixels(&device, &queue)).is_empty());
 }
 
 #[test]
@@ -840,7 +1028,7 @@ fn the_loading_art_sits_above_the_backdrop_and_below_the_logo() {
     let foreground = OverlayForeground {
         alpha: 1.0,
         loading_seconds: Some(0.0),
-        tip: None,
+        panel: None,
     };
     menu.render_foreground(&device, &queue, &mut encoder, &view, SIZE, foreground);
     queue.submit(std::iter::once(encoder.finish()));

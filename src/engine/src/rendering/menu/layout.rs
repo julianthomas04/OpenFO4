@@ -6,6 +6,7 @@
 //! anchoring has nothing to apply to.
 
 use super::loading_icon::{self, IconPlacement};
+use super::loading_panel::{self, PanelLayout};
 use crate::rendering::hud::field_text::ScreenMap;
 use crate::rendering::hud::layout::Layout;
 use crate::rendering::hud::quad::PxRect;
@@ -83,6 +84,7 @@ pub static LAYOUT_KEYS: ModuleKeys = ModuleKeys {
         &loading_icon::STAGE,
         &loading_icon::LOGO_ORIGIN,
         &loading_icon::LOGO_PLACEMENT,
+        &loading_panel::KEYS,
     ],
     resolve: validate,
 };
@@ -137,6 +139,8 @@ pub struct MenuLayout {
     pub set_text: SetTextRules,
     /// Where the loading screen's logo sits on the stage the menu shares with it.
     pub loading_icon: IconPlacement,
+    /// The tip, level, experience meter and catalogue number of a large loading screen.
+    pub loading_panel: PanelLayout,
 }
 
 /// One visible list row: its index in the whole list, its rectangle in framebuffer pixels and
@@ -264,6 +268,7 @@ impl MenuLayout {
             },
             set_text: SET_TEXT.resolve(layout)?,
             loading_icon: IconPlacement::resolve(layout, (xmax, ymax))?,
+            loading_panel: PanelLayout::resolve(layout)?,
         })
     }
 
@@ -353,7 +358,8 @@ pub(super) mod test_support {
     fn translate() -> String {
         json!({
             "format": 1, "extractor": 1, "kind": "translate", "language": "en",
-            "entries": {"$TEST_LABEL": "Translated label", "$PLAY": "PLAY", "$QUIT": "QUIT", "$BACK": "BACK"}, "unresolved": {},
+            "entries": {"$TEST_LABEL": "Translated label", "$PLAY": "PLAY", "$QUIT": "QUIT", "$BACK": "BACK",
+                         "$LEVEL": "LEVEL", "$VDSGPrepend": "VDSG No."}, "unresolved": {},
         })
         .to_string()
     }

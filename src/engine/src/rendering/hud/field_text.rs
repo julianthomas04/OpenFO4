@@ -56,6 +56,16 @@ pub struct TextItem {
     pub max_height: Option<f32>,
 }
 
+/// The framebuffer rectangle a text item's lines cover: the left edge and top of its first
+/// line, the width of its longest line and the height of all its lines.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextExtent {
+    pub left: f32,
+    pub top: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
 struct Placed {
     index: usize,
     left: f32,
@@ -73,6 +83,7 @@ pub struct FieldText {
     prepared: Vec<TextItem>,
     prepared_for: (u32, u32),
     stale: bool,
+    measured: Option<(TextItem, TextExtent)>,
 }
 
 impl FieldText {
@@ -98,7 +109,21 @@ impl FieldText {
             prepared: Vec::new(),
             prepared_for: (0, 0),
             stale: true,
+            measured: None,
         }
+    }
+
+    /// Where the lines of `item` land, as [`Self::prepare`] would place them. The last
+    /// measurement is kept while the item stays the same.
+    pub fn measure(&mut self, item: &TextItem) -> TextExtent {
+        if let Some((measured, extent)) = &self.measured
+            && measured == item
+        {
+            return *extent;
+        }
+        let extent = extent_of(&mut self.font_system, item);
+        self.measured = Some((item.clone(), extent));
+        extent
     }
 
     /// Shapes `items` and uploads their glyphs for a framebuffer of `fb` pixels. Nothing is redone
@@ -243,6 +268,26 @@ fn shape(font_system: &mut FontSystem, buffer: &mut Buffer, item: &TextItem) -> 
     (left, baseline_y - baseline)
 }
 
+/// The rectangle the lines of `item` cover once shaped.
+fn extent_of(font_system: &mut FontSystem, item: &TextItem) -> TextExtent {
+    let mut buffer = Buffer::new(font_system, Metrics::new(1.0, 1.0));
+    let (left, top) = shape(font_system, &mut buffer, item);
+    let (width, height) = buffer
+        .layout_runs()
+        .fold((0.0_f32, 0.0_f32), |(width, height), run| {
+            (
+                width.max(run.line_w),
+                height.max(run.line_top + run.line_height),
+            )
+        });
+    TextExtent {
+        left,
+        top,
+        width,
+        height,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,6 +346,44 @@ mod tests {
         let widths = line_widths(&item(Some(COLUMN)));
         assert!(widths.len() > 1, "{widths:?}");
         assert!(widths.iter().all(|&width| width <= COLUMN), "{widths:?}");
+    }
+
+    fn extent(item: &TextItem) -> TextExtent {
+        extent_of(&mut fonts::ui_fonts().font_system(), item)
+    }
+
+    #[test]
+    fn the_extent_of_wrapped_text_is_its_column_wide_at_most_and_all_its_lines_tall() {
+        let wrapped = extent(&item(Some(COLUMN)));
+        let single = extent(&item(None));
+
+        assert!(
+            wrapped.width <= COLUMN && wrapped.width > COLUMN / 2.0,
+            "{wrapped:?}"
+        );
+        assert!(single.width > COLUMN, "{single:?}");
+        let line = single.height;
+        assert!(line > 0.0);
+        assert!(
+            wrapped.height >= line * 2.0 - 0.01,
+            "several lines of {line} px: {wrapped:?}"
+        );
+        assert!(
+            ((wrapped.height / line).round() * line - wrapped.height).abs() < 0.01,
+            "whole lines: {wrapped:?}"
+        );
+    }
+
+    #[test]
+    fn the_extent_starts_where_the_field_puts_the_text() {
+        let item = item(Some(COLUMN));
+        let extent = extent(&item);
+        assert!((extent.left - item.geometry.content_left()).abs() < 0.01);
+        let baseline = item.geometry.first_baseline();
+        assert!(
+            extent.top < baseline && baseline < extent.top + extent.height,
+            "the first baseline {baseline} lies in the first line of {extent:?}"
+        );
     }
 
     #[test]

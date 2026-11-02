@@ -213,7 +213,7 @@ use lighting::frame_uniform::FrameUniform;
 use load_transition::{
     Destination, DragTracker, LoadHistory, LoadScreenHost, LoadScreens, spawn_report_title,
 };
-use menu::{Backdrop, MenuRenderer, OverlayForeground};
+use menu::{Backdrop, MenuRenderer, OverlayForeground, PanelContent};
 use particles::CameraBasis;
 use ragdoll_objects::RagdollObjects;
 use refraction::{RefractionFrameInputs, RefractionStage};
@@ -2683,7 +2683,9 @@ impl State {
             let foreground = OverlayForeground {
                 alpha: overlay_alpha,
                 loading_seconds: self.flow.loading_seconds(),
-                tip: self.load_screens.host.tip().filter(|_| layers.tip),
+                panel: layers.panel.then(|| {
+                    PanelContent::placeholder(self.load_screens.host.tip())
+                }).filter(|_| self.load_screens.host.has_art()),
             };
             self.menu.render_foreground(
                 &self.device,

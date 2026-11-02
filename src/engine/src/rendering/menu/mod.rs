@@ -4,13 +4,14 @@
 mod image_quad;
 mod layout;
 mod loading_icon;
+mod loading_panel;
 mod renderer;
 #[cfg(test)]
 mod renderer_tests;
-mod tip;
 mod video_layer;
 #[cfg(test)]
 mod video_layer_tests;
 
 pub use layout::{LAYOUT_KEYS, MenuLayout, RowRect};
+pub use loading_panel::PanelContent;
 pub use renderer::{Backdrop, MenuError, MenuRenderer, MenuScene, OverlayForeground};

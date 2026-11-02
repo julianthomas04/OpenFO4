@@ -7,7 +7,7 @@ use std::sync::Arc;
 use super::image_quad::{BackgroundQuad, ImageQuadPipeline};
 use super::layout::MenuLayout;
 use super::loading_icon::{IconScene, LoadingIcon, LoadingIconError};
-use super::tip;
+use super::loading_panel::{ColouredRect, PanelContent};
 use super::video_layer::VideoLayer;
 use crate::assets::pipboy_art::ArtLibrary;
 use crate::game_flow::MenuView;
@@ -51,8 +51,8 @@ pub enum MenuScene<'a> {
     Overlay {
         alpha: f32,
         loading_seconds: Option<f64>,
-        /// A tip shown in the lower part of the screen.
-        tip: Option<&'a str>,
+        /// The text panel of a large loading screen.
+        panel: Option<PanelContent<'a>>,
     },
 }
 
@@ -70,7 +70,60 @@ pub struct Backdrop<'a> {
 pub struct OverlayForeground<'a> {
     pub alpha: f32,
     pub loading_seconds: Option<f64>,
-    pub tip: Option<&'a str>,
+    pub panel: Option<PanelContent<'a>>,
+}
+
+/// A vertex buffer of rectangles and the vertices it holds this frame.
+struct QuadLayer {
+    vbuf: wgpu::Buffer,
+    capacity: u64,
+    verts: Vec<HudVertex>,
+}
+
+impl QuadLayer {
+    fn new(device: &wgpu::Device) -> Self {
+        Self {
+            vbuf: Self::create_buffer(device, INITIAL_VBUF_VERTS),
+            capacity: INITIAL_VBUF_VERTS,
+            verts: Vec::new(),
+        }
+    }
+
+    fn create_buffer(device: &wgpu::Device, verts: u64) -> wgpu::Buffer {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("menu_vbuf"),
+            size: verts * std::mem::size_of::<HudVertex>() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
+    }
+
+    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        if self.verts.is_empty() {
+            return;
+        }
+        let needed = self.verts.len() as u64;
+        if needed > self.capacity {
+            self.capacity = needed.next_power_of_two();
+            self.vbuf = Self::create_buffer(device, self.capacity);
+        }
+        queue.write_buffer(&self.vbuf, 0, bytemuck::cast_slice(&self.verts));
+    }
+
+    fn draw(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        pipeline: &HudPipeline,
+        tint_bind_group: &wgpu::BindGroup,
+    ) {
+        if self.verts.is_empty() {
+            return;
+        }
+        pass.set_pipeline(&pipeline.pipeline);
+        pass.set_bind_group(0, tint_bind_group, &[]);
+        pass.set_vertex_buffer(0, self.vbuf.slice(..));
+        pass.draw(0..self.verts.len() as u32, 0..1);
+    }
 }
 
 pub struct MenuRenderer {
@@ -82,9 +135,11 @@ pub struct MenuRenderer {
     tint: UiTint,
     pipeline: HudPipeline,
     tint_bind_group: wgpu::BindGroup,
-    vbuf: wgpu::Buffer,
-    vbuf_verts: u64,
-    verts: Vec<HudVertex>,
+    /// The list's rectangles and the overlay's black layer.
+    quads: QuadLayer,
+    /// The overlay's panel rectangles. Its own buffer, because the queue's writes of both layers
+    /// land before the frame's passes run.
+    foreground_quads: QuadLayer,
     text: FieldText,
     video: VideoLayer,
     image_pipeline: ImageQuadPipeline,
@@ -134,9 +189,8 @@ impl MenuRenderer {
             tint,
             pipeline,
             tint_bind_group,
-            vbuf: Self::create_vbuf(device, INITIAL_VBUF_VERTS),
-            vbuf_verts: INITIAL_VBUF_VERTS,
-            verts: Vec::new(),
+            quads: QuadLayer::new(device),
+            foreground_quads: QuadLayer::new(device),
             text: FieldText::new(device, queue, format, fonts, glyphon::ColorMode::Web),
             video: VideoLayer::new(device, format),
             image_pipeline,
@@ -181,15 +235,6 @@ impl MenuRenderer {
         self.video.clear();
     }
 
-    fn create_vbuf(device: &wgpu::Device, verts: u64) -> wgpu::Buffer {
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("menu_vbuf"),
-            size: verts * std::mem::size_of::<HudVertex>() as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        })
-    }
-
     /// The text a list row shows for `label`, by the game's text-setting rule.
     fn shown(&self, label: &str) -> String {
         self.layout
@@ -214,14 +259,14 @@ impl MenuRenderer {
             MenuScene::Overlay {
                 alpha,
                 loading_seconds,
-                tip,
+                panel,
             } => {
                 let backdrop = Backdrop { alpha, image: None };
                 self.render_backdrop(device, queue, encoder, view, fb, backdrop);
                 let foreground = OverlayForeground {
                     alpha,
                     loading_seconds,
-                    tip,
+                    panel,
                 };
                 self.render_foreground(device, queue, encoder, view, fb, foreground);
             }
@@ -237,15 +282,15 @@ impl MenuRenderer {
         fb: (u32, u32),
         list: MenuView<'_>,
     ) {
-        let mut verts = std::mem::take(&mut self.verts);
+        let mut verts = std::mem::take(&mut self.quads.verts);
         let mut quads = QuadBuilder::new(&mut verts, fb.0 as f32, fb.1 as f32, 0.0, [0.0; 4]);
         let mut items = Vec::new();
         self.draw_list(fb, list, &mut quads, &mut items);
-        self.verts = verts;
+        self.quads.verts = verts;
         let video_visible = self.video.prepare(queue, fb);
 
         self.text.prepare(device, queue, fb, &items);
-        self.upload_vertices(device, queue);
+        self.quads.upload(device, queue);
 
         let mut pass = Self::begin_pass(
             encoder,
@@ -256,7 +301,8 @@ impl MenuRenderer {
         if video_visible {
             self.video.draw(&mut pass);
         }
-        self.draw_quads(&mut pass);
+        self.quads
+            .draw(&mut pass, &self.pipeline, &self.tint_bind_group);
         self.text.render_into(&mut pass);
     }
 
@@ -273,11 +319,11 @@ impl MenuRenderer {
         fb: (u32, u32),
         backdrop: Backdrop<'_>,
     ) {
-        let mut verts = std::mem::take(&mut self.verts);
+        let mut verts = std::mem::take(&mut self.quads.verts);
         let mut quads = QuadBuilder::new(&mut verts, fb.0 as f32, fb.1 as f32, 0.0, [0.0; 4]);
         Self::draw_overlay(fb, backdrop.alpha, &mut quads);
-        self.verts = verts;
-        self.upload_vertices(device, queue);
+        self.quads.verts = verts;
+        self.quads.upload(device, queue);
         match backdrop.image {
             Some(image) => self.background.prepare(
                 &self.image_pipeline,
@@ -291,11 +337,12 @@ impl MenuRenderer {
         }
 
         let mut pass = Self::begin_pass(encoder, "Menu Backdrop Pass", view, wgpu::LoadOp::Load);
-        self.draw_quads(&mut pass);
+        self.quads
+            .draw(&mut pass, &self.pipeline, &self.tint_bind_group);
         self.background.draw(&self.image_pipeline, &mut pass);
     }
 
-    /// Encodes the pass of an overlay's loading logo and tip text over `view`'s contents.
+    /// Encodes the pass of an overlay's loading logo and panel over `view`'s contents.
     pub fn render_foreground(
         &mut self,
         device: &wgpu::Device,
@@ -308,24 +355,47 @@ impl MenuRenderer {
         let OverlayForeground {
             alpha,
             loading_seconds,
-            tip,
+            panel,
         } = foreground;
         let icon_visible = match loading_seconds {
             Some(seconds) => self.prepare_loading_icon(device, queue, fb, alpha, seconds),
             None => false,
         };
-        let items: Vec<TextItem> = tip
-            .filter(|_| alpha > 0.0)
-            .map(|text| tip::item(&self.layout, self.safe_zone, &self.tint, fb, text))
-            .into_iter()
-            .collect();
+        let (items, rects) = match panel.filter(|_| alpha > 0.0) {
+            Some(content) => self.panel_layers(fb, &content),
+            None => (Vec::new(), Vec::new()),
+        };
         self.text.prepare(device, queue, fb, &items);
+        let mut verts = std::mem::take(&mut self.foreground_quads.verts);
+        let mut quads = QuadBuilder::new(&mut verts, fb.0 as f32, fb.1 as f32, 0.0, [0.0; 4]);
+        for (rect, colour) in rects {
+            quads.rect(rect, colour);
+        }
+        self.foreground_quads.verts = verts;
+        self.foreground_quads.upload(device, queue);
 
         let mut pass = Self::begin_pass(encoder, "Menu Foreground Pass", view, wgpu::LoadOp::Load);
         if icon_visible {
             self.loading_icon.draw(&mut pass);
         }
+        self.foreground_quads
+            .draw(&mut pass, &self.pipeline, &self.tint_bind_group);
         self.text.render_into(&mut pass);
+    }
+
+    /// The text and the rectangles of the loading panel on a target of `fb` pixels. The tip's box
+    /// is drawn around the lines the tip really wraps into.
+    fn panel_layers(
+        &mut self,
+        fb: (u32, u32),
+        content: &PanelContent<'_>,
+    ) -> (Vec<TextItem>, Vec<ColouredRect>) {
+        let fit = self.layout.fit(fb.0, fb.1);
+        let panel = &self.layout.loading_panel;
+        let text = panel.text(&fit, &self.tint, content);
+        let tip_extent = text.tip.as_ref().map(|tip| self.text.measure(tip));
+        let rects = panel.rects(&fit, &self.tint, tip_extent, content.experience);
+        (text.into_items(), rects)
     }
 
     fn begin_pass<'encoder>(
@@ -350,28 +420,6 @@ impl MenuRenderer {
             timestamp_writes: None,
             multiview_mask: None,
         })
-    }
-
-    fn draw_quads(&self, pass: &mut wgpu::RenderPass<'_>) {
-        if self.verts.is_empty() {
-            return;
-        }
-        pass.set_pipeline(&self.pipeline.pipeline);
-        pass.set_bind_group(0, &self.tint_bind_group, &[]);
-        pass.set_vertex_buffer(0, self.vbuf.slice(..));
-        pass.draw(0..self.verts.len() as u32, 0..1);
-    }
-
-    fn upload_vertices(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        if self.verts.is_empty() {
-            return;
-        }
-        let needed = self.verts.len() as u64;
-        if needed > self.vbuf_verts {
-            self.vbuf_verts = needed.next_power_of_two();
-            self.vbuf = Self::create_vbuf(device, self.vbuf_verts);
-        }
-        queue.write_buffer(&self.vbuf, 0, bytemuck::cast_slice(&self.verts));
     }
 
     fn draw_list(
