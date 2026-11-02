@@ -11,7 +11,7 @@ mod keys;
 pub(super) use drag::DragTracker;
 pub(super) use history::{LoadHistory, spawn_report_title};
 pub(in crate::rendering) use host::LoadScreenHost;
-pub(super) use keys::art_key;
+pub(super) use keys::routed_art_key;
 
 use history::{LoadOrigin, take_if_accepted};
 use host::ArtStatus;
@@ -225,15 +225,33 @@ impl State {
         }
     }
 
-    /// Whether the pointer and the keys act on the model.
-    pub(super) fn art_interactive(&self) -> bool {
-        self.flow.overlay_layers().art && self.load_screens.host.has_art()
+    /// Whether the large screen's background, model and panel are drawn, and the pointer and the
+    /// keys act on the model: its layer is up and its model is ready.
+    pub(super) fn art_shown(&self) -> bool {
+        art_shown(
+            self.flow.overlay_layers().art,
+            self.load_screens.host.has_art(),
+        )
     }
+}
+
+/// Nothing of a large screen but black and the logo shows until its model is ready; then the
+/// background, the model and the panel appear together.
+fn art_shown(art_layer: bool, art_ready: bool) -> bool {
+    art_layer && art_ready
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_large_screen_shows_only_while_its_layer_is_up_and_its_model_is_ready() {
+        assert!(art_shown(true, true));
+        assert!(!art_shown(true, false));
+        assert!(!art_shown(false, true));
+        assert!(!art_shown(false, false));
+    }
 
     fn exterior(worldspace: &str) -> Place {
         Place::Exterior {

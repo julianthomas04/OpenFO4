@@ -3,7 +3,7 @@
 
 use winit::keyboard::KeyCode;
 
-use super::load_transition::art_key;
+use super::load_transition::routed_art_key;
 use super::stream_settle::{self, ColliderSettle, StreamReport};
 use super::{ResolvedTarget, State};
 use crate::game_flow::{FlowAction, FlowEvent, Phase, SpawnLocation, StreamCounts};
@@ -46,7 +46,7 @@ impl State {
     }
 
     pub fn handle_pointer_pressed(&mut self) {
-        if self.art_interactive() {
+        if self.art_shown() {
             self.load_screens
                 .drag
                 .press(self.pointer_px.0, self.pointer_px.1);
@@ -145,7 +145,7 @@ impl State {
     /// Keys outside gameplay drive the menu list, or, while a large loading screen shows its
     /// model, move and recolour the model.
     pub(super) fn handle_menu_key(&mut self, code: KeyCode, is_pressed: bool, is_repeat: bool) {
-        if let Some(key) = art_key(code).filter(|_| self.art_interactive()) {
+        if let Some(key) = routed_art_key(code, self.art_shown()) {
             self.load_screens.host.key(key, is_pressed, is_repeat);
             return;
         }

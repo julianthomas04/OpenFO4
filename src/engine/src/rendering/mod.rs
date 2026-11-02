@@ -2660,9 +2660,10 @@ impl State {
             let menu_view = self.menu.target_view(&output.texture);
             let framebuffer = (self.config.width, self.config.height);
             let layers = self.flow.overlay_layers();
+            let art_shown = self.art_shown();
             let backdrop = Backdrop {
                 alpha: overlay_alpha,
-                image: if layers.art {
+                image: if art_shown {
                     self.load_screens.host.background()
                 } else {
                     None
@@ -2676,7 +2677,7 @@ impl State {
                 framebuffer,
                 backdrop,
             );
-            if layers.art {
+            if art_shown {
                 self.load_screens
                     .host
                     .render(&mut encoder, &menu_view, framebuffer);
@@ -2684,9 +2685,8 @@ impl State {
             let foreground = OverlayForeground {
                 alpha: overlay_alpha,
                 loading_seconds: self.flow.loading_seconds(),
-                panel: layers.panel.then(|| {
-                    PanelContent::placeholder(self.load_screens.host.tip())
-                }).filter(|_| self.load_screens.host.has_art()),
+                panel: (layers.panel && art_shown)
+                    .then(|| PanelContent::placeholder(self.load_screens.host.tip())),
             };
             self.menu.render_foreground(
                 &self.device,

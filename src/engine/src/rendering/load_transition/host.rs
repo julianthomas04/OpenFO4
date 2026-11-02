@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use super::art_loader::{ArtLoadError, ArtLoader, LoaderPoll};
-use super::keys::ArtKey;
+use super::keys::{ArtEffect, ArtKey};
 use crate::assets::db::DbClient;
 use crate::assets::db::load_screens::{LoadScreen, LoadScreenCatalog};
 use crate::assets::types::glb_key::glb_key;
@@ -205,13 +205,12 @@ impl LoadScreenHost {
         self.renderer.drag(dx_px, dy_px);
     }
 
-    /// A key that acts on the model went down or up. Holding a key down repeats its press, which
-    /// switches nothing twice.
+    /// A key that acts on the model went down or up.
     pub fn key(&mut self, key: ArtKey, pressed: bool, repeat: bool) {
-        match key {
-            ArtKey::Pan(pan) => self.renderer.set_pan_key(pan, pressed),
-            ArtKey::ToggleColours if pressed && !repeat => self.renderer.toggle_colours(),
-            ArtKey::ToggleColours => {}
+        match key.effect(pressed, repeat) {
+            Some(ArtEffect::Pan { key, held }) => self.renderer.set_pan_key(key, held),
+            Some(ArtEffect::ToggleColours) => self.renderer.toggle_colours(),
+            None => {}
         }
     }
 
@@ -543,6 +542,24 @@ mod tests {
             host.key(ArtKey::ToggleColours, false, false);
             assert_eq!(host.renderer.colour_mode(), ColourMode::Monochrome);
             host.key(ArtKey::ToggleColours, true, false);
+            assert_eq!(host.renderer.colour_mode(), ColourMode::Own);
+        }
+
+        #[test]
+        fn a_new_screen_starts_in_the_models_own_colours() {
+            let Some(mut host) = host("load screen host colours reset") else {
+                return;
+            };
+            let dir = tempfile::tempdir().unwrap();
+            host.key(ArtKey::ToggleColours, true, false);
+            assert_eq!(host.renderer.colour_mode(), ColourMode::Monochrome);
+
+            host.show(chosen(cube_art(dir.path(), ""))).unwrap();
+            assert_eq!(host.renderer.colour_mode(), ColourMode::Own);
+            assert!(matches!(settled(&mut host), ArtStatus::Ready));
+            host.key(ArtKey::ToggleColours, true, false);
+            host.show(chosen(cube_art(dir.path(), ""))).unwrap();
+            assert!(matches!(settled(&mut host), ArtStatus::Ready));
             assert_eq!(host.renderer.colour_mode(), ColourMode::Own);
         }
 

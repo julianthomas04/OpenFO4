@@ -101,9 +101,10 @@ impl LoadingArtRenderer {
         }
     }
 
-    /// Shows `art` from the next render on, with a camera back at its placement as stored;
-    /// `None` shows nothing.
+    /// Shows `art` from the next render on, with a camera back at its placement as stored and
+    /// the model in its own colours; `None` shows nothing.
     pub fn set_art(&mut self, art: Option<LoadedArt>) {
+        self.colours = ColourMode::default();
         self.active = art.map(|art| {
             let texture_groups = art
                 .draws
