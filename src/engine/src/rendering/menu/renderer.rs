@@ -50,7 +50,7 @@ pub enum MenuScene<'a> {
     Overlay {
         alpha: f32,
         loading_seconds: Option<f64>,
-        /// A tip shown in the lower part of the screen, fading with the layer.
+        /// A tip shown in the lower part of the screen.
         tip: Option<&'a str>,
     },
 }
@@ -286,16 +286,7 @@ impl MenuRenderer {
         };
         let items: Vec<TextItem> = tip
             .filter(|_| alpha > 0.0)
-            .map(|text| {
-                tip::item(
-                    &self.layout,
-                    self.safe_zone,
-                    &self.tint,
-                    fb,
-                    text,
-                    alpha.clamp(0.0, 1.0),
-                )
-            })
+            .map(|text| tip::item(&self.layout, self.safe_zone, &self.tint, fb, text))
             .into_iter()
             .collect();
         self.text.prepare(device, queue, fb, &items);

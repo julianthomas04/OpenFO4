@@ -746,7 +746,7 @@ fn a_long_tip_wraps_inside_its_column_in_the_lower_part_of_the_screen() {
     let target = Target::new(&device);
     let item = {
         let renderer = renderer(&device, &queue, HUD_GREEN);
-        super::tip::item(renderer.layout(), SAFE_ZONE, &HUD_GREEN, SIZE, TIP, 1.0)
+        super::tip::item(renderer.layout(), SAFE_ZONE, &HUD_GREEN, SIZE, TIP)
     };
     let column_left = item.map.origin.0 + item.geometry.content_left() * item.map.scale;
     let column_right = column_left + item.wrap_width.expect("a tip wraps");
@@ -791,8 +791,8 @@ fn a_tip_too_long_for_the_column_stops_above_the_bottom_safe_zone() {
 }
 
 #[test]
-fn a_tip_fades_with_the_overlay() {
-    let Some((device, queue)) = test_device("menu tip fade") else {
+fn a_tip_shows_in_full_strength_and_not_at_all_on_a_transparent_overlay() {
+    let Some((device, queue)) = test_device("menu tip strength") else {
         return;
     };
     let target = Target::new(&device);
@@ -807,8 +807,6 @@ fn a_tip_fades_with_the_overlay() {
     };
 
     assert_eq!(brightest(0.0), None, "a transparent overlay shows no tip");
-    let half = brightest(0.5).expect("half of the tip shows");
-    assert!((100..=156).contains(&half), "half green: {half}");
     let full = brightest(1.0).expect("the tip shows");
     assert!(full >= 250, "full green up to antialiasing: {full}");
 }

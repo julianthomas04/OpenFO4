@@ -102,7 +102,9 @@ impl LoadScreenHost {
                 return None;
             }
             CatalogState::Failed(reason) => {
-                tracing::error!("large loading screens are unavailable: {reason}");
+                crate::utils::error_once("load-screens-failed", || {
+                    format!("large loading screens are unavailable: {reason}")
+                });
                 return None;
             }
         };

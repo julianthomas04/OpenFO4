@@ -211,7 +211,7 @@ use effects::stage::{EffectFrameInputs, EffectStage};
 use light_anim::LightAnimator;
 use lighting::frame_uniform::FrameUniform;
 use load_transition::{
-    DragTracker, LoadHistory, LoadScreenHost, LoadScreens, spawn_report_title, take_if_accepted,
+    Destination, DragTracker, LoadHistory, LoadScreenHost, LoadScreens, spawn_report_title,
 };
 use menu::{MenuRenderer, OverlayForeground};
 use particles::CameraBasis;
@@ -349,6 +349,31 @@ impl ResolvedTarget {
                     no_load_screen: false,
                 }
             }
+        }
+    }
+
+    /// Where the teleport arrives, for choosing its loading screen. An exterior arrival names no
+    /// cell: its destination ref may sit in the worldspace's persistent `TopCell`, so the cell's own
+    /// location (XLCN) is not used and the worldspace's location stands in for it.
+    fn destination(&self) -> Destination {
+        let (place, cell) = if self.is_interior {
+            (
+                crate::loading_screen::Place::Interior,
+                self.cell_form_key.as_str(),
+            )
+        } else {
+            (
+                crate::loading_screen::Place::Exterior {
+                    worldspace: self.worldspace.clone(),
+                },
+                "",
+            )
+        };
+        Destination {
+            place,
+            cell: cell.to_string(),
+            grid: self.grid,
+            no_load_screen: self.no_load_screen,
         }
     }
 
@@ -3585,9 +3610,8 @@ impl State {
         // camera this frame: the streamer tears the old content down and reports
         // the new start. The input-mode block below recomputes camera.target
         // from the controller, so only eye is set here (in apply_stream_teleport).
-        let accepting = self.accepts_transition();
         if let Some(ws) =
-            take_if_accepted(&mut self.pending_worldspace, accepting, "worldspace pick")
+            self.take_pending_transition(|state| &mut state.pending_worldspace, "worldspace pick")
         {
             // Re-picking the current worldspace is a no-op — unless we're in an
             // interior, where it is the way back out and must reload.
@@ -3599,14 +3623,13 @@ impl State {
                     .iter()
                     .find(|w| w.form_key == ws)
                     .map_or((0, 0), |w| w.start_cell);
-                let plan = self.plan_transition(
+                let plan = self.plan_transition(Destination::picked(
                     crate::loading_screen::Place::Exterior {
                         worldspace: ws.clone(),
                     },
                     "",
                     start_cell,
-                    false,
-                );
+                ));
                 let start = self.with_stream_targets(asset_server, |streamer, targets| {
                     streamer.switch_worldspace(&ws, start_cell, targets)
                 });
@@ -3623,8 +3646,9 @@ impl State {
         // Apply a debug-UI interior selection: drop the worldspace cells and
         // load the single interior cell as a walkable unit (sim interior mode on
         // so the player grounds on its object-mesh floors).
-        let accepting = self.accepts_transition();
-        if let Some(fk) = take_if_accepted(&mut self.pending_interior, accepting, "interior pick") {
+        if let Some(fk) =
+            self.take_pending_transition(|state| &mut state.pending_interior, "interior pick")
+        {
             // Copy out grid + start (Copy) so the &self.interiors borrow ends
             // before with_stream_targets takes &mut self.
             let target = self
@@ -3633,8 +3657,11 @@ impl State {
                 .find(|i| i.form_key == fk)
                 .map(|i| (i.grid, i.start_pos));
             if let Some((grid, start_pos)) = target {
-                let plan =
-                    self.plan_transition(crate::loading_screen::Place::Interior, &fk, grid, false);
+                let plan = self.plan_transition(Destination::picked(
+                    crate::loading_screen::Place::Interior,
+                    &fk,
+                    grid,
+                ));
                 let start = self.with_stream_targets(asset_server, |streamer, targets| {
                     streamer.enter_interior(&fk, grid, start_pos, targets)
                 })?;
@@ -3683,22 +3710,10 @@ impl State {
         // the debug pickers, but the arrival position, grid and facing all come
         // from the door's XTEL. `switch_worldspace`'s returned default start is
         // intentionally discarded — we always arrive at the door's destination.
-        let accepting = self.accepts_transition();
         if let Some(t) =
-            take_if_accepted(&mut self.pending_teleport, accepting, "load door teleport")
+            self.take_pending_transition(|state| &mut state.pending_teleport, "load door teleport")
         {
-            let plan = self.plan_transition(
-                if t.is_interior {
-                    crate::loading_screen::Place::Interior
-                } else {
-                    crate::loading_screen::Place::Exterior {
-                        worldspace: t.worldspace.clone(),
-                    }
-                },
-                if t.is_interior { &t.cell_form_key } else { "" },
-                t.grid,
-                t.no_load_screen,
-            );
+            let plan = self.plan_transition(t.destination());
             self.with_stream_targets(asset_server, |streamer, targets| {
                 if t.is_interior {
                     streamer
@@ -4557,6 +4572,51 @@ mod walk_keys_tests {
 
         assert!(!keys.forward && !keys.jump && !keys.sprint_held && !keys.crouch_held);
         assert!(keys.sprint_active && keys.crouch_active);
+    }
+}
+
+#[cfg(test)]
+mod destination_tests {
+    use super::*;
+    use crate::loading_screen::Place;
+
+    fn door(is_interior: bool, no_load_screen: bool) -> ResolvedTarget {
+        ResolvedTarget {
+            is_interior,
+            worldspace: "00003C:Fallout4.esm".to_string(),
+            cell_form_key: "001234:Fallout4.esm".to_string(),
+            start_pos: Vec3::ZERO,
+            grid: (7, -2),
+            yaw: None,
+            no_load_screen,
+        }
+    }
+
+    #[test]
+    fn a_door_that_skips_its_screen_says_so() {
+        assert!(door(true, true).destination().no_load_screen);
+        assert!(door(false, true).destination().no_load_screen);
+        assert!(!door(true, false).destination().no_load_screen);
+    }
+
+    #[test]
+    fn an_interior_door_arrives_in_its_cell() {
+        let destination = door(true, false).destination();
+        assert_eq!(destination.place, Place::Interior);
+        assert_eq!(destination.cell, "001234:Fallout4.esm");
+        assert_eq!(destination.grid, (7, -2));
+    }
+
+    #[test]
+    fn an_exterior_door_arrives_in_its_worldspace_without_a_cell() {
+        let destination = door(false, false).destination();
+        assert_eq!(
+            destination.place,
+            Place::Exterior {
+                worldspace: "00003C:Fallout4.esm".to_string()
+            }
+        );
+        assert_eq!(destination.cell, "");
     }
 }
 

@@ -1221,6 +1221,7 @@ mod tests {
         assert_eq!(flow.overlay_alpha(), 1.0, "the small screen starts opaque");
         assert!(!flow.overlay_layers().art && !flow.overlay_layers().tip);
     }
+
     #[test]
     fn a_direct_start_loads_without_a_menu_and_reveals() {
         let mut flow = GameFlow::new(Vec::new(), VISIBLE_ROWS, StartMode::Direct);

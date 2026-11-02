@@ -14,14 +14,13 @@ const TOP_FRACTION: f32 = 0.78;
 /// free.
 const WIDTH_FRACTION: f32 = 0.6;
 
-/// The tip `text` for a framebuffer of `fb` pixels, faded by `alpha` (0 to 1).
+/// The tip `text` for a framebuffer of `fb` pixels, in the HUD colour.
 pub(super) fn item(
     layout: &MenuLayout,
     safe_zone: SafeZone,
     tint: &UiTint,
     fb: (u32, u32),
     text: &str,
-    alpha: f32,
 ) -> TextItem {
     let fit = layout.fit(fb.0, fb.1);
     let [left, top, right, bottom] = fit.visible_stage_rect();
@@ -40,8 +39,6 @@ pub(super) fn item(
     )
     .wrapping();
     let whole_lines = (column_height / geometry.line_pitch()).floor().max(1.0);
-    let mut colour = tint.text_rgba();
-    colour[3] = (f32::from(colour[3]) * alpha.clamp(0.0, 1.0)).round() as u8;
     let (origin_x, origin_y) = fit.stage_point(0.0, 0.0);
     TextItem {
         text: text.to_owned(),
@@ -52,7 +49,7 @@ pub(super) fn item(
             scale: fit.scale(),
         },
         shrink: false,
-        colour,
+        colour: tint.text_rgba(),
         shadow: None,
         wrap_width: Some(fit.s(column_width)),
         // Half a line short of the last whole line, so no rounding shows a line past the safe zone.
@@ -73,7 +70,7 @@ mod tests {
 
     fn tip(fb: (u32, u32)) -> (TextItem, f32) {
         let layout = standard();
-        let item = item(&layout, SAFE_ZONE, &TINT, fb, "A tip", 1.0);
+        let item = item(&layout, SAFE_ZONE, &TINT, fb, "A tip");
         let bottom_limit = layout.fit(fb.0, fb.1).visible_stage_rect()[3] - SAFE_ZONE.y;
         (item, bottom_limit)
     }
@@ -92,12 +89,5 @@ mod tests {
             );
             assert!(height > 0.0, "{fb:?}: at least one line fits");
         }
-    }
-
-    #[test]
-    fn the_tip_fades_by_scaling_the_hud_colour_alpha() {
-        let layout = standard();
-        let half = item(&layout, SAFE_ZONE, &TINT, (640, 360), "A tip", 0.5);
-        assert_eq!(half.colour, [0, 255, 0, 128]);
     }
 }

@@ -96,6 +96,7 @@ mod tests {
             "the second fork continues from where the first left the parent"
         );
     }
+
     #[test]
     fn unit_stays_in_the_half_open_interval() {
         let mut rng = SplitMix64::new(1);
