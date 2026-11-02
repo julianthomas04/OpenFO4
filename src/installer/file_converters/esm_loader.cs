@@ -654,6 +654,25 @@ namespace AssetConverter
             ("collision_layers", "collides_with", "TEXT"),
             ("doors", "bounds", "TEXT"),
             ("doors", "trigger_bounds", "TEXT"),
+            ("load_screens", "tip", "TEXT"),
+            ("load_screens", "model", "TEXT NOT NULL DEFAULT ''"),
+            ("load_screens", "flags", "INTEGER NOT NULL DEFAULT 0"),
+            ("load_screens", "transform", "TEXT"),
+            ("load_screens", "rotation_min", "INTEGER"),
+            ("load_screens", "rotation_max", "INTEGER"),
+            ("load_screens", "zoom_min", "REAL"),
+            ("load_screens", "zoom_max", "REAL"),
+            ("transforms", "pos_x", "REAL"),
+            ("transforms", "pos_y", "REAL"),
+            ("transforms", "pos_z", "REAL"),
+            ("transforms", "rot_x", "REAL"),
+            ("transforms", "rot_y", "REAL"),
+            ("transforms", "rot_z", "REAL"),
+            ("transforms", "scale", "REAL"),
+            ("transforms", "flags", "INTEGER"),
+            ("transforms", "zoom_min", "REAL"),
+            ("transforms", "zoom_max", "REAL"),
+            ("placed_teleports", "flags", "INTEGER NOT NULL DEFAULT 0"),
         };
 
         private async Task AddColumnIfMissingAsync(string table, string column, string type)
@@ -759,7 +778,7 @@ namespace AssetConverter
         {
             "source_ref", "destination_ref",
             "dest_position_x", "dest_position_y", "dest_position_z",
-            "dest_rotation_x", "dest_rotation_y", "dest_rotation_z",
+            "dest_rotation_x", "dest_rotation_y", "dest_rotation_z", "flags",
         };
     }
 
@@ -2106,15 +2125,17 @@ namespace AssetConverter
             public readonly string DestinationRef;
             public readonly float DestPosX, DestPosY, DestPosZ;
             public readonly float DestRotX, DestRotY, DestRotZ;
+            public readonly int Flags;
 
             public TeleportRow(string sourceRef, string destinationRef,
                 float destPosX, float destPosY, float destPosZ,
-                float destRotX, float destRotY, float destRotZ)
+                float destRotX, float destRotY, float destRotZ, int flags)
             {
                 SourceRef = sourceRef;
                 DestinationRef = destinationRef;
                 DestPosX = destPosX; DestPosY = destPosY; DestPosZ = destPosZ;
                 DestRotX = destRotX; DestRotY = destRotY; DestRotZ = destRotZ;
+                Flags = flags;
             }
         }
 
@@ -2264,7 +2285,7 @@ namespace AssetConverter
                             teleRows[i] = new object?[] {
                                 t.SourceRef, t.DestinationRef,
                                 t.DestPosX, t.DestPosY, t.DestPosZ,
-                                t.DestRotX, t.DestRotY, t.DestRotZ
+                                t.DestRotX, t.DestRotY, t.DestRotZ, t.Flags
                             };
                         }
                         BatchInsert.Execute(conn, transaction, "placed_teleports",
@@ -2378,7 +2399,7 @@ namespace AssetConverter
                     teleports.Add(new TeleportRow(
                         obj.FormKey.ToString(), dest.Door.FormKey.ToString(),
                         dest.Position.X, dest.Position.Y, dest.Position.Z,
-                        dest.Rotation.X, dest.Rotation.Y, dest.Rotation.Z));
+                        dest.Rotation.X, dest.Rotation.Y, dest.Rotation.Z, (int)dest.Flags));
                 }
 
                 results.Add(new PlacedObjectRow(obj, cellFk, isPersistent,
