@@ -23,7 +23,7 @@ namespace AssetConverter
                 {
                     FormKey = formKey,
                     EditorId = record.EditorID,
-                    Tip = record.Description?.String,
+                    Tip = string.IsNullOrEmpty(record.Description?.String) ? null : record.Description.String,
                     Model = model,
                     Flags = (int)record.MajorFlags,
                     Transform = transform,
