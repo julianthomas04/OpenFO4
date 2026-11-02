@@ -309,6 +309,22 @@ namespace InstallerTests
             return record;
         }
 
+        public LoadScreen AddLoadScreen(string editorId, Action<LoadScreen> configure)
+        {
+            var record = _mod.LoadScreens.AddNew(editorId);
+            configure(record);
+            Register(editorId, record.FormKey);
+            return record;
+        }
+
+        public Transform AddTransform(string editorId, Action<Transform> configure)
+        {
+            var record = _mod.Transforms.AddNew(editorId);
+            configure(record);
+            Register(editorId, record.FormKey);
+            return record;
+        }
+
         public SoundDescriptor AddSoundDescriptor(string editorId, Action<SoundDescriptor> configure)
         {
             var record = _mod.SoundDescriptors.AddNew(editorId);
