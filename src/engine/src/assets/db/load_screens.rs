@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use rusqlite::Connection;
 
 use crate::assets::db::conditions::{Condition, load_conditions, load_globals};
-use crate::assets::db::music::load_cell_places;
 use crate::assets::db::rows::{collect_rows, narrow, real32, required};
 
 /// LSCR record flag bit 10.
@@ -277,11 +276,16 @@ fn vector(values: [Option<f64>; 3], columns: [&str; 3], row: &str) -> anyhow::Re
     ])
 }
 
+/// The one source of where a cell stands: the location its record names. Exterior cells that only
+/// the location records list will join here.
 fn load_cell_locations(conn: &Connection) -> anyhow::Result<HashMap<String, String>> {
-    Ok(load_cell_places(conn)?
-        .into_iter()
-        .filter_map(|place| place.location.map(|location| (place.cell, location)))
-        .collect())
+    Ok(collect_rows(
+        conn,
+        "SELECT cell, location FROM cell_places WHERE location IS NOT NULL",
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )?
+    .into_iter()
+    .collect())
 }
 
 fn load_location_parents(conn: &Connection) -> anyhow::Result<HashMap<String, String>> {
@@ -734,6 +738,26 @@ mod tests {
         assert_eq!(
             catalog.location_parents,
             HashMap::from([("LOC_CHILD".to_string(), "LOC_ROOT".to_string())])
+        );
+    }
+
+    #[test]
+    fn cell_locations_do_not_require_the_music_tables_to_be_consistent() {
+        let conn = connection();
+        insert(
+            &conn,
+            "cell_places",
+            &[("cell", text("NO_CELL_ROW")), ("location", text("LOC"))],
+        );
+
+        let catalog = LoadScreenCatalog::from_connection(&conn).unwrap();
+
+        assert_eq!(
+            catalog
+                .cell_locations
+                .get("NO_CELL_ROW")
+                .map(String::as_str),
+            Some("LOC")
         );
     }
 

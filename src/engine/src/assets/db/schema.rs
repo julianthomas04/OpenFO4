@@ -389,6 +389,8 @@ pub enum SchemaError {
         table: &'static str,
         missing: Vec<&'static str>,
     },
+    #[error("the load screen data is present in some tables but missing from the {} columns; the database is half converted, re-run the installer", missing.iter().map(ToString::to_string).collect::<Vec<_>>().join(" and "))]
+    PartialLoadScreenTables { missing: Vec<ColumnGroup> },
     #[error("table `{table}` has only some of its {group} columns; missing: {}", missing.join(", "))]
     PartialColumnGroup {
         group: ColumnGroup,
@@ -590,22 +592,7 @@ impl DbSchema {
                 "doors",
                 DOOR_TRIGGER_BOUNDS_COLUMNS,
             )?,
-            load_screen_columns_present: column_group_present(
-                conn,
-                ColumnGroup::LoadScreen,
-                "load_screens",
-                LOAD_SCREEN_COLUMNS,
-            )? & column_group_present(
-                conn,
-                ColumnGroup::LoadScreenCondition,
-                "load_screen_conditions",
-                LOAD_SCREEN_CONDITION_COLUMNS,
-            )? & column_group_present(
-                conn,
-                ColumnGroup::Transform,
-                "transforms",
-                TRANSFORM_COLUMNS,
-            )?,
+            load_screen_columns_present: load_screen_tables_present(conn)?,
             teleport_flags_column_present: column_group_present(
                 conn,
                 ColumnGroup::TeleportFlags,
@@ -847,6 +834,34 @@ fn table_columns(conn: &Connection, table: &str) -> anyhow::Result<Vec<String>> 
     Ok(stmt
         .query_map([table], |row| row.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?)
+}
+
+/// Whether the load screen, load screen condition and transform tables are all complete. Absent
+/// everywhere is a database from before the export; a mix means a half converted database.
+fn load_screen_tables_present(conn: &Connection) -> anyhow::Result<bool> {
+    let groups = [
+        (ColumnGroup::LoadScreen, "load_screens", LOAD_SCREEN_COLUMNS),
+        (
+            ColumnGroup::LoadScreenCondition,
+            "load_screen_conditions",
+            LOAD_SCREEN_CONDITION_COLUMNS,
+        ),
+        (ColumnGroup::Transform, "transforms", TRANSFORM_COLUMNS),
+    ];
+    let mut present = Vec::new();
+    let mut missing = Vec::new();
+    for (group, table, columns) in groups {
+        if column_group_present(conn, group, table, columns)? {
+            present.push(group);
+        } else {
+            missing.push(group);
+        }
+    }
+    if present.is_empty() || missing.is_empty() {
+        Ok(missing.is_empty())
+    } else {
+        Err(SchemaError::PartialLoadScreenTables { missing }.into())
+    }
 }
 
 fn column_group_present(

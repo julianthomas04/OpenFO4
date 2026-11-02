@@ -1433,7 +1433,10 @@ fn the_load_screen_catalog_is_absent_on_a_database_from_an_older_installer() {
         .iter()
         .map(|column| ("load_screens", *column))
         .collect();
-    let db = client(legacy_connection(&dropped));
+    let conn = legacy_connection(&dropped);
+    conn.execute_batch("DROP TABLE load_screen_conditions; DROP TABLE transforms;")
+        .unwrap();
+    let db = client(conn);
 
     assert!(!db.schema().load_screen_columns_present);
     assert!(db.get_load_screen_catalog().unwrap().is_none());
@@ -1449,6 +1452,30 @@ fn detect_rejects_a_partial_load_screen_group_naming_the_missing_columns() {
         error.contains("tip") && error.contains("zoom_max"),
         "{error}"
     );
+}
+
+#[test]
+fn detect_rejects_load_screen_data_present_in_only_some_of_its_tables() {
+    let conn = schema_connection();
+    conn.execute_batch("DROP TABLE transforms;").unwrap();
+
+    let error = DbSchema::detect(&conn).unwrap_err().to_string();
+
+    assert!(
+        error.contains("transform") && error.contains("half converted"),
+        "{error}"
+    );
+}
+
+#[test]
+fn detect_reports_load_screen_data_absent_from_every_table_as_absent() {
+    let conn = schema_connection();
+    conn.execute_batch(
+        "DROP TABLE load_screen_conditions; DROP TABLE transforms; DROP TABLE load_screens;",
+    )
+    .unwrap();
+
+    assert!(!DbSchema::detect(&conn).unwrap().load_screen_columns_present);
 }
 
 #[test]
