@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use resvg::usvg;
 
 use super::image_quad::{ImageQuadParams, ImageQuadPipeline, params_buffer};
+use super::safe_rect::{Anchor, plain_origin};
 use crate::assets::pipboy_art::{ArtClip, ArtLibrary, FixedArt};
 use crate::rendering::game_settings::SafeZone;
 use crate::rendering::hud::layout::Layout;
@@ -57,14 +58,7 @@ impl IconPlacement {
                 ),
             ));
         }
-        let origin = layout.get(&LOGO_ORIGIN)?.world.matrix;
-        if (origin.a, origin.b, origin.c, origin.d) != (1.0, 0.0, 0.0, 1.0) {
-            return Err(UiLayoutError::unresolved(
-                MOVIE,
-                LOGO_ORIGIN.path,
-                "the logo's clip is scaled, rotated or skewed",
-            ));
-        }
+        let origin = plain_origin(layout, &LOGO_ORIGIN)?;
         let world = layout.get(&LOGO_PLACEMENT)?.world;
         let unresolved = |reason| UiLayoutError::unresolved(MOVIE, LOGO_PLACEMENT.path, reason);
         if !world.matrix.is_axis_aligned() {
@@ -78,26 +72,15 @@ impl IconPlacement {
         }
         Ok(Self {
             matrix: world.matrix,
-            origin: (origin.tx, origin.ty),
+            origin,
         })
-    }
-
-    /// The stage offset the loading screen's script moves the logo by: it puts the clip's
-    /// registration point on the bottom-right corner of the visible rectangle, inset by the
-    /// safe zone.
-    fn safe_rect_shift(&self, fit: &Layout, safe_zone: SafeZone) -> (f32, f32) {
-        let [_, _, right, bottom] = fit.visible_stage_rect();
-        (
-            right - safe_zone.x - self.origin.0,
-            bottom - safe_zone.y - self.origin.1,
-        )
     }
 
     /// The framebuffer rectangle the art with symbol-local `bounds` covers, with the stage fitted
     /// by `fit` and the logo locked to the bottom-right corner of the safe zone.
     pub fn screen_rect(&self, bounds: [f32; 4], fit: &Layout, safe_zone: SafeZone) -> PxRect {
         let [xmin, ymin, xmax, ymax] = bounds;
-        let (shift_x, shift_y) = self.safe_rect_shift(fit, safe_zone);
+        let (shift_x, shift_y) = Anchor::BottomRight.shift(fit, safe_zone, self.origin);
         let (left, top) = self.matrix.apply(xmin, ymin);
         let (right, bottom) = self.matrix.apply(xmax, ymax);
         let (left, right) = (left + shift_x, right + shift_x);

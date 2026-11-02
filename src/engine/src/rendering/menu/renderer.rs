@@ -392,9 +392,9 @@ impl MenuRenderer {
     ) -> (Vec<TextItem>, Vec<ColouredRect>) {
         let fit = self.layout.fit(fb.0, fb.1);
         let panel = &self.layout.loading_panel;
-        let text = panel.text(&fit, &self.tint, content);
+        let text = panel.text(&fit, self.safe_zone, &self.tint, content);
         let tip_extent = text.tip.as_ref().map(|tip| self.text.measure(tip));
-        let rects = panel.rects(&fit, &self.tint, tip_extent, content.experience);
+        let rects = panel.rects(&fit, self.safe_zone, &self.tint, tip_extent, content.experience);
         (text.into_items(), rects)
     }
 

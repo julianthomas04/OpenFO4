@@ -748,10 +748,12 @@ fn extent_of(positions: &[(u32, u32)]) -> ((u32, u32), (u32, u32)) {
 fn panel_text(device: &wgpu::Device, queue: &wgpu::Queue, tip: Option<&str>) -> PanelText {
     let renderer = renderer(device, queue, HUD_GREEN);
     let fit = renderer.layout().fit(SIZE.0, SIZE.1);
-    renderer
-        .layout()
-        .loading_panel
-        .text(&fit, &HUD_GREEN, &PanelContent::placeholder(tip))
+    renderer.layout().loading_panel.text(
+        &fit,
+        SAFE_ZONE,
+        &HUD_GREEN,
+        &PanelContent::placeholder(tip),
+    )
 }
 
 /// The framebuffer position of the top of the first line of `item`'s field.
@@ -834,8 +836,8 @@ fn the_panel_puts_the_level_and_the_catalogue_number_where_the_layout_does() {
     let pixels = target.pixels(&device, &queue);
 
     for (name, item) in [
-        ("level", &text.level),
-        ("catalogue number", &text.catalogue),
+        ("level", text.level.as_ref().unwrap()),
+        ("catalogue number", text.catalogue.as_ref().unwrap()),
     ] {
         let top = line_top_px(item);
         let band: Vec<_> = green_pixels(&pixels)
@@ -1116,6 +1118,45 @@ fn a_backdrop_image_covers_the_whole_target_as_stored() {
             "the image fills the target untinted",
         );
     }
+}
+
+#[test]
+fn a_backdrop_image_fades_in_with_the_overlay() {
+    let Some((device, queue)) = test_device("menu backdrop image opacity") else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let mut background = background_in(dir.path());
+    let image = background.view(&device, &queue).expect("the image loads");
+    let target = Target::new(&device);
+    let mut menu = renderer(&device, &queue, HUD_GREEN);
+    let draw_at = |menu: &mut MenuRenderer, alpha: f32| {
+        target.fill(&device, &queue, RED);
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        let view = menu.target_view(&target.texture);
+        let backdrop = Backdrop {
+            alpha,
+            image: Some(image),
+        };
+        menu.render_backdrop(&device, &queue, &mut encoder, &view, SIZE, backdrop);
+        queue.submit(std::iter::once(encoder.finish()));
+        target.pixels(&device, &queue).at(SIZE.0 / 2, SIZE.1 / 2)
+    };
+
+    let half = draw_at(&mut menu, 0.5);
+    let over = draw_at(&mut menu, 7.0);
+
+    let [_, green, blue] = BACKGROUND_COLOUR;
+    assert_close(
+        half,
+        [half[0], green / 2, blue / 2],
+        "half of the image over the red frame, which has no green or blue",
+    );
+    assert_close(
+        over,
+        BACKGROUND_COLOUR,
+        "an opacity above 1 is fully opaque",
+    );
 }
 
 #[test]

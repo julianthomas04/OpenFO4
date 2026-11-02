@@ -8,6 +8,7 @@ mod loading_panel;
 mod renderer;
 #[cfg(test)]
 mod renderer_tests;
+mod safe_rect;
 mod video_layer;
 #[cfg(test)]
 mod video_layer_tests;

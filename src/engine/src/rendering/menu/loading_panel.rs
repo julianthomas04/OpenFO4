@@ -10,6 +10,8 @@
 //! bottom.
 
 use super::loading_icon::MOVIE;
+use super::safe_rect::{Anchor, plain_origin};
+use crate::rendering::game_settings::SafeZone;
 use crate::rendering::hud::field_text::{ScreenMap, TextExtent, TextItem};
 use crate::rendering::hud::layout::Layout;
 use crate::rendering::hud::quad::PxRect;
@@ -17,7 +19,7 @@ use crate::rendering::hud::shape::{StageRect, shown_fill, stage_rect};
 use crate::rendering::ui_colour::UiTint;
 use crate::ui_layout::scaleform_text::FieldGeometry;
 use crate::ui_layout::{
-    KeyGroup, LiteralKey, ShapeKey, TextKey, TranslateKey, UiLayout, UiLayoutError,
+    KeyGroup, LiteralKey, PlacementKey, ShapeKey, TextKey, TranslateKey, UiLayout, UiLayoutError,
 };
 
 const MAX_COLOUR: f64 = 16_777_215.0;
@@ -29,6 +31,8 @@ pub const PLACEHOLDER_LEVEL: u32 = 1;
 pub const PLACEHOLDER_CATALOGUE_NUMBER: u32 = 1;
 pub const PLACEHOLDER_EXPERIENCE: f32 = 0.0;
 
+pub static LEFT_TEXT: PlacementKey =
+    PlacementKey::new(MOVIE, "FilterHolder_mc/Menu_mc/LeftText_mc");
 pub static TIP: TextKey = TextKey::new(
     MOVIE,
     "FilterHolder_mc/Menu_mc/LeftText_mc/LoadScreenText_tf",
@@ -65,13 +69,12 @@ static BORDER_INSET: [LiteralKey; 4] = [
 
 /// Every layout key the panel reads.
 pub static KEYS: KeyGroup = KeyGroup(&[
+    &LEFT_TEXT,
     &TIP,
     &LEVEL,
     &CATALOGUE,
     &METER_OUTLINE,
     &METER_FILL,
-    &LEVEL_PREFIX,
-    &CATALOGUE_PREFIX,
     &BORDER_WIDTH,
     &BORDER_COLOUR,
     &BORDER_INSET,
@@ -114,9 +117,13 @@ pub struct PanelLayout {
     tip: TextStyle,
     level: TextStyle,
     catalogue: TextStyle,
-    level_prefix: String,
-    catalogue_prefix: String,
+    /// The translated labels in front of the level and the catalogue number. A line whose label
+    /// the translations lack is left out.
+    level_prefix: Option<String>,
+    catalogue_prefix: Option<String>,
     meter: Meter,
+    /// The registration point of the clip holding the panel, on the stage as authored.
+    origin: (f32, f32),
     border_width: f32,
     border_colour: [u8; 3],
     pub border_padding: Padding,
@@ -148,13 +155,13 @@ impl<'a> PanelContent<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PanelText {
     pub tip: Option<TextItem>,
-    pub level: TextItem,
-    pub catalogue: TextItem,
+    pub level: Option<TextItem>,
+    pub catalogue: Option<TextItem>,
 }
 
 impl PanelText {
     pub fn into_items(self) -> Vec<TextItem> {
-        [self.tip, Some(self.level), Some(self.catalogue)]
+        [self.tip, self.level, self.catalogue]
             .into_iter()
             .flatten()
             .collect()
@@ -163,6 +170,18 @@ impl PanelText {
 
 /// A rectangle with its colour, for the quad pass.
 pub type ColouredRect = (PxRect, [f32; 4]);
+
+/// The translation of `key`; none, after an error logged once, when the translations lack it.
+fn label(layout: &UiLayout, key: &TranslateKey) -> Option<String> {
+    layout
+        .get(key)
+        .map_err(|error| {
+            crate::utils::error_once(&format!("loading-panel-label-{}", key.path), || {
+                format!("{error}; the loading screen leaves that line out")
+            });
+        })
+        .ok()
+}
 
 fn text_style(layout: &UiLayout, key: &TextKey) -> Result<TextStyle, UiLayoutError> {
     let field = layout.get(key)?;
@@ -238,9 +257,10 @@ impl PanelLayout {
             tip: text_style(layout, &TIP)?,
             level: text_style(layout, &LEVEL)?,
             catalogue: text_style(layout, &CATALOGUE)?,
-            level_prefix: layout.get(&LEVEL_PREFIX)?,
-            catalogue_prefix: layout.get(&CATALOGUE_PREFIX)?,
+            level_prefix: label(layout, &LEVEL_PREFIX),
+            catalogue_prefix: label(layout, &CATALOGUE_PREFIX),
             meter: Meter::resolve(layout)?,
+            origin: plain_origin(layout, &LEFT_TEXT)?,
             border_width: layout.lit_number(&BORDER_WIDTH, 0)? as f32,
             border_colour: rgb_of(&BORDER_COLOUR, layout.lit_number(&BORDER_COLOUR, 0)?)?,
             border_padding: Padding {
@@ -252,17 +272,35 @@ impl PanelLayout {
         })
     }
 
-    /// The text of `content` on a framebuffer fitted by `fit`, in the colour of `tint`.
-    pub fn text(&self, fit: &Layout, tint: &UiTint, content: &PanelContent<'_>) -> PanelText {
-        let level = format!("{} {}", self.level_prefix, content.level);
-        let catalogue = format!("{} {}", self.catalogue_prefix, content.catalogue_number);
+    /// The stage offset the loading screen's script moves the panel by: it puts the clip's
+    /// registration point on the left edge of the safe zone.
+    fn safe_rect_shift(&self, fit: &Layout, safe_zone: SafeZone) -> f32 {
+        Anchor::Left.shift(fit, safe_zone, self.origin).0
+    }
+
+    /// The text of `content` on a framebuffer fitted by `fit`, in the colour of `tint`, with the
+    /// panel locked to the left of `safe_zone`.
+    pub fn text(
+        &self,
+        fit: &Layout,
+        safe_zone: SafeZone,
+        tint: &UiTint,
+        content: &PanelContent<'_>,
+    ) -> PanelText {
+        let shift = self.safe_rect_shift(fit, safe_zone);
         PanelText {
             tip: content
                 .tip
                 .filter(|tip| !tip.trim().is_empty())
-                .map(|tip| wrapped_item(&self.tip, fit, tint, tip)),
-            level: item(&self.level, fit, tint, level),
-            catalogue: item(&self.catalogue, fit, tint, catalogue),
+                .map(|tip| wrapped_item(&self.tip, fit, shift, tint, tip)),
+            level: self.level_prefix.as_ref().map(|prefix| {
+                let level = format!("{prefix} {}", content.level);
+                item(&self.level, fit, shift, tint, level)
+            }),
+            catalogue: self.catalogue_prefix.as_ref().map(|prefix| {
+                let number = format!("{prefix} {}", content.catalogue_number);
+                item(&self.catalogue, fit, shift, tint, number)
+            }),
         }
     }
 
@@ -271,10 +309,12 @@ impl PanelLayout {
     pub fn rects(
         &self,
         fit: &Layout,
+        safe_zone: SafeZone,
         tint: &UiTint,
         tip: Option<TextExtent>,
         experience: f32,
     ) -> Vec<ColouredRect> {
+        let shift = self.safe_rect_shift(fit, safe_zone);
         let colour = |rgb: [u8; 3]| tinted(tint, rgb);
         let mut rects = Vec::new();
         if let Some(extent) = tip {
@@ -287,7 +327,7 @@ impl PanelLayout {
             );
         }
         let meter = &self.meter;
-        let frame = screen_rect(fit, meter.frame.rect);
+        let frame = screen_rect(fit, shifted(meter.frame.rect, shift));
         let thickness = (
             fit.s(meter.frame.thickness.0),
             fit.s(meter.frame.thickness.1),
@@ -297,7 +337,7 @@ impl PanelLayout {
                 .into_iter()
                 .map(|rect| (rect, colour(meter.frame.colour))),
         );
-        let fill = filled(screen_rect(fit, meter.fill), experience);
+        let fill = filled(screen_rect(fit, shifted(meter.fill, shift)), experience);
         rects.push((fill, colour(meter.fill_colour)));
         rects
     }
@@ -308,8 +348,8 @@ fn tinted(tint: &UiTint, rgb: [u8; 3]) -> [f32; 4] {
     [red, green, blue, 1.0]
 }
 
-fn item(style: &TextStyle, fit: &Layout, tint: &UiTint, text: String) -> TextItem {
-    let (origin_x, origin_y) = fit.stage_point(0.0, 0.0);
+fn item(style: &TextStyle, fit: &Layout, shift: f32, tint: &UiTint, text: String) -> TextItem {
+    let (origin_x, origin_y) = fit.stage_point(shift, 0.0);
     let [red, green, blue] = tint.apply_to(style.colour);
     TextItem {
         text,
@@ -328,7 +368,13 @@ fn item(style: &TextStyle, fit: &Layout, tint: &UiTint, text: String) -> TextIte
 }
 
 /// `text` wrapped to the field's width and cut off after the last whole line that fits its height.
-fn wrapped_item(style: &TextStyle, fit: &Layout, tint: &UiTint, text: &str) -> TextItem {
+fn wrapped_item(
+    style: &TextStyle,
+    fit: &Layout,
+    shift: f32,
+    tint: &UiTint,
+    text: &str,
+) -> TextItem {
     let geometry = style.geometry.wrapping();
     let pitch = geometry.line_pitch();
     let whole_lines = (geometry.content_height() / pitch).floor().max(1.0);
@@ -342,9 +388,17 @@ fn wrapped_item(style: &TextStyle, fit: &Layout, tint: &UiTint, text: &str) -> T
                 ..style.clone()
             },
             fit,
+            shift,
             tint,
             text.to_owned(),
         )
+    }
+}
+
+fn shifted(rect: StageRect, shift: f32) -> StageRect {
+    StageRect {
+        x: rect.x + shift,
+        ..rect
     }
 }
 
@@ -450,6 +504,9 @@ pub(super) mod test_support {
     /// The tip field's authored width, wider than the content by the gutters.
     pub const TIP_WIDTH: f64 = 504.95;
 
+    /// Where the fixture puts the panel's clip: on the left edge of the tests' safe zone.
+    pub const LEFT_TEXT_ORIGIN: (f64, f64) = (64.0, 506.65);
+
     /// The characters, instances and literals of the panel, to merge into the loading screen's
     /// movie parts.
     pub fn parts() -> Value {
@@ -467,6 +524,8 @@ pub(super) mod test_support {
                       "lines": [], "paths": []},
             },
             "instances": {
+                LEFT_TEXT.to_owned():
+                    placed(3, "sprite", [1.0, 0.0, 0.0, 1.0, LEFT_TEXT_ORIGIN.0, LEFT_TEXT_ORIGIN.1]),
                 format!("{LEFT_TEXT}/LoadScreenText_tf"):
                     placed(16, "text", [1.0, 0.0, 0.0, 1.0, TIP_ORIGIN.0, TIP_ORIGIN.1]),
                 format!("{LEFT_TEXT}/VDSGText_tf"):
@@ -505,6 +564,10 @@ mod tests {
         opacity: 1.0,
     };
 
+    /// A safe zone whose left edge is where the fixture places the panel's clip, so the lock moves
+    /// nothing.
+    const AUTHORED: SafeZone = SafeZone { x: 64.0, y: 36.0 };
+
     fn panel() -> PanelLayout {
         standard().loading_panel
     }
@@ -539,6 +602,29 @@ mod tests {
     }
 
     #[test]
+    fn the_whole_panel_is_locked_to_the_safe_zones_left_edge() {
+        let (fit, safe) = (fit(), SafeZone { x: 40.0, y: 36.0 });
+        let shift = 40.0 - 64.0;
+        let content = PanelContent::placeholder(Some("tip"));
+        let authored = panel().text(&fit, AUTHORED, &GREEN, &content);
+        let locked = panel().text(&fit, safe, &GREEN, &content);
+        for (before, after) in authored.into_items().iter().zip(locked.into_items().iter()) {
+            close(after.map.origin.0 - before.map.origin.0, shift);
+            assert_eq!(after.map.origin.1, before.map.origin.1);
+        }
+        let before = panel().rects(&fit, AUTHORED, &GREEN, None, 0.5);
+        let after = panel().rects(&fit, safe, &GREEN, None, 0.5);
+        assert_eq!(before.len(), after.len());
+        for ((moved, _), (authored, _)) in after.iter().zip(&before) {
+            close(moved.x - authored.x, shift);
+            assert_eq!(
+                (moved.y, moved.w, moved.h),
+                (authored.y, authored.w, authored.h)
+            );
+        }
+    }
+
+    #[test]
     fn the_box_style_and_padding_come_from_the_document() {
         let panel = panel();
         assert_eq!(panel.border_width, 2.0);
@@ -556,9 +642,14 @@ mod tests {
 
     #[test]
     fn the_labels_are_translated_and_the_placeholders_follow_them() {
-        let text = panel().text(&fit(), &GREEN, &PanelContent::placeholder(Some("tip")));
-        assert_eq!(text.level.text, "LEVEL 1");
-        assert_eq!(text.catalogue.text, "VDSG No. 1");
+        let text = panel().text(
+            &fit(),
+            AUTHORED,
+            &GREEN,
+            &PanelContent::placeholder(Some("tip")),
+        );
+        assert_eq!(text.level.unwrap().text, "LEVEL 1");
+        assert_eq!(text.catalogue.unwrap().text, "VDSG No. 1");
         assert_eq!(text.tip.expect("a tip").text, "tip");
     }
 
@@ -566,6 +657,7 @@ mod tests {
     fn a_blank_tip_is_no_tip() {
         let text = panel().text(
             &fit(),
+            AUTHORED,
             &GREEN,
             &PanelContent::placeholder(Some(
                 "  
@@ -577,15 +669,20 @@ mod tests {
 
     #[test]
     fn a_screen_without_a_tip_still_has_its_level_and_catalogue_number() {
-        let text = panel().text(&fit(), &GREEN, &PanelContent::placeholder(None));
+        let text = panel().text(&fit(), AUTHORED, &GREEN, &PanelContent::placeholder(None));
         assert!(text.tip.is_none());
         assert_eq!(text.into_items().len(), 2);
     }
 
     #[test]
     fn text_is_the_hud_colour_times_the_field_colour() {
-        let text = panel().text(&fit(), &GREEN, &PanelContent::placeholder(Some("tip")));
-        assert_eq!(text.level.colour, [0, 255, 0, 255]);
+        let text = panel().text(
+            &fit(),
+            AUTHORED,
+            &GREEN,
+            &PanelContent::placeholder(Some("tip")),
+        );
+        assert_eq!(text.level.unwrap().colour, [0, 255, 0, 255]);
         let tip = text.tip.expect("a tip").colour;
         assert_eq!((tip[0], tip[2], tip[3]), (0, 0, 255));
         assert!((218..=224).contains(&tip[1]), "{tip:?}");
@@ -594,7 +691,12 @@ mod tests {
     #[test]
     fn the_tip_wraps_at_the_field_width_and_stops_after_its_last_whole_line() {
         let fit = Layout::for_stage(1280.0, 720.0, 640.0, 360.0);
-        let text = panel().text(&fit, &GREEN, &PanelContent::placeholder(Some("tip")));
+        let text = panel().text(
+            &fit,
+            AUTHORED,
+            &GREEN,
+            &PanelContent::placeholder(Some("tip")),
+        );
         let tip = text.tip.expect("a tip");
         close(
             tip.wrap_width.expect("a tip wraps"),
@@ -613,9 +715,10 @@ mod tests {
 
     #[test]
     fn the_single_line_fields_neither_wrap_nor_stop() {
-        let text = panel().text(&fit(), &GREEN, &PanelContent::placeholder(None));
-        assert!(text.level.wrap_width.is_none() && text.level.max_height.is_none());
-        assert!(text.catalogue.wrap_width.is_none());
+        let text = panel().text(&fit(), AUTHORED, &GREEN, &PanelContent::placeholder(None));
+        let (level, catalogue) = (text.level.unwrap(), text.catalogue.unwrap());
+        assert!(level.wrap_width.is_none() && level.max_height.is_none());
+        assert!(catalogue.wrap_width.is_none());
     }
 
     #[test]
@@ -689,7 +792,7 @@ mod tests {
 
     #[test]
     fn the_meter_sits_where_the_document_puts_it_and_is_drawn_in_the_hud_colour() {
-        let rects = panel().rects(&fit(), &GREEN, None, 0.5);
+        let rects = panel().rects(&fit(), AUTHORED, &GREEN, None, 0.5);
         // Four frame bars and the fill, and no box without a tip.
         assert_eq!(rects.len(), 5);
         let (fill, colour) = rects[4];
@@ -702,7 +805,7 @@ mod tests {
 
     #[test]
     fn the_frame_of_the_meter_has_the_stroke_scaled_by_the_documents_matrix() {
-        let rects = panel().rects(&fit(), &GREEN, None, 0.0);
+        let rects = panel().rects(&fit(), AUTHORED, &GREEN, None, 0.0);
         let (top, _) = rects[0];
         let (left, _) = rects[2];
         close(top.h, 2.0 * 0.440_002);
@@ -717,8 +820,8 @@ mod tests {
             width: 400.0,
             height: 80.0,
         };
-        let with_box = panel().rects(&fit(), &GREEN, Some(extent), 0.0);
-        let without = panel().rects(&fit(), &GREEN, None, 0.0);
+        let with_box = panel().rects(&fit(), AUTHORED, &GREEN, Some(extent), 0.0);
+        let without = panel().rects(&fit(), AUTHORED, &GREEN, None, 0.0);
         assert_eq!(with_box.len(), without.len() + 4);
         let (top, _) = with_box[0];
         close(top.x, 152.0 - 8.0 - 1.0);
