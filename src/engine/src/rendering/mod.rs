@@ -39,6 +39,7 @@ pub mod instance;
 pub mod light_anim;
 pub mod lighting;
 mod line_buffer;
+pub mod loading_screen;
 pub mod local_lights;
 pub mod mega_buffer;
 pub mod menu;

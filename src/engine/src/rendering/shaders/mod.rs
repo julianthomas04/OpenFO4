@@ -240,6 +240,11 @@ pub const MENU_ICON: ShaderSource = ShaderSource {
     wgsl: include_str!("menu_icon.wgsl"),
 };
 
+pub const LOADING_ART: ShaderSource = ShaderSource {
+    label: "loading_art_shader",
+    wgsl: include_str!("loading_art.wgsl"),
+};
+
 pub const LIGHT_SPHERES: ShaderSource = ShaderSource {
     label: "light_spheres_shader",
     wgsl: concat!(
@@ -332,6 +337,7 @@ const ALL: &[&ShaderSource] = &[
     &HUD,
     &MENU_VIDEO,
     &MENU_ICON,
+    &LOADING_ART,
     &LIGHT_SPHERES,
     &LIGHT_CULL,
     &SKINNED_OBJECT,
