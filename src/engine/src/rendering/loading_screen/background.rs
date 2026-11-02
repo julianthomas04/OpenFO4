@@ -91,4 +91,17 @@ mod tests {
             "a failed load is not retried every frame"
         );
     }
+
+    #[test]
+    #[ignore = "needs OPENFO4_INSTALL_DIR with the installed interface textures"]
+    fn the_installed_image_loads() {
+        let Some((device, queue)) = test_device("loading background installed") else {
+            return;
+        };
+        let install = std::env::var(crate::assets::INSTALL_DIR_VAR).expect("OPENFO4_INSTALL_DIR");
+        let root = std::path::Path::new(&install).join(crate::assets::layout::ASSETS_DIR);
+        let mut background = LoadingBackground::new(root);
+
+        assert!(background.view(&device, &queue).is_some());
+    }
 }
