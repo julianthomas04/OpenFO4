@@ -305,25 +305,45 @@ fn overlapping_surfaces_show_the_nearest_whatever_the_draw_order() {
     }
 }
 
+/// How many pixels the cube lights when its texture has `alpha` and its material is `tokens`;
+/// `None` without a GPU.
+fn lit_pixels_with(test: &str, alpha: u8, tokens: &str) -> Option<usize> {
+    let mut scene = Scene::new(test)?;
+    let dir = tempfile::tempdir().unwrap();
+    write_texture(dir.path(), "leaf.dds", alpha);
+    scene.show(&cube_art(dir.path(), &format!("leaf.dds{tokens}")));
+    let target = Target::new(&scene, SIZE, BLACK);
+    Some(scene.draw(&target).lit_count())
+}
+
 #[test]
-fn texels_below_half_alpha_are_cut_out() {
-    let Some(mut scene) = Scene::new("loading art alpha test") else {
+fn a_material_with_an_alpha_test_cuts_out_texels_below_its_cutoff() {
+    // 100/255 is below 128/255.
+    let Some(lit) = lit_pixels_with("loading art alpha cut", 100, "|test:128") else {
         return;
     };
-    let dir = tempfile::tempdir().unwrap();
-    write_texture(dir.path(), "cut.dds", 0);
-    scene.show(&cube_art(dir.path(), "cut.dds"));
-    let target = Target::new(&scene, SIZE, BLACK);
-    assert_eq!(
-        scene.draw(&target).lit_count(),
-        0,
-        "a fully transparent texture leaves nothing"
-    );
+    assert_eq!(lit, 0, "the whole cube is below its cutoff");
+}
 
-    write_texture(dir.path(), "solid.dds", 255);
-    scene.show(&cube_art(dir.path(), "solid.dds"));
+#[test]
+fn a_material_with_an_alpha_test_keeps_texels_above_its_cutoff() {
+    // 200/255 and 100/255 are both above 50/255; 200/255 is above 128/255.
+    let (Some(high), Some(low)) = (
+        lit_pixels_with("loading art alpha keep high", 200, "|test:128"),
+        lit_pixels_with("loading art alpha keep low", 100, "|test:50"),
+    ) else {
+        return;
+    };
+    assert!(high > 0 && low > 0, "{high} {low}");
+}
+
+#[test]
+fn a_material_without_an_alpha_test_never_discards() {
+    let Some(lit) = lit_pixels_with("loading art no alpha test", 0, "") else {
+        return;
+    };
     assert!(
-        scene.draw(&target).lit_count() > 0,
-        "an opaque texture draws"
+        lit > 0,
+        "a fully transparent texture still draws without a test token"
     );
 }

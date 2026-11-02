@@ -17,6 +17,13 @@ struct Scene {
 @group(1) @binding(0) var diffuse: texture_2d<f32>;
 @group(1) @binding(1) var diffuse_sampler: sampler;
 
+struct Material {
+    // The alpha below which a texel is cut out; 0 for a material that cuts nothing out.
+    cutoff: vec4<f32>,
+};
+
+@group(1) @binding(2) var<uniform> material: Material;
+
 struct VsIn {
     @location(0) position: vec3<f32>,
     @location(1) uv: vec2<f32>,
@@ -49,13 +56,16 @@ fn encode_srgb(linear: vec3<f32>) -> vec3<f32> {
     return select(high, low, linear <= vec3<f32>(0.0031308));
 }
 
-// Texels at or below this alpha are cut out (hair, grates, foliage).
-const ALPHA_CUTOFF: f32 = 0.5;
+// Whether a texel of `alpha` is cut out (hair, grates, foliage): only a material that asks for
+// an alpha test cuts anything out, like the world's alpha-test bucket.
+fn is_cut_out(alpha: f32) -> bool {
+    return material.cutoff.x > 0.0 && alpha < material.cutoff.x;
+}
 
 // The depth prepass: only the cut-out decides what is written.
 @fragment
 fn fs_depth(in: VsOut) -> @location(0) vec4<f32> {
-    if textureSample(diffuse, diffuse_sampler, in.uv).a < ALPHA_CUTOFF {
+    if is_cut_out(textureSample(diffuse, diffuse_sampler, in.uv).a) {
         discard;
     }
     return vec4<f32>(0.0);
@@ -67,7 +77,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     let normal = normalize(facing);
     let light = max(dot(normal, scene.light_direction.xyz), 0.0);
     let texel = textureSample(diffuse, diffuse_sampler, in.uv);
-    if texel.a < ALPHA_CUTOFF {
+    if is_cut_out(texel.a) {
         discard;
     }
     let albedo = texel.rgb;

@@ -34,6 +34,21 @@ impl SceneUniform {
     }
 }
 
+/// The uniform block of one draw's material in `loading_art.wgsl`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Pod, Zeroable)]
+pub(super) struct MaterialUniform {
+    cutoff: [f32; 4],
+}
+
+impl MaterialUniform {
+    pub fn new(alpha_cutoff: f32) -> Self {
+        Self {
+            cutoff: [alpha_cutoff, 0.0, 0.0, 0.0],
+        }
+    }
+}
+
 pub(super) struct ArtPipeline {
     pub depth_prepass: wgpu::RenderPipeline,
     pub pipeline: wgpu::RenderPipeline,
@@ -73,6 +88,16 @@ impl ArtPipeline {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                     count: None,
                 },
             ],

@@ -38,11 +38,13 @@ pub enum LoadingArtError {
     TooLarge { path: PathBuf },
 }
 
-/// One drawable part of the model: its triangles and the diffuse texture it asks for.
+/// One drawable part of the model: its triangles, the diffuse texture it asks for and the alpha
+/// below which that texture is cut out (0 when the material has no alpha test).
 struct CpuSubmesh {
     vertices: Vec<Vertex>,
     indices: Vec<u32>,
     diffuse_key: Option<String>,
+    alpha_cutoff: f32,
 }
 
 /// The model read from disk, ready to be uploaded.
@@ -95,10 +97,10 @@ impl CpuArt {
 
 /// `None` for a helper volume, which is geometry for the editor and never seen.
 fn submesh(mesh: CpuMesh, model: &std::path::Path) -> Option<CpuSubmesh> {
-    let diffuse_key = match mesh.texture_path.as_deref().map(MaterialName::parse) {
-        None => None,
+    let (diffuse_key, alpha_cutoff) = match mesh.texture_path.as_deref().map(MaterialName::parse) {
+        None => (None, 0.0),
         Some(Ok(material)) if material.is_helper_shape() => return None,
-        Some(Ok(material)) => material.diffuse_path,
+        Some(Ok(material)) => (material.diffuse_path, material.alpha_cutoff),
         Some(Err(error)) => {
             let name = mesh.texture_path.as_deref().unwrap_or_default();
             crate::utils::warn_once(
@@ -110,13 +112,14 @@ fn submesh(mesh: CpuMesh, model: &std::path::Path) -> Option<CpuSubmesh> {
                     )
                 },
             );
-            None
+            (None, 0.0)
         }
     };
     Some(CpuSubmesh {
         vertices: mesh.vertices,
         indices: mesh.indices,
         diffuse_key,
+        alpha_cutoff,
     })
 }
 
@@ -125,6 +128,7 @@ pub(super) struct Draw {
     pub indices: Range<u32>,
     pub base_vertex: i32,
     pub diffuse: wgpu::TextureView,
+    pub alpha_cutoff: f32,
 }
 
 /// A model on the GPU with the camera that views it.
@@ -158,6 +162,7 @@ impl LoadedArt {
                 indices: start..end,
                 base_vertex,
                 diffuse: textures.get(part.diffuse_key.as_deref()),
+                alpha_cutoff: part.alpha_cutoff,
             });
         }
         Ok(Self {
@@ -308,5 +313,16 @@ mod tests {
             cpu.submeshes[0].diffuse_key.as_deref(),
             Some("textures\\props\\crate_d.dds")
         );
+        assert!(cpu.submeshes[0].alpha_cutoff.abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_part_takes_its_alpha_cutoff_from_the_material_test_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let art = cube_art(dir.path(), "props\\leaf_d.dds|test:51");
+
+        let cpu = CpuArt::load(&art).unwrap();
+
+        assert!((cpu.submeshes[0].alpha_cutoff - 0.2).abs() < 1e-6);
     }
 }

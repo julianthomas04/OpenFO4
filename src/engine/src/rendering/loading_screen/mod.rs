@@ -19,8 +19,9 @@ pub use camera::ArtCamera;
 pub use model::{CpuArt, LoadedArt, LoadingArtError};
 
 use bytemuck::bytes_of;
+use wgpu::util::DeviceExt;
 
-use pipeline::{ArtPipeline, DepthTarget, SceneUniform};
+use pipeline::{ArtPipeline, DepthTarget, MaterialUniform, SceneUniform};
 
 struct Active {
     art: LoadedArt,
@@ -93,6 +94,13 @@ impl LoadingArtRenderer {
                 .draws
                 .iter()
                 .map(|draw| {
+                    let material =
+                        self.device
+                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some("loading_art_material"),
+                                contents: bytes_of(&MaterialUniform::new(draw.alpha_cutoff)),
+                                usage: wgpu::BufferUsages::UNIFORM,
+                            });
                     self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some("loading_art_texture_group"),
                         layout: &self.pipeline.texture_layout,
@@ -104,6 +112,10 @@ impl LoadingArtRenderer {
                             wgpu::BindGroupEntry {
                                 binding: 1,
                                 resource: wgpu::BindingResource::Sampler(&self.sampler),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: material.as_entire_binding(),
                             },
                         ],
                     })
