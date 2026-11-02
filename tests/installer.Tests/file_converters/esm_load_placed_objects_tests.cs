@@ -1,3 +1,4 @@
+using Mutagen.Bethesda.Fallout4;
 using Xunit;
 
 namespace InstallerTests
@@ -12,6 +13,17 @@ namespace InstallerTests
 
         bool IsImported(string editorId) =>
             db.QuerySingle<long>("SELECT COUNT(*) FROM placed_objects WHERE form_key = @key", new { key = db.KeyOf(editorId) }) == 1;
+
+        long TeleportFlags(string editorId) =>
+            db.QuerySingle<long>("SELECT flags FROM placed_teleports WHERE source_ref = @key", new { key = db.KeyOf(editorId) });
+
+        [Fact]
+        public void Teleport_NoLoadScreenDoor_StoresTheFlagBit() =>
+            Assert.Equal((long)TeleportDestination.Flag.NoLoadScreen, TeleportFlags("InteriorDoor"));
+
+        [Fact]
+        public void Teleport_PlainDoor_StoresZeroFlags() =>
+            Assert.Equal(0L, TeleportFlags("ExteriorDoor"));
 
         [Fact]
         public void PlacedObject_PlainRef_StoresRawPlacementScaleAndOwners()

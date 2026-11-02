@@ -41,6 +41,18 @@ namespace InstallerTests
             Assert.True(plan.NeedsRawScans);
         }
 
+        [Theory]
+        [InlineData("load_screens", "load_screen_conditions")]
+        [InlineData("load_screen_conditions", "load_screens")]
+        public void Create_LoadScreenTable_PlansTheScreensAndTheirConditionsTogether(string requested, string companion)
+        {
+            var plan = TableReloadPlan.Create([requested]);
+
+            Assert.Equal(["load_screen_conditions", "load_screens"], plan.Tables);
+            Assert.Contains(companion, plan.Tables);
+            Assert.Equal(["LSCR"], plan.RecordTypes);
+        }
+
         [Fact]
         public void Create_PlacedObjectsRequested_ReloadsWholeCellsJob() =>
             Assert.Contains("cells", TableReloadPlan.Create(["placed_objects"]).Tables);
