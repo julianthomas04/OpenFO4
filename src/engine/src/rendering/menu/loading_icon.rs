@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use resvg::usvg;
 
-use super::image_quad::{ImageQuadParams, ImageQuadPipeline};
+use super::image_quad::{ImageQuadParams, ImageQuadPipeline, params_buffer};
 use crate::assets::pipboy_art::{ArtClip, ArtLibrary, FixedArt};
 use crate::rendering::game_settings::SafeZone;
 use crate::rendering::hud::layout::Layout;
@@ -187,7 +187,7 @@ impl LoadingIcon {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let pipeline = ImageQuadPipeline::new(device, format);
-        let params = pipeline.params_buffer(device);
+        let params = params_buffer(device);
         Ok(Self {
             clip,
             frames,

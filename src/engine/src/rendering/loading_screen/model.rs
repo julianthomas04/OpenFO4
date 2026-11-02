@@ -11,6 +11,7 @@ use wgpu::util::DeviceExt;
 
 use super::art::LoadingArt;
 use super::camera::ArtCamera;
+use super::pan_window::{bounding_sphere_radius, pan_limit};
 use crate::assets::types::material_name::MaterialName;
 use crate::assets::types::mesh::{CpuMesh, Topology};
 use crate::rendering::texture::load_texture_asset_srgb;
@@ -86,11 +87,16 @@ impl CpuArt {
         if submeshes.is_empty() {
             return Err(LoadingArtError::NothingToDraw { path: path.clone() });
         }
+        let radius = bounding_sphere_radius(
+            submeshes
+                .iter()
+                .flat_map(|part| part.vertices.iter().map(|vertex| vertex.position)),
+        );
         Ok(Self {
             model_path: path.clone(),
             submeshes,
             asset_root: art.asset_root.clone(),
-            camera: ArtCamera::new(art),
+            camera: ArtCamera::new(art, pan_limit(radius, art.transform.scale)),
         })
     }
 }

@@ -28,6 +28,16 @@ impl ImageQuadParams {
     }
 }
 
+/// A uniform buffer for one quad's [`ImageQuadParams`].
+pub(super) fn params_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("menu_icon_params"),
+        size: std::mem::size_of::<ImageQuadParams>() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
 pub(super) struct ImageQuadPipeline {
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
@@ -116,16 +126,6 @@ impl ImageQuadPipeline {
         }
     }
 
-    /// A uniform buffer for one quad's [`ImageQuadParams`].
-    pub fn params_buffer(&self, device: &wgpu::Device) -> wgpu::Buffer {
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("menu_icon_params"),
-            size: std::mem::size_of::<ImageQuadParams>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        })
-    }
-
     /// The bind group that draws `view` with the parameters in `params`.
     pub fn bind_group(
         &self,
@@ -167,9 +167,9 @@ pub(super) struct BackgroundQuad {
 }
 
 impl BackgroundQuad {
-    pub fn new(pipeline: &ImageQuadPipeline, device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device) -> Self {
         Self {
-            params: pipeline.params_buffer(device),
+            params: params_buffer(device),
             bind_group: None,
         }
     }

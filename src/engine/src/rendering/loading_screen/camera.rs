@@ -1,30 +1,38 @@
-//! The viewer's camera on a loading screen's model: where the model stands and how dragging and
-//! the wheel move it. Pure, so every rule is unit-tested.
+//! The viewer's camera on a loading screen's model: where the model stands and how dragging, the
+//! pan keys and the slow spin it starts with move it. Pure, so every rule is unit-tested.
 //!
 //! The scene is in engine space (Y-up, one unit = 10 game units, see [`crate::bethesda_space`]).
 //! The camera sits at the origin and looks along Bethesda north (+Y), which is engine -Z. The
 //! model is placed by its transform: `translation * rotation * scale`. The viewer's yaw turns
 //! about the vertical axis, around the model's own position or, with `around_origin`, around the
-//! origin. Zoom `z` scales the model's distance from the camera by `1 / (1 + z)`.
+//! origin. Zoom `z` scales the model's distance from the camera by `1 / (1 + z)`. Panning moves
+//! the model along the camera's plane, within a window around its placement.
 
 use glam::{Mat4, Quat, Vec3};
 
 use super::art::{LoadingArt, ModelTransform};
+use super::motion::{PanKey, PanKeys, is_full_turn, spun_yaw, wrap_half_turns};
+use super::tuning::{
+    DEGREES_PER_PIXEL, MAX_STEP_SECONDS, PAN_HALF_WINDOWS_PER_SECOND, SPIN_DEGREES_PER_SECOND,
+    ZOOM_PER_PIXEL,
+};
 use crate::bethesda_space::{position_to_engine, rotation_to_engine};
 
 /// Inferred: the game's loading art framing is not documented.
 pub const VERTICAL_FOV_DEGREES: f32 = 50.0;
 const NEAR: f32 = 0.1;
 const FAR: f32 = 2000.0;
-/// Inferred: a drag across a 1000 px wide window turns the model by 350 degrees.
-const DEGREES_PER_PIXEL: f32 = 0.35;
-/// Inferred: ten wheel lines span the zoom range of a typical screen.
-const ZOOM_PER_LINE: f32 = 0.1;
 /// Zoom never reaches -1, where the distance would be infinite.
 const MIN_ZOOM: f32 = -0.9;
 /// Where a model stored at the origin is put instead, in Bethesda units straight ahead.
 const FALLBACK_DISTANCE: f32 = 600.0;
-const HALF_TURN_DEGREES: f32 = 180.0;
+
+/// The turn the model makes by itself, counted from where it stood when it began.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Spin {
+    start_deg: f32,
+    travelled_deg: f32,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArtCamera {
@@ -34,10 +42,19 @@ pub struct ArtCamera {
     no_rotation: bool,
     yaw_deg: f32,
     zoom: f32,
+    /// How far the pan keys have moved the model right and up, in engine units.
+    pan: (f32, f32),
+    /// The model may be moved this far from its placement along each axis, in engine units.
+    pan_limit: f32,
+    pan_keys: PanKeys,
+    /// Turning by itself until the viewer first drags; `None` once they have.
+    spin: Option<Spin>,
 }
 
 impl ArtCamera {
-    pub fn new(art: &LoadingArt) -> Self {
+    /// A camera for `art`, which the pan keys may move `pan_limit` engine units from its
+    /// placement along each axis.
+    pub fn new(art: &LoadingArt, pan_limit: f32) -> Self {
         let (rotation_min, rotation_max) = art.rotation_limits_deg;
         let rotation_limits_deg = ordered(f32::from(rotation_min), f32::from(rotation_max));
         let (zoom_min, zoom_max) = ordered(art.zoom_limits.0, art.zoom_limits.1);
@@ -49,6 +66,13 @@ impl ArtCamera {
             no_rotation: art.no_rotation,
             yaw_deg: 0.0,
             zoom: 0.0_f32.clamp(zoom_limits.0, zoom_limits.1),
+            pan: (0.0, 0.0),
+            pan_limit: pan_limit.max(0.0),
+            pan_keys: PanKeys::default(),
+            spin: (!art.no_rotation).then_some(Spin {
+                start_deg: 0.0,
+                travelled_deg: 0.0,
+            }),
         }
     }
 
@@ -61,31 +85,72 @@ impl ArtCamera {
         self.zoom
     }
 
-    /// A horizontal drag of `dx_px` pixels to the right turns the model's near side to the
-    /// right. Limits that span a full turn wrap around instead of stopping.
-    pub fn drag(&mut self, dx_px: f32) {
-        if self.no_rotation || !dx_px.is_finite() {
+    /// How far the pan keys have moved the model right and up, in engine units.
+    pub fn pan(&self) -> (f32, f32) {
+        self.pan
+    }
+
+    /// Whether the model is still turning by itself.
+    pub fn is_spinning(&self) -> bool {
+        self.spin.is_some()
+    }
+
+    /// A drag of `dx_px` pixels to the right and `dy_px` down. The horizontal part turns the
+    /// model's near side to the right, wrapping round when its limits span a full turn and
+    /// stopping at them otherwise; the vertical part zooms in when it goes up. A drag ends the
+    /// model's spin for good.
+    pub fn drag(&mut self, dx_px: f32, dy_px: f32) {
+        if !dx_px.is_finite() || !dy_px.is_finite() {
             return;
         }
-        let (min, max) = self.rotation_limits_deg;
-        let yaw = self.yaw_deg + dx_px * DEGREES_PER_PIXEL;
-        self.yaw_deg = if min <= -HALF_TURN_DEGREES && max >= HALF_TURN_DEGREES {
+        if dx_px.abs() > 0.0 || dy_px.abs() > 0.0 {
+            self.spin = None;
+        }
+        self.turn(dx_px * DEGREES_PER_PIXEL);
+        let (min, max) = self.zoom_limits;
+        self.zoom = (self.zoom - dy_px * ZOOM_PER_PIXEL).clamp(min, max);
+    }
+
+    fn turn(&mut self, degrees: f32) {
+        if self.no_rotation {
+            return;
+        }
+        let limits = self.rotation_limits_deg;
+        let yaw = self.yaw_deg + degrees;
+        self.yaw_deg = if is_full_turn(limits) {
             wrap_half_turns(yaw)
         } else {
-            yaw.clamp(min, max)
+            yaw.clamp(limits.0, limits.1)
         };
     }
 
-    /// Scrolling `lines` forwards (positive) zooms in.
-    pub fn wheel(&mut self, lines: f32) {
-        if !lines.is_finite() {
-            return;
-        }
-        let (min, max) = self.zoom_limits;
-        self.zoom = (self.zoom + lines * ZOOM_PER_LINE).clamp(min, max);
+    /// A pan key went down or up.
+    pub fn set_pan_key(&mut self, key: PanKey, held: bool) {
+        self.pan_keys.set(key, held);
     }
 
-    /// The model's position in engine units at the current zoom.
+    /// Lets `seconds` pass: the spin turns the model on and the held pan keys move it within
+    /// its window. A step that is not a positive number changes nothing; a long one counts as
+    /// [`MAX_STEP_SECONDS`].
+    pub fn tick(&mut self, seconds: f32) {
+        if !seconds.is_finite() || seconds <= 0.0 {
+            return;
+        }
+        let step = seconds.min(MAX_STEP_SECONDS);
+        if let Some(spin) = &mut self.spin {
+            spin.travelled_deg += SPIN_DEGREES_PER_SECOND * step;
+            self.yaw_deg = spun_yaw(spin.start_deg, spin.travelled_deg, self.rotation_limits_deg);
+        }
+        let (right, up) = self.pan_keys.direction();
+        let limit = self.pan_limit;
+        let reach = limit * PAN_HALF_WINDOWS_PER_SECOND * step;
+        self.pan = (
+            (self.pan.0 + right * reach).clamp(-limit, limit),
+            (self.pan.1 + up * reach).clamp(-limit, limit),
+        );
+    }
+
+    /// The model's position in engine units at the current zoom, before panning.
     fn position(&self) -> Vec3 {
         let [x, y, z] = self.transform.position;
         let stored = position_to_engine(x, y, z);
@@ -103,10 +168,11 @@ impl ArtCamera {
             * Mat4::from_scale(Vec3::splat(self.transform.scale));
         let position = Mat4::from_translation(self.position());
         let yaw = Mat4::from_quat(Quat::from_rotation_y(self.yaw_deg.to_radians()));
+        let pan = Mat4::from_translation(Vec3::new(self.pan.0, self.pan.1, 0.0));
         if self.transform.around_origin {
-            yaw * position * orientation
+            pan * yaw * position * orientation
         } else {
-            position * yaw * orientation
+            pan * position * yaw * orientation
         }
     }
 
@@ -124,11 +190,6 @@ impl ArtCamera {
 
 fn ordered(a: f32, b: f32) -> (f32, f32) {
     if a <= b { (a, b) } else { (b, a) }
-}
-
-/// `degrees` brought into `[-180, 180)`.
-fn wrap_half_turns(degrees: f32) -> f32 {
-    (degrees + HALF_TURN_DEGREES).rem_euclid(2.0 * HALF_TURN_DEGREES) - HALF_TURN_DEGREES
 }
 
 #[cfg(test)]
@@ -155,10 +216,20 @@ mod tests {
         }
     }
 
+    const PAN_LIMIT: f32 = 4.0;
+
     fn camera(edit: impl FnOnce(&mut LoadingArt)) -> ArtCamera {
         let mut art = art();
         edit(&mut art);
-        ArtCamera::new(&art)
+        ArtCamera::new(&art, PAN_LIMIT)
+    }
+
+    /// A camera that has been dragged a little, so its spin is over.
+    fn still_camera(edit: impl FnOnce(&mut LoadingArt)) -> ArtCamera {
+        let mut camera = camera(edit);
+        camera.drag(1.0, 0.0);
+        camera.drag(-1.0, 0.0);
+        camera
     }
 
     fn origin_of(matrix: Mat4) -> Vec3 {
@@ -173,79 +244,98 @@ mod tests {
     }
 
     #[test]
-    fn a_drag_turns_the_model_by_degrees_per_pixel() {
+    fn a_horizontal_drag_turns_the_model_by_degrees_per_pixel() {
         let mut camera = camera(|_| {});
-        camera.drag(40.0);
+        camera.drag(40.0, 0.0);
         assert!((camera.yaw_degrees() - 40.0 * DEGREES_PER_PIXEL).abs() < 1e-4);
     }
 
     #[test]
-    fn a_drag_stops_at_the_rotation_limits() {
+    fn a_horizontal_drag_stops_at_the_rotation_limits() {
         let mut camera = camera(|_| {});
-        camera.drag(100_000.0);
+        camera.drag(100_000.0, 0.0);
         assert_eq!(camera.yaw_degrees(), 45.0);
-        camera.drag(-100_000.0);
+        camera.drag(-100_000.0, 0.0);
         assert_eq!(camera.yaw_degrees(), -30.0);
     }
 
     #[test]
     fn reversed_rotation_limits_are_put_in_order() {
         let mut camera = camera(|art| art.rotation_limits_deg = (45, -30));
-        camera.drag(-100_000.0);
+        camera.drag(-100_000.0, 0.0);
         assert_eq!(camera.yaw_degrees(), -30.0);
     }
 
     #[test]
     fn a_full_turn_range_wraps_instead_of_stopping() {
         let mut camera = camera(|art| art.rotation_limits_deg = (-180, 180));
-        camera.drag(200.0 / DEGREES_PER_PIXEL);
+        camera.drag(200.0 / DEGREES_PER_PIXEL, 0.0);
         assert!(
             (camera.yaw_degrees() + 160.0).abs() < 1e-3,
             "{}",
             camera.yaw_degrees()
         );
-        camera.drag(-100.0 / DEGREES_PER_PIXEL);
+        camera.drag(-100.0 / DEGREES_PER_PIXEL, 0.0);
         assert!((camera.yaw_degrees() - 100.0).abs() < 1e-3);
     }
 
     #[test]
     fn limits_that_cover_only_one_side_of_the_full_turn_still_clamp() {
         let mut camera = camera(|art| art.rotation_limits_deg = (-180, 90));
-        camera.drag(100_000.0);
+        camera.drag(100_000.0, 0.0);
         assert_eq!(camera.yaw_degrees(), 90.0);
-        camera.drag(-100_000.0);
+        camera.drag(-100_000.0, 0.0);
         assert_eq!(camera.yaw_degrees(), -180.0);
     }
 
     #[test]
-    fn no_rotation_ignores_drags() {
+    fn no_rotation_ignores_horizontal_drags_but_not_vertical_ones() {
         let mut camera = camera(|art| art.no_rotation = true);
-        camera.drag(500.0);
+        camera.drag(500.0, -100.0);
         assert_eq!(camera.yaw_degrees(), 0.0);
+        assert!(camera.zoom() > 0.0, "the zoom still answers");
     }
 
     #[test]
     fn input_that_is_not_a_number_changes_nothing() {
         let mut camera = camera(|_| {});
-        camera.drag(f32::NAN);
-        camera.wheel(f32::INFINITY);
+        camera.drag(f32::NAN, 1.0);
+        camera.drag(1.0, f32::INFINITY);
+        camera.tick(f32::NAN);
         assert_eq!((camera.yaw_degrees(), camera.zoom()), (0.0, 0.0));
+        assert!(camera.is_spinning(), "such a drag is no drag");
     }
 
     #[test]
-    fn the_wheel_stays_within_the_zoom_limits() {
+    fn dragging_up_zooms_in_and_down_zooms_out_by_zoom_per_pixel() {
+        let mut camera = still_camera(|_| {});
+        camera.drag(0.0, -100.0);
+        assert!((camera.zoom() - 100.0 * ZOOM_PER_PIXEL).abs() < 1e-5);
+        camera.drag(0.0, 140.0);
+        assert!((camera.zoom() + 40.0 * ZOOM_PER_PIXEL).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_vertical_drag_stays_within_the_zoom_limits() {
         let mut camera = camera(|_| {});
-        camera.wheel(1000.0);
+        camera.drag(0.0, -100_000.0);
         assert_eq!(camera.zoom(), 1.5);
-        camera.wheel(-1000.0);
+        camera.drag(0.0, 100_000.0);
         assert_eq!(camera.zoom(), -0.5);
+    }
+
+    #[test]
+    fn a_vertical_drag_does_not_turn_the_model() {
+        let mut camera = still_camera(|_| {});
+        camera.drag(0.0, -300.0);
+        assert_eq!(camera.yaw_degrees(), 0.0);
     }
 
     #[test]
     fn zoom_scales_the_distance_by_one_over_one_plus_zoom() {
         let mut camera = camera(|_| {});
         let stored = origin_of(camera.model_matrix());
-        camera.wheel(5.0);
+        camera.drag(0.0, -100.0);
         assert!((camera.zoom() - 0.5).abs() < 1e-6);
         assert_close(origin_of(camera.model_matrix()), stored / 1.5);
     }
@@ -274,7 +364,7 @@ mod tests {
     #[test]
     fn the_model_turns_about_its_own_position_by_default() {
         let mut camera = camera(|art| art.rotation_limits_deg = (-90, 90));
-        camera.drag(90.0 / DEGREES_PER_PIXEL);
+        camera.drag(90.0 / DEGREES_PER_PIXEL, 0.0);
         let matrix = camera.model_matrix();
         assert_close(origin_of(matrix), Vec3::new(0.0, 0.0, -50.0));
         assert_close(matrix.transform_vector3(Vec3::Z), Vec3::X);
@@ -286,7 +376,7 @@ mod tests {
             art.rotation_limits_deg = (-90, 90);
             art.transform.around_origin = true;
         });
-        camera.drag(90.0 / DEGREES_PER_PIXEL);
+        camera.drag(90.0 / DEGREES_PER_PIXEL, 0.0);
         assert_close(origin_of(camera.model_matrix()), Vec3::new(-50.0, 0.0, 0.0));
     }
 
@@ -307,5 +397,176 @@ mod tests {
         let clip = camera.view_proj(16.0 / 9.0) * Vec3::new(0.0, 0.0, -50.0).extend(1.0);
         assert!(clip.w > 0.0);
         assert!((clip.x / clip.w).abs() < 1e-5 && (clip.y / clip.w).abs() < 1e-5);
+    }
+
+    #[test]
+    fn the_model_spins_by_itself_at_the_spin_speed_until_dragged() {
+        let mut camera = camera(|art| art.rotation_limits_deg = (-180, 180));
+        camera.tick(0.1);
+        assert!((camera.yaw_degrees() - SPIN_DEGREES_PER_SECOND * 0.1).abs() < 1e-4);
+        camera.tick(0.1);
+        assert!((camera.yaw_degrees() - SPIN_DEGREES_PER_SECOND * 0.2).abs() < 1e-4);
+        assert!(camera.is_spinning());
+    }
+
+    #[test]
+    fn a_spin_with_a_full_turn_of_room_wraps_round() {
+        let mut camera = camera(|art| art.rotation_limits_deg = (-180, 180));
+        let seconds = 190.0 / SPIN_DEGREES_PER_SECOND;
+        for _ in 0..(seconds / MAX_STEP_SECONDS).ceil() as u32 {
+            camera.tick(MAX_STEP_SECONDS);
+        }
+        assert!(
+            camera.yaw_degrees() < 0.0,
+            "past 180 degrees it comes round to {}",
+            camera.yaw_degrees()
+        );
+    }
+
+    #[test]
+    fn a_spin_with_narrower_limits_turns_back_at_each_end() {
+        let mut camera = camera(|_| {});
+        let steps_to_the_end = (45.0 / SPIN_DEGREES_PER_SECOND / 0.1).round() as u32;
+        let mut highest = f32::MIN;
+        for _ in 0..steps_to_the_end + 20 {
+            camera.tick(0.1);
+            highest = highest.max(camera.yaw_degrees());
+        }
+        assert!(
+            (highest - 45.0).abs() < 1e-3,
+            "it reached its limit: {highest}"
+        );
+        assert!(camera.yaw_degrees() < 45.0, "and then turned back");
+        let mut lowest = f32::MAX;
+        for _ in 0..400 {
+            camera.tick(0.1);
+            let yaw = camera.yaw_degrees();
+            assert!(
+                (-30.0..=45.0).contains(&yaw),
+                "{yaw} stays within the limits"
+            );
+            lowest = lowest.min(yaw);
+        }
+        assert!((lowest + 30.0).abs() < 1e-3, "it swept down to {lowest}");
+    }
+
+    #[test]
+    fn dragging_ends_the_spin_for_good() {
+        let mut camera = camera(|art| art.rotation_limits_deg = (-180, 180));
+        camera.tick(1.0);
+        camera.drag(10.0, 0.0);
+        let yaw = camera.yaw_degrees();
+        assert!(!camera.is_spinning());
+        camera.tick(1.0);
+        assert_eq!(camera.yaw_degrees(), yaw, "it no longer turns by itself");
+    }
+
+    #[test]
+    fn a_drag_that_moves_nowhere_does_not_end_the_spin() {
+        let mut camera = camera(|_| {});
+        camera.drag(0.0, 0.0);
+        assert!(camera.is_spinning());
+    }
+
+    #[test]
+    fn a_model_that_may_not_rotate_never_spins() {
+        let mut camera = camera(|art| art.no_rotation = true);
+        assert!(!camera.is_spinning());
+        camera.tick(5.0);
+        assert_eq!(camera.yaw_degrees(), 0.0);
+    }
+
+    #[test]
+    fn a_long_stalled_step_counts_as_the_longest_step() {
+        let mut stalled = camera(|art| art.rotation_limits_deg = (-180, 180));
+        let mut capped = stalled.clone();
+        stalled.tick(100.0);
+        capped.tick(MAX_STEP_SECONDS);
+        assert_eq!(stalled.yaw_degrees(), capped.yaw_degrees());
+    }
+
+    #[test]
+    fn a_held_pan_key_moves_the_model_across_the_screen_at_the_pan_speed() {
+        let mut camera = still_camera(|_| {});
+        camera.set_pan_key(PanKey::Right, true);
+        camera.tick(0.1);
+        let (right, up) = camera.pan();
+        assert!((right - PAN_LIMIT * PAN_HALF_WINDOWS_PER_SECOND * 0.1).abs() < 1e-5);
+        assert_eq!(up, 0.0);
+        assert_close(
+            origin_of(camera.model_matrix()),
+            Vec3::new(right, 0.0, -50.0),
+        );
+    }
+
+    #[test]
+    fn each_pan_key_moves_the_model_its_own_way() {
+        for (key, sign) in [
+            (PanKey::Right, (1.0, 0.0)),
+            (PanKey::Left, (-1.0, 0.0)),
+            (PanKey::Up, (0.0, 1.0)),
+            (PanKey::Down, (0.0, -1.0)),
+        ] {
+            let mut camera = still_camera(|_| {});
+            camera.set_pan_key(key, true);
+            camera.tick(0.1);
+            let (x, y) = camera.pan();
+            assert!(x * sign.1 == 0.0 && y * sign.0 == 0.0, "{key:?}: {x} {y}");
+            assert!(x * sign.0 + y * sign.1 > 0.0, "{key:?}: {x} {y}");
+        }
+    }
+
+    #[test]
+    fn the_pan_stops_at_the_edge_of_its_window_on_both_sides_of_both_axes() {
+        let mut camera = still_camera(|_| {});
+        for key in [PanKey::Right, PanKey::Up] {
+            camera.set_pan_key(key, true);
+        }
+        for _ in 0..100 {
+            camera.tick(MAX_STEP_SECONDS);
+        }
+        assert_eq!(camera.pan(), (PAN_LIMIT, PAN_LIMIT));
+        for key in [PanKey::Right, PanKey::Up] {
+            camera.set_pan_key(key, false);
+        }
+        for key in [PanKey::Left, PanKey::Down] {
+            camera.set_pan_key(key, true);
+        }
+        for _ in 0..200 {
+            camera.tick(MAX_STEP_SECONDS);
+        }
+        assert_eq!(camera.pan(), (-PAN_LIMIT, -PAN_LIMIT));
+    }
+
+    #[test]
+    fn a_released_pan_key_leaves_the_model_where_it_is() {
+        let mut camera = still_camera(|_| {});
+        camera.set_pan_key(PanKey::Right, true);
+        camera.tick(0.1);
+        camera.set_pan_key(PanKey::Right, false);
+        let moved = camera.pan();
+        camera.tick(1.0);
+        assert_eq!(camera.pan(), moved);
+    }
+
+    #[test]
+    fn a_model_with_no_pan_window_cannot_be_moved() {
+        let mut camera = ArtCamera::new(&art(), 0.0);
+        camera.set_pan_key(PanKey::Right, true);
+        camera.tick(1.0);
+        assert_eq!(camera.pan(), (0.0, 0.0));
+        let mut camera = ArtCamera::new(&art(), f32::NAN);
+        camera.set_pan_key(PanKey::Up, true);
+        camera.tick(1.0);
+        assert_eq!(camera.pan(), (0.0, 0.0));
+    }
+
+    #[test]
+    fn panning_moves_a_model_that_swings_about_the_camera_along_the_screen_too() {
+        let mut camera = still_camera(|art| art.transform.around_origin = true);
+        camera.set_pan_key(PanKey::Up, true);
+        camera.tick(0.1);
+        let (_, up) = camera.pan();
+        assert_close(origin_of(camera.model_matrix()), Vec3::new(0.0, up, -50.0));
     }
 }

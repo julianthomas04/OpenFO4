@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use super::art_loader::{ArtLoadError, ArtLoader, LoaderPoll};
+use super::keys::ArtKey;
 use crate::assets::db::DbClient;
 use crate::assets::db::load_screens::{LoadScreen, LoadScreenCatalog};
 use crate::assets::types::glb_key::glb_key;
@@ -71,6 +72,7 @@ impl LoadScreenHost {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         target_format: wgpu::TextureFormat,
+        hud_tint: [f32; 3],
         asset_root: &Path,
         db_path: String,
         seed: u64,
@@ -82,7 +84,7 @@ impl LoadScreenHost {
             rng: SplitMix64::new(seed),
             forced: forced_screen_from_env(),
             loader: ArtLoader::default(),
-            renderer: LoadingArtRenderer::new(device, queue, target_format),
+            renderer: LoadingArtRenderer::new(device, queue, target_format, hud_tint),
             background: LoadingBackground::new(asset_root.to_path_buf()),
             device: device.clone(),
             queue: queue.clone(),
@@ -198,12 +200,24 @@ impl LoadScreenHost {
         self.background.view(&self.device, &self.queue)
     }
 
-    pub fn drag(&mut self, dx_px: f32) {
-        self.renderer.drag(dx_px);
+    /// A drag of `dx_px` pixels to the right and `dy_px` down.
+    pub fn drag(&mut self, dx_px: f32, dy_px: f32) {
+        self.renderer.drag(dx_px, dy_px);
     }
 
-    pub fn wheel(&mut self, lines: f32) {
-        self.renderer.wheel(lines);
+    /// A key that acts on the model went down or up. Holding a key down repeats its press, which
+    /// switches nothing twice.
+    pub fn key(&mut self, key: ArtKey, pressed: bool, repeat: bool) {
+        match key {
+            ArtKey::Pan(pan) => self.renderer.set_pan_key(pan, pressed),
+            ArtKey::ToggleColours if pressed && !repeat => self.renderer.toggle_colours(),
+            ArtKey::ToggleColours => {}
+        }
+    }
+
+    /// Lets `seconds` pass for the model's spin and pan.
+    pub fn tick(&mut self, seconds: f32) {
+        self.renderer.tick(seconds);
     }
 
     pub fn render(
@@ -422,6 +436,7 @@ mod tests {
         use super::super::*;
         use crate::rendering::gpu_test::test_device;
         use crate::rendering::loading_screen::test_support::cube_art;
+        use crate::rendering::loading_screen::{ColourMode, PanKey};
         use crate::rendering::post::tonemap::ui_gamma_format;
 
         const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -433,6 +448,7 @@ mod tests {
                 &device,
                 &queue,
                 ui_gamma_format(FORMAT),
+                [1.0; 3],
                 Path::new("unused"),
                 String::new(),
                 1,
@@ -512,6 +528,59 @@ mod tests {
                 matches!(host.poll(), ArtStatus::Idle),
                 "the load is forgotten"
             );
+        }
+
+        #[test]
+        fn q_switches_the_colours_once_per_press_and_ignores_its_repeats_and_release() {
+            let Some(mut host) = host("load screen host colours") else {
+                return;
+            };
+            assert_eq!(host.renderer.colour_mode(), ColourMode::Own);
+
+            host.key(ArtKey::ToggleColours, true, false);
+            assert_eq!(host.renderer.colour_mode(), ColourMode::Monochrome);
+            host.key(ArtKey::ToggleColours, true, true);
+            host.key(ArtKey::ToggleColours, false, false);
+            assert_eq!(host.renderer.colour_mode(), ColourMode::Monochrome);
+            host.key(ArtKey::ToggleColours, true, false);
+            assert_eq!(host.renderer.colour_mode(), ColourMode::Own);
+        }
+
+        #[test]
+        fn the_pan_keys_move_the_shown_model_only_while_they_are_held() {
+            let Some(mut host) = host("load screen host pan") else {
+                return;
+            };
+            let dir = tempfile::tempdir().unwrap();
+            host.show(chosen(cube_art(dir.path(), ""))).unwrap();
+            assert!(matches!(settled(&mut host), ArtStatus::Ready));
+            let pan = |host: &LoadScreenHost| host.renderer.camera().expect("a model").pan();
+
+            host.key(ArtKey::Pan(PanKey::Right), true, false);
+            host.tick(0.1);
+            let held = pan(&host);
+            assert!(held.0 > 0.0, "{held:?}");
+            host.key(ArtKey::Pan(PanKey::Right), false, false);
+            host.tick(0.1);
+            assert_eq!(pan(&host), held);
+        }
+
+        #[test]
+        fn a_drag_turns_and_zooms_the_shown_model_and_stops_its_spin() {
+            let Some(mut host) = host("load screen host drag") else {
+                return;
+            };
+            let dir = tempfile::tempdir().unwrap();
+            host.show(chosen(cube_art(dir.path(), ""))).unwrap();
+            assert!(matches!(settled(&mut host), ArtStatus::Ready));
+            host.tick(0.1);
+            assert!(host.renderer.camera().unwrap().is_spinning());
+
+            host.drag(20.0, -50.0);
+
+            let camera = host.renderer.camera().unwrap();
+            assert!(!camera.is_spinning());
+            assert!(camera.zoom() > 0.0);
         }
 
         #[test]

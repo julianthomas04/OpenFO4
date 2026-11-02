@@ -1778,6 +1778,7 @@ impl State {
                 &device,
                 &queue,
                 tonemap::ui_gamma_format(surface_format),
+                settings.ui_colours.tint_for(UiColourSet::Hud).color,
                 Path::new(asset_server.asset_location()),
                 db_path.clone(),
                 seed_from_clock(),
@@ -3753,7 +3754,7 @@ impl State {
         }
 
         self.begin_unstarted_initial_load();
-        self.sync_load_screen();
+        self.sync_load_screen(dt);
 
         self.tick_animated_objects(world_dt);
 

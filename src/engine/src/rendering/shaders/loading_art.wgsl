@@ -8,9 +8,11 @@ struct Scene {
     model: mat4x4<f32>,
     // Unit vector towards the light, in engine space.
     light_direction: vec4<f32>,
-    // The ambient and the diffuse strength of the light, and 1 when
-    // the shader has to encode to sRGB.
+    // The ambient and the diffuse strength of the light, 1 when the shader has to encode to
+    // sRGB, and 1 when the model is drawn in the HUD colour alone.
     shading: vec4<f32>,
+    // The HUD colour in linear light.
+    tint: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> scene: Scene;
@@ -50,6 +52,9 @@ fn vs_main(in: VsIn) -> VsOut {
     return out;
 }
 
+// The weights of linear red, green and blue in perceived brightness (Rec. 709).
+const LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
+
 fn encode_srgb(linear: vec3<f32>) -> vec3<f32> {
     let low = linear * 12.92;
     let high = 1.055 * pow(linear, vec3<f32>(1.0 / 2.4)) - 0.055;
@@ -80,7 +85,8 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     if is_cut_out(texel.a) {
         discard;
     }
-    let albedo = texel.rgb;
+    let brightness = dot(texel.rgb, LUMA);
+    let albedo = select(texel.rgb, vec3<f32>(brightness) * scene.tint.rgb, scene.shading.w > 0.5);
     let lit = albedo * (scene.shading.x + scene.shading.y * light);
     let colour = select(lit, encode_srgb(lit), scene.shading.z > 0.5);
     return vec4<f32>(colour, 1.0);

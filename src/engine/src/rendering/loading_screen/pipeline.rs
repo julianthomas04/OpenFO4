@@ -4,6 +4,7 @@
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
 
+use super::colour_mode::ColourMode;
 use crate::rendering::shaders;
 use crate::rendering::texture::Texture;
 use crate::rendering::vertex::Vertex;
@@ -21,15 +22,31 @@ pub(super) struct SceneUniform {
     model: [[f32; 4]; 4],
     light_direction: [f32; 4],
     shading: [f32; 4],
+    /// The HUD colour in linear light, for the monochrome look.
+    tint: [f32; 4],
 }
 
 impl SceneUniform {
-    pub fn new(view_proj: Mat4, model: Mat4, encode_srgb: bool) -> Self {
+    pub fn new(
+        view_proj: Mat4,
+        model: Mat4,
+        encode_srgb: bool,
+        colours: ColourMode,
+        hud_tint: [f32; 3],
+    ) -> Self {
+        let flag = |on: bool| if on { 1.0 } else { 0.0 };
+        let [red, green, blue] = hud_tint;
         Self {
             view_proj: view_proj.to_cols_array_2d(),
             model: model.to_cols_array_2d(),
             light_direction: LIGHT_TOWARDS.normalize().extend(0.0).to_array(),
-            shading: [AMBIENT, DIFFUSE, if encode_srgb { 1.0 } else { 0.0 }, 0.0],
+            shading: [
+                AMBIENT,
+                DIFFUSE,
+                flag(encode_srgb),
+                flag(colours == ColourMode::Monochrome),
+            ],
+            tint: [red, green, blue, 0.0],
         }
     }
 }

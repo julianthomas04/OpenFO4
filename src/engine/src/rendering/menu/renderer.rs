@@ -181,7 +181,7 @@ impl MenuRenderer {
         let tint_bind_group = pipeline.create_tint_bind_group(device, &NEUTRAL_TINT);
         let loading_icon = LoadingIcon::new(device, format, art)?;
         let image_pipeline = ImageQuadPipeline::new(device, format);
-        let background = BackgroundQuad::new(&image_pipeline, device);
+        let background = BackgroundQuad::new(device);
         Ok(Self {
             gamma_format: format,
             layout,

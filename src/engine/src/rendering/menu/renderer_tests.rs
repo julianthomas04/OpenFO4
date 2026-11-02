@@ -996,7 +996,8 @@ fn an_overlay_without_a_panel_draws_none() {
     };
     let target = Target::new(&device);
     target.render(&device, &queue, overlay(1.0, None));
-    assert!(green_pixels(&target.pixels(&device, &queue)).is_empty());
+    let lit = green_pixels(&target.pixels(&device, &queue));
+    assert_eq!(lit.len(), 0, "{lit:?}");
 }
 
 #[test]
@@ -1007,7 +1008,8 @@ fn the_loading_art_sits_above_the_backdrop_and_below_the_logo() {
     let target = Target::new(&device);
     target.fill(&device, &queue, RED);
     let mut menu = renderer(&device, &queue, HUD_GREEN);
-    let mut art_renderer = LoadingArtRenderer::new(&device, &queue, ui_gamma_format(FORMAT));
+    let mut art_renderer =
+        LoadingArtRenderer::new(&device, &queue, ui_gamma_format(FORMAT), [1.0; 3]);
     let dir = tempfile::tempdir().unwrap();
     let mut art = cube_art(dir.path(), "");
     // The cube stands over the logo's corner of the screen.
@@ -1152,7 +1154,8 @@ fn the_loading_art_is_drawn_over_the_backdrop_image() {
     let image = background.view(&device, &queue).expect("the image loads");
     let target = Target::new(&device);
     let mut menu = renderer(&device, &queue, HUD_GREEN);
-    let mut art_renderer = LoadingArtRenderer::new(&device, &queue, ui_gamma_format(FORMAT));
+    let mut art_renderer =
+        LoadingArtRenderer::new(&device, &queue, ui_gamma_format(FORMAT), [1.0; 3]);
     let cpu = CpuArt::load(&cube_art(dir.path(), "")).expect("the synthetic cube loads");
     art_renderer.set_art(Some(
         LoadedArt::upload(&device, &queue, cpu).expect("the cube uploads"),

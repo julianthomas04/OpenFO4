@@ -3,6 +3,7 @@
 
 use winit::keyboard::KeyCode;
 
+use super::load_transition::art_key;
 use super::stream_settle::{self, ColliderSettle, StreamReport};
 use super::{ResolvedTarget, State};
 use crate::game_flow::{FlowAction, FlowEvent, Phase, SpawnLocation, StreamCounts};
@@ -32,8 +33,12 @@ impl State {
 
     pub fn handle_pointer_moved(&mut self, x: f64, y: f64) {
         self.pointer_px = (x as f32, y as f32);
-        if let Some(dx) = self.load_screens.drag.moved(self.pointer_px.0) {
-            self.load_screens.host.drag(dx);
+        if let Some((dx, dy)) = self
+            .load_screens
+            .drag
+            .moved(self.pointer_px.0, self.pointer_px.1)
+        {
+            self.load_screens.host.drag(dx, dy);
         }
         if let Some(row) = self.row_under_pointer() {
             self.handle_flow_event(FlowEvent::RowHovered(row));
@@ -42,7 +47,9 @@ impl State {
 
     pub fn handle_pointer_pressed(&mut self) {
         if self.art_interactive() {
-            self.load_screens.drag.press(self.pointer_px.0);
+            self.load_screens
+                .drag
+                .press(self.pointer_px.0, self.pointer_px.1);
         }
         if let Some(row) = self.row_under_pointer() {
             self.handle_flow_event(FlowEvent::RowPressed(row));
@@ -57,11 +64,7 @@ impl State {
 
     /// `lines` is the wheel's travel in lines, positive away from the user.
     pub fn handle_wheel(&mut self, lines: f32) {
-        if self.art_interactive() {
-            self.load_screens.host.wheel(lines);
-        } else {
-            self.flow.scroll(lines);
-        }
+        self.flow.scroll(lines);
     }
 
     /// Whether the developer window is shown and so takes pointer and keyboard input.
@@ -139,8 +142,13 @@ impl State {
         self.pending_teleport = Some(target);
     }
 
-    /// Keys outside gameplay drive the menu list.
+    /// Keys outside gameplay drive the menu list, or, while a large loading screen shows its
+    /// model, move and recolour the model.
     pub(super) fn handle_menu_key(&mut self, code: KeyCode, is_pressed: bool, is_repeat: bool) {
+        if let Some(key) = art_key(code).filter(|_| self.art_interactive()) {
+            self.load_screens.host.key(key, is_pressed, is_repeat);
+            return;
+        }
         if !is_pressed {
             return;
         }

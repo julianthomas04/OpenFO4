@@ -6,10 +6,12 @@ mod art_loader;
 mod drag;
 mod history;
 mod host;
+mod keys;
 
 pub(super) use drag::DragTracker;
 pub(super) use history::{LoadHistory, spawn_report_title};
 pub(in crate::rendering) use host::LoadScreenHost;
+pub(super) use keys::art_key;
 
 use history::{LoadOrigin, take_if_accepted};
 use host::ArtStatus;
@@ -204,9 +206,10 @@ impl State {
         self.begin_transition(&plan);
     }
 
-    /// Follows the model's load, and takes the model down once the load screen is. A model that
-    /// fails to load turns the large screen into the small one.
-    pub(super) fn sync_load_screen(&mut self) {
+    /// Follows the model's load, lets `seconds` pass for its spin and pan, and takes the model
+    /// down once the load screen is. A model that fails to load turns the large screen into the
+    /// small one.
+    pub(super) fn sync_load_screen(&mut self, seconds: f32) {
         if self.flow.phase() != Phase::Loading {
             if self.load_screens.host.is_active() {
                 self.load_screens.host.clear();
@@ -214,6 +217,7 @@ impl State {
             self.load_screens.drag.release();
             return;
         }
+        self.load_screens.host.tick(seconds);
         if let ArtStatus::Failed { label, error } = self.load_screens.host.poll() {
             tracing::error!("loading screen {label} falls back to the small screen: {error}");
             self.flow.fall_back_to_small();
@@ -221,7 +225,7 @@ impl State {
         }
     }
 
-    /// Whether the pointer and the wheel turn and zoom the model.
+    /// Whether the pointer and the keys act on the model.
     pub(super) fn art_interactive(&self) -> bool {
         self.flow.overlay_layers().art && self.load_screens.host.has_art()
     }

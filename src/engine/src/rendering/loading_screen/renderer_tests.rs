@@ -2,14 +2,16 @@
 
 use glam::UVec2;
 
-use super::test_support::{cube_art, layered_quads_art, write_texture};
-use super::{CpuArt, LoadedArt, LoadingArt, LoadingArtRenderer};
+use super::test_support::{cube_art, layered_quads_art, write_solid_texture, write_texture};
+use super::{ColourMode, CpuArt, LoadedArt, LoadingArt, LoadingArtRenderer, PanKey};
 use crate::rendering::gpu_test::{linear_to_srgb_byte, read_mip, test_device};
 use crate::rendering::post::tonemap::ui_gamma_format;
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const SIZE: (u32, u32) = (320, 180);
 const BLACK: wgpu::Color = wgpu::Color::BLACK;
+/// The HUD colour of the tests, in linear light.
+const HUD_GREEN: [f32; 3] = [0.0, 1.0, 0.0];
 /// The cube's front face is lit by the ambient term and the light at an angle of
 /// `cos = 0.7 / |(-0.4, 0.6, 0.7)|`; a white texel shows `0.35 + 0.75 * cos` encoded to sRGB.
 const FRONT_FACE_LINEAR: f32 = 0.35 + 0.75 * 0.696_5;
@@ -130,7 +132,7 @@ struct Scene {
 impl Scene {
     fn new(test: &str) -> Option<Self> {
         let (device, queue) = test_device(test)?;
-        let renderer = LoadingArtRenderer::new(&device, &queue, ui_gamma_format(FORMAT));
+        let renderer = LoadingArtRenderer::new(&device, &queue, ui_gamma_format(FORMAT), HUD_GREEN);
         Some(Self {
             device,
             queue,
@@ -233,7 +235,7 @@ fn dragging_turns_the_cube_within_its_limits() {
     let target = Target::new(&scene, SIZE, BLACK);
     let head_on = scene.draw(&target).lit_width();
 
-    scene.renderer.drag(100_000.0);
+    scene.renderer.drag(100_000.0, 0.0);
     target.clear(&scene, BLACK);
     let turned = scene.draw(&target).lit_width();
 
@@ -256,10 +258,10 @@ fn a_model_that_cannot_be_zoomed_in_on_keeps_its_size() {
     let target = Target::new(&scene, SIZE, BLACK);
     let before = scene.draw(&target).lit_count();
 
-    scene.renderer.wheel(-50.0);
+    scene.renderer.drag(0.0, 10_000.0);
     target.clear(&scene, BLACK);
     let zoomed_out = scene.draw(&target).lit_count();
-    scene.renderer.wheel(5.0);
+    scene.renderer.drag(0.0, -1_000.0);
     target.clear(&scene, BLACK);
     let zoomed_in = scene.draw(&target).lit_count();
 
@@ -346,4 +348,101 @@ fn a_material_without_an_alpha_test_never_discards() {
         lit > 0,
         "a fully transparent texture still draws without a test token"
     );
+}
+
+impl Pixels {
+    /// The mean column of the pixels that hold anything but black.
+    fn lit_centre_x(&self) -> f32 {
+        let (sum, count) = (0..self.size.1)
+            .flat_map(|y| (0..self.size.0).map(move |x| (x, y)))
+            .filter(|&(x, y)| self.at(x, y) != [0, 0, 0])
+            .fold((0.0_f32, 0.0_f32), |(sum, count), (x, _)| {
+                (sum + x as f32, count + 1.0)
+            });
+        sum / count
+    }
+}
+
+#[test]
+fn a_held_pan_key_moves_the_drawn_model_across_the_screen() {
+    let Some(mut scene) = Scene::new("loading art pan") else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    scene.show(&cube_art(dir.path(), ""));
+    let target = Target::new(&scene, SIZE, BLACK);
+    let before = scene.draw(&target).lit_centre_x();
+
+    scene.renderer.set_pan_key(PanKey::Right, true);
+    scene.renderer.tick(0.25);
+    scene.renderer.set_pan_key(PanKey::Right, false);
+    target.clear(&scene, BLACK);
+    let right = scene.draw(&target).lit_centre_x();
+    scene.renderer.set_pan_key(PanKey::Left, true);
+    scene.renderer.tick(0.25);
+    scene.renderer.tick(0.25);
+    target.clear(&scene, BLACK);
+    let left = scene.draw(&target).lit_centre_x();
+
+    assert!(right > before + 5.0, "{before} -> {right}");
+    assert!(left < before - 5.0, "{before} -> {left}");
+}
+
+/// The colour of the middle of a cube textured with `texel` in `mode`; `None` without a GPU.
+fn centre_in(test: &str, texel: [u8; 4], mode: ColourMode) -> Option<[u8; 3]> {
+    let mut scene = Scene::new(test)?;
+    let dir = tempfile::tempdir().unwrap();
+    write_solid_texture(dir.path(), "tinted.dds", texel);
+    scene.show(&cube_art(dir.path(), "tinted.dds"));
+    while scene.renderer.colour_mode() != mode {
+        scene.renderer.toggle_colours();
+    }
+    let target = Target::new(&scene, SIZE, BLACK);
+    Some(scene.draw(&target).centre())
+}
+
+#[test]
+fn a_model_shows_its_own_colours_until_the_colours_are_switched() {
+    let Some(own) = centre_in("loading art own colours", [255, 0, 0, 255], ColourMode::Own) else {
+        return;
+    };
+    assert!(own[0] > 100 && own[1] == 0 && own[2] == 0, "red: {own:?}");
+}
+
+#[test]
+fn a_monochrome_model_is_the_hud_colour_scaled_by_the_brightness_of_its_texture() {
+    let Some(red) = centre_in(
+        "loading art mono red",
+        [255, 0, 0, 255],
+        ColourMode::Monochrome,
+    ) else {
+        return;
+    };
+    let Some(white) = centre_in("loading art mono white", [255; 4], ColourMode::Monochrome) else {
+        return;
+    };
+    assert_eq!(
+        (red[0], red[2]),
+        (0, 0),
+        "only the HUD colour's own channel: {red:?}"
+    );
+    assert_eq!((white[0], white[2]), (0, 0), "{white:?}");
+    assert!(
+        white[1] > red[1] && red[1] > 0,
+        "a white texture is brighter than a red one: {white:?} against {red:?}"
+    );
+    let expected = linear_to_srgb_byte(FRONT_FACE_LINEAR);
+    assert_close(white[1], expected, 4);
+}
+
+#[test]
+fn switching_the_colours_twice_brings_the_models_own_back() {
+    let Some(mut scene) = Scene::new("loading art colour toggle") else {
+        return;
+    };
+    assert_eq!(scene.renderer.colour_mode(), ColourMode::Own);
+    scene.renderer.toggle_colours();
+    assert_eq!(scene.renderer.colour_mode(), ColourMode::Monochrome);
+    scene.renderer.toggle_colours();
+    assert_eq!(scene.renderer.colour_mode(), ColourMode::Own);
 }
