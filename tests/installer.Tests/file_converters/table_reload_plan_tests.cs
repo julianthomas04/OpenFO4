@@ -54,6 +54,16 @@ namespace InstallerTests
         }
 
         [Fact]
+        public void Create_WorldspacesTable_PlansOnlyTheWorldspaceJobWithoutCellsOrRawScans()
+        {
+            var plan = TableReloadPlan.Create(["worldspaces"]);
+
+            Assert.Equal(["map_markers", "worldspaces"], plan.Tables);
+            Assert.Equal(["WRLD"], plan.RecordTypes);
+            Assert.False(plan.NeedsRawScans);
+        }
+
+        [Fact]
         public void Create_PlacedObjectsRequested_ReloadsWholeCellsJob() =>
             Assert.Contains("cells", TableReloadPlan.Create(["placed_objects"]).Tables);
 
