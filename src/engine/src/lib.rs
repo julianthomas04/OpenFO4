@@ -13,6 +13,7 @@ pub mod bethesda_space;
 pub mod conditions;
 pub mod footsteps;
 pub mod game_flow;
+pub mod loading_screen;
 #[cfg(test)]
 pub(crate) mod installer_source;
 pub mod navmesh;
