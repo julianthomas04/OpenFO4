@@ -13,18 +13,19 @@ use crate::rendering::vertex::Vertex;
 /// left and front, so the left silhouette is bright, the right side dark and the undersides
 /// black; there is no fill or rim light.
 ///
-/// Inferred from a comparison with a vanilla screenshot: the left and right p90 brightness differ
-/// by about 1.8 and surfaces facing the viewer's right fall to black.
-const LIGHT_TOWARDS: Vec3 = Vec3::new(-0.75, 0.55, 0.3);
-/// Inferred: practically none, vanilla has 6.7% pure black model pixels. The shader adds no wrap
+/// Inferred from comparisons with a vanilla screenshot: the left and right p90 brightness differ
+/// by about 1.76, the upper and lower by about 1.59, and surfaces facing the viewer's right fall
+/// to black, so the key is mostly lateral and from above, barely frontal.
+const LIGHT_TOWARDS: Vec3 = Vec3::new(-0.7, 0.7, 0.15);
+/// Inferred: nearly none, vanilla has 6.7% pure black model pixels. The shader adds no wrap
 /// light, and back faces of two-sided geometry are lit as their own side, not brightened.
-const AMBIENT: f32 = 0.01;
+const AMBIENT: f32 = 0.02;
 /// Inferred: the strength of the key, aiming at a p99 luma of about 250 with 1.5 to 2% of the
 /// model's pixels clipped.
-const DIFFUSE: f32 = 2.2;
-/// Inferred: the strength of the specular lobe of the world's surface response, in the key's
-/// colour, aiming at white-looking highlights.
-const SPECULAR_STRENGTH: f32 = 2.0;
+const DIFFUSE: f32 = 2.5;
+/// Inferred: the strength of the specular lobe of the world's surface response. The lobe is
+/// white, not tinted like the diffuse light: vanilla's highlights have blue about 0.96 of green.
+const SPECULAR_STRENGTH: f32 = 3.0;
 
 /// The uniform block of `loading_art.wgsl`.
 #[repr(C)]
@@ -34,7 +35,7 @@ pub(super) struct SceneUniform {
     model: [[f32; 4]; 4],
     light_direction: [f32; 4],
     shading: [f32; 4],
-    /// The linear colour of the key, applied to its diffuse and specular terms.
+    /// The linear colour of the key, applied to its diffuse term only.
     light_colour: [f32; 4],
 }
 

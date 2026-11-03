@@ -13,7 +13,7 @@ struct Scene {
     // The ambient and the diffuse strength of the light, 1 when the shader has to encode to sRGB,
     // and the strength of the specular lobe.
     shading: vec4<f32>,
-    // The linear colour of the light, applied to its diffuse and specular terms.
+    // The linear colour of the light, applied to its diffuse term only; the specular is white.
     light_colour: vec4<f32>,
 };
 
@@ -92,12 +92,11 @@ fn direction_to_viewer(world_pos: vec3<f32>) -> vec3<f32> {
 }
 
 // The specular lobe of the key light on `surface`; none where the light does not reach it.
-fn key_specular(surface: SurfaceSample, light: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
+fn key_specular(surface: SurfaceSample, light: vec3<f32>, world_pos: vec3<f32>) -> f32 {
     if dot(surface.n, light) <= 0.0 {
-        return vec3<f32>(0.0);
+        return 0.0;
     }
-    return scene.light_colour.rgb * scene.shading.w
-        * specular_response(surface, light, direction_to_viewer(world_pos));
+    return scene.shading.w * specular_response(surface, light, direction_to_viewer(world_pos));
 }
 
 @fragment
@@ -120,7 +119,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         material.surface.y * specular_texel.r,
     );
     let key = scene.light_colour.rgb * (scene.shading.y * max(dot(surface.n, light), 0.0));
-    let lit = texel.rgb * (vec3<f32>(scene.shading.x) + key) + key_specular(surface, light, in.world_pos);
+    let lit = texel.rgb * (vec3<f32>(scene.shading.x) + key) + vec3<f32>(key_specular(surface, light, in.world_pos));
     let colour = select(lit, encode_srgb(lit), scene.shading.z > 0.5);
     return vec4<f32>(colour, 1.0);
 }

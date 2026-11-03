@@ -13,12 +13,12 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const SIZE: (u32, u32) = (320, 180);
 const BLACK: wgpu::Color = wgpu::Color::BLACK;
 /// The cube's front face is lit by the ambient term and the tinted light at an angle of
-/// `cos = 0.3 / |(-0.75, 0.55, 0.3)|`; a white texel shows `0.01 + 2.2 * cos * tint` per channel,
+/// `cos = 0.15 / |(-0.7, 0.7, 0.15)|`; a white texel shows `0.02 + 2.5 * cos * tint` per channel,
 /// encoded to sRGB.
-const FRONT_FACE_COS: f32 = 0.307;
+const FRONT_FACE_COS: f32 = 0.149_8;
 
 fn front_face_bytes() -> [u8; 3] {
-    light_colour().map(|tint| linear_to_srgb_byte(0.01 + 2.2 * FRONT_FACE_COS * tint))
+    light_colour().map(|tint| linear_to_srgb_byte(0.02 + 2.5 * FRONT_FACE_COS * tint))
 }
 
 fn assert_close_colour(actual: [u8; 3], expected: [u8; 3], tolerance: u8) {
@@ -423,7 +423,7 @@ fn assert_same_colour(actual: [u8; 3], expected: [u8; 3]) {
 }
 
 #[test]
-fn a_specular_map_adds_a_highlight_in_the_colour_of_the_light() {
+fn a_specular_map_adds_a_white_highlight_whatever_the_colour_of_the_light() {
     let (Some(matte), Some(shiny)) = (
         centre_with("loading art matte", "grey.dds", &[("grey.dds", MID_GREY)]),
         centre_with(
@@ -435,17 +435,13 @@ fn a_specular_map_adds_a_highlight_in_the_colour_of_the_light() {
         return;
     };
     assert!(
-        shiny[0] > matte[0] + 5 && shiny[2] > matte[2] + 5,
+        shiny[0] > matte[0] + 3 && shiny[2] > matte[2] + 3,
         "{matte:?} -> {shiny:?}"
     );
-    let added = |channel: usize| {
-        srgb_to_linear(shiny[channel]) - srgb_to_linear(matte[channel])
-    };
-    let tint = light_colour();
-    let (red_to_blue, tint_red_to_blue) = (added(0) / added(2), tint[0] / tint[2]);
+    let added = |channel: usize| srgb_to_linear(shiny[channel]) - srgb_to_linear(matte[channel]);
     assert!(
-        (red_to_blue / tint_red_to_blue - 1.0).abs() < 0.1,
-        "{matte:?} -> {shiny:?}: red to blue {red_to_blue}, the light's {tint_red_to_blue}"
+        (added(0) - added(2)).abs() < 0.01 * added(0).max(0.01) + 0.003,
+        "{matte:?} -> {shiny:?}: the highlight is white"
     );
 }
 
