@@ -66,6 +66,7 @@ use crate::rendering::texture_streaming::demand::{
 };
 use crate::rendering::texture_streaming::material::{MaterialSource, build_gpu_material};
 use crate::rendering::texture_streaming::read_failure::ReadFailure;
+use crate::rendering::texture_streaming::readiness::TextureReadiness;
 use crate::rendering::texture_streaming::role::{Admission, admit_texture};
 use crate::rendering::texture_streaming::{
     ResidencyPolicy, TextureResidency, residency, uv_density,
@@ -83,7 +84,7 @@ use crate::sim::collision::{
 use crate::sim::{EntityId, SimCommand, refr_entity_id};
 use crate::water_world::{LoadedCell, VolumeShapes};
 use one_shot::OneShot;
-use staging::{DeferredSpawn, Ring, StagedCell, Staging, TextureReadiness};
+use staging::{DeferredSpawn, Ring, StagedCell, Staging};
 
 mod effect_shapes;
 pub(crate) use effect_shapes::{AddonAttachment, AttachmentKey};
@@ -2536,12 +2537,7 @@ impl WorldStreamer {
             let grass = &*targets.grass;
             self.staging.judge(|res| {
                 Self::cell_textures(res, grass)
-                    .map(|handle| {
-                        TextureReadiness::of(
-                            residency.load_of(handle),
-                            array.view_bound(handle.slot),
-                        )
-                    })
+                    .map(|handle| TextureReadiness::of_handle(residency, array, handle))
                     .collect()
             })
         };
@@ -2595,9 +2591,8 @@ impl WorldStreamer {
             .expect("an overdue cell is staged");
         let waiting = Self::cell_textures(&cell.res, targets.grass)
             .filter_map(|handle| {
-                let load = targets.residency.load_of(handle);
-                let bound = targets.texture_array.view_bound(handle.slot);
-                match TextureReadiness::of(load, bound) {
+                match TextureReadiness::of_handle(targets.residency, targets.texture_array, handle)
+                {
                     TextureReadiness::Ready => None,
                     TextureReadiness::Unbound => Some(format!(
                         "{} (loaded, not yet in the material bind group)",

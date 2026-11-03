@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use super::{CellResources, GpuPlacedLight, LightModelRef, NavMesh, ShadowLampSource};
 use crate::rendering::animated_objects::AnimatedRefr;
 use crate::rendering::ragdoll_objects::RagdollRefr;
-use crate::rendering::texture_streaming::residency::TextureLoad;
+use crate::rendering::texture_streaming::readiness::TextureReadiness;
 
 /// How long a staged cell may wait for its textures before the load counts as hung.
 pub(super) const TEXTURE_READY_DEADLINE: Duration = Duration::from_secs(30);
@@ -18,27 +18,6 @@ pub(super) const TEXTURE_READY_DEADLINE: Duration = Duration::from_secs(30);
 /// The longest step one update adds to a staged cell's wait, so a stall of the whole process
 /// (a debugger, a suspended window) is not taken for a hung texture.
 const MAX_WAIT_STEP: Duration = Duration::from_millis(250);
-
-/// How far one texture a staged cell uses has got.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum TextureReadiness {
-    /// Its file is still being read, or it was found broken and the game is ending.
-    Loading,
-    /// Loaded, or settled on its stand-in because its file is missing, but the material bind
-    /// group still samples the view the slot held before.
-    Unbound,
-    Ready,
-}
-
-impl TextureReadiness {
-    pub(super) fn of(load: Option<TextureLoad>, view_bound: bool) -> Self {
-        match load {
-            Some(TextureLoad::Resident | TextureLoad::Missing) if view_bound => Self::Ready,
-            Some(TextureLoad::Resident | TextureLoad::Missing) => Self::Unbound,
-            Some(TextureLoad::Pending | TextureLoad::Broken) | None => Self::Loading,
-        }
-    }
-}
 
 /// What to do with a staged cell this update.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -259,21 +238,6 @@ pub(super) struct Judgement {
 mod tests {
     use super::*;
     use TextureReadiness::{Loading, Ready, Unbound};
-
-    #[test]
-    fn a_texture_is_ready_once_loaded_or_settled_on_its_stand_in_and_bound() {
-        for load in [TextureLoad::Resident, TextureLoad::Missing] {
-            assert_eq!(TextureReadiness::of(Some(load), true), Ready);
-            assert_eq!(TextureReadiness::of(Some(load), false), Unbound);
-        }
-    }
-
-    #[test]
-    fn a_pending_broken_or_untracked_texture_is_still_loading() {
-        for load in [Some(TextureLoad::Pending), Some(TextureLoad::Broken), None] {
-            assert_eq!(TextureReadiness::of(load, true), Loading);
-        }
-    }
 
     #[test]
     fn a_cell_without_textures_is_promoted_at_once() {
