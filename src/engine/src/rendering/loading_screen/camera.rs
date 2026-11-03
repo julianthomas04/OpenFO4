@@ -18,8 +18,12 @@ use super::tuning::{
 };
 use crate::bethesda_space::{position_to_engine, rotation_to_engine};
 
-/// Inferred: the game's loading art framing is not documented.
-pub const VERTICAL_FOV_DEGREES: f32 = 50.0;
+/// Inferred, not documented by the game: fitted to a vanilla 2560x1440 screenshot of the T-51
+/// loading screen. With the camera at the origin and the transform's placement as stored, the
+/// silhouette matches best at 23.9 degrees (24.6 and 23.2 already fit clearly worse), and moving
+/// the camera instead of narrowing the field fits worse at every distance. Kept vertical, so a
+/// wider window shows more at the sides, as the world camera does.
+pub const VERTICAL_FOV_DEGREES: f32 = 24.0;
 const NEAR: f32 = 0.1;
 const FAR: f32 = 2000.0;
 /// Zoom never reaches -1, where the distance would be infinite.
@@ -466,6 +470,42 @@ mod tests {
         let clip = camera.view_proj(16.0 / 9.0) * Vec3::new(0.0, 0.0, -50.0).extend(1.0);
         assert!(clip.w > 0.0);
         assert!((clip.x / clip.w).abs() < 1e-5 && (clip.y / clip.w).abs() < 1e-5);
+    }
+
+    fn pixel_of(camera: &ArtCamera, point: Vec3, size: (f32, f32)) -> (f32, f32) {
+        let clip = camera.view_proj(size.0 / size.1) * point.extend(1.0);
+        let ndc = clip.truncate() / clip.w;
+        (f32::midpoint(ndc.x, 1.0) * size.0, f32::midpoint(1.0, -ndc.y) * size.1)
+    }
+
+    #[test]
+    fn a_point_at_the_top_edge_of_the_vertical_field_projects_to_the_top_of_the_screen() {
+        let camera = camera(|_| {});
+        let half_fov = (VERTICAL_FOV_DEGREES / 2.0).to_radians();
+        let point = Vec3::new(0.0, 50.0 * half_fov.tan(), -50.0);
+        let (_, y) = pixel_of(&camera, point, (2560.0, 1440.0));
+        assert!(y.abs() < 1e-2, "{y}");
+    }
+
+    #[test]
+    fn the_t51_screen_puts_the_top_of_the_armour_near_the_top_right_where_vanilla_shows_it() {
+        let camera = camera(|art| {
+            art.transform.position = [40.0, 275.0, -105.0];
+            art.transform.rotation_radians = [0.0, 0.0, 3.874_631];
+            art.rotation_limits_deg = (-180, 180);
+        });
+        let armour_top = position_to_engine(0.0, 0.0, 150.0);
+        let (x, y) = pixel_of(
+            &camera,
+            camera.model_matrix().transform_point3(armour_top),
+            (2560.0, 1440.0),
+        );
+        let vanilla_silhouette_top = (1752.0, 131.0);
+        assert!(
+            (x - vanilla_silhouette_top.0).abs() < 60.0
+                && (y - vanilla_silhouette_top.1).abs() < 40.0,
+            "({x}, {y})"
+        );
     }
 
     #[test]

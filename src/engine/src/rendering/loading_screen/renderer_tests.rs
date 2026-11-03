@@ -259,6 +259,8 @@ fn a_model_that_cannot_be_zoomed_in_on_keeps_its_size() {
     let dir = tempfile::tempdir().unwrap();
     let mut art = cube_art(dir.path(), "");
     art.zoom_limits = (0.0, 1.0);
+    // Far enough that the cube still fits the frame when zoomed in to half the distance.
+    art.transform.position = [0.0, 660.0, 0.0];
     scene.show(&art);
     let target = Target::new(&scene, SIZE, BLACK);
     let before = scene.draw(&target).lit_count();
