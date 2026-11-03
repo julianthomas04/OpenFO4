@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 8667401a1febca2da198481ab95b60a8a9dda4d30f382dbaef61fce52c25d880 # shrinks to case = GridCase { cols: 2, rows: 3, kept: [true, false, true, true, true, true], game_space: false }, pick_a = 1, pick_b = 5, (ua, va, ub, vb) = (0.03, 0.03, 0.5569514, 0.55695236)
