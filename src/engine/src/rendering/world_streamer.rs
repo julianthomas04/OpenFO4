@@ -3245,8 +3245,13 @@ impl WorldStreamer {
                 });
                 return fallback_slot;
             }
-            // The residency reads it again, with its own retries.
-            Some(Err(ReadFailure::Transient(_))) | None => None,
+            Some(Err(ReadFailure::Transient(reason))) => {
+                debug!(
+                    "texture '{path}' pre-read failed for a passing reason, the residency reads it again: {reason}"
+                );
+                None
+            }
+            None => None,
         };
         let _span = info_span!("texture_admit").entered();
         // Cells integrate atomically, so one texture-heavy cell would upload
