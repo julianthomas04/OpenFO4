@@ -8,13 +8,26 @@ pub struct Landscape {
     pub cell: String,
     pub grid_x: i32,
     pub grid_y: i32,
-    pub vertex_height_map: Vec<u8>,
+    /// `None` for a LAND without height data, which has no terrain.
+    pub vertex_height_map: Option<Vec<u8>>,
     pub vertex_colors: Option<Vec<u8>>,
     pub layers: Option<Vec<u8>>,
     pub flags: Option<String>,
 }
 
 impl Landscape {
+    /// The height data terrain is built from.
+    pub fn height_map(&self) -> anyhow::Result<&[u8]> {
+        self.vertex_height_map.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "the LAND of cell {} ({}, {}) has no height map",
+                self.cell,
+                self.grid_x,
+                self.grid_y
+            )
+        })
+    }
+
     /// Column list shared by every query feeding [`from_row`], whose positional
     /// `row.get(0..6)` must stay aligned with this order.
     const COLUMNS: &'static str =

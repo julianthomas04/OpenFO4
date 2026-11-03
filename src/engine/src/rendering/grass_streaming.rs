@@ -101,7 +101,10 @@ impl GrassWorkerData {
         let Some(layers) = landscape.layers.as_deref().and_then(decode_layers) else {
             return Vec::new();
         };
-        let heights = match HeightGrid::decode(&landscape.vertex_height_map) {
+        let Some(blob) = landscape.vertex_height_map.as_deref() else {
+            return Vec::new();
+        };
+        let heights = match HeightGrid::decode(blob) {
             Ok(heights) => heights,
             Err(error) => {
                 warn!("grass for cell ({gx}, {gy}): {error:#}");

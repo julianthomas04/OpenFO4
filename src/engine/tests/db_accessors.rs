@@ -660,12 +660,12 @@ fn landscape_blobs_round_trip_byte_for_byte_and_optional_blobs_are_none() {
     let db = client(conn);
 
     let plain = db.get_landscape("C1", 4, -5).unwrap();
-    assert_eq!(plain.vertex_height_map, heights);
+    assert_eq!(plain.vertex_height_map, Some(heights));
     assert_eq!((plain.vertex_colors, plain.layers), (None, None));
     assert_eq!((plain.grid_x, plain.grid_y), (4, -5));
 
     let full = db.get_landscape("C2", 0, 0).unwrap();
-    assert_eq!(full.vertex_height_map, [1, 0, 2]);
+    assert_eq!(full.vertex_height_map.as_deref(), Some(&[1, 0, 2][..]));
     assert_eq!(full.vertex_colors.as_deref(), Some(&[9, 8, 7][..]));
     assert_eq!(full.layers.as_deref(), Some(&[0, 0][..]));
 }
@@ -782,7 +782,7 @@ fn seed_cell_without_land(conn: &Connection, worldspace: &str) {
 fn marker_at(db: &DbClient, worldspace: &str) -> Option<u8> {
     db.get_landscape_at(worldspace, 1, 2)
         .unwrap()
-        .map(|land| land.vertex_height_map[0])
+        .and_then(|land| land.vertex_height_map?.first().copied())
 }
 
 #[test]
@@ -791,9 +791,30 @@ fn a_worldspace_with_its_own_land_reads_it_with_the_requested_grid() {
     seed_worldspaces(&conn, &[("WS", None, 0)]);
     seed_land(&conn, "WS", 7);
     let land = client(conn).get_landscape_at("WS", 1, 2).unwrap().unwrap();
-    assert_eq!(land.vertex_height_map, [7]);
+    assert_eq!(land.vertex_height_map.as_deref(), Some(&[7][..]));
     assert_eq!((land.grid_x, land.grid_y), (1, 2));
     assert_eq!(land.cell, "WS-cell");
+}
+
+#[test]
+fn a_land_without_heights_is_read_without_them() {
+    let conn = schema_connection();
+    seed_worldspaces(&conn, &[("WS", None, 0)]);
+    insert(
+        &conn,
+        "cells",
+        &cell_row("WS-cell", Some("WS"), Some((1, 2))),
+    );
+    insert(
+        &conn,
+        "landscapes",
+        &[("form_key", text("WS-land")), ("cell", text("WS-cell"))],
+    );
+
+    let land = client(conn).get_landscape_at("WS", 1, 2).unwrap().unwrap();
+
+    assert_eq!(land.vertex_height_map, None);
+    assert!(land.height_map().is_err());
 }
 
 #[test]
@@ -807,7 +828,7 @@ fn a_cell_without_land_inherits_it_from_the_parent_when_the_land_bit_is_set() {
     seed_land(&conn, "PARENT", 9);
     let db = client(conn);
     let land = db.get_landscape_at("CHILD", 1, 2).unwrap().unwrap();
-    assert_eq!(land.vertex_height_map, [9]);
+    assert_eq!(land.vertex_height_map.as_deref(), Some(&[9][..]));
     assert_eq!((land.grid_x, land.grid_y), (1, 2));
 }
 

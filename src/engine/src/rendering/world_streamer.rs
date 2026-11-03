@@ -5319,8 +5319,8 @@ fn resolve_cell_terrain<C>(
     build: impl FnOnce(&Landscape) -> anyhow::Result<(C, TerrainCollision)>,
 ) -> CellTerrain<C> {
     let landscape = match terrain_landscape(lookup, gx, gy) {
-        Ok(Some(landscape)) => landscape,
-        Ok(None) => {
+        Ok(Some(landscape)) if landscape.vertex_height_map.is_some() => landscape,
+        Ok(_) => {
             return CellTerrain {
                 landscape: None,
                 cpu: None,
@@ -6598,7 +6598,7 @@ mod tests {
             cell: "cell".to_owned(),
             grid_x: 1,
             grid_y: 2,
-            vertex_height_map: Vec::new(),
+            vertex_height_map: Some(Vec::new()),
             vertex_colors: None,
             layers: None,
             flags: None,
@@ -6667,6 +6667,46 @@ mod tests {
         assert!(terrain.landscape.is_none() && terrain.cpu.is_none());
         assert!(matches!(terrain.collision, TerrainCollision::Absent));
         assert_eq!(terrain.failure, None, "a landless cell is not broken");
+    }
+
+    #[test]
+    fn a_land_without_heights_is_landless_and_never_builds() {
+        let heightless = Landscape {
+            vertex_height_map: None,
+            ..landscape()
+        };
+        let terrain =
+            resolve_cell_terrain(Ok(Some(heightless)), 1, 2, |_| -> anyhow::Result<((), _)> {
+                panic!("built without heights")
+            });
+        assert!(terrain.landscape.is_none() && terrain.cpu.is_none());
+        assert!(matches!(terrain.collision, TerrainCollision::Absent));
+        assert_eq!(terrain.failure, None);
+    }
+
+    /// Diamond City ships LAND records for cells such as (9, 7) without any height data.
+    #[test]
+    #[ignore = "needs OPENFO4_INSTALL_DIR with the installed database"]
+    fn the_heightless_diamond_city_land_of_the_installed_database_is_landless() {
+        const DIAMOND_CITY: &str = "000F94:Fallout4.esm";
+        let install = std::env::var(crate::assets::INSTALL_DIR_VAR).expect("OPENFO4_INSTALL_DIR");
+        let root = format!("{install}/{}", crate::assets::layout::ASSETS_DIR);
+        let db = DbClient::new(&format!(
+            "{}/{}",
+            crate::assets::layout::data_dir(&root),
+            crate::assets::layout::DATABASE_FILE
+        ))
+        .expect("the installed database opens");
+
+        let lookup = db.get_landscape_at(DIAMOND_CITY, 9, 7);
+
+        let land = lookup.as_ref().expect("the lookup succeeds").as_ref();
+        assert!(land.is_some_and(|land| land.vertex_height_map.is_none()));
+        let terrain = resolve_cell_terrain(lookup, 9, 7, |_| -> anyhow::Result<((), _)> {
+            panic!("built without heights")
+        });
+        assert!(matches!(terrain.collision, TerrainCollision::Absent));
+        assert_eq!(terrain.failure, None);
     }
 
     #[test]
