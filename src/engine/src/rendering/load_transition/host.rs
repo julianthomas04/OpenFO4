@@ -10,7 +10,8 @@ use crate::assets::types::glb_key::glb_key;
 use crate::loading_screen::{LoadScreenContext, Place, select};
 use crate::random::SplitMix64;
 use crate::rendering::loading_screen::{
-    LoadedArt, LoadingArt, LoadingArtRenderer, LoadingBackground, ModelTransform, PanKey,
+    BackgroundImages, LoadedArt, LoadingArt, LoadingArtRenderer, LoadingBackground, ModelTransform,
+    PanKey,
 };
 
 /// Names the editor id of the loading screen to show on every large screen, to tune its camera.
@@ -192,10 +193,10 @@ impl LoadScreenHost {
             .filter(|_| self.renderer.has_art())
     }
 
-    /// The image behind a large screen's model, loaded on first use; none when the install lacks
-    /// it.
-    pub fn background(&mut self) -> Option<&wgpu::TextureView> {
-        self.background.view(&self.device, &self.queue)
+    /// The images behind a large screen's model, loaded on first use; none when the install lacks
+    /// the background.
+    pub fn background(&mut self) -> Option<BackgroundImages<'_>> {
+        self.background.images(&self.device, &self.queue)
     }
 
     /// A drag of `dx_px` pixels to the right and `dy_px` down.

@@ -240,6 +240,11 @@ pub const MENU_ICON: ShaderSource = ShaderSource {
     wgsl: include_str!("menu_icon.wgsl"),
 };
 
+pub const LOADING_BACKGROUND: ShaderSource = ShaderSource {
+    label: "loading_background_shader",
+    wgsl: include_str!("loading_background.wgsl"),
+};
+
 pub const LOADING_ART: ShaderSource = ShaderSource {
     label: "loading_art_shader",
     wgsl: include_str!("loading_art.wgsl"),
@@ -337,6 +342,7 @@ const ALL: &[&ShaderSource] = &[
     &HUD,
     &MENU_VIDEO,
     &MENU_ICON,
+    &LOADING_BACKGROUND,
     &LOADING_ART,
     &LIGHT_SPHERES,
     &LIGHT_CULL,

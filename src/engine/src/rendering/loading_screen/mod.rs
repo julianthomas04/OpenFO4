@@ -7,6 +7,7 @@
 
 mod art;
 mod background;
+mod background_look;
 mod camera;
 mod model;
 mod motion;
@@ -19,7 +20,10 @@ pub(crate) mod test_support;
 mod tuning;
 
 pub use art::{LoadingArt, ModelTransform};
-pub use background::LoadingBackground;
+pub use background::{BackgroundImages, LoadingBackground};
+pub use background_look::{BACKGROUND_U_MAX, GRADE_LIFT, GRADE_TINT, OVERLAY_ALPHA_FACTOR};
+#[cfg(test)]
+pub use background_look::{background_uv, graded};
 pub use camera::ArtCamera;
 pub use model::{CpuArt, LoadedArt, LoadingArtError};
 pub use motion::PanKey;

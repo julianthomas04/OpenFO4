@@ -12,7 +12,9 @@ use crate::rendering::game_settings::SafeZone;
 use crate::rendering::gpu_test::test_device;
 use crate::rendering::hud::field_text::TextItem;
 use crate::rendering::loading_screen::test_support::{cube_art, write_solid_texture};
-use crate::rendering::loading_screen::{CpuArt, LoadedArt, LoadingArtRenderer, LoadingBackground};
+use crate::rendering::loading_screen::{
+    BackgroundImages, CpuArt, LoadedArt, LoadingArtRenderer, LoadingBackground, graded,
+};
 use crate::rendering::post::tonemap::ui_gamma_format;
 use crate::rendering::ui_colour::UiTint;
 use crate::rendering::ui_fonts::{UiFontError, test_support as fonts};
@@ -1080,6 +1082,18 @@ fn corners_and_centre(pixels: &Pixels) -> [[u8; 3]; 5] {
     ]
 }
 
+/// What the shader writes for `background` and `overlay` texels of the given bytes.
+fn graded_bytes(background: [u8; 3], overlay: [u8; 4]) -> [u8; 3] {
+    let unit = |byte: u8| f32::from(byte) / 255.0;
+    let out = graded(background.map(unit), overlay.map(unit));
+    out.map(|channel| (channel * 255.0).round().clamp(0.0, 255.0) as u8)
+}
+
+/// The background of [`background_in`] as drawn without an overlay.
+fn graded_background() -> [u8; 3] {
+    graded_bytes(BACKGROUND_COLOUR, [0; 4])
+}
+
 fn assert_close(actual: [u8; 3], expected: [u8; 3], context: &str) {
     for (a, e) in actual.into_iter().zip(expected) {
         assert!(
@@ -1090,13 +1104,13 @@ fn assert_close(actual: [u8; 3], expected: [u8; 3], context: &str) {
 }
 
 #[test]
-fn a_backdrop_image_covers_the_whole_target_as_stored() {
+fn a_backdrop_image_covers_the_whole_target_graded() {
     let Some((device, queue)) = test_device("menu backdrop image") else {
         return;
     };
     let dir = tempfile::tempdir().unwrap();
     let mut background = background_in(dir.path());
-    let image = background.view(&device, &queue).expect("the image loads");
+    let image = background.images(&device, &queue).expect("the image loads");
     let target = Target::new(&device);
     target.fill(&device, &queue, RED);
     let mut menu = renderer(&device, &queue, HUD_GREEN);
@@ -1113,9 +1127,48 @@ fn a_backdrop_image_covers_the_whole_target_as_stored() {
     for pixel in corners_and_centre(&target.pixels(&device, &queue)) {
         assert_close(
             pixel,
-            BACKGROUND_COLOUR,
-            "the image fills the target untinted",
+            graded_background(),
+            "the graded image fills the target",
         );
+    }
+}
+
+#[test]
+fn a_backdrop_overlay_is_added_over_the_image() {
+    let Some((device, queue)) = test_device("menu backdrop overlay") else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let overlay = [90, 160, 255, 128];
+    write_solid_texture(
+        dir.path(),
+        "Interface/Objects/LoadScreen/Overlay01_d.DDS",
+        overlay,
+    );
+    let mut background = background_in(dir.path());
+    let images = background.images(&device, &queue).expect("the images load");
+    assert!(images.overlay.is_some());
+    let target = Target::new(&device);
+    target.fill(&device, &queue, RED);
+    let mut menu = renderer(&device, &queue, HUD_GREEN);
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    let view = menu.target_view(&target.texture);
+    let backdrop = Backdrop {
+        alpha: 1.0,
+        image: Some(images),
+    };
+    menu.render_backdrop(&device, &queue, &mut encoder, &view, SIZE, backdrop);
+    queue.submit(std::iter::once(encoder.finish()));
+
+    let expected = graded_bytes(BACKGROUND_COLOUR, overlay);
+    assert_ne!(
+        expected,
+        graded_background(),
+        "the overlay changes the colour"
+    );
+    for pixel in corners_and_centre(&target.pixels(&device, &queue)) {
+        assert_close(pixel, expected, "the overlay is added to the image");
     }
 }
 
@@ -1126,7 +1179,7 @@ fn a_backdrop_image_fades_in_with_the_overlay() {
     };
     let dir = tempfile::tempdir().unwrap();
     let mut background = background_in(dir.path());
-    let image = background.view(&device, &queue).expect("the image loads");
+    let image = background.images(&device, &queue).expect("the image loads");
     let target = Target::new(&device);
     let mut menu = renderer(&device, &queue, HUD_GREEN);
     let draw_at = |menu: &mut MenuRenderer, alpha: f32| {
@@ -1145,7 +1198,7 @@ fn a_backdrop_image_fades_in_with_the_overlay() {
     let half = draw_at(&mut menu, 0.5);
     let over = draw_at(&mut menu, 7.0);
 
-    let [_, green, blue] = BACKGROUND_COLOUR;
+    let [_, green, blue] = graded_background();
     assert_close(
         half,
         [half[0], green / 2, blue / 2],
@@ -1153,7 +1206,7 @@ fn a_backdrop_image_fades_in_with_the_overlay() {
     );
     assert_close(
         over,
-        BACKGROUND_COLOUR,
+        graded_background(),
         "an opacity above 1 is fully opaque",
     );
 }
@@ -1165,10 +1218,10 @@ fn a_backdrop_without_an_image_is_only_the_black_layer() {
     };
     let dir = tempfile::tempdir().unwrap();
     let mut background = background_in(dir.path());
-    let image = background.view(&device, &queue).expect("the image loads");
+    let image = background.images(&device, &queue).expect("the image loads");
     let target = Target::new(&device);
     let mut menu = renderer(&device, &queue, HUD_GREEN);
-    let draw = |menu: &mut MenuRenderer, image: Option<&wgpu::TextureView>| {
+    let draw = |menu: &mut MenuRenderer, image: Option<BackgroundImages<'_>>| {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         let view = menu.target_view(&target.texture);
         let backdrop = Backdrop { alpha: 1.0, image };
@@ -1191,7 +1244,7 @@ fn the_loading_art_is_drawn_over_the_backdrop_image() {
     };
     let dir = tempfile::tempdir().unwrap();
     let mut background = background_in(dir.path());
-    let image = background.view(&device, &queue).expect("the image loads");
+    let image = background.images(&device, &queue).expect("the image loads");
     let target = Target::new(&device);
     let mut menu = renderer(&device, &queue, HUD_GREEN);
     let mut art_renderer = LoadingArtRenderer::new(&device, &queue, ui_gamma_format(FORMAT));
@@ -1213,14 +1266,14 @@ fn the_loading_art_is_drawn_over_the_backdrop_image() {
 
     assert_close(
         pixels.at(0, 0),
-        BACKGROUND_COLOUR,
+        graded_background(),
         "the corner shows the image",
     );
     let centre = pixels.at(SIZE.0 / 2, SIZE.1 / 2);
     assert!(
         centre
             .iter()
-            .zip(BACKGROUND_COLOUR)
+            .zip(graded_background())
             .any(|(a, b)| a.abs_diff(b) > 20),
         "the cube hides the image at the centre: {centre:?}"
     );

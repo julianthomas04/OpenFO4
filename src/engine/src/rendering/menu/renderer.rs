@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use super::image_quad::{BackgroundQuad, ImageQuadPipeline};
+use super::background_quad::BackgroundQuad;
 use super::layout::MenuLayout;
 use super::loading_icon::{IconScene, LoadingIcon, LoadingIconError};
 use super::loading_panel::{ColouredRect, PanelContent};
@@ -17,6 +17,7 @@ use crate::rendering::hud::{
     pipeline::HudPipeline,
     quad::{HudVertex, PxRect, QuadBuilder},
 };
+use crate::rendering::loading_screen::BackgroundImages;
 use crate::rendering::post::tonemap::ui_gamma_format;
 use crate::rendering::ui_colour::UiTint;
 use crate::rendering::ui_fonts::{UiFontError, UiFonts};
@@ -62,7 +63,7 @@ pub enum MenuScene<'a> {
 pub struct Backdrop<'a> {
     pub alpha: f32,
     /// Stretched over the whole target above the black layer.
-    pub image: Option<&'a wgpu::TextureView>,
+    pub image: Option<BackgroundImages<'a>>,
 }
 
 /// What an overlay draws above its backdrop and the loading art.
@@ -142,7 +143,6 @@ pub struct MenuRenderer {
     foreground_quads: QuadLayer,
     text: FieldText,
     video: VideoLayer,
-    image_pipeline: ImageQuadPipeline,
     background: BackgroundQuad,
     loading_icon: LoadingIcon,
     icon_state: IconState,
@@ -180,8 +180,7 @@ impl MenuRenderer {
         let pipeline = HudPipeline::new(device, format);
         let tint_bind_group = pipeline.create_tint_bind_group(device, &NEUTRAL_TINT);
         let loading_icon = LoadingIcon::new(device, format, art)?;
-        let image_pipeline = ImageQuadPipeline::new(device, format);
-        let background = BackgroundQuad::new(device);
+        let background = BackgroundQuad::new(device, queue, format);
         Ok(Self {
             gamma_format: format,
             layout,
@@ -193,7 +192,6 @@ impl MenuRenderer {
             foreground_quads: QuadLayer::new(device),
             text: FieldText::new(device, queue, format, fonts, glyphon::ColorMode::Web),
             video: VideoLayer::new(device, format),
-            image_pipeline,
             background,
             loading_icon,
             icon_state: IconState::default(),
@@ -325,21 +323,16 @@ impl MenuRenderer {
         self.quads.verts = verts;
         self.quads.upload(device, queue);
         match backdrop.image {
-            Some(image) => self.background.prepare(
-                &self.image_pipeline,
-                device,
-                queue,
-                image,
-                fb,
-                backdrop.alpha,
-            ),
+            Some(images) => self
+                .background
+                .prepare(device, queue, images, backdrop.alpha),
             None => self.background.clear(),
         }
 
         let mut pass = Self::begin_pass(encoder, "Menu Backdrop Pass", view, wgpu::LoadOp::Load);
         self.quads
             .draw(&mut pass, &self.pipeline, &self.tint_bind_group);
-        self.background.draw(&self.image_pipeline, &mut pass);
+        self.background.draw(&mut pass);
     }
 
     /// Encodes the pass of an overlay's loading logo and panel over `view`'s contents.
@@ -394,7 +387,13 @@ impl MenuRenderer {
         let panel = &self.layout.loading_panel;
         let text = panel.text(&fit, self.safe_zone, &self.tint, content);
         let tip_extent = text.tip.as_ref().map(|tip| self.text.measure(tip));
-        let rects = panel.rects(&fit, self.safe_zone, &self.tint, tip_extent, content.experience);
+        let rects = panel.rects(
+            &fit,
+            self.safe_zone,
+            &self.tint,
+            tip_extent,
+            content.experience,
+        );
         (text.into_items(), rects)
     }
 
