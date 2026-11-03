@@ -23,9 +23,10 @@ const TEXTURES_PREFIX: &str = "textures\\";
 const DATA_PREFIX: &str = "data\\";
 
 /// Inferred, not read from any game data: a neutral amount of linear light added to the stage's
-/// opaque background, before the picture is graded; the model does not get it. Without it a vanilla screenshot's background is matched about
-/// four times worse (rms 3.9 against 1.5 of 255), with it the fitted lift is the same in every
-/// channel (0.0035, 0.0037, 0.0034); about one step of 255 once encoded.
+/// opaque background, before the picture is graded; the model does not get it. Without it a
+/// vanilla screenshot's background is matched about four times worse (rms 3.9 against 1.5 of 255),
+/// with it the fitted lift is the same in every channel (0.0035, 0.0037, 0.0034); about one step
+/// of 255 once encoded.
 pub const INFERRED_LIFT: f32 = 0.0035;
 
 /// The texture key of the colour LUT loading screens are graded with.
@@ -118,13 +119,13 @@ impl GradeParams {
         let cinematic = &look.cinematic;
         Self {
             look: [
-                0.0,
                 if fade.is_nan() {
                     0.0
                 } else {
                     fade.clamp(0.0, 1.0)
                 },
                 if target_decodes_srgb { 1.0 } else { 0.0 },
+                0.0,
                 0.0,
             ],
             cinematic: [
@@ -289,9 +290,9 @@ mod tests {
             },
         };
         let params = GradeParams::new(&look, 3.0, true);
-        assert_eq!(params.look, [0.0, 1.0, 1.0, 0.0]);
+        assert_eq!(params.look, [1.0, 1.0, 0.0, 0.0]);
         assert_eq!(params.cinematic, [0.9, 1.0, 1.0, 0.0]);
-        assert_eq!(GradeParams::new(&look, -1.0, false).look[1..3], [0.0, 0.0]);
+        assert_eq!(GradeParams::new(&look, -1.0, false).look[..2], [0.0, 0.0]);
     }
 
     #[test]
@@ -299,8 +300,8 @@ mod tests {
         let look = GradeLook {
             cinematic: ImageSpaceCinematic::NEUTRAL,
         };
-        assert_eq!(GradeParams::new(&look, f32::NAN, false).look[1], 0.0);
-        assert_eq!(GradeParams::new(&look, f32::INFINITY, false).look[1], 1.0);
+        assert_eq!(GradeParams::new(&look, f32::NAN, false).look[0], 0.0);
+        assert_eq!(GradeParams::new(&look, f32::INFINITY, false).look[0], 1.0);
     }
 
     #[test]

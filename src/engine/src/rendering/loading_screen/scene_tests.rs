@@ -524,6 +524,23 @@ fn an_infinite_picture_colour_is_graded_as_the_largest_finite_one() {
 }
 
 #[test]
+fn a_nan_picture_colour_is_graded_as_black() {
+    let Some((device, queue)) = test_device("loading grade nan colour") else {
+        return;
+    };
+    let mut pass = plain_pass(&device, &queue, 1.0);
+    pass.set_lut(&queue, &LutTable::identity());
+    let look = GradeLook {
+        cinematic: ImageSpaceCinematic::NEUTRAL,
+    };
+
+    let graded_nan = grade_one(&device, &queue, &mut pass, Vec3::new(f32::NAN, 0.5, 0.5));
+
+    let expected = bytes(graded(Vec3::new(0.0, 0.5, 0.5), &look, |display| display));
+    assert_close(graded_nan, expected, "NaN grades as 0");
+}
+
+#[test]
 #[ignore = "needs OPENFO4_INSTALL_DIR with the installed loading screen stage and LUT"]
 fn the_installed_stage_frames_24_degrees_and_its_lut_loads() {
     use super::stage::{CpuStage, stage_paths};

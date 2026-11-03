@@ -1,12 +1,13 @@
-// The large loading screen's colour pass: the linear picture of its stage and model, through the cinematic stage of its image space, encoded to sRGB and looked up in its colour
-// LUT. The result is premultiplied by the fade.
+// The large loading screen's colour pass: the linear picture of its stage and model, through the
+// cinematic stage of its image space, encoded to sRGB and looked up in its colour LUT. The result
+// is premultiplied by the fade.
 
 // The largest picture colour graded: a float picture holds infinities, and the saturation's
-// luma difference turns one into NaN that spreads over the whole pixel.
+// luma difference turns one into NaN that spreads over the whole pixel. A NaN texel grades as 0.
 const PICTURE_MAX = 65000.0;
 
 struct GradeParams {
-    // y: the fade, z: 1 when the target decodes sRGB itself, x and w: unused.
+    // x: the fade, y: 1 when the target decodes sRGB itself, z and w: padding.
     look: vec4<f32>,
     // x saturation, y brightness, z contrast, w tint amount.
     cinematic: vec4<f32>,
@@ -34,12 +35,11 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VsOut {
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let loaded = textureLoad(picture, vec2<i32>(in.clip.xy), 0).rgb;
-    let finite = max(min(loaded, vec3<f32>(PICTURE_MAX)), vec3<f32>(0.0));
-    let linear = finite;
+    let linear = select(vec3<f32>(0.0), clamp(loaded, vec3<f32>(0.0), vec3<f32>(PICTURE_MAX)), loaded == loaded);
     let display = linear_to_srgb(apply_cinematic(linear, params.cinematic, params.tint.rgb));
     let coordinate = colour_lut_coordinate(display, f32(textureDimensions(colour_lut).x));
     let graded = textureSampleLevel(colour_lut, colour_lut_sampler, coordinate, 0.0).rgb;
-    let written = select(graded, srgb_to_linear(graded), params.look.z > 0.5);
-    let fade = params.look.y;
+    let written = select(graded, srgb_to_linear(graded), params.look.y > 0.5);
+    let fade = params.look.x;
     return vec4<f32>(written * fade, fade);
 }
