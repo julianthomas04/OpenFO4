@@ -4162,6 +4162,7 @@ impl State {
                     &self.splatmaps.view,
                 );
             self.texture_array.upload_slot_mips(&self.queue);
+            self.texture_array.mark_views_bound();
             self.material_bg_dirty = false;
             self.material_bg_last_rebuild = Instant::now();
             self.material_bg_built_len = self.texture_array.bind_group_len();

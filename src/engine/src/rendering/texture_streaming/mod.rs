@@ -8,6 +8,7 @@ pub mod role;
 pub mod settings;
 pub mod stats;
 pub mod uv_density;
+pub mod view_binding;
 
 pub use feedback::TextureFeedback;
 pub use policy::ResidencyPolicy;

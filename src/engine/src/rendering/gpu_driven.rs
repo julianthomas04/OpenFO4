@@ -10,6 +10,7 @@ use crate::assets::types::effect_params::{
 use crate::rendering::cube_array::CubeHandle;
 use crate::rendering::gpu_slab::{GpuSlab, SlabElement};
 use crate::rendering::lighting::cell_lighting::srgb_to_linear;
+use crate::rendering::texture_streaming::view_binding::ViewBinding;
 
 pub const MAX_TEXTURES: u32 = 8192;
 
@@ -509,6 +510,8 @@ pub struct TextureArray {
     slot_mips: Vec<SlotMips>,
     slot_mips_dirty: Option<Range<usize>>,
     slot_mips_buffer: wgpu::Buffer,
+    /// Which slots' views the material bind group samples.
+    binding: ViewBinding,
 }
 
 impl TextureArray {
@@ -566,7 +569,24 @@ impl TextureArray {
             slot_mips_dirty: None,
             slot_mips_buffer: create_slot_mips_buffer(device, &slot_mips),
             slot_mips,
+            binding: ViewBinding::new(MAX_TEXTURES as usize),
         }
+    }
+
+    /// The material bind group was just rebuilt from the current views.
+    pub fn mark_views_bound(&mut self) {
+        self.binding.mark_bound();
+    }
+
+    /// Whether the material bind group samples the view now in `slot`: one put in since the
+    /// last rebuild is not drawn yet.
+    pub fn view_bound(&self, slot: u32) -> bool {
+        self.binding.is_bound(slot)
+    }
+
+    /// Whether some slot holds a view the material bind group does not sample yet.
+    pub fn has_unbound_views(&self) -> bool {
+        self.binding.has_unbound()
     }
 
     pub fn slot_mips_buffer(&self) -> &wgpu::Buffer {
@@ -646,6 +666,7 @@ impl TextureArray {
         let generation = self.slot_generations[slot as usize].wrapping_add(1);
         self.slot_generations[slot as usize] = generation;
         self.views[slot as usize] = Some(view);
+        self.binding.note_change(slot);
         self.set_first_mip(slot, first_mip);
         self.slot_paths[slot as usize] = Some(path.to_string());
         self.path_to_slot.insert(
@@ -737,6 +758,22 @@ impl TextureArray {
         self.views[handle.slot as usize] = Some(view);
         self.set_first_mip(handle.slot, first_mip);
         self.changes.placeholder_resolved_slots.push(handle.slot);
+        self.binding.note_change(handle.slot);
+        true
+    }
+
+    /// Bind a stand-in view to a live slot for good, in place of the one shown while its texture
+    /// loaded. Like a resolved placeholder, the slot shows it after the next bind group rebuild.
+    /// False for a stale handle.
+    pub fn settle_on_stand_in(
+        &mut self,
+        handle: TextureHandle,
+        view: Arc<wgpu::TextureView>,
+    ) -> bool {
+        if !self.replace_view(handle, view, PLACEHOLDER_FIRST_MIP) {
+            return false;
+        }
+        self.binding.note_change(handle.slot);
         true
     }
 

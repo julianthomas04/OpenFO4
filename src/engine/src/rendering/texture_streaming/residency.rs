@@ -265,11 +265,7 @@ impl Entry {
         );
         self.last_failure = Some(reason.to_owned());
         self.state = State::Missing;
-        array.replace_view(
-            self.handle,
-            array.reserved_view(self.placeholder_slot),
-            PLACEHOLDER_FIRST_MIP,
-        );
+        array.settle_on_stand_in(self.handle, array.reserved_view(self.placeholder_slot));
     }
 }
 
