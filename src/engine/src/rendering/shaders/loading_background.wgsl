@@ -4,7 +4,7 @@
 // result is premultiplied by the fade.
 
 struct BackgroundParams {
-    // The right end of the u range, the factor of the overlay's alpha, the fade, unused.
+    // The right end of the u range, the overlay's gain, the fade, unused.
     look: vec4<f32>,
     tint: vec4<f32>,
     lift: vec4<f32>,

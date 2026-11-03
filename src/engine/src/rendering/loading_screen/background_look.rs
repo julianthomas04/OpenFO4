@@ -9,8 +9,10 @@
 /// this value, whatever the screen's shape.
 pub const BACKGROUND_U_MAX: f32 = 16.0 / 9.0 / 2.0;
 
-/// The factor of the additive grid overlay's alpha, which is blended with (source alpha, one).
-pub const OVERLAY_ALPHA_FACTOR: f32 = 0.6;
+/// The gain of the additive grid overlay's `alpha * rgb`. Measured against a vanilla screenshot
+/// as about 1.07, not the 0.6 of the material that draws it, so vanilla evidently does not apply
+/// that factor; inferred, not documented.
+pub const OVERLAY_GAIN: f32 = 1.0;
 
 /// The per-channel multiplier of the summed layers, in encoded space.
 pub const GRADE_TINT: [f32; 3] = [0.662, 0.673, 0.489];
@@ -40,7 +42,7 @@ pub fn background_uv(screen_uv: [f32; 2]) -> [f32; 2] {
 /// `overlay` texel, before the fade. The reference the shader's fragment stage is tested against.
 #[cfg(test)]
 pub fn graded(background: [f32; 3], overlay: [f32; 4]) -> [f32; 3] {
-    let overlay_gain = OVERLAY_ALPHA_FACTOR * overlay[3];
+    let overlay_gain = OVERLAY_GAIN * overlay[3];
     std::array::from_fn(|channel| {
         GRADE_TINT[channel] * (background[channel] + overlay_gain * overlay[channel])
             + GRADE_LIFT[channel]
@@ -95,11 +97,11 @@ mod tests {
     }
 
     #[test]
-    fn the_overlay_adds_its_colour_by_six_tenths_of_its_alpha() {
+    fn the_overlay_adds_its_colour_by_its_alpha_at_the_overlay_gain() {
         let plain = graded([0.2; 3], [0.0; 4]);
         let lit = graded([0.2; 3], [0.5, 0.5, 0.5, 0.5]);
         for channel in 0..3 {
-            let added = 0.6 * 0.5 * 0.5 * GRADE_TINT[channel];
+            let added = OVERLAY_GAIN * 0.5 * 0.5 * GRADE_TINT[channel];
             assert!((lit[channel] - plain[channel] - added).abs() < 1e-6);
         }
     }

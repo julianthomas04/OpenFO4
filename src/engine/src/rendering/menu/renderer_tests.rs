@@ -15,7 +15,7 @@ use crate::rendering::loading_screen::test_support::{
     BC3_SOLID_RGB, cube_art, write_solid_bc3_texture, write_solid_texture, write_two_band_texture,
 };
 use crate::rendering::loading_screen::{
-    BackgroundImages, background_uv, CpuArt, LoadedArt, LoadingArtRenderer, LoadingBackground, graded, GRADE_TINT, OVERLAY_ALPHA_FACTOR,
+    BackgroundImages, background_uv, CpuArt, LoadedArt, LoadingArtRenderer, LoadingBackground, graded, GRADE_TINT, OVERLAY_GAIN,
 };
 use crate::rendering::post::tonemap::ui_gamma_format;
 use crate::rendering::ui_colour::UiTint;
@@ -1018,7 +1018,7 @@ fn the_loading_art_sits_above_the_backdrop_and_below_the_logo() {
     let dir = tempfile::tempdir().unwrap();
     let mut art = cube_art(dir.path(), "");
     // The cube stands over the logo's corner of the screen.
-    art.transform.position = [218.0, 300.0, -122.0];
+    art.transform.position = [218.0, 660.0, -122.0];
     let cpu = CpuArt::load(&art).expect("the synthetic cube loads");
     art_renderer.set_art(Some(
         LoadedArt::upload(&device, &queue, cpu).expect("the cube uploads"),
@@ -1214,9 +1214,9 @@ fn a_backdrop_overlay_is_added_over_the_image() {
 }
 
 /// The game's overlay is a BC3 texture: an sRGB view of it, or its alpha applied twice, would
-/// weaken the grid. Its texel adds exactly `0.6 * alpha * rgb`, rgb as stored, tinted.
+/// weaken the grid. Its texel adds exactly `gain * alpha * rgb`, rgb as stored, tinted.
 #[test]
-fn a_bc3_overlay_adds_six_tenths_of_its_alpha_times_its_stored_colour() {
+fn a_bc3_overlay_adds_its_alpha_times_its_stored_colour_at_the_overlay_gain() {
     const ALPHA: u8 = 128;
     let Some((device, queue)) = test_device("menu backdrop bc3 overlay") else {
         return;
@@ -1246,7 +1246,7 @@ fn a_bc3_overlay_adds_six_tenths_of_its_alpha_times_its_stored_colour() {
     let alpha = f32::from(ALPHA) / 255.0;
     let expected: [u8; 3] = std::array::from_fn(|channel| {
         let added = GRADE_TINT[channel]
-            * OVERLAY_ALPHA_FACTOR
+            * OVERLAY_GAIN
             * alpha
             * f32::from(BC3_SOLID_RGB[channel]);
         (f32::from(plain[channel]) + added).round() as u8

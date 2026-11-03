@@ -4,7 +4,7 @@
 use bytemuck::{Pod, Zeroable};
 
 use crate::rendering::loading_screen::{
-    BACKGROUND_U_MAX, BackgroundImages, GRADE_LIFT, GRADE_TINT, OVERLAY_ALPHA_FACTOR,
+    BACKGROUND_U_MAX, BackgroundImages, GRADE_LIFT, GRADE_TINT, OVERLAY_GAIN,
 };
 use crate::rendering::shaders;
 
@@ -12,7 +12,7 @@ use crate::rendering::shaders;
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Pod, Zeroable)]
 struct BackgroundParams {
-    /// The right end of the u range, the factor of the overlay's alpha, the fade, unused.
+    /// The right end of the u range, the overlay's gain, the fade, unused.
     look: [f32; 4],
     tint: [f32; 4],
     lift: [f32; 4],
@@ -23,7 +23,7 @@ impl BackgroundParams {
         Self {
             look: [
                 BACKGROUND_U_MAX,
-                OVERLAY_ALPHA_FACTOR,
+                OVERLAY_GAIN,
                 opacity.clamp(0.0, 1.0),
                 0.0,
             ],
