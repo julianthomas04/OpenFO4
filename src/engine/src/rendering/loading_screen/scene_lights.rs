@@ -158,9 +158,10 @@ const NON_NEGATIVE: Rule = Rule {
     holds: |value| value.is_finite() && *value >= 0.0,
 };
 
+/// The same range `outer_cone_cos` converts, so a value the INI accepts always converts.
 const SPOT_FOV: Rule = Rule {
     requirement: "a finite number above 0 and at most 180",
-    holds: |value| value.is_finite() && *value > 0.0 && *value <= 180.0,
+    holds: |value| outer_cone_cos(*value).is_ok(),
 };
 
 const POSITIVE: Rule = Rule {
