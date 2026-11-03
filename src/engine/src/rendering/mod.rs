@@ -62,6 +62,7 @@ mod rain_stage;
 pub mod readback_ring;
 pub mod refraction;
 pub mod render_pipelines;
+mod reveal_texture_check;
 pub(crate) mod row_pose;
 pub mod scene_copy;
 pub mod scene_overrides;
@@ -175,11 +176,14 @@ use crate::rendering::{
     },
     skeleton_overlay::{OverlayView, SkeletonOverlay},
     skinning::{
-        CharacterSystem, materials::CharacterGpuContext, pipelines::SkinnedPipelines,
-        scene::Visibility,
+        CharacterSystem, gpu_mesh::GpuSkinnedMesh, materials::CharacterGpuContext,
+        pipelines::SkinnedPipelines, scene::Visibility,
     },
     texture::Texture,
-    texture_streaming::{ResidencyPolicy, TextureFeedback, TextureResidency, demand::ScreenView},
+    texture_streaming::{
+        ResidencyPolicy, TextureFeedback, TextureResidency, demand::ScreenView,
+        readiness::TextureReadiness,
+    },
     water::{CameraWater, WaterSetting, WaterStage, water_panel},
     weather::{
         StartupWeather, WeatherSync,
@@ -220,6 +224,7 @@ use menu::{MenuRenderer, OverlayForeground, PanelContent};
 use particles::CameraBasis;
 use ragdoll_objects::RagdollObjects;
 use refraction::{RefractionFrameInputs, RefractionStage};
+use reveal_texture_check::{Draw, RevealTextureCheck};
 use shaders::startup::EffectValidation;
 use startup_reads::StartupDbReads;
 use ui_colour::UiColourSet;
@@ -694,6 +699,7 @@ pub struct State {
     auto_anim: AutoAnim,
     /// Dev override (`OPENFO4_AUTO_CHARACTER`): spawn skinned characters playing given clips.
     auto_characters: AutoCharacters,
+    reveal_texture_check: RevealTextureCheck,
 
     // Simulation (sim/render split: commands in, poses out)
     sim: SimWorld,
@@ -1910,6 +1916,7 @@ impl State {
             ragdoll_objects: RagdollObjects::default(),
             auto_anim: AutoAnim::from_env(),
             auto_characters: AutoCharacters::from_env(),
+            reveal_texture_check: RevealTextureCheck::default(),
             sim,
             input_mode: InputMode::Walk,
             freeze_camera,
@@ -3402,6 +3409,49 @@ impl State {
     /// `start`. The remove-before-teleport order is load-bearing — otherwise the
     /// spawn's ground-snap can latch onto the old content's still-resident
     /// terrain at a grid that numerically aliases the new start.
+    /// Feeds the reveal texture check this frame's draws, now that the material bind group is
+    /// final for the frame, and logs its report once a fade ends.
+    fn check_reveal_textures(&mut self) {
+        let fading = self.flow.phase() == Phase::Revealing;
+        let mut check = std::mem::take(&mut self.reveal_texture_check);
+        let report = check.frame(fading, || self.draws_with_unready_textures());
+        self.reveal_texture_check = check;
+        match report {
+            Some(report) if report.is_clean() => tracing::info!("REVEAL_TEXTURE_CHECK {report}"),
+            Some(report) => tracing::warn!(
+                "REVEAL_TEXTURE_CHECK {report}: the fade showed meshes whose textures were not ready"
+            ),
+            None => {}
+        }
+    }
+
+    fn draws_with_unready_textures(&self) -> Vec<Draw> {
+        let residency = &self.texture_residency;
+        let array = &self.texture_array;
+        let mut draws =
+            self.streamer
+                .drawn_cells_with_unready_textures(residency, array, &self.grass);
+        draws.extend(
+            self.characters
+                .characters()
+                .iter()
+                .filter(|character| !character.is_faulted())
+                .filter(|character| {
+                    character
+                        .rig()
+                        .meshes
+                        .iter()
+                        .flat_map(GpuSkinnedMesh::texture_refs)
+                        .any(|handle| {
+                            TextureReadiness::of_handle(residency, array, handle)
+                                != TextureReadiness::Ready
+                        })
+                })
+                .map(|character| Draw::Skinned(character.rig().name.clone())),
+        );
+        draws
+    }
+
     fn apply_stream_teleport(&mut self, start: Vec3) {
         stream_settle::apply_teardown(&mut self.sim, self.streamer.take_sim_commands());
         self.walk_in.rearm();
@@ -4190,6 +4240,7 @@ impl State {
         }
 
         drop(material_bind_group_span);
+        self.check_reveal_textures();
         let lamp_shadows_span = tracing::info_span!("lamp_shadows").entered();
         let mut shadow_invalidations = self.streamer.take_shadow_invalidations();
         self.characters

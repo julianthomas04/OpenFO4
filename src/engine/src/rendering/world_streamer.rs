@@ -55,6 +55,7 @@ use crate::rendering::placed_light::{
     GpuPlacedLight, LightBase, LightBaseError, LightPlacement, PlacedLight, PlacedLightError,
 };
 use crate::rendering::ragdoll_objects::{RagdollEvent, RagdollRefr, SkinPlan};
+use crate::rendering::reveal_texture_check::Draw;
 use crate::rendering::shadows::lamps::{
     ShadowInvalidations,
     source::{LampCandidate, LampKey, ShadowLampSource},
@@ -4230,6 +4231,31 @@ impl WorldStreamer {
 
     pub(crate) fn lod_pending_cell_count(&self) -> usize {
         self.lod_pending_cells.len()
+    }
+
+    /// The drawn cells, of either ring, that use a texture which is not loaded and bound.
+    pub(crate) fn drawn_cells_with_unready_textures(
+        &self,
+        residency: &TextureResidency,
+        array: &TextureArray,
+        grass: &GrassStage,
+    ) -> Vec<Draw> {
+        let unready = |res: &CellResources| {
+            Self::cell_textures(res, grass).any(|handle| {
+                TextureReadiness::of_handle(residency, array, handle) != TextureReadiness::Ready
+            })
+        };
+        let full = self
+            .loaded
+            .iter()
+            .filter(|(_, res)| unready(res))
+            .map(|(&grid, _)| Draw::FullCell(grid));
+        let lod = self
+            .lod_loaded
+            .iter()
+            .filter(|(_, res)| unready(res))
+            .map(|(&grid, _)| Draw::LodCell(grid));
+        full.chain(lod).collect()
     }
 
     /// Whether some cells are loaded and no cell of either ring is still loading or waiting to be
