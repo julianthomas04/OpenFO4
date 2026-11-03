@@ -1,24 +1,41 @@
 //! The loading art renderer on the shared headless GPU device: what ends up in the pixels.
 
-use glam::UVec2;
+use glam::{UVec2, Vec3};
 
-use super::light_colour;
 use super::test_support::{cube_art, layered_quads_art, write_solid_texture, write_texture};
-use super::{CpuArt, LoadedArt, LoadingArt, LoadingArtRenderer, PanKey};
+use super::{CpuArt, LoadedArt, LoadingArt, LoadingArtRenderer, PanKey, SceneLights};
+use crate::bethesda_space::{UNITS_TO_ENGINE, position_to_engine};
 use crate::rendering::gpu_test::{linear_to_srgb_byte, read_mip, test_device};
 use crate::rendering::lighting::cell_lighting::srgb_to_linear;
+use crate::rendering::placed_light::linear_colour;
 use crate::rendering::post::tonemap::ui_gamma_format;
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const SIZE: (u32, u32) = (320, 180);
 const BLACK: wgpu::Color = wgpu::Color::BLACK;
-/// The cube's front face is lit by the ambient term and the tinted light at an angle of
-/// `cos = 0.15 / |(-0.7, 0.7, 0.15)|`; a white texel shows `0.02 + 2.5 * cos * tint` per channel,
-/// encoded to sRGB.
-const FRONT_FACE_COS: f32 = 0.149_8;
+/// How far the cube's front face is from the camera, in engine units: the cube's centre is at
+/// 30 and its half edge 5.
+const FRONT_FACE_DEPTH: f32 = 25.0;
+/// The diffuse of a fully rough surface seen along its normal, relative to Lambert:
+/// `1 - 0.5 * 1 / (1 + 0.57)` from the world's roughness coefficients.
+const ROUGH_FLATTEN: f32 = 0.681_5;
+
+/// The linear colour of the cube's front face lit by `lights`' third light alone: the other two
+/// stand behind the face. The world's local light on a matte white texel seen head-on: the colour
+/// times the falloff `(1 - (distance / radius)^2)^2.2` times the rough diffuse times the cosine.
+fn front_face_linear(lights: &SceneLights) -> [f32; 3] {
+    let fill = lights.lights[2];
+    let [x, y, z] = fill.position.to_array();
+    let to_light = position_to_engine(x, y, z) - Vec3::new(0.0, 0.0, -FRONT_FACE_DEPTH);
+    let distance = to_light.length();
+    let normalised = distance / (fill.radius * UNITS_TO_ENGINE);
+    let falloff = (1.0 - normalised * normalised).max(0.0).powf(2.2);
+    let cosine = to_light.z / distance;
+    (linear_colour(fill.diffuse, fill.dimmer) * (falloff * ROUGH_FLATTEN * cosine)).to_array()
+}
 
 fn front_face_bytes() -> [u8; 3] {
-    light_colour().map(|tint| linear_to_srgb_byte(0.02 + 2.5 * FRONT_FACE_COS * tint))
+    front_face_linear(&SceneLights::VANILLA).map(linear_to_srgb_byte)
 }
 
 fn assert_close_colour(actual: [u8; 3], expected: [u8; 3], tolerance: u8) {
@@ -142,8 +159,12 @@ struct Scene {
 
 impl Scene {
     fn new(test: &str) -> Option<Self> {
+        Self::lit_by(test, &SceneLights::VANILLA)
+    }
+
+    fn lit_by(test: &str, lights: &SceneLights) -> Option<Self> {
         let (device, queue) = test_device(test)?;
-        let renderer = LoadingArtRenderer::new(&device, &queue, ui_gamma_format(FORMAT));
+        let renderer = LoadingArtRenderer::new(&device, &queue, ui_gamma_format(FORMAT), lights);
         Some(Self {
             device,
             queue,
@@ -423,7 +444,7 @@ fn assert_same_colour(actual: [u8; 3], expected: [u8; 3]) {
 }
 
 #[test]
-fn a_specular_map_adds_a_white_highlight_whatever_the_colour_of_the_light() {
+fn a_specular_map_adds_a_highlight_in_the_colour_of_the_light() {
     let (Some(matte), Some(shiny)) = (
         centre_with("loading art matte", "grey.dds", &[("grey.dds", MID_GREY)]),
         centre_with(
@@ -439,16 +460,23 @@ fn a_specular_map_adds_a_white_highlight_whatever_the_colour_of_the_light() {
         "{matte:?} -> {shiny:?}"
     );
     let added = |channel: usize| srgb_to_linear(shiny[channel]) - srgb_to_linear(matte[channel]);
+    let fill = SceneLights::VANILLA.lights[2];
+    let light = linear_colour(fill.diffuse, fill.dimmer);
+    let (added_ratio, light_ratio) = (added(0) / added(2), light.x / light.z);
     assert!(
-        (added(0) - added(2)).abs() < 0.01 * added(0).max(0.01) + 0.003,
-        "{matte:?} -> {shiny:?}: the highlight is white"
+        (added_ratio - light_ratio).abs() < 0.05 * light_ratio,
+        "{matte:?} -> {shiny:?}: the highlight has the light's red to blue {light_ratio}, not {added_ratio}"
     );
 }
 
 #[test]
 fn a_specular_map_without_intensity_adds_nothing() {
     let (Some(matte), Some(dull)) = (
-        centre_with("loading art matte again", "grey.dds", &[("grey.dds", MID_GREY)]),
+        centre_with(
+            "loading art matte again",
+            "grey.dds",
+            &[("grey.dds", MID_GREY)],
+        ),
         centre_with(
             "loading art black specular",
             &format!("grey.dds{SPECULAR_TOKENS}"),
@@ -463,7 +491,11 @@ fn a_specular_map_without_intensity_adds_nothing() {
 #[test]
 fn a_specular_map_that_cannot_be_loaded_switches_the_specular_off() {
     let (Some(matte), Some(unloaded)) = (
-        centre_with("loading art matte third", "grey.dds", &[("grey.dds", MID_GREY)]),
+        centre_with(
+            "loading art matte third",
+            "grey.dds",
+            &[("grey.dds", MID_GREY)],
+        ),
         centre_with(
             "loading art missing specular",
             &format!("grey.dds{SPECULAR_TOKENS}"),
@@ -478,7 +510,11 @@ fn a_specular_map_that_cannot_be_loaded_switches_the_specular_off() {
 #[test]
 fn a_material_without_specular_parameters_stays_matte_whatever_its_specular_map() {
     let (Some(matte), Some(unmarked)) = (
-        centre_with("loading art matte fourth", "grey.dds", &[("grey.dds", MID_GREY)]),
+        centre_with(
+            "loading art matte fourth",
+            "grey.dds",
+            &[("grey.dds", MID_GREY)],
+        ),
         centre_with(
             "loading art legacy specular",
             "grey.dds|spec:spec.dds",
@@ -522,8 +558,10 @@ fn a_normal_map_changes_how_the_surface_catches_the_light() {
     } else {
         (other_way, one_way)
     };
+    // The one light that reaches the face stands a little to one side of the view axis, so
+    // leaning towards it brightens less than leaning away darkens.
     assert!(
-        brighter[0] > flat[0] + 10 && darker[0] + 10 < flat[0],
+        brighter[0] > flat[0] && darker[0] + 10 < flat[0],
         "flat {flat:?}, leaning {one_way:?} and {other_way:?}"
     );
 }
@@ -531,7 +569,11 @@ fn a_normal_map_changes_how_the_surface_catches_the_light() {
 #[test]
 fn a_normal_map_that_cannot_be_loaded_leaves_the_surface_flat() {
     let (Some(flat), Some(unloaded)) = (
-        centre_with("loading art flat again", "grey.dds", &[("grey.dds", MID_GREY)]),
+        centre_with(
+            "loading art flat again",
+            "grey.dds",
+            &[("grey.dds", MID_GREY)],
+        ),
         centre_with(
             "loading art missing normal",
             "grey.dds|normal.dds",
@@ -541,4 +583,95 @@ fn a_normal_map_that_cannot_be_loaded_leaves_the_surface_flat() {
         return;
     };
     assert_same_colour(unloaded, flat);
+}
+
+fn centre_lit_by(test: &str, lights: &SceneLights) -> Option<[u8; 3]> {
+    let mut scene = Scene::lit_by(test, lights)?;
+    let dir = tempfile::tempdir().unwrap();
+    scene.show(&cube_art(dir.path(), ""));
+    let target = Target::new(&scene, SIZE, BLACK);
+    Some(scene.draw(&target).centre())
+}
+
+fn with_fill(change: impl FnOnce(&mut super::scene_lights::SceneLight)) -> SceneLights {
+    let mut lights = SceneLights::VANILLA;
+    change(&mut lights.lights[2]);
+    lights
+}
+
+fn linear_centre(test: &str, lights: &SceneLights) -> Option<[f32; 3]> {
+    centre_lit_by(test, lights).map(|bytes| bytes.map(srgb_to_linear))
+}
+
+#[test]
+fn a_head_on_face_shows_the_worlds_local_light_of_the_fill_light() {
+    let Some(centre) = linear_centre("loading art fill light", &SceneLights::VANILLA) else {
+        return;
+    };
+
+    for (channel, (actual, expected)) in centre
+        .into_iter()
+        .zip(front_face_linear(&SceneLights::VANILLA))
+        .enumerate()
+    {
+        assert!(
+            (actual - expected).abs() < 0.01,
+            "channel {channel}: {actual} is not {expected}"
+        );
+    }
+}
+
+#[test]
+fn doubling_the_dimmer_doubles_the_radiance() {
+    let doubled = with_fill(|fill| fill.dimmer *= 2.0);
+    let (Some(single), Some(double)) = (
+        linear_centre("loading art dimmer one", &SceneLights::VANILLA),
+        linear_centre("loading art dimmer two", &doubled),
+    ) else {
+        return;
+    };
+
+    for channel in 0..3 {
+        let ratio = double[channel] / single[channel];
+        assert!(
+            (ratio - 2.0).abs() < 0.05,
+            "channel {channel}: {single:?} -> {double:?}"
+        );
+    }
+}
+
+#[test]
+fn a_light_whose_radius_ends_before_the_model_lights_nothing() {
+    let short = with_fill(|fill| fill.radius = 50.0);
+
+    let Some(centre) = centre_lit_by("loading art short radius", &short) else {
+        return;
+    };
+
+    assert_eq!(centre, [0, 0, 0]);
+}
+
+#[test]
+fn a_light_behind_the_face_does_not_light_it() {
+    let behind = with_fill(|fill| fill.position = Vec3::new(400.0, 1000.0, 220.0));
+
+    let Some(centre) = centre_lit_by("loading art light behind", &behind) else {
+        return;
+    };
+
+    assert_eq!(centre, [0, 0, 0]);
+}
+
+#[test]
+fn a_nearer_light_is_brighter_than_a_farther_one() {
+    let near = with_fill(|fill| fill.position = Vec3::new(0.0, -300.0, 0.0));
+    let far = with_fill(|fill| fill.position = Vec3::new(0.0, -2500.0, 0.0));
+    let (Some(near), Some(far)) = (
+        linear_centre("loading art near light", &near),
+        linear_centre("loading art far light", &far),
+    ) else {
+        return;
+    };
+
+    assert!(near[1] > far[1] + 0.05, "{near:?} against {far:?}");
 }

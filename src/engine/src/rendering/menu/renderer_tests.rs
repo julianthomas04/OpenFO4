@@ -15,7 +15,7 @@ use crate::rendering::loading_screen::test_support::{
     BC3_SOLID_RGB, cube_art, write_solid_bc3_texture, write_solid_texture, write_two_band_texture,
 };
 use crate::rendering::loading_screen::{
-    BackgroundImages, background_uv, CpuArt, LoadedArt, LoadingArtRenderer, LoadingBackground, graded, GRADE_TINT, OVERLAY_GAIN,
+    BackgroundImages, background_uv, CpuArt, LoadedArt, LoadingArtRenderer, LoadingBackground, SceneLights, graded, GRADE_TINT, OVERLAY_GAIN,
 };
 use crate::rendering::post::tonemap::ui_gamma_format;
 use crate::rendering::ui_colour::UiTint;
@@ -1014,7 +1014,12 @@ fn the_loading_art_sits_above_the_backdrop_and_below_the_logo() {
     let target = Target::new(&device);
     target.fill(&device, &queue, RED);
     let mut menu = renderer(&device, &queue, HUD_GREEN);
-    let mut art_renderer = LoadingArtRenderer::new(&device, &queue, ui_gamma_format(FORMAT));
+    let mut art_renderer = LoadingArtRenderer::new(
+        &device,
+        &queue,
+        ui_gamma_format(FORMAT),
+        &SceneLights::VANILLA,
+    );
     let dir = tempfile::tempdir().unwrap();
     let mut art = cube_art(dir.path(), "");
     // The cube stands over the logo's corner of the screen.
@@ -1331,7 +1336,12 @@ fn the_loading_art_is_drawn_over_the_backdrop_image() {
     let image = background.images(&device, &queue).expect("the image loads");
     let target = Target::new(&device);
     let mut menu = renderer(&device, &queue, HUD_GREEN);
-    let mut art_renderer = LoadingArtRenderer::new(&device, &queue, ui_gamma_format(FORMAT));
+    let mut art_renderer = LoadingArtRenderer::new(
+        &device,
+        &queue,
+        ui_gamma_format(FORMAT),
+        &SceneLights::VANILLA,
+    );
     let cpu = CpuArt::load(&cube_art(dir.path(), "")).expect("the synthetic cube loads");
     art_renderer.set_art(Some(
         LoadedArt::upload(&device, &queue, cpu).expect("the cube uploads"),

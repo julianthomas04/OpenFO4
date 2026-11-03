@@ -15,25 +15,26 @@ mod pan_window;
 mod pipeline;
 #[cfg(test)]
 mod renderer_tests;
+mod scene_lights;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod tuning;
 
 pub use art::{LoadingArt, ModelTransform};
 pub use background::{BackgroundImages, LoadingBackground};
-pub use background_look::{
-    BACKGROUND_U_MAX, GRADE_LIFT, GRADE_TINT, OVERLAY_GAIN, light_colour,
-};
+pub use background_look::{BACKGROUND_U_MAX, GRADE_LIFT, GRADE_TINT, OVERLAY_GAIN, light_colour};
 #[cfg(test)]
 pub use background_look::{background_uv, graded};
 pub use camera::ArtCamera;
 pub use model::{CpuArt, LoadedArt, LoadingArtError};
 pub use motion::PanKey;
+pub use scene_lights::SceneLights;
 
 use bytemuck::bytes_of;
 use wgpu::util::DeviceExt;
 
 use pipeline::{ArtPipeline, DepthTarget, MaterialUniform, SceneUniform};
+use scene_lights::{GpuSceneLight, LIGHT_COUNT};
 
 struct Active {
     art: LoadedArt,
@@ -44,6 +45,7 @@ pub struct LoadingArtRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     encode_srgb: bool,
+    lights: [GpuSceneLight; LIGHT_COUNT],
     pipeline: ArtPipeline,
     sampler: wgpu::Sampler,
     scene_buffer: wgpu::Buffer,
@@ -53,13 +55,14 @@ pub struct LoadingArtRenderer {
 }
 
 impl LoadingArtRenderer {
-    /// A renderer for views of `target_format`. The menu draws through the swapchain's non-sRGB
-    /// view, so a format that does not encode sRGB itself gets its colour encoded by the shader,
-    /// and alpha blends on the encoded values like the rest of the menu.
+    /// A renderer for views of `target_format`, lit by `lights`. The menu draws through the
+    /// swapchain's non-sRGB view, so a format that does not encode sRGB itself gets its colour
+    /// encoded by the shader, and alpha blends on the encoded values like the rest of the menu.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         target_format: wgpu::TextureFormat,
+        lights: &SceneLights,
     ) -> Self {
         let pipeline = ArtPipeline::new(device, target_format);
         let scene_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -89,6 +92,7 @@ impl LoadingArtRenderer {
             device: device.clone(),
             queue: queue.clone(),
             encode_srgb: !target_format.is_srgb(),
+            lights: lights.to_gpu(),
             pipeline,
             sampler,
             scene_buffer,
@@ -212,6 +216,7 @@ impl LoadingArtRenderer {
         let scene = SceneUniform::new(
             active.art.camera.view_proj(aspect),
             active.art.camera.model_matrix(),
+            self.lights,
             self.encode_srgb,
         );
         self.queue

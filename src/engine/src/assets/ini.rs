@@ -335,7 +335,20 @@ impl GameIni {
     /// settings the game's own INIs omit, whose value the game takes from its built-in default
     /// (the caller says which); a value that is present must still be valid.
     pub fn optional_positive(&self, key: IniKey) -> Result<Option<f32>, IniError> {
-        match self.require_positive(key) {
+        self.optional_valid(key, "a finite number above 0", |v: &f32| {
+            v.is_finite() && *v > 0.0
+        })
+    }
+
+    /// Like [`Self::require_valid`], and `None` when no INI sets the key; the same rule as
+    /// [`Self::optional_positive`] for a setting with any other validity.
+    pub fn optional_valid<T: IniValue>(
+        &self,
+        key: IniKey,
+        requirement: &str,
+        is_valid: impl Fn(&T) -> bool,
+    ) -> Result<Option<T>, IniError> {
+        match self.require_valid(key, requirement, is_valid) {
             Err(IniError::MissingKey { .. }) => Ok(None),
             other => other.map(Some),
         }
@@ -718,6 +731,18 @@ mod tests {
             ini.require_valid(key("iOdd"), "even", even),
             Err(IniError::Invalid { .. })
         ));
+    }
+
+    #[test]
+    fn an_optional_valid_setting_is_none_when_absent_and_still_validated_when_present() {
+        let ini = ini("fNegative=-3.5\nfBig=900\nfWord=big\n");
+        let at_most_100 = |value: &f32| *value <= 100.0;
+        let read = |name| ini.optional_valid(key(name), "100 or less", at_most_100);
+
+        assert_eq!(read("fNegative").unwrap(), Some(-3.5));
+        assert_eq!(read("fAbsent").unwrap(), None);
+        assert!(matches!(read("fBig"), Err(IniError::Invalid { .. })));
+        assert!(matches!(read("fWord"), Err(IniError::Unparsable { .. })));
     }
 
     #[test]

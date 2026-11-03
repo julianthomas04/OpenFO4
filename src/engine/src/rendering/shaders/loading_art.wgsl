@@ -1,20 +1,28 @@
-// The 3D model of a large loading screen: the diffuse texture under one directional, tinted light, a
-// near-zero ambient term and the world's specular lobe. The normal map and the specular map
-// (R = intensity, G = smoothness) are read through the world's tangent frame and surface
-// response (`normal_mapping.wgsl`, `surface_response.wgsl`). The pass draws through the non-sRGB
-// view of the swapchain like the rest of the menu, so the shader encodes the colour itself when
-// `shading.z` is 1.
+// The 3D model of a large loading screen, lit by the game's three loading-menu scene lights: point
+// lights fixed relative to the camera, each with the world's placed-light distance falloff
+// (`placed_light.wgsl`) and the world's surface response (`surface_response.wgsl`), and no ambient
+// term. The normal map and the specular map (R = intensity, G = smoothness) are read through the
+// world's tangent frame (`normal_mapping.wgsl`). The output is linear radiance, unclamped. The
+// pass draws through the non-sRGB view of the swapchain like the rest of the menu, so the shader
+// encodes the colour itself when `encode.x` is 1.
+
+const SCENE_LIGHT_COUNT = 3;
+
+struct SceneLight {
+    // The position in engine space and the radius in engine units.
+    position_radius: vec4<f32>,
+    // The linear colour with the dimmer applied.
+    colour: vec4<f32>,
+    // The falloff's constant, scalar and exponent, as a placed light's record stores them.
+    attenuation: vec4<f32>,
+};
 
 struct Scene {
     view_proj: mat4x4<f32>,
     model: mat4x4<f32>,
-    // Unit vector towards the light, in engine space.
-    light_direction: vec4<f32>,
-    // The ambient and the diffuse strength of the light, 1 when the shader has to encode to sRGB,
-    // and the strength of the specular lobe.
-    shading: vec4<f32>,
-    // The linear colour of the light, applied to its diffuse term only; the specular is white.
-    light_colour: vec4<f32>,
+    lights: array<SceneLight, SCENE_LIGHT_COUNT>,
+    // 1 when the shader has to encode to sRGB.
+    encode: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> scene: Scene;
@@ -91,12 +99,16 @@ fn direction_to_viewer(world_pos: vec3<f32>) -> vec3<f32> {
     return safe_normalize(-world_pos);
 }
 
-// The specular lobe of the key light on `surface`; none where the light does not reach it.
-fn key_specular(surface: SurfaceSample, light: vec3<f32>, world_pos: vec3<f32>) -> f32 {
-    if dot(surface.n, light) <= 0.0 {
-        return 0.0;
-    }
-    return scene.shading.w * specular_response(surface, light, direction_to_viewer(world_pos));
+// What `light` adds to `surface` at `world_pos`: the world's local light, a point light with no
+// flags, so the full surface response. The response is zero where the light is behind the surface.
+fn scene_light_radiance(surface: SurfaceSample, light: SceneLight, world_pos: vec3<f32>) -> vec3<f32> {
+    let to_light = light.position_radius.xyz - world_pos;
+    let distance = max(length(to_light), MIN_LIGHT_DISTANCE);
+    let to_light_unit = to_light / distance;
+    let falloff = placed_light_falloff(light.position_radius.w, light.attenuation.xyz, distance);
+    let colour = light.colour.rgb * (falloff * terminator(surface.ng, to_light_unit));
+    let response = surface_response(surface, to_light_unit, direction_to_viewer(world_pos), FULL_RESPONSE);
+    return surface.albedo * colour * response.diffuse + colour * response.specular;
 }
 
 @fragment
@@ -110,7 +122,6 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     if is_cut_out(texel.a) {
         discard;
     }
-    let light = scene.light_direction.xyz;
     let surface = SurfaceSample(
         texel.rgb,
         normals.shading,
@@ -118,8 +129,10 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         material.surface.x * specular_texel.g,
         material.surface.y * specular_texel.r,
     );
-    let key = scene.light_colour.rgb * (scene.shading.y * max(dot(surface.n, light), 0.0));
-    let lit = texel.rgb * (vec3<f32>(scene.shading.x) + key) + vec3<f32>(key_specular(surface, light, in.world_pos));
-    let colour = select(lit, encode_srgb(lit), scene.shading.z > 0.5);
+    var lit = vec3<f32>(0.0);
+    for (var index = 0; index < SCENE_LIGHT_COUNT; index = index + 1) {
+        lit += scene_light_radiance(surface, scene.lights[index], in.world_pos);
+    }
+    let colour = select(lit, encode_srgb(lit), scene.encode.x > 0.5);
     return vec4<f32>(colour, 1.0);
 }

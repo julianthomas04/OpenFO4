@@ -1779,6 +1779,7 @@ impl State {
                 &device,
                 &queue,
                 tonemap::ui_gamma_format(surface_format),
+                &settings.loading_lights,
                 Path::new(asset_server.asset_location()),
                 db_path.clone(),
                 seed_from_clock(),

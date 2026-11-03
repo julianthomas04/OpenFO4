@@ -12,7 +12,7 @@ use crate::loading_screen::{LoadScreenContext, Place, select};
 use crate::random::SplitMix64;
 use crate::rendering::loading_screen::{
     BackgroundImages, LoadedArt, LoadingArt, LoadingArtRenderer, LoadingBackground, ModelTransform,
-    PanKey,
+    PanKey, SceneLights,
 };
 
 /// Names the editor id of the loading screen to show on every large screen, to tune its camera.
@@ -73,6 +73,7 @@ impl LoadScreenHost {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         target_format: wgpu::TextureFormat,
+        lights: &SceneLights,
         asset_root: &Path,
         db_path: String,
         seed: u64,
@@ -84,7 +85,7 @@ impl LoadScreenHost {
             rng: SplitMix64::new(seed),
             forced: forced_screen_from_env(),
             loader: ArtLoader::default(),
-            renderer: LoadingArtRenderer::new(device, queue, target_format),
+            renderer: LoadingArtRenderer::new(device, queue, target_format, lights),
             background: LoadingBackground::new(asset_root.to_path_buf()),
             device: device.clone(),
             queue: queue.clone(),
@@ -496,6 +497,7 @@ mod tests {
                 &device,
                 &queue,
                 ui_gamma_format(FORMAT),
+                &SceneLights::VANILLA,
                 Path::new("unused"),
                 String::new(),
                 1,

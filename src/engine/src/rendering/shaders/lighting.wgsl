@@ -20,8 +20,6 @@ const CLASS_OPAQUE_EFFECT = vec3<f32>(0.0, 1.0, 0.0);
 const CLASS_LIT_ENV = vec3<f32>(0.0, 0.0, 1.0);
 const CLASS_OTHER = vec3<f32>(0.08);
 
-const TERMINATOR_SHARPNESS = 8.0;
-
 const NO_CASCADE = 0xffffffffu;
 const LAST_CASCADE_FADE_FRACTION = 0.1;
 const MAX_SLOPE_BIAS_TANGENT = 10.0;
@@ -43,7 +41,6 @@ const RECEIVER_OBJECT = 0u;
 const RECEIVER_LANDSCAPE = LIGHT_FLAG_REF_DOES_NOT_LIGHT_LANDSCAPE;
 
 const MIN_CLUSTER_DEPTH = 1e-3;
-const MIN_LIGHT_DISTANCE = 1e-4;
 const HEATMAP_FULL_SCALE = 32.0;
 const HEATMAP_EMPTY_COLOR = vec3<f32>(0.0, 0.1, 0.6);
 const HEATMAP_MID_COLOR = vec3<f32>(0.0, 1.0, 0.2);
@@ -63,11 +60,6 @@ struct ShadingPoint {
     // Framebuffer position in pixels.
     frag_xy: vec2<f32>,
     excluded_light_flags: u32,
-}
-
-// Hides the shading-normal light leak past the geometric terminator.
-fn terminator(ng: vec3<f32>, l: vec3<f32>) -> f32 {
-    return saturate(dot(ng, l) * TERMINATOR_SHARPNESS);
 }
 
 fn cascade_containing(world_pos: vec3<f32>) -> u32 {
@@ -238,24 +230,13 @@ fn light_cluster(p: ShadingPoint) -> u32 {
     return cluster_index(tile, u32(clamp(slice, 0.0, f32(grid.z - 1u))), grid.x);
 }
 
-const LIGHT_FALLOFF_POWER = 2.2;
-const MAX_DISTANCE_POWER = 1e30;
 const MIN_CONE_COSINE_SPAN = 1e-6;
 const MIN_CONE_SIN_SQ = 1e-12;
 const MIN_CONE_TAN_DIVISOR = 1e-30;
 
-// Distance falloff of a placed light, `distance` in engine units: the share of
-// light lost, raised to a power. It is the larger of the light's own loss (its
-// constant plus scalar times the normalised distance raised to its exponent) and
-// the squared normalised distance, so the falloff never exceeds
-// (1 - normalised^2)^power and reaches 0 with zero slope at the radius whatever
-// the record says. Zero from the radius outwards.
+// Distance falloff of a placed light, `distance` in engine units (see placed_light.wgsl).
 fn local_light_attenuation(light: VisibleLight, distance: f32) -> f32 {
-    let normalised = distance / light.radius;
-    let window_loss = normalised * normalised;
-    let distance_power = min(pow_or_zero(normalised, light.attenuation.z), MAX_DISTANCE_POWER);
-    let record_loss = saturate(light.attenuation.x + light.attenuation.y * distance_power);
-    return pow_or_zero(1.0 - saturate(max(record_loss, window_loss)), LIGHT_FALLOFF_POWER);
+    return placed_light_falloff(light.radius, light.attenuation, distance);
 }
 
 // Falloff of a spot light without a lamp shadow: the cosine of the angle off

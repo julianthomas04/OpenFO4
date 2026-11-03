@@ -2,30 +2,12 @@
 //! uniform block and the depth buffer.
 
 use bytemuck::{Pod, Zeroable};
-use glam::{Mat4, Vec3};
+use glam::Mat4;
 
-use super::background_look::light_colour;
+use super::scene_lights::{GpuSceneLight, LIGHT_COUNT};
 use crate::rendering::shaders;
 use crate::rendering::texture::Texture;
 use crate::rendering::vertex::Vertex;
-
-/// Measured from the vanilla screen's T-51 power armour: the key comes from the viewer's upper
-/// left and front, so the left silhouette is bright, the right side dark and the undersides
-/// black; there is no fill or rim light.
-///
-/// Inferred from comparisons with a vanilla screenshot: the left and right p90 brightness differ
-/// by about 1.76, the upper and lower by about 1.59, and surfaces facing the viewer's right fall
-/// to black, so the key is mostly lateral and from above, barely frontal.
-const LIGHT_TOWARDS: Vec3 = Vec3::new(-0.7, 0.7, 0.15);
-/// Inferred: nearly none, vanilla has 6.7% pure black model pixels. The shader adds no wrap
-/// light, and back faces of two-sided geometry are lit as their own side, not brightened.
-const AMBIENT: f32 = 0.02;
-/// Inferred: the strength of the key, aiming at a p99 luma of about 250 with 1.5 to 2% of the
-/// model's pixels clipped.
-const DIFFUSE: f32 = 2.5;
-/// Inferred: the strength of the specular lobe of the world's surface response. The lobe is
-/// white, not tinted like the diffuse light: vanilla's highlights have blue about 0.96 of green.
-const SPECULAR_STRENGTH: f32 = 3.0;
 
 /// The uniform block of `loading_art.wgsl`.
 #[repr(C)]
@@ -33,28 +15,23 @@ const SPECULAR_STRENGTH: f32 = 3.0;
 pub(super) struct SceneUniform {
     view_proj: [[f32; 4]; 4],
     model: [[f32; 4]; 4],
-    light_direction: [f32; 4],
-    shading: [f32; 4],
-    /// The linear colour of the key, applied to its diffuse term only.
-    light_colour: [f32; 4],
+    lights: [GpuSceneLight; LIGHT_COUNT],
+    /// 1 in `x` when the shader has to encode its linear output to sRGB.
+    encode: [f32; 4],
 }
 
 impl SceneUniform {
-    pub fn new(view_proj: Mat4, model: Mat4, encode_srgb: bool) -> Self {
+    pub fn new(
+        view_proj: Mat4,
+        model: Mat4,
+        lights: [GpuSceneLight; LIGHT_COUNT],
+        encode_srgb: bool,
+    ) -> Self {
         Self {
             view_proj: view_proj.to_cols_array_2d(),
             model: model.to_cols_array_2d(),
-            light_direction: LIGHT_TOWARDS.normalize().extend(0.0).to_array(),
-            shading: [
-                AMBIENT,
-                DIFFUSE,
-                if encode_srgb { 1.0 } else { 0.0 },
-                SPECULAR_STRENGTH,
-            ],
-            light_colour: {
-                let [red, green, blue] = light_colour();
-                [red, green, blue, 0.0]
-            },
+            lights,
+            encode: [if encode_srgb { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
         }
     }
 }
@@ -257,25 +234,23 @@ impl DepthTarget {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "the expected values are exact literals parsed or copied, not computed"
+)]
 mod tests {
+    use super::super::scene_lights::SceneLights;
     use super::*;
 
     #[test]
-    fn the_key_light_is_a_unit_vector_from_the_upper_left_front() {
-        let scene = SceneUniform::new(Mat4::IDENTITY, Mat4::IDENTITY, false);
-        let [x, y, z, _] = scene.light_direction;
+    fn the_uniform_carries_the_lights_and_the_encode_flag() {
+        let lights = SceneLights::VANILLA.to_gpu();
+        let encoded = SceneUniform::new(Mat4::IDENTITY, Mat4::IDENTITY, lights, true);
+        let direct = SceneUniform::new(Mat4::IDENTITY, Mat4::IDENTITY, lights, false);
 
-        assert!(x < 0.0 && y > 0.0 && z > 0.0, "{x} {y} {z}");
-        assert!((x * x + y * y + z * z - 1.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn the_shading_carries_the_ambient_the_key_the_encode_flag_and_the_specular() {
-        let encoded = SceneUniform::new(Mat4::IDENTITY, Mat4::IDENTITY, true);
-        let direct = SceneUniform::new(Mat4::IDENTITY, Mat4::IDENTITY, false);
-
-        assert_eq!(encoded.shading, [AMBIENT, DIFFUSE, 1.0, SPECULAR_STRENGTH]);
-        assert_eq!(direct.shading[2], 0.0);
+        assert_eq!(encoded.lights, lights);
+        assert_eq!(encoded.encode[0], 1.0);
+        assert_eq!(direct.encode[0], 0.0);
     }
 
     #[test]
