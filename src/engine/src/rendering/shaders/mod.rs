@@ -28,6 +28,7 @@ pub const OBJECT: ShaderSource = ShaderSource {
     wgsl: concat!(
         include_str!("binding_array.wgsl"),
         include_str!("light_data.wgsl"),
+        include_str!("lamp_shadow_types.wgsl"),
         include_str!("frame.wgsl"),
         include_str!("instance.wgsl"),
         include_str!("scene_bindings.wgsl"),
@@ -43,6 +44,7 @@ pub const OBJECT: ShaderSource = ShaderSource {
         include_str!("mip_debug.wgsl"),
         include_str!("texture_feedback.wgsl"),
         include_str!("fog.wgsl"),
+        include_str!("shadow_bias.wgsl"),
         include_str!("lighting.wgsl"),
         include_str!("surface.wgsl"),
         include_str!("env_reflection.wgsl"),
@@ -56,6 +58,7 @@ pub const TERRAIN: ShaderSource = ShaderSource {
     wgsl: concat!(
         include_str!("binding_array.wgsl"),
         include_str!("light_data.wgsl"),
+        include_str!("lamp_shadow_types.wgsl"),
         include_str!("frame.wgsl"),
         include_str!("instance.wgsl"),
         include_str!("scene_bindings.wgsl"),
@@ -69,6 +72,7 @@ pub const TERRAIN: ShaderSource = ShaderSource {
         include_str!("mip_debug.wgsl"),
         include_str!("texture_feedback.wgsl"),
         include_str!("fog.wgsl"),
+        include_str!("shadow_bias.wgsl"),
         include_str!("lighting.wgsl"),
         include_str!("terrain.wgsl"),
     ),
@@ -78,6 +82,7 @@ pub const SKY: ShaderSource = ShaderSource {
     label: "sky_shader",
     wgsl: concat!(
         include_str!("light_data.wgsl"),
+        include_str!("lamp_shadow_types.wgsl"),
         include_str!("frame.wgsl"),
         include_str!("fullscreen.wgsl"),
         include_str!("sky_gradient.wgsl"),
@@ -89,6 +94,7 @@ pub const SKY_MOON: ShaderSource = ShaderSource {
     label: "sky_moon_shader",
     wgsl: concat!(
         include_str!("light_data.wgsl"),
+        include_str!("lamp_shadow_types.wgsl"),
         include_str!("frame.wgsl"),
         include_str!("sky_moon.wgsl"),
     ),
@@ -98,6 +104,7 @@ pub const SKY_SUN: ShaderSource = ShaderSource {
     label: "sky_sun_shader",
     wgsl: concat!(
         include_str!("light_data.wgsl"),
+        include_str!("lamp_shadow_types.wgsl"),
         include_str!("frame.wgsl"),
         include_str!("sky_sun.wgsl"),
     ),
@@ -107,6 +114,7 @@ pub const SKY_STARS: ShaderSource = ShaderSource {
     label: "sky_stars_shader",
     wgsl: concat!(
         include_str!("light_data.wgsl"),
+        include_str!("lamp_shadow_types.wgsl"),
         include_str!("frame.wgsl"),
         include_str!("sky_stars.wgsl"),
     ),
@@ -116,6 +124,7 @@ pub const SKY_CLOUDS: ShaderSource = ShaderSource {
     label: "sky_clouds_shader",
     wgsl: concat!(
         include_str!("light_data.wgsl"),
+        include_str!("lamp_shadow_types.wgsl"),
         include_str!("frame.wgsl"),
         include_str!("sky_clouds.wgsl"),
     ),
@@ -125,6 +134,7 @@ pub const TONEMAP: ShaderSource = ShaderSource {
     label: "tonemap_shader",
     wgsl: concat!(
         include_str!("light_data.wgsl"),
+        include_str!("lamp_shadow_types.wgsl"),
         include_str!("frame.wgsl"),
         include_str!("fullscreen.wgsl"),
         include_str!("image_space.wgsl"),
@@ -136,6 +146,7 @@ pub const DEBUG_LINES: ShaderSource = ShaderSource {
     label: "debug_lines_shader",
     wgsl: concat!(
         include_str!("light_data.wgsl"),
+        include_str!("lamp_shadow_types.wgsl"),
         include_str!("frame.wgsl"),
         include_str!("debug_lines.wgsl"),
     ),
@@ -145,6 +156,7 @@ pub const SKELETON_OVERLAY: ShaderSource = ShaderSource {
     label: "skeleton_overlay_shader",
     wgsl: concat!(
         include_str!("light_data.wgsl"),
+        include_str!("lamp_shadow_types.wgsl"),
         include_str!("frame.wgsl"),
         include_str!("skeleton_overlay.wgsl"),
     ),
@@ -154,6 +166,7 @@ pub const RAIN: ShaderSource = ShaderSource {
     label: "rain_shader",
     wgsl: concat!(
         include_str!("light_data.wgsl"),
+        include_str!("lamp_shadow_types.wgsl"),
         include_str!("frame.wgsl"),
         include_str!("fog.wgsl"),
         include_str!("rain.wgsl"),
@@ -274,6 +287,7 @@ pub const LIGHT_SPHERES: ShaderSource = ShaderSource {
     label: "light_spheres_shader",
     wgsl: concat!(
         include_str!("light_data.wgsl"),
+        include_str!("lamp_shadow_types.wgsl"),
         include_str!("frame.wgsl"),
         include_str!("light_spheres.wgsl"),
     ),
@@ -293,6 +307,7 @@ pub const SKINNED_OBJECT: ShaderSource = ShaderSource {
     wgsl: concat!(
         include_str!("binding_array.wgsl"),
         include_str!("light_data.wgsl"),
+        include_str!("lamp_shadow_types.wgsl"),
         include_str!("frame.wgsl"),
         include_str!("instance.wgsl"),
         include_str!("scene_bindings.wgsl"),
@@ -308,6 +323,7 @@ pub const SKINNED_OBJECT: ShaderSource = ShaderSource {
         include_str!("mip_debug.wgsl"),
         include_str!("texture_feedback.wgsl"),
         include_str!("fog.wgsl"),
+        include_str!("shadow_bias.wgsl"),
         include_str!("lighting.wgsl"),
         include_str!("surface.wgsl"),
         include_str!("env_reflection.wgsl"),

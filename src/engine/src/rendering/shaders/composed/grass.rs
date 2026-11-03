@@ -7,6 +7,7 @@ pub static GRASS: ComposedShaderSource = ComposedShaderSource {
     parts: &[
         ShaderPart::Static(include_str!("../binding_array.wgsl")),
         ShaderPart::Static(include_str!("../light_data.wgsl")),
+        ShaderPart::Static(include_str!("../lamp_shadow_types.wgsl")),
         ShaderPart::Static(include_str!("../frame.wgsl")),
         ShaderPart::Static(include_str!("../instance.wgsl")),
         ShaderPart::Static(include_str!("../scene_bindings.wgsl")),
@@ -19,6 +20,7 @@ pub static GRASS: ComposedShaderSource = ComposedShaderSource {
         ShaderPart::Static(include_str!("../lamp_shadow.wgsl")),
         ShaderPart::Static(include_str!("../mip_debug.wgsl")),
         ShaderPart::Static(include_str!("../fog.wgsl")),
+        ShaderPart::Static(include_str!("../shadow_bias.wgsl")),
         ShaderPart::Static(include_str!("../lighting.wgsl")),
         ShaderPart::Static(include_str!("../surface.wgsl")),
         ShaderPart::Static(include_str!("../grass.wgsl")),

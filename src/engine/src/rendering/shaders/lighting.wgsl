@@ -22,8 +22,6 @@ const CLASS_OTHER = vec3<f32>(0.08);
 
 const NO_CASCADE = 0xffffffffu;
 const LAST_CASCADE_FADE_FRACTION = 0.1;
-const MAX_SLOPE_BIAS_TANGENT = 10.0;
-const MIN_NO_L = 1e-4;
 // Radius of the sun's shadow filter in world units: constant plus a share of the distance from the
 // receiver to its caster along the shadow direction. Fitted to vanilla's shadow edges (a linear ramp
 // 11.7 + 0.0059 x distance units wide, which this filter disc matches at 0.586 of that width).
@@ -164,17 +162,6 @@ fn filtered_shadow(uv: vec2<f32>, cascade: u32, depth: f32, slope: vec2<f32>) ->
         );
     }
     return lit / f32(taps);
-}
-
-// Receiver-side biases in texels of the shadow map at the receiver (x
-// constant, y slope, z normal offset): constant and slope push the receiver
-// towards the light, the normal offset along the geometric normal.
-fn biased_receiver(world_pos: vec3<f32>, ng: vec3<f32>, l: vec3<f32>, texel: f32, bias: vec3<f32>) -> vec3<f32> {
-    let n_dot_l = saturate(dot(ng, l));
-    let slope = min(sqrt(1.0 - n_dot_l * n_dot_l) / max(n_dot_l, MIN_NO_L), MAX_SLOPE_BIAS_TANGENT);
-    return world_pos
-        + ng * (bias.z * texel * (1.0 - n_dot_l))
-        + l * ((bias.x + bias.y * slope) * texel);
 }
 
 fn cascade_visibility(cascade: u32, world_pos: vec3<f32>, ng: vec3<f32>, l: vec3<f32>) -> f32 {
