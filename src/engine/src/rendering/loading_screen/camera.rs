@@ -134,6 +134,11 @@ impl ArtCamera {
         self.pan_keys.set(key, held);
     }
 
+    /// Lets go of every held pan key.
+    pub fn release_pan_keys(&mut self) {
+        self.pan_keys = PanKeys::default();
+    }
+
     /// Lets `seconds` pass: the spin turns the model on and the held pan keys move it within
     /// its window. A step that is not a positive number changes nothing; a long one counts as
     /// [`MAX_STEP_SECONDS`].

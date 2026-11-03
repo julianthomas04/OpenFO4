@@ -152,6 +152,13 @@ impl LoadingArtRenderer {
         }
     }
 
+    /// Lets go of every held pan key.
+    pub fn release_pan_keys(&mut self) {
+        if let Some(active) = &mut self.active {
+            active.art.camera.release_pan_keys();
+        }
+    }
+
     /// Lets `seconds` pass for the model's spin and pan.
     pub fn tick(&mut self, seconds: f32) {
         if let Some(active) = &mut self.active {

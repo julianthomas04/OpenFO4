@@ -7,6 +7,7 @@ mod drag;
 mod history;
 mod host;
 mod keys;
+mod pointer;
 
 pub(super) use drag::DragTracker;
 pub(super) use history::{LoadHistory, spawn_report_title};

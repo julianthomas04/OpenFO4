@@ -33,33 +33,31 @@ impl State {
 
     pub fn handle_pointer_moved(&mut self, x: f64, y: f64) {
         self.pointer_px = (x as f32, y as f32);
-        if let Some((dx, dy)) = self
-            .load_screens
-            .drag
-            .moved(self.pointer_px.0, self.pointer_px.1)
-        {
-            self.load_screens.host.drag(dx, dy);
-        }
+        self.load_screens
+            .pointer_moved(self.pointer_px.0, self.pointer_px.1);
         if let Some(row) = self.row_under_pointer() {
             self.handle_flow_event(FlowEvent::RowHovered(row));
         }
     }
 
     pub fn handle_pointer_pressed(&mut self) {
-        if self.art_shown() {
-            self.load_screens
-                .drag
-                .press(self.pointer_px.0, self.pointer_px.1);
-        }
+        let art_shown = self.art_shown();
+        self.load_screens
+            .pointer_pressed(self.pointer_px.0, self.pointer_px.1, art_shown);
         if let Some(row) = self.row_under_pointer() {
             self.handle_flow_event(FlowEvent::RowPressed(row));
         }
     }
 
     pub fn handle_pointer_released(&mut self) {
-        self.load_screens.drag.release();
+        self.load_screens.pointer_released();
         let row = self.row_under_pointer();
         self.handle_flow_event(FlowEvent::RowReleased(row));
+    }
+
+    /// The window lost the focus: a held drag or pan key never sees its release.
+    pub fn handle_focus_lost(&mut self) {
+        self.load_screens.focus_lost();
     }
 
     /// `lines` is the wheel's travel in lines, positive away from the user.

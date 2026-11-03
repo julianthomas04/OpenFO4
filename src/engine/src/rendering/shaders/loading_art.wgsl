@@ -9,7 +9,7 @@ struct Scene {
     // Unit vector towards the light, in engine space.
     light_direction: vec4<f32>,
     // The ambient and the diffuse strength of the light, and 1 when the shader has to encode to
-    // sRGB.
+    // sRGB; `w` is unused padding.
     shading: vec4<f32>,
 };
 

@@ -30,13 +30,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn moves_without_a_press_travel_nowhere() {
-        let mut drag = DragTracker::default();
-        assert_eq!(drag.moved(40.0, 10.0), None);
-    }
-
-    #[test]
-    fn repeated_moves_without_a_press_never_start_a_drag() {
+    fn moves_without_a_press_travel_nowhere_however_often() {
         let mut drag = DragTracker::default();
         assert_eq!(drag.moved(40.0, 10.0), None);
         assert_eq!(drag.moved(60.0, 30.0), None);

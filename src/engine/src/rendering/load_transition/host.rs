@@ -203,6 +203,11 @@ impl LoadScreenHost {
         self.renderer.drag(dx_px, dy_px);
     }
 
+    /// Lets go of every held pan key.
+    pub fn release_keys(&mut self) {
+        self.renderer.release_pan_keys();
+    }
+
     /// A pan key went down or up. Key repeats do nothing: the key stays held until its release.
     pub fn key(&mut self, key: PanKey, pressed: bool, repeat: bool) {
         if !repeat {
@@ -430,7 +435,8 @@ mod tests {
 
         use super::super::*;
         use crate::rendering::gpu_test::test_device;
-        use crate::rendering::load_transition::DragTracker;
+        use crate::rendering::load_transition::{DragTracker, LoadHistory, LoadScreens};
+        use crate::rendering::loading_screen::ArtCamera;
         use crate::rendering::loading_screen::test_support::cube_art;
         use crate::rendering::post::tonemap::ui_gamma_format;
 
@@ -576,34 +582,34 @@ mod tests {
             assert_eq!(host.renderer.camera().expect("a model").pan(), (0.0, 0.0));
         }
 
-        /// What the window does with the pointer: a move drags only between a press and its release.
-        fn pointer_move(host: &mut LoadScreenHost, drag: &mut DragTracker, x: f32, y: f32) {
-            if let Some((dx, dy)) = drag.moved(x, y) {
-                host.drag(dx, dy);
-            }
+        fn screens(test: &str) -> Option<LoadScreens> {
+            let mut host = host(test)?;
+            let dir = tempfile::tempdir().unwrap();
+            host.show(chosen(cube_art(dir.path(), ""))).unwrap();
+            assert!(matches!(settled(&mut host), ArtStatus::Ready));
+            Some(LoadScreens {
+                host,
+                drag: DragTracker::default(),
+                history: LoadHistory::default(),
+            })
+        }
+
+        fn camera(screens: &LoadScreens) -> &ArtCamera {
+            screens.host.renderer.camera().expect("a model")
         }
 
         #[test]
         fn pointer_motion_without_the_button_held_leaves_the_model_alone() {
-            let Some(mut host) = host("load screen host free pointer") else {
+            let Some(mut screens) = screens("load screen pointer free") else {
                 return;
             };
-            let dir = tempfile::tempdir().unwrap();
-            host.show(chosen(cube_art(dir.path(), ""))).unwrap();
-            assert!(matches!(settled(&mut host), ArtStatus::Ready));
-            let mut drag = DragTracker::default();
-
             for step in 0..5 {
-                pointer_move(
-                    &mut host,
-                    &mut drag,
-                    100.0 + 40.0 * step as f32,
-                    50.0 + 30.0 * step as f32,
-                );
+                let step = step as f32;
+                screens.pointer_moved(100.0 + 40.0 * step, 50.0 + 30.0 * step);
             }
-            host.tick(0.0);
+            screens.host.tick(0.0);
 
-            let camera = host.renderer.camera().expect("a model");
+            let camera = camera(&screens);
             assert!(camera.is_spinning());
             assert_eq!((camera.yaw_degrees(), camera.zoom()), (0.0, 0.0));
             assert_eq!(camera.pan(), (0.0, 0.0));
@@ -611,22 +617,45 @@ mod tests {
 
         #[test]
         fn pointer_motion_with_the_button_held_turns_and_zooms_until_it_is_released() {
-            let Some(mut host) = host("load screen host held pointer") else {
+            let Some(mut screens) = screens("load screen pointer held") else {
                 return;
             };
-            let dir = tempfile::tempdir().unwrap();
-            host.show(chosen(cube_art(dir.path(), ""))).unwrap();
-            assert!(matches!(settled(&mut host), ArtStatus::Ready));
-            let mut drag = DragTracker::default();
-
-            drag.press(100.0, 100.0);
-            pointer_move(&mut host, &mut drag, 140.0, 60.0);
-            let held = host.renderer.camera().expect("a model").clone();
+            screens.pointer_pressed(100.0, 100.0, true);
+            screens.pointer_moved(140.0, 60.0);
+            let held = camera(&screens).clone();
             assert!(held.yaw_degrees() > 0.0 && held.zoom() > 0.0, "{held:?}");
 
-            drag.release();
-            pointer_move(&mut host, &mut drag, 400.0, 300.0);
-            assert_eq!(host.renderer.camera().expect("a model"), &held);
+            screens.pointer_released();
+            screens.pointer_moved(400.0, 300.0);
+            assert_eq!(camera(&screens), &held);
+        }
+
+        #[test]
+        fn a_press_while_no_model_is_shown_starts_no_drag() {
+            let Some(mut screens) = screens("load screen pointer press gate") else {
+                return;
+            };
+            screens.pointer_pressed(100.0, 100.0, false);
+            screens.pointer_moved(140.0, 60.0);
+            assert!(camera(&screens).is_spinning());
+        }
+
+        #[test]
+        fn losing_the_focus_ends_the_drag_and_lets_go_of_the_pan_keys() {
+            let Some(mut screens) = screens("load screen focus lost") else {
+                return;
+            };
+            screens.pointer_pressed(100.0, 100.0, true);
+            screens.host.key(PanKey::Right, true, false);
+
+            screens.focus_lost();
+            screens.pointer_moved(400.0, 300.0);
+            screens.host.tick(0.1);
+
+            let camera = camera(&screens);
+            assert!(camera.is_spinning());
+            assert_eq!(camera.zoom(), 0.0);
+            assert_eq!(camera.pan(), (0.0, 0.0));
         }
 
         #[test]
