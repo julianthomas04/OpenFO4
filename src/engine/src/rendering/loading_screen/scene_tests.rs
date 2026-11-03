@@ -226,7 +226,7 @@ fn every_width_of_screen_is_covered_by_the_stage_of_its_shape() {
 }
 
 #[test]
-fn the_overlay_adds_its_colour_at_its_alpha_times_the_materials() {
+fn the_overlay_adds_its_colour_at_its_alpha_times_the_base_alpha_and_the_materials() {
     let Some((device, queue)) = test_device("loading scene overlay") else {
         return;
     };
@@ -249,7 +249,7 @@ fn the_overlay_adds_its_colour_at_its_alpha_times_the_materials() {
         1.0,
     );
 
-    let added = decoded([overlay[0], overlay[1], overlay[2]]) * 0.6 * (128.0 / 255.0);
+    let added = decoded([overlay[0], overlay[1], overlay[2]]) * (0.6 * 0.6) * (128.0 / 255.0);
     let expected = bytes(graded(
         lifted_background() + added,
         &neutral_look(),

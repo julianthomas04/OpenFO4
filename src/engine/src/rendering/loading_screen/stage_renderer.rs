@@ -14,7 +14,7 @@ use super::grade::INFERRED_LIFT;
 use super::stage::{CpuStage, StageError, StageLayer, keep_usable, nearest_aspect};
 use super::stage_framing::StageFraming;
 use crate::assets::layout::named_texture_key;
-use crate::assets::types::effect_material::{ClampMode, EffectMaterial, EffectTextures};
+use crate::assets::types::effect_material::{BlendMode, ClampMode, EffectMaterial, EffectTextures};
 use crate::rendering::effects::pipeline::{BlendFactors, blend_factors, blend_state};
 use crate::rendering::shaders;
 use crate::rendering::texture::load_texture_asset_srgb;
@@ -31,16 +31,22 @@ struct StageMaterialUniform {
 
 impl StageMaterialUniform {
     /// An effect shape's colour: its base colour times its scale, and the base colour's alpha
-    /// times the material's.
+    /// times the material's. An additive plane takes the base colour's alpha twice: an
+    /// interpretation confirmed against a vanilla capture within about 8%, not documented data.
     fn new(material: &EffectMaterial, lift: f32) -> Self {
         let [red, green, blue, alpha] = material.base_color;
         let scale = material.base_color_scale;
+        let base_alpha = if material.blend.mode == BlendMode::Add {
+            alpha * alpha
+        } else {
+            alpha
+        };
         Self {
             colour: [
                 red * scale,
                 green * scale,
                 blue * scale,
-                alpha * material.alpha,
+                base_alpha * material.alpha,
             ],
             lift: [lift, 0.0, 0.0, 0.0],
         }
@@ -392,11 +398,28 @@ mod tests {
         material.base_color = [0.5, 0.25, 1.0, 0.6];
         material.base_color_scale = 2.0;
         material.alpha = 0.5;
+        material.blend.mode = BlendMode::Alpha;
 
         let uniform = StageMaterialUniform::new(&material, 0.0);
 
         assert_eq!(uniform.colour[..3], [1.0, 0.5, 2.0]);
         assert!((uniform.colour[3] - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn an_additive_material_takes_its_base_colour_alpha_twice() {
+        let mut material: EffectMaterial = serde_json::from_value(
+            crate::rendering::loading_screen::test_support::TestStageLayer::vanilla()[0]
+                .effect_json(),
+        )
+        .unwrap();
+        material.base_color = [1.0, 1.0, 1.0, 0.6];
+        material.alpha = 1.0;
+        material.blend.mode = BlendMode::Add;
+
+        let uniform = StageMaterialUniform::new(&material, 0.0);
+
+        assert!((uniform.colour[3] - 0.36).abs() < 1e-6);
     }
 
     #[test]
