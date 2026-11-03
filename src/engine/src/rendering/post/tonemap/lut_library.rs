@@ -44,7 +44,7 @@ impl LutLibrary {
         if let Some(known) = self.tables.get(key) {
             return known.clone();
         }
-        let loaded = match load(&self.asset_root, key) {
+        let loaded = match load_table(&self.asset_root, key) {
             Ok(table) => Some(Arc::new(table)),
             Err(error) => {
                 tracing::error!("{error}; the image space grades without it");
@@ -56,7 +56,8 @@ impl LutLibrary {
     }
 }
 
-fn load(asset_root: &str, key: &Arc<str>) -> Result<LutTable, LutLoadError> {
+/// The table of the texture key `key`, below `asset_root`.
+pub(crate) fn load_table(asset_root: &str, key: &Arc<str>) -> Result<LutTable, LutLoadError> {
     let relative = resolve_below(Path::new(asset_root), key).map_err(|source| {
         let key = Arc::clone(key);
         if source.kind() == io::ErrorKind::NotFound {
@@ -117,11 +118,11 @@ mod tests {
         let root = installed(b"not a dds");
         let missing: Arc<str> = r"textures\effects\luts\missing.dds".into();
         assert!(matches!(
-            load(root.path().to_str().unwrap(), &missing),
+            load_table(root.path().to_str().unwrap(), &missing),
             Err(LutLoadError::NotFound { key, .. }) if key == missing
         ));
         assert!(matches!(
-            load(root.path().to_str().unwrap(), &KEY.into()),
+            load_table(root.path().to_str().unwrap(), &KEY.into()),
             Err(LutLoadError::Table { .. })
         ));
         let mut library = library(&root);
@@ -226,7 +227,7 @@ mod tests {
                 .collect();
             assert!(!paths.is_empty(), "no image space names a LUT");
             for path in paths {
-                match load(&root, &key(&path)) {
+                match load_table(&root, &key(&path)) {
                     Ok(_) => {}
                     Err(LutLoadError::NotFound { .. })
                         if PATHS_WITHOUT_A_FILE.contains(&&*path) => {}

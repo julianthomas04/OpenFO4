@@ -127,6 +127,7 @@ pub const TONEMAP: ShaderSource = ShaderSource {
         include_str!("light_data.wgsl"),
         include_str!("frame.wgsl"),
         include_str!("fullscreen.wgsl"),
+        include_str!("image_space.wgsl"),
         include_str!("tonemap.wgsl"),
     ),
 };
