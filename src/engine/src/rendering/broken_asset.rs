@@ -7,12 +7,20 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrokenAsset {
     Texture { path: String, reason: String },
+    LodCell { grid: (i32, i32), reason: String },
 }
 
 impl fmt::Display for BrokenAsset {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Texture { path, reason } => write!(f, "texture '{path}' is broken: {reason}"),
+            Self::LodCell { grid, reason } => {
+                write!(
+                    f,
+                    "LOD cell ({}, {}) failed to load: {reason}",
+                    grid.0, grid.1
+                )
+            }
         }
     }
 }

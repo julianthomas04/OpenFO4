@@ -642,6 +642,9 @@ struct CellLoadResult {
     textures: Prereads,
     /// Navigation meshes of the cell, decoded and indexed on the worker. Empty for LOD cells.
     navmeshes: Vec<NavMesh>,
+    /// Why a LOD cell's data could not be read; the main thread reports it as broken. Always
+    /// `None` for full and interior cells, and for a grid the worldspace has no cell at.
+    load_failure: Option<String>,
 }
 
 /// All placed instances of one mega-buffer slot within a cell. Keeping the
@@ -2397,6 +2400,11 @@ impl WorldStreamer {
     fn integrate_lod(&mut self, result: &mut CellLoadResult, targets: &mut StreamTargets) -> bool {
         let _span = info_span!("integrate_lod").entered();
         let grid = result.grid;
+        if let Some(reason) = result.load_failure.take() {
+            self.lod_pending_cells.remove(&grid);
+            self.broken.push(BrokenAsset::LodCell { grid, reason });
+            return false;
+        }
         if !self.lod_pending_cells.remove(&grid) {
             return false;
         }
@@ -4740,6 +4748,12 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
         ragdoll_refs: Vec::new(),
         textures: HashMap::new(),
         navmeshes: Vec::new(),
+        load_failure: None,
+    };
+    let fail_lod = |result: &mut CellLoadResult, reason: String| {
+        if is_lod {
+            result.load_failure = Some(reason);
+        }
     };
 
     match &request {
@@ -4760,6 +4774,9 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
                 Ok(c) => c,
                 Err(e) => {
                     warn!("Cell ({}, {}) not found: {}", gx, gy, e);
+                    if !is_absent_row(&e) {
+                        fail_lod(&mut result, format!("the cell query failed: {e:#}"));
+                    }
                     return wrap(result);
                 }
             };
@@ -4768,6 +4785,7 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
                 fk.clone()
             } else {
                 warn!("Cell ({}, {}) has no form_key", gx, gy);
+                fail_lod(&mut result, "the cell row has no form_key".to_owned());
                 return wrap(result);
             };
 
@@ -4806,6 +4824,9 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
                         Ok((cpu, collision))
                     },
                 );
+                if let Some(reason) = cell_terrain.failure {
+                    fail_lod(&mut result, format!("its terrain failed: {reason}"));
+                }
                 terrain_collider = cell_terrain.collision;
                 result.terrain = cell_terrain.cpu;
                 if let (false, Some(landscape)) = (is_lod, &cell_terrain.landscape) {
@@ -4862,6 +4883,10 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
                     Ok(objs) => objs,
                     Err(e) => {
                         warn!("Failed to load placed objects for ({}, {}): {}", gx, gy, e);
+                        fail_lod(
+                            &mut result,
+                            format!("its placed objects could not be loaded: {e:#}"),
+                        );
                         if !is_lod {
                             // Ship the terrain collider anyway: a cell that lost
                             // its objects should still be walkable ground. Without
@@ -4899,9 +4924,7 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
             let cell = match db.get_cell_by_form_key(cell_form_key) {
                 Ok(c) => c,
                 Err(e) => {
-                    if let Some(rusqlite::Error::QueryReturnedNoRows) =
-                        e.downcast_ref::<rusqlite::Error>()
-                    {
+                    if is_absent_row(&e) {
                         info!("Interior cell {cell_form_key} not found");
                     } else {
                         warn!("Interior cell {cell_form_key} query failed: {e}");
@@ -4937,14 +4960,24 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
     wrap(result)
 }
 
-/// The LAND query for a cell failed; the failure is already logged.
+/// Whether a query failed only because no row matched, as for a grid without a cell.
+fn is_absent_row(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<rusqlite::Error>(),
+        Some(rusqlite::Error::QueryReturnedNoRows)
+    )
+}
+
+/// The LAND query for a cell failed with this error; the failure is already logged.
 #[derive(Debug)]
-struct LandscapeLookupFailed;
+struct LandscapeLookupFailed(String);
 
 struct CellTerrain<C> {
     landscape: Option<Landscape>,
     cpu: Option<C>,
     collision: TerrainCollision,
+    /// Why the lookup or the build failed, when `collision` is `Failed`.
+    failure: Option<String>,
 }
 
 /// Looks up and builds a cell's terrain. `Absent` means legitimately landless; a failed lookup or
@@ -4962,13 +4995,15 @@ fn resolve_cell_terrain<C>(
                 landscape: None,
                 cpu: None,
                 collision: TerrainCollision::Absent,
+                failure: None,
             };
         }
-        Err(LandscapeLookupFailed) => {
+        Err(LandscapeLookupFailed(reason)) => {
             return CellTerrain {
                 landscape: None,
                 cpu: None,
                 collision: TerrainCollision::Failed,
+                failure: Some(format!("the landscape lookup failed: {reason}")),
             };
         }
     };
@@ -4977,6 +5012,7 @@ fn resolve_cell_terrain<C>(
             landscape: Some(landscape),
             cpu: Some(cpu),
             collision,
+            failure: None,
         },
         Err(e) => {
             warn!("Failed to build terrain for ({gx}, {gy}): {e}");
@@ -4984,6 +5020,7 @@ fn resolve_cell_terrain<C>(
                 landscape: Some(landscape),
                 cpu: None,
                 collision: TerrainCollision::Failed,
+                failure: Some(format!("the build failed: {e:#}")),
             }
         }
     }
@@ -4998,7 +5035,7 @@ fn terrain_landscape(
 ) -> Result<Option<Landscape>, LandscapeLookupFailed> {
     lookup.map_err(|error| {
         warn!("Failed to look up the landscape of ({gx}, {gy}): {error:#}");
-        LandscapeLookupFailed
+        LandscapeLookupFailed(format!("{error:#}"))
     })
 }
 
@@ -6289,6 +6326,7 @@ mod tests {
         let terrain = resolve_cell_terrain(Ok(Some(landscape())), 1, 2, |_| Ok(present()));
         assert!(terrain.landscape.is_some() && terrain.cpu.is_some());
         assert!(matches!(terrain.collision, TerrainCollision::Present(_)));
+        assert_eq!(terrain.failure, None);
     }
 
     #[test]
@@ -6298,6 +6336,7 @@ mod tests {
         });
         assert!(terrain.landscape.is_none() && terrain.cpu.is_none());
         assert!(matches!(terrain.collision, TerrainCollision::Absent));
+        assert_eq!(terrain.failure, None, "a landless cell is not broken");
     }
 
     #[test]
@@ -6306,6 +6345,10 @@ mod tests {
             resolve_cell_terrain(Err(anyhow::anyhow!("db down")), 1, 2, |_| Ok(present()));
         assert!(terrain.landscape.is_none() && terrain.cpu.is_none());
         assert!(matches!(terrain.collision, TerrainCollision::Failed));
+        assert_eq!(
+            terrain.failure.as_deref(),
+            Some("the landscape lookup failed: db down")
+        );
     }
 
     #[test]
@@ -6315,6 +6358,21 @@ mod tests {
         });
         assert!(terrain.landscape.is_some() && terrain.cpu.is_none());
         assert!(matches!(terrain.collision, TerrainCollision::Failed));
+        assert_eq!(
+            terrain.failure.as_deref(),
+            Some("the build failed: bad heightmap")
+        );
+    }
+
+    #[test]
+    fn only_a_query_that_matched_no_row_counts_as_an_absent_cell() {
+        assert!(is_absent_row(&anyhow::Error::from(
+            rusqlite::Error::QueryReturnedNoRows
+        )));
+        assert!(!is_absent_row(&anyhow::Error::from(
+            rusqlite::Error::InvalidQuery
+        )));
+        assert!(!is_absent_row(&anyhow::anyhow!("db down")));
     }
 
     #[test]
@@ -6322,7 +6380,7 @@ mod tests {
         assert!(matches!(terrain_landscape(Ok(None), 1, 2), Ok(None)));
         assert!(matches!(
             terrain_landscape(Err(anyhow::anyhow!("db down")), 1, 2),
-            Err(LandscapeLookupFailed)
+            Err(LandscapeLookupFailed(reason)) if reason == "db down"
         ));
     }
 
