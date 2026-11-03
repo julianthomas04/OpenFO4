@@ -943,6 +943,12 @@ enum SweepSet {
     StagedLod,
 }
 
+/// The least demand, in pixels per UV unit, the textures of a staged cell carry. A texture
+/// without demand is never loaded, and a staged cell waits for every texture it uses, also one
+/// the view gives no demand, such as on a mesh outside it. One pixel per UV unit asks for the
+/// coarsest mips; real demand refines them once the cell is drawn.
+const STAGED_DEMAND_FLOOR: f32 = 1.0;
+
 /// Minimum spacing of demand recomputes forced only by cell releases.
 const DEMAND_STALE_INTERVAL: Duration = Duration::from_millis(500);
 /// Integrated-cell bounds remembered between bind group rebuilds before the
@@ -2040,6 +2046,18 @@ impl WorldStreamer {
     /// sources place on it. A source whose bounding box cannot beat what its
     /// textures already have in the running sweep is skipped without walking
     /// its placements.
+    /// A staged cell's demand, with every texture held at least at `STAGED_DEMAND_FLOOR`.
+    fn note_staged_cell_demand(
+        res: &CellResources,
+        view: &DemandView,
+        residency: &mut TextureResidency,
+    ) {
+        Self::note_cell_demand(res, view, residency);
+        for handle in &res.texture_refs {
+            residency.note_demand(handle.slot, STAGED_DEMAND_FLOOR);
+        }
+    }
+
     fn note_cell_demand(res: &CellResources, view: &DemandView, residency: &mut TextureResidency) {
         for source in &res.demand_sources {
             let textures = &res.texture_refs[source.textures.clone()];
@@ -2319,8 +2337,14 @@ impl WorldStreamer {
         };
         while let Some(&(grid, set)) = sweep.cells.get(sweep.next) {
             sweep.next += 1;
-            if let Some(res) = self.sweep_cell(grid, set) {
-                Self::note_cell_demand(res, &view, residency);
+            match (self.sweep_cell(grid, set), set) {
+                (Some(res), SweepSet::StagedFull | SweepSet::StagedLod) => {
+                    Self::note_staged_cell_demand(res, &view, residency);
+                }
+                (Some(res), SweepSet::Full | SweepSet::Lod) => {
+                    Self::note_cell_demand(res, &view, residency);
+                }
+                (None, _) => {}
             }
             if started.elapsed() >= DEMAND_SWEEP_BUDGET {
                 break;
@@ -2515,7 +2539,7 @@ impl WorldStreamer {
         spawn: DeferredSpawn,
         targets: &mut StreamTargets,
     ) {
-        Self::note_cell_demand(&res, &self.demand_view, targets.residency);
+        Self::note_staged_cell_demand(&res, &self.demand_view, targets.residency);
         targets.residency.end_demand_round();
         self.staging.stage(ring, grid, res, spawn);
     }
@@ -6599,6 +6623,28 @@ mod tests {
 
         assert_eq!(error.cell_form_key, "Cell:1");
         assert_eq!(pending, HashSet::from([(9, 9)]));
+    }
+
+    #[test]
+    fn every_texture_of_a_staged_cell_carries_the_demand_floor() {
+        let mut residency = TextureResidency::new(
+            ResidencyPolicy {
+                global_skip: 0,
+                max_anisotropy: 16,
+            },
+            "no-such-asset-root",
+        );
+        let res = CellResources {
+            texture_refs: vec![TextureHandle {
+                slot: 7,
+                generation: 1,
+            }],
+            ..CellResources::default()
+        };
+
+        WorldStreamer::note_staged_cell_demand(&res, &DemandView::default(), &mut residency);
+
+        assert_eq!(residency.sweep_demand(7), STAGED_DEMAND_FLOOR);
     }
 
     fn landscape() -> Landscape {
