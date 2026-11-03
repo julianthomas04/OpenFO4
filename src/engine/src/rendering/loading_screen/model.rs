@@ -379,7 +379,8 @@ mod tests {
 
     #[test]
     fn the_bounds_centre_is_the_middle_of_the_box_not_the_mean_of_the_vertices() {
-        let centre = bounds_centre([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [4.0, 2.0, -6.0]].into_iter());
+        let centre =
+            bounds_centre([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [4.0, 2.0, -6.0]].into_iter());
 
         assert_eq!(centre, glam::Vec3::new(2.0, 1.0, -3.0));
     }

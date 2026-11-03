@@ -495,7 +495,10 @@ mod tests {
     fn pixel_of(camera: &ArtCamera, point: Vec3, size: (f32, f32)) -> (f32, f32) {
         let clip = camera.view_proj(size.0 / size.1, fov()) * point.extend(1.0);
         let ndc = clip.truncate() / clip.w;
-        (f32::midpoint(ndc.x, 1.0) * size.0, f32::midpoint(1.0, -ndc.y) * size.1)
+        (
+            f32::midpoint(ndc.x, 1.0) * size.0,
+            f32::midpoint(1.0, -ndc.y) * size.1,
+        )
     }
 
     #[test]
@@ -514,10 +517,15 @@ mod tests {
 
         let aim = camera.spot_aim();
 
-        let expected = camera.model_matrix().transform_point3(Vec3::new(0.0, 3.0, 0.0));
+        let expected = camera
+            .model_matrix()
+            .transform_point3(Vec3::new(0.0, 3.0, 0.0));
         assert!(aim.abs_diff_eq(expected, 1e-5), "{aim}");
         let placement = camera.model_matrix().transform_point3(Vec3::ZERO);
-        assert!(!aim.abs_diff_eq(placement, 1e-3), "the aim is not the pivot");
+        assert!(
+            !aim.abs_diff_eq(placement, 1e-3),
+            "the aim is not the pivot"
+        );
     }
 
     #[test]
