@@ -830,6 +830,29 @@ impl TextureResidency {
         std::mem::take(&mut self.broken)
     }
 
+    /// The texture `handle` names and how far its load has got, for a report of a load that
+    /// never finished.
+    pub fn describe(&self, handle: TextureHandle) -> String {
+        let Some(entry) = self
+            .entries
+            .get(&handle.slot)
+            .filter(|entry| entry.handle == handle)
+        else {
+            return format!("slot {} (no longer tracked)", handle.slot);
+        };
+        let state = match &entry.state {
+            State::Placeholder if entry.in_flight => "read in flight",
+            State::Placeholder => "waiting for its read to start",
+            State::Resident(_) => "resident",
+            State::Missing => "missing",
+            State::Broken => "broken",
+        };
+        match &entry.last_failure {
+            Some(failure) => format!("'{}' ({state}, last failure: {failure})", entry.path),
+            None => format!("'{}' ({state})", entry.path),
+        }
+    }
+
     /// How far the load of the texture `handle` names has got; `None` for a handle whose slot
     /// has since been given to another texture.
     pub fn load_of(&self, handle: TextureHandle) -> Option<TextureLoad> {

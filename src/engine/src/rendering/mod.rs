@@ -4144,8 +4144,11 @@ impl State {
             || !self.pending_alpha_slots.is_empty()
             || material_realloc
             || cube_added;
-        let must_rebuild_now =
-            material_realloc || self.texture_array.bind_group_len() > self.material_bg_built_len;
+        // Behind the loading screen, staged cells that wait for nothing but
+        // their views being bound are not left waiting out the debounce.
+        let must_rebuild_now = material_realloc
+            || self.texture_array.bind_group_len() > self.material_bg_built_len
+            || (self.streamer.wants_views_bound_now() && self.texture_array.has_unbound_views());
         if self.material_bg_dirty
             && (must_rebuild_now || self.material_bg_last_rebuild.elapsed() >= MATERIAL_BG_DEBOUNCE)
         {

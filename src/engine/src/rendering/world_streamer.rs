@@ -74,6 +74,7 @@ use crate::rendering::vertex::Vertex;
 use crate::rendering::water::PlacedWater;
 
 mod one_shot;
+mod staging;
 use crate::shared_cache::SharedCache;
 use crate::sim::collision::{
     CellColliderBatch, CollisionMeta, ObjectColliderGroup, PartShape, Placement, SidecarData,
@@ -82,6 +83,7 @@ use crate::sim::collision::{
 use crate::sim::{EntityId, SimCommand, refr_entity_id};
 use crate::water_world::{LoadedCell, VolumeShapes};
 use one_shot::OneShot;
+use staging::{DeferredSpawn, Ring, StagedCell, Staging, TextureReadiness};
 
 mod effect_shapes;
 pub(crate) use effect_shapes::{AddonAttachment, AttachmentKey};
@@ -923,11 +925,20 @@ const RETIRE_BUDGET: std::time::Duration = std::time::Duration::from_millis(1);
 /// which the lookahead covers.
 const DEMAND_SWEEP_BUDGET: Duration = Duration::from_micros(300);
 
-/// A pass over the resident cells gathering texture demand: grids, and whether
-/// each is a LOD cell.
+/// A pass over the resident and staged cells gathering texture demand: grids,
+/// and which cells each names.
 struct DemandSweep {
-    cells: Vec<((i32, i32), bool)>,
+    cells: Vec<((i32, i32), SweepSet)>,
     next: usize,
+}
+
+/// Which of the cell maps a demand sweep entry is in.
+#[derive(Clone, Copy)]
+enum SweepSet {
+    Full,
+    Lod,
+    StagedFull,
+    StagedLod,
 }
 
 /// Minimum spacing of demand recomputes forced only by cell releases.
@@ -1211,6 +1222,13 @@ pub struct WorldStreamer {
     full_ring_signal: OneShot,
     /// Broken assets met during the running update; ending the game is the caller's.
     broken: BrokenAssetSink,
+    /// Integrated cells hidden until their textures are ready. A staged cell keeps its request
+    /// marker in `pending_cells`/`lod_pending_cells` until it is promoted into
+    /// `loaded`/`lod_loaded`, so it counts as still loading.
+    staging: Staging,
+    /// At the last promotion pass some staged cell waited for nothing but the next material
+    /// bind group rebuild.
+    waiting_only_for_binding: bool,
     /// Last ~500 ms bucket a `SPAWN_PROGRESS` line was logged for.
     spawn_progress_tick: u64,
     /// Worst frame gap in `LoadMode::Loading`, reported at `SPAWN_COMPLETE`.
@@ -1483,6 +1501,8 @@ impl WorldStreamer {
             spawn_full_done: None,
             full_ring_signal: OneShot::default(),
             broken: BrokenAssetSink::default(),
+            staging: Staging::default(),
+            waiting_only_for_binding: false,
             spawn_lod_done: None,
             spawn_progress_tick: 0,
             load_frames: LoadFrameMeter::new(),
@@ -1615,24 +1635,28 @@ impl WorldStreamer {
         let max_cells_per_frame = self.effective_cells_per_frame();
 
         self.drain_worker_responses();
+        self.staging.advance(frame_started);
 
-        // Integrate buffered results one at a time — full cells (player-
-        // facing) before LOD — stopping once the cell count OR the upload
-        // byte budget is spent. The first successful integration is exempt
+        // Integrate: first promote the staged cells whose textures became
+        // ready, then stage buffered results one at a time — full cells
+        // (player-facing) before LOD — stopping once the cell count OR the
+        // upload byte budget is spent. The first successful staging is exempt
         // so a single oversized cell can't stall streaming forever; gated/
-        // stale drops (integrate returns false) cost nothing and don't
-        // consume that guaranteed slot. The channel re-drains between
-        // integrations: a fat loading-mode frame that only drained at frame
-        // start left the bounded response channel full for its whole
-        // duration and stalled every worker mid-spawn.
+        // stale drops (stage returns false) cost nothing and don't consume
+        // that guaranteed slot. The channel re-drains between stagings: a fat
+        // loading-mode frame that only drained at frame start left the
+        // bounded response channel full for its whole duration and stalled
+        // every worker mid-spawn.
         let integrate_span = info_span!(
             "integrate_cells",
             mode = self.mode.label(),
             integrated = tracing::field::Empty
         )
         .entered();
-        let mut integrated = 0usize;
         let integrate_started = Instant::now();
+        membership_changed |=
+            self.promote_ready_cells(targets, max_cells_per_frame, integrate_started);
+        let mut integrated = 0usize;
         loop {
             if integration_must_stop(
                 self.mode,
@@ -1648,12 +1672,10 @@ impl WorldStreamer {
             let Some(mut result) = self.buffered_full.pop_front() else {
                 break;
             };
-            let changed = self.integrate_full(&mut result, targets);
+            let staged = self.stage_full(&mut result, targets);
             crate::utils::drop_off_thread(result);
-            if changed {
-                membership_changed = true;
+            if staged {
                 integrated += 1;
-                self.full_spawn_rate.record();
             }
             self.drain_worker_responses();
         }
@@ -1672,12 +1694,10 @@ impl WorldStreamer {
             let Some(mut result) = self.buffered_lod.pop_front() else {
                 break;
             };
-            let changed = self.integrate_lod(&mut result, targets);
+            let staged = self.stage_lod(&mut result, targets);
             crate::utils::drop_off_thread(result);
-            if changed {
-                membership_changed = true;
+            if staged {
                 integrated += 1;
-                self.lod_spawn_rate.record();
             }
             self.drain_worker_responses();
         }
@@ -1695,10 +1715,7 @@ impl WorldStreamer {
             {
                 self.spawn_full_done = Some(start.elapsed());
             }
-            let full_ring_drained = self.pending_cells.is_empty()
-                && self.buffered_full.is_empty()
-                && !self.loaded.is_empty();
-            full_ring_complete = self.full_ring_signal.fire(full_ring_drained);
+            full_ring_complete = self.full_ring_signal.fire(self.full_ring_integrated());
             if full_ring_complete {
                 info!(
                     "FULL_RING_COMPLETE elapsed_ms={} full_cells={} lod_loaded={}/{}",
@@ -1787,7 +1804,7 @@ impl WorldStreamer {
 
             // Unload full-detail cells that left both rings. A full cell that
             // merely dropped into the LOD ring stays resident until its LOD
-            // replacement arrives (pop-free demotion in integrate_lod).
+            // replacement is drawn (pop-free demotion in promote_lod).
             let to_unload_full: Vec<(i32, i32)> = self
                 .loaded
                 .keys()
@@ -1831,12 +1848,27 @@ impl WorldStreamer {
 
             // Prune stale pending markers and buffered payloads. In-flight
             // responses whose markers were pruned are dropped by the gates in
-            // integrate_full/integrate_lod.
+            // stage_full/stage_lod.
             let prune_span = info_span!("cell_change_prune").entered();
             self.pending_cells.retain(|cell| rings.in_full(*cell));
             self.lod_pending_cells.retain(|cell| rings.in_lod(*cell));
             retain_deferred_drop(&mut self.buffered_full, |r| rings.in_full(r.grid));
             retain_deferred_drop(&mut self.buffered_lod, |r| rings.in_lod(r.grid));
+            let unwanted_staged: Vec<CellResources> = self
+                .staging
+                .drain_unwanted(Ring::Full, |grid| rings.in_full(grid))
+                .into_iter()
+                .chain(
+                    self.staging
+                        .drain_unwanted(Ring::Lod, |grid| rings.in_lod(grid)),
+                )
+                .collect();
+            if !unwanted_staged.is_empty() {
+                self.collision_ring_dirty = true;
+            }
+            for res in unwanted_staged {
+                self.drop_staged(&res, targets);
+            }
             drop(prune_span);
 
             // Cells whose earlier request never went out are still wanted when
@@ -1928,11 +1960,18 @@ impl WorldStreamer {
             let _span = info_span!("texture_residency").entered();
             self.update_texture_demand(targets.residency);
             let _pump = info_span!("texture_pump").entered();
+            // Staged cells wait for these uploads: behind the loading screen
+            // the pump is held only by its own caps, not by what the
+            // integration left of the frame's budget.
+            let pump_budget = match self.mode {
+                LoadMode::Streaming => targets.upload_budget.remaining(),
+                LoadMode::Loading => u64::MAX,
+            };
             targets.residency.pump(
                 targets.device,
                 targets.queue,
                 targets.texture_array,
-                targets.upload_budget.remaining(),
+                pump_budget,
             )
         };
         targets.upload_budget.add(uploaded);
@@ -2051,15 +2090,26 @@ impl WorldStreamer {
         }
     }
 
+    /// Every cell holding texture references, drawn or staged, with what it is.
+    fn cells_with_kind(&self) -> impl Iterator<Item = (&(i32, i32), &'static str, &CellResources)> {
+        let staged = |ring, kind| {
+            self.staging
+                .cells(ring)
+                .iter()
+                .map(move |(grid, cell)| (grid, kind, &cell.res))
+        };
+        self.loaded
+            .iter()
+            .map(|(grid, res)| (grid, "full", res))
+            .chain(self.lod_loaded.iter().map(|(grid, res)| (grid, "lod", res)))
+            .chain(staged(Ring::Full, "staged full"))
+            .chain(staged(Ring::Lod, "staged lod"))
+    }
+
     /// The source placing the strongest demand on `slot`, described for the trace.
     fn demand_driver(&self, view: &DemandView, slot: u32) -> String {
         let mut best: Option<(f32, String)> = None;
-        let cells = self
-            .loaded
-            .iter()
-            .map(|(grid, res)| (grid, "full", res))
-            .chain(self.lod_loaded.iter().map(|(grid, res)| (grid, "lod", res)));
-        for (grid, kind, res) in cells {
+        for (grid, kind, res) in self.cells_with_kind() {
             for source in &res.demand_sources {
                 if !res.texture_refs[source.textures.clone()]
                     .iter()
@@ -2149,12 +2199,7 @@ impl WorldStreamer {
     fn describe_texture_owners(&self, slot: u32) -> String {
         const MAX_OWNERS: usize = 3;
         let mut owners = Vec::new();
-        let cells = self
-            .loaded
-            .iter()
-            .map(|(grid, res)| (grid, "full", res))
-            .chain(self.lod_loaded.iter().map(|(grid, res)| (grid, "lod", res)));
-        'cells: for (grid, kind, res) in cells {
+        'cells: for (grid, kind, res) in self.cells_with_kind() {
             for source in &res.demand_sources {
                 if !res.texture_refs[source.textures.clone()]
                     .iter()
@@ -2189,20 +2234,37 @@ impl WorldStreamer {
         }
     }
 
-    /// Cells for a new demand sweep: full-detail cells nearest the camera
-    /// first, then the LOD cells.
+    /// Cells for a new demand sweep: the staged cells, whose textures hold
+    /// them back, then full-detail cells nearest the camera, then the LOD
+    /// cells.
     fn begin_demand_sweep(&self) -> DemandSweep {
         let mut near: Vec<(i32, i32)> = self.loaded.keys().copied().collect();
         if let Some(camera) = self.demand_view.camera() {
             let (cx, cy) = Self::camera_to_grid(camera);
             near.sort_unstable_by_key(|&(gx, gy)| (gx - cx).abs().max((gy - cy).abs()));
         }
-        let cells = near
-            .into_iter()
-            .map(|grid| (grid, false))
-            .chain(self.lod_loaded.keys().map(|&grid| (grid, true)))
+        let staged = |ring, set| {
+            self.staging
+                .cells(ring)
+                .keys()
+                .map(move |&grid| (grid, set))
+        };
+        let cells = staged(Ring::Full, SweepSet::StagedFull)
+            .chain(staged(Ring::Lod, SweepSet::StagedLod))
+            .chain(near.into_iter().map(|grid| (grid, SweepSet::Full)))
+            .chain(self.lod_loaded.keys().map(|&grid| (grid, SweepSet::Lod)))
             .collect();
         DemandSweep { cells, next: 0 }
+    }
+
+    /// The cell a demand sweep entry names, if it is still there.
+    fn sweep_cell(&self, grid: (i32, i32), set: SweepSet) -> Option<&CellResources> {
+        match set {
+            SweepSet::Full => self.loaded.get(&grid),
+            SweepSet::Lod => self.lod_loaded.get(&grid),
+            SweepSet::StagedFull => self.staging.get(Ring::Full, grid).map(|cell| &cell.res),
+            SweepSet::StagedLod => self.staging.get(Ring::Lod, grid).map(|cell| &cell.res),
+        }
     }
 
     /// Advance the texture demand sweep by at most `DEMAND_SWEEP_BUDGET`. A
@@ -2227,13 +2289,12 @@ impl WorldStreamer {
 
         let _span = info_span!("texture_demand_sweep").entered();
         let started = Instant::now();
-        let Some(sweep) = self.sweep.as_mut() else {
+        let Some(mut sweep) = self.sweep.take() else {
             return;
         };
-        while let Some(&(grid, lod)) = sweep.cells.get(sweep.next) {
+        while let Some(&(grid, set)) = sweep.cells.get(sweep.next) {
             sweep.next += 1;
-            let cells = if lod { &self.lod_loaded } else { &self.loaded };
-            if let Some(res) = cells.get(&grid) {
+            if let Some(res) = self.sweep_cell(grid, set) {
                 Self::note_cell_demand(res, &view, residency);
             }
             if started.elapsed() >= DEMAND_SWEEP_BUDGET {
@@ -2242,8 +2303,9 @@ impl WorldStreamer {
         }
         if sweep.next >= sweep.cells.len() {
             residency.finish_demand_sweep();
-            self.sweep = None;
             self.last_demand_pass = Instant::now();
+        } else {
+            self.sweep = Some(sweep);
         }
     }
 
@@ -2309,23 +2371,26 @@ impl WorldStreamer {
         }
     }
 
-    /// Integrate a full-detail cell result. Gated: drops responses whose
-    /// request marker was pruned, that left the ring, or that are already
-    /// resident (double-response after a re-request). Returns true when cell
-    /// membership changed.
-    fn integrate_full(&mut self, result: &mut CellLoadResult, targets: &mut StreamTargets) -> bool {
-        let _span = info_span!("integrate_full").entered();
+    /// Stage a full-detail cell result: build its geometry, take its textures and keep it hidden
+    /// until `promote_ready_cells` finds them ready. Gated: drops responses whose request marker
+    /// was pruned, that left the ring, or that are already resident or staged (double-response
+    /// after a re-request). The request marker stays until the cell is promoted. Returns true
+    /// when the cell was staged.
+    fn stage_full(&mut self, result: &mut CellLoadResult, targets: &mut StreamTargets) -> bool {
+        let _span = info_span!("stage_full").entered();
         let grid = result.grid;
-        if !self.pending_cells.remove(&grid) {
+        if !self.pending_cells.contains(&grid) || self.staging.holds(Ring::Full, grid) {
             return false;
         }
         if !self.in_full_ring(grid) || self.loaded.contains_key(&grid) {
+            self.pending_cells.remove(&grid);
             return false;
         }
 
         // Held, not registered: sync_collision_ring registers it once the
         // collision ring covers this grid (often this same frame).
         let mut res = CellResources {
+            residency: self.new_residency(),
             collider_payload: result
                 .colliders
                 .take()
@@ -2342,14 +2407,206 @@ impl WorldStreamer {
                 self.build_mesh_group(group, &result.textures, &mut res, targets);
             }
         }
-        self.upload_cell_instances(&mut res, targets);
         Self::add_cell_grass(&mut res, &result.grass, &result.grass_models, targets);
-        res.lights = std::mem::take(&mut result.lights);
-        res.shadow_lamps = std::mem::take(&mut result.shadow_lamps);
-        res.light_models = std::mem::take(&mut result.light_models);
+        let spawn = DeferredSpawn {
+            mesh_groups: result.meshes.len(),
+            lights: std::mem::take(&mut result.lights),
+            shadow_lamps: std::mem::take(&mut result.shadow_lamps),
+            light_models: std::mem::take(&mut result.light_models),
+            addon_lights: result.addon_lights,
+            navmeshes: std::mem::take(&mut result.navmeshes),
+            animated_refs: std::mem::take(&mut result.animated_refs),
+            ragdoll_refs: std::mem::take(&mut result.ragdoll_refs),
+        };
+        self.stage(Ring::Full, grid, res, spawn, targets);
+        // The staged cell's static collision registers at once.
+        self.collision_ring_dirty = true;
+        true
+    }
+
+    /// Stage a LOD cell result, same gating as `stage_full`. Returns true when the cell was
+    /// staged.
+    fn stage_lod(&mut self, result: &mut CellLoadResult, targets: &mut StreamTargets) -> bool {
+        let _span = info_span!("stage_lod").entered();
+        let grid = result.grid;
+        if let Some(reason) = result.load_failure.take() {
+            self.lod_pending_cells.remove(&grid);
+            self.broken.push(BrokenAsset::LodCell { grid, reason });
+            return false;
+        }
+        if !self.lod_pending_cells.contains(&grid) || self.staging.holds(Ring::Lod, grid) {
+            return false;
+        }
+        if !self.in_lod_ring(grid) || self.lod_loaded.contains_key(&grid) {
+            self.lod_pending_cells.remove(&grid);
+            return false;
+        }
+
+        let mut res = CellResources {
+            residency: self.new_residency(),
+            ..CellResources::default()
+        };
+        if let Some(cpu) = result.terrain.take() {
+            self.build_terrain_instance(&cpu, true, &result.textures, &mut res, targets);
+        }
+        for group in &result.meshes {
+            self.build_mesh_group(group, &result.textures, &mut res, targets);
+        }
+        let spawn = DeferredSpawn {
+            mesh_groups: result.meshes.len(),
+            ..DeferredSpawn::default()
+        };
+        self.stage(Ring::Lod, grid, res, spawn, targets);
+        true
+    }
+
+    /// A residency id no cell had before: lamp keys and the grass stage tell integrations apart
+    /// by it.
+    fn new_residency(&mut self) -> u64 {
+        self.next_residency += 1;
+        self.next_residency
+    }
+
+    /// Every texture a cell is drawn with: its own and its grass's.
+    fn cell_textures<'a>(
+        res: &'a CellResources,
+        grass: &'a GrassStage,
+    ) -> impl Iterator<Item = TextureHandle> + 'a {
+        let grass_textures = res
+            .has_grass
+            .then(|| grass.cell_textures(res.residency))
+            .into_iter()
+            .flatten();
+        res.texture_refs.iter().copied().chain(grass_textures)
+    }
+
+    /// Hand a built cell to the staging. Its textures get their demand now, so the residency
+    /// loads the ones still missing.
+    fn stage(
+        &mut self,
+        ring: Ring,
+        grid: (i32, i32),
+        res: CellResources,
+        spawn: DeferredSpawn,
+        targets: &mut StreamTargets,
+    ) {
+        Self::note_cell_demand(&res, &self.demand_view, targets.residency);
+        targets.residency.end_demand_round();
+        self.staging.stage(ring, grid, res, spawn);
+    }
+
+    /// Promote the staged cells whose textures are all loaded and bound, oldest first, within
+    /// the frame's integration budget. A cell still waiting after `TEXTURE_READY_DEADLINE` is
+    /// reported as broken. Returns true when cell membership changed.
+    fn promote_ready_cells(
+        &mut self,
+        targets: &mut StreamTargets,
+        cell_cap: usize,
+        started: Instant,
+    ) -> bool {
+        let _span = info_span!("promote_ready_cells").entered();
+        let judgement = {
+            let residency = &*targets.residency;
+            let array = &*targets.texture_array;
+            let grass = &*targets.grass;
+            self.staging.judge(|res| {
+                Self::cell_textures(res, grass)
+                    .map(|handle| {
+                        TextureReadiness::of(
+                            residency.load_of(handle),
+                            array.view_bound(handle.slot),
+                        )
+                    })
+                    .collect()
+            })
+        };
+        self.waiting_only_for_binding = judgement.waiting_only_for_binding;
+        for (ring, grid) in judgement.overdue {
+            let overdue = self.describe_overdue(ring, grid, targets);
+            self.broken.push(overdue);
+        }
+
+        let mut promoted = 0usize;
+        for (ring, grid) in judgement.ready {
+            if integration_must_stop(
+                self.mode,
+                &IntegrationProgress {
+                    integrated: promoted,
+                    cell_cap,
+                    bytes_exhausted: targets.upload_budget.exhausted(),
+                    elapsed: started.elapsed(),
+                },
+            ) {
+                break;
+            }
+            let Some(cell) = self.staging.take(ring, grid) else {
+                continue;
+            };
+            match ring {
+                Ring::Full => {
+                    self.promote_full(grid, cell, targets);
+                    self.full_spawn_rate.record();
+                }
+                Ring::Lod => {
+                    self.promote_lod(grid, cell, targets);
+                    self.lod_spawn_rate.record();
+                }
+            }
+            promoted += 1;
+        }
+        promoted > 0
+    }
+
+    /// The broken-asset report of a staged cell whose textures did not get ready in time.
+    fn describe_overdue(
+        &self,
+        ring: Ring,
+        grid: (i32, i32),
+        targets: &StreamTargets,
+    ) -> BrokenAsset {
+        let cell = self
+            .staging
+            .get(ring, grid)
+            .expect("an overdue cell is staged");
+        let waiting = Self::cell_textures(&cell.res, targets.grass)
+            .filter_map(|handle| {
+                let load = targets.residency.load_of(handle);
+                let bound = targets.texture_array.view_bound(handle.slot);
+                match TextureReadiness::of(load, bound) {
+                    TextureReadiness::Ready => None,
+                    TextureReadiness::Unbound => Some(format!(
+                        "{} (loaded, not yet in the material bind group)",
+                        targets.residency.describe(handle)
+                    )),
+                    TextureReadiness::Loading => Some(targets.residency.describe(handle)),
+                }
+            })
+            .collect();
+        BrokenAsset::TexturesOverdue {
+            grid,
+            lod: ring == Ring::Lod,
+            waited: cell.waited(),
+            waiting,
+        }
+    }
+
+    /// Make a staged full-detail cell visible: upload its instances and lights, hand over its
+    /// grass, navigation meshes and dynamic objects, and retire the LOD twin it replaces.
+    fn promote_full(&mut self, grid: (i32, i32), cell: StagedCell, targets: &mut StreamTargets) {
+        let _span = info_span!("promote_full").entered();
+        let removed = self.pending_cells.remove(&grid);
+        debug_assert!(removed, "a staged cell keeps its request marker");
+        let StagedCell { mut res, spawn, .. } = cell;
+        self.upload_cell_instances(&mut res, targets);
+        if res.has_grass {
+            targets.grass.reveal_cell(res.residency);
+        }
+        res.lights = spawn.lights;
+        res.shadow_lamps = spawn.shadow_lamps;
+        res.light_models = spawn.light_models;
         self.upload_cell_lights(&mut res, targets);
-        self.log_addon_attachments(&res, result.addon_lights);
-        res.nav_meshes = self.nav.integrate(std::mem::take(&mut result.navmeshes));
+        self.log_addon_attachments(&res, spawn.addon_lights);
+        res.nav_meshes = self.nav.integrate(spawn.navmeshes);
 
         // Promotion: this grid was resident as LOD — swap the LOD twin out.
         if let Some(old) = self.lod_loaded.remove(&grid) {
@@ -2360,85 +2617,88 @@ impl WorldStreamer {
             "Cell ({}, {}) ready: {} mesh groups, {} placed lights ({} shadow-type)",
             grid.0,
             grid.1,
-            result.meshes.len(),
+            spawn.mesh_groups,
             res.lights.len(),
             res.shadow_lamps.len()
         );
-        self.marker_instance_count += res.marker_count;
-        self.fx_instance_count += res.fx_count;
-        for bucket in 0..DRAW_BUCKET_COUNT {
-            self.bucket_potential_total[bucket] += res.bucket_potential[bucket];
-        }
+        self.add_cell_tallies(&res);
         // Index this cell's dynamic REFRs so the pose readback finds them O(1).
         for entity in res.dynamic_instances.keys() {
             self.entity_cell.insert(*entity, grid);
         }
-        res.animated_entities = result
-            .animated_refs
-            .iter()
-            .map(|refr| refr.entity)
-            .collect();
+        res.animated_entities = spawn.animated_refs.iter().map(|refr| refr.entity).collect();
         self.animated_events.extend(
-            result
+            spawn
                 .animated_refs
-                .drain(..)
+                .into_iter()
                 .map(AnimatedObjectEvent::Added),
         );
-        res.ragdoll_entities = result.ragdoll_refs.iter().map(|refr| refr.entity).collect();
+        res.ragdoll_entities = spawn.ragdoll_refs.iter().map(|refr| refr.entity).collect();
         self.ragdoll_events
-            .extend(result.ragdoll_refs.drain(..).map(RagdollEvent::Added));
-        Self::note_cell_demand(&res, &self.demand_view, targets.residency);
-        targets.residency.end_demand_round();
+            .extend(spawn.ragdoll_refs.into_iter().map(RagdollEvent::Added));
         self.loaded.insert(grid, res);
         self.mark_loaded_changed();
-        true
     }
 
-    /// Integrate a LOD cell result, same gating as `integrate_full`. Handles
-    /// demotion: a previously full-detail cell is released when its LOD
-    /// replacement arrives.
-    fn integrate_lod(&mut self, result: &mut CellLoadResult, targets: &mut StreamTargets) -> bool {
-        let _span = info_span!("integrate_lod").entered();
-        let grid = result.grid;
-        if let Some(reason) = result.load_failure.take() {
-            self.lod_pending_cells.remove(&grid);
-            self.broken.push(BrokenAsset::LodCell { grid, reason });
-            return false;
-        }
-        if !self.lod_pending_cells.remove(&grid) {
-            return false;
-        }
-        if !self.in_lod_ring(grid) || self.lod_loaded.contains_key(&grid) {
-            return false;
-        }
-
-        let mut res = CellResources::default();
-
-        if let Some(cpu) = result.terrain.take() {
-            self.build_terrain_instance(&cpu, true, &result.textures, &mut res, targets);
-        }
-        for group in &result.meshes {
-            self.build_mesh_group(group, &result.textures, &mut res, targets);
-        }
+    /// Make a staged LOD cell visible. Handles demotion: a previously full-detail cell is
+    /// released only now that its LOD replacement is drawn.
+    fn promote_lod(&mut self, grid: (i32, i32), cell: StagedCell, targets: &mut StreamTargets) {
+        let _span = info_span!("promote_lod").entered();
+        let removed = self.lod_pending_cells.remove(&grid);
+        debug_assert!(removed, "a staged cell keeps its request marker");
+        let mut res = cell.res;
         self.upload_cell_instances(&mut res, targets);
 
         // Demotion: full-detail twin leaves only now that its replacement is
-        // ready. Its colliders, if it still had any registered, are
+        // drawn. Its colliders, if it still had any registered, are
         // deregistered by sync_collision_ring when it leaves `loaded`.
         if let Some(old) = self.loaded.remove(&grid) {
             self.mark_loaded_changed();
             self.retire_cell(&old, targets);
         }
 
+        self.add_cell_tallies(&res);
+        self.lod_loaded.insert(grid, res);
+    }
+
+    /// Roll a cell that became visible into the resident tallies; `finish_retire` rolls it out.
+    fn add_cell_tallies(&mut self, res: &CellResources) {
         self.marker_instance_count += res.marker_count;
         self.fx_instance_count += res.fx_count;
         for bucket in 0..DRAW_BUCKET_COUNT {
             self.bucket_potential_total[bucket] += res.bucket_potential[bucket];
         }
-        Self::note_cell_demand(&res, &self.demand_view, targets.residency);
-        targets.residency.end_demand_round();
-        self.lod_loaded.insert(grid, res);
-        true
+    }
+
+    /// Release a staged cell that is no longer wanted. It was never drawn, so it holds no slab
+    /// ranges, grass or navigation meshes and is not in the tallies.
+    fn drop_staged(&mut self, res: &CellResources, targets: &mut StreamTargets) {
+        self.demand_stale = true;
+        if res.has_grass {
+            with_grass_gpu(targets, |grass, gpu| grass.remove_cell(res.residency, gpu));
+        }
+        Self::release_cell_buffers(res, targets);
+    }
+
+    /// Whether every full-detail cell of the ring has arrived from the workers and is at least
+    /// staged, so its static collision is registered; its textures may still load.
+    fn full_ring_integrated(&self) -> bool {
+        let staged = self.staging.len(Ring::Full);
+        self.buffered_full.is_empty()
+            && self.pending_cells.len() == staged
+            && (staged > 0 || !self.loaded.is_empty())
+    }
+
+    /// Whether `grid` holds a full-detail cell, drawn or staged.
+    fn holds_full_cell(&self, grid: (i32, i32)) -> bool {
+        self.loaded.contains_key(&grid) || self.staging.holds(Ring::Full, grid)
+    }
+
+    /// The full-detail cell at `grid`, drawn or staged.
+    fn full_cell(&self, grid: (i32, i32)) -> Option<&CellResources> {
+        self.loaded
+            .get(&grid)
+            .or_else(|| self.staging.get(Ring::Full, grid).map(|cell| &cell.res))
     }
 
     /// Register/deregister cell colliders so exactly the resident full cells
@@ -2476,7 +2736,7 @@ impl WorldStreamer {
         let stale: Vec<(i32, i32)> = self
             .collision_registered
             .iter()
-            .filter(|g| !in_ring(g) || !self.loaded.contains_key(g))
+            .filter(|g| !in_ring(g) || !self.holds_full_cell(**g))
             .copied()
             .collect();
         let mut ring_changed = !stale.is_empty();
@@ -2492,7 +2752,7 @@ impl WorldStreamer {
                 if self.collision_registered.contains(&grid) {
                     continue;
                 }
-                let Some(res) = self.loaded.get(&grid) else {
+                let Some(res) = self.full_cell(grid) else {
                     continue;
                 };
                 let Some((batch, baked)) = &res.collider_payload else {
@@ -2525,7 +2785,7 @@ impl WorldStreamer {
     /// Retire a resident cell: roll its marker tally out of the running
     /// total, then release its GPU resources. Every removal from
     /// `loaded`/`lod_loaded` must come through here so the tally balances
-    /// the `+=` in `integrate_full/integrate_lod`.
+    /// the `+=` in `add_cell_tallies`.
     fn retire_cell(&mut self, res: &CellResources, targets: &mut StreamTargets) {
         self.forget_cell_entities(res);
         self.finish_retire(res, targets);
@@ -2607,8 +2867,8 @@ impl WorldStreamer {
         Self::release_cell(res, targets);
     }
 
-    /// Hands the cell's grass to the grass stage, keyed by the cell's residency id.
-    /// The buffers it creates count against the frame's upload budget.
+    /// Hands the cell's grass to the grass stage, keyed by the cell's residency id, hidden until
+    /// the cell is promoted. The buffers it creates count against the frame's upload budget.
     fn add_cell_grass(
         res: &mut CellResources,
         grass: &[CellGrass],
@@ -2671,8 +2931,6 @@ impl WorldStreamer {
     /// a range.
     fn upload_cell_instances(&mut self, res: &mut CellResources, targets: &mut StreamTargets) {
         let _span = info_span!("upload_cell_instances").entered();
-        self.next_residency += 1;
-        res.residency = self.next_residency;
         res.group_base = group_base_offsets(&res.object_groups);
         res.caster_bounds = caster_bounds(res);
         if let Some(bounds) = res.caster_bounds {
@@ -2846,7 +3104,12 @@ impl WorldStreamer {
     /// instance copies. The caller must follow with `repack_instances` to push
     /// the patched copies to the GPU.
     fn patch_object_mega_offsets(&mut self, object_mega: &MegaBuffer) {
-        for res in self.loaded.values_mut().chain(self.lod_loaded.values_mut()) {
+        for res in self
+            .loaded
+            .values_mut()
+            .chain(self.lod_loaded.values_mut())
+            .chain(self.staging.resources_mut())
+        {
             for group in &mut res.object_groups {
                 if let Some(slot) = object_mega.slot(&group.mega_key) {
                     for inst in &mut group.instances {
@@ -2862,7 +3125,12 @@ impl WorldStreamer {
     /// Terrain twin of `patch_object_mega_offsets`; the caller must follow
     /// with `rebuild_terrain_instances`.
     fn patch_terrain_mega_offsets(&mut self, terrain_mega: &MegaBuffer) {
-        for res in self.loaded.values_mut().chain(self.lod_loaded.values_mut()) {
+        for res in self
+            .loaded
+            .values_mut()
+            .chain(self.lod_loaded.values_mut())
+            .chain(self.staging.resources_mut())
+        {
             if let (Some(key), Some(t)) = (&res.terrain_mega_key, res.terrain.as_mut())
                 && let Some(slot) = terrain_mega.slot(key)
             {
@@ -3439,6 +3707,13 @@ impl WorldStreamer {
     /// frame in `worst_frame_ms`.
     pub fn suspend_frame_meter(&mut self) {
         self.load_frames.suspend();
+        self.staging.suspend();
+    }
+
+    /// Whether the material bind group should be rebuilt now rather than after its debounce: a
+    /// load behind the loading screen has staged cells waiting for nothing else.
+    pub(crate) fn wants_views_bound_now(&self) -> bool {
+        self.mode == LoadMode::Loading && self.waiting_only_for_binding
     }
 
     /// Arm the spawn-completion instrumentation (the timer + per-ring finish
@@ -3568,6 +3843,10 @@ impl WorldStreamer {
         for (_, res) in self.lod_loaded.drain() {
             Self::release_cell_buffers(&res, targets);
         }
+        for res in self.staging.drain_all() {
+            Self::release_cell_buffers(&res, targets);
+        }
+        self.waiting_only_for_binding = false;
         self.marker_instance_count = 0;
         self.fx_instance_count = 0;
         self.bucket_potential_total = [0; DRAW_BUCKET_COUNT];
@@ -3993,7 +4272,7 @@ impl WorldStreamer {
 
     /// Mode switches are safe mid-stream: workers check the gate between
     /// cells, and in-flight responses are gated/dropped by
-    /// `integrate_full/integrate_lod` like any other stale result.
+    /// `stage_full/stage_lod` like any other stale result.
     fn apply_mode(&mut self, mode: LoadMode) {
         self.mode = mode;
         let active = match mode {

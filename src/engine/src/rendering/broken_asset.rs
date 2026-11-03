@@ -3,11 +3,25 @@
 //! ends the game, and so does a load that never finishes.
 
 use std::fmt;
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrokenAsset {
-    Texture { path: String, reason: String },
-    LodCell { grid: (i32, i32), reason: String },
+    Texture {
+        path: String,
+        reason: String,
+    },
+    LodCell {
+        grid: (i32, i32),
+        reason: String,
+    },
+    /// A cell waited `waited` for the textures in `waiting`, described with their state.
+    TexturesOverdue {
+        grid: (i32, i32),
+        lod: bool,
+        waited: Duration,
+        waiting: Vec<String>,
+    },
 }
 
 impl fmt::Display for BrokenAsset {
@@ -21,6 +35,20 @@ impl fmt::Display for BrokenAsset {
                     grid.0, grid.1
                 )
             }
+            Self::TexturesOverdue {
+                grid,
+                lod,
+                waited,
+                waiting,
+            } => write!(
+                f,
+                "the textures of the {} cell ({}, {}) are not ready after {:.1}s: {}",
+                if *lod { "LOD" } else { "full-detail" },
+                grid.0,
+                grid.1,
+                waited.as_secs_f32(),
+                waiting.join(", "),
+            ),
         }
     }
 }
@@ -96,11 +124,26 @@ mod tests {
 
     #[test]
     fn the_report_names_every_broken_asset() {
-        let report = BrokenAssets(vec![texture("a.dds"), texture("b.dds")]).to_string();
+        let lod_cell = BrokenAsset::LodCell {
+            grid: (-3, 12),
+            reason: "the cell row has no form_key".to_owned(),
+        };
+        let overdue = BrokenAsset::TexturesOverdue {
+            grid: (4, -2),
+            lod: false,
+            waited: Duration::from_secs(30),
+            waiting: vec![
+                "'a.dds' (read in flight)".to_owned(),
+                "'b.dds' (resident)".to_owned(),
+            ],
+        };
+        let report = BrokenAssets(vec![texture("a.dds"), lod_cell, overdue]).to_string();
         assert_eq!(
             report,
-            "2 broken asset(s): texture 'a.dds' is broken: invalid DDS; \
-             texture 'b.dds' is broken: invalid DDS"
+            "3 broken asset(s): texture 'a.dds' is broken: invalid DDS; \
+             LOD cell (-3, 12) failed to load: the cell row has no form_key; \
+             the textures of the full-detail cell (4, -2) are not ready after 30.0s: \
+             'a.dds' (read in flight), 'b.dds' (resident)"
         );
     }
 }
