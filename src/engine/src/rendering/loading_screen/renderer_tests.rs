@@ -2,17 +2,14 @@
 
 use glam::UVec2;
 
-use super::test_support::{cube_art, layered_quads_art, write_solid_texture, write_texture};
-use super::{ColourMode, CpuArt, LoadedArt, LoadingArt, LoadingArtRenderer, PanKey};
+use super::test_support::{cube_art, layered_quads_art, write_texture};
+use super::{CpuArt, LoadedArt, LoadingArt, LoadingArtRenderer, PanKey};
 use crate::rendering::gpu_test::{linear_to_srgb_byte, read_mip, test_device};
 use crate::rendering::post::tonemap::ui_gamma_format;
-use crate::rendering::ui_colour::UiTint;
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const SIZE: (u32, u32) = (320, 180);
 const BLACK: wgpu::Color = wgpu::Color::BLACK;
-/// The HUD colour of the tests, in linear light.
-const HUD_GREEN: [f32; 3] = [0.0, 1.0, 0.0];
 /// The cube's front face is lit by the ambient term and the light at an angle of
 /// `cos = 0.7 / |(-0.4, 0.6, 0.7)|`; a white texel shows `0.35 + 0.75 * cos` encoded to sRGB.
 const FRONT_FACE_LINEAR: f32 = 0.35 + 0.75 * 0.696_5;
@@ -132,12 +129,8 @@ struct Scene {
 
 impl Scene {
     fn new(test: &str) -> Option<Self> {
-        Self::with_tint(test, HUD_GREEN)
-    }
-
-    fn with_tint(test: &str, hud_tint: [f32; 3]) -> Option<Self> {
         let (device, queue) = test_device(test)?;
-        let renderer = LoadingArtRenderer::new(&device, &queue, ui_gamma_format(FORMAT), hud_tint);
+        let renderer = LoadingArtRenderer::new(&device, &queue, ui_gamma_format(FORMAT));
         Some(Self {
             device,
             queue,
@@ -399,94 +392,4 @@ fn a_held_pan_key_moves_the_drawn_model_across_the_screen() {
 
     assert!(right > before + 5.0, "{before} -> {right}");
     assert!(left < before - 5.0, "{before} -> {left}");
-}
-
-/// The colour of the middle of a cube textured with `texel` in `mode`; `None` without a GPU.
-fn centre_in(test: &str, texel: [u8; 4], mode: ColourMode) -> Option<[u8; 3]> {
-    let mut scene = Scene::new(test)?;
-    let dir = tempfile::tempdir().unwrap();
-    write_solid_texture(dir.path(), "tinted.dds", texel);
-    scene.show(&cube_art(dir.path(), "tinted.dds"));
-    while scene.renderer.colour_mode() != mode {
-        scene.renderer.toggle_colours();
-    }
-    let target = Target::new(&scene, SIZE, BLACK);
-    Some(scene.draw(&target).centre())
-}
-
-#[test]
-fn a_model_shows_its_own_colours_until_the_colours_are_switched() {
-    let Some(own) = centre_in("loading art own colours", [255, 0, 0, 255], ColourMode::Own) else {
-        return;
-    };
-    assert!(own[0] > 100 && own[1] == 0 && own[2] == 0, "red: {own:?}");
-}
-
-#[test]
-fn a_monochrome_model_is_the_hud_colour_scaled_by_the_brightness_of_its_texture() {
-    let Some(red) = centre_in(
-        "loading art mono red",
-        [255, 0, 0, 255],
-        ColourMode::Monochrome,
-    ) else {
-        return;
-    };
-    let Some(white) = centre_in("loading art mono white", [255; 4], ColourMode::Monochrome) else {
-        return;
-    };
-    assert_eq!(
-        (red[0], red[2]),
-        (0, 0),
-        "only the HUD colour's own channel: {red:?}"
-    );
-    assert_eq!((white[0], white[2]), (0, 0), "{white:?}");
-    assert!(
-        white[1] > red[1] && red[1] > 0,
-        "a white texture is brighter than a red one: {white:?} against {red:?}"
-    );
-    let expected = linear_to_srgb_byte(FRONT_FACE_LINEAR);
-    assert_close(white[1], expected, 4);
-}
-
-#[test]
-fn a_monochrome_model_multiplies_in_the_encoded_space_of_the_huds_text() {
-    let hud_tint = [0.5, 0.2, 0.0];
-    let (Some(mut scene), Some(own)) = (
-        Scene::with_tint("loading art mono encoded", hud_tint),
-        centre_in(
-            "loading art mono encoded reference",
-            [255; 4],
-            ColourMode::Own,
-        ),
-    ) else {
-        return;
-    };
-    let dir = tempfile::tempdir().unwrap();
-    write_solid_texture(dir.path(), "white.dds", [255; 4]);
-    scene.show(&cube_art(dir.path(), "white.dds"));
-    scene.renderer.toggle_colours();
-    let target = Target::new(&scene, SIZE, BLACK);
-
-    let mono = scene.draw(&target).centre();
-
-    let tint = UiTint {
-        color: hud_tint,
-        opacity: 1.0,
-    };
-    let text = tint.apply_to(own);
-    for (channel, expected) in mono.into_iter().zip(text) {
-        assert_close(channel, expected, 2);
-    }
-}
-
-#[test]
-fn switching_the_colours_twice_brings_the_models_own_back() {
-    let Some(mut scene) = Scene::new("loading art colour toggle") else {
-        return;
-    };
-    assert_eq!(scene.renderer.colour_mode(), ColourMode::Own);
-    scene.renderer.toggle_colours();
-    assert_eq!(scene.renderer.colour_mode(), ColourMode::Monochrome);
-    scene.renderer.toggle_colours();
-    assert_eq!(scene.renderer.colour_mode(), ColourMode::Own);
 }

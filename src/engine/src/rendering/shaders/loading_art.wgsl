@@ -8,11 +8,9 @@ struct Scene {
     model: mat4x4<f32>,
     // Unit vector towards the light, in engine space.
     light_direction: vec4<f32>,
-    // The ambient and the diffuse strength of the light, 1 when the shader has to encode to
-    // sRGB, and 1 when the model is drawn in the HUD colour alone.
+    // The ambient and the diffuse strength of the light, and 1 when the shader has to encode to
+    // sRGB.
     shading: vec4<f32>,
-    // The HUD colour in linear light, for the monochrome look.
-    tint: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> scene: Scene;
@@ -52,19 +50,10 @@ fn vs_main(in: VsIn) -> VsOut {
     return out;
 }
 
-// The weights of linear red, green and blue in perceived brightness (Rec. 709).
-const LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
-
 fn encode_srgb(linear: vec3<f32>) -> vec3<f32> {
     let low = linear * 12.92;
     let high = 1.055 * pow(linear, vec3<f32>(1.0 / 2.4)) - 0.055;
     return select(high, low, linear <= vec3<f32>(0.0031308));
-}
-
-fn decode_srgb(encoded: vec3<f32>) -> vec3<f32> {
-    let low = encoded / 12.92;
-    let high = pow((encoded + 0.055) / 1.055, vec3<f32>(2.4));
-    return select(high, low, encoded <= vec3<f32>(0.04045));
 }
 
 // Whether a texel of `alpha` is cut out (hair, grates, foliage): only a material that asks for
@@ -92,16 +81,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         discard;
     }
     let strength = scene.shading.x + scene.shading.y * light;
-    let to_encoded_target = scene.shading.z > 0.5;
-    var colour: vec3<f32>;
-    if scene.shading.w > 0.5 {
-        // Like the HUD's text: the encoded brightness times the encoded HUD colour.
-        let grey = vec3<f32>(dot(texel.rgb, LUMA) * strength);
-        let encoded = encode_srgb(grey) * encode_srgb(scene.tint.rgb);
-        colour = select(decode_srgb(encoded), encoded, to_encoded_target);
-    } else {
-        let lit = texel.rgb * strength;
-        colour = select(lit, encode_srgb(lit), to_encoded_target);
-    }
+    let lit = texel.rgb * strength;
+    let colour = select(lit, encode_srgb(lit), scene.shading.z > 0.5);
     return vec4<f32>(colour, 1.0);
 }

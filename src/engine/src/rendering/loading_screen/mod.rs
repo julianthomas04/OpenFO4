@@ -8,7 +8,6 @@
 mod art;
 mod background;
 mod camera;
-mod colour_mode;
 mod model;
 mod motion;
 mod pan_window;
@@ -22,7 +21,6 @@ mod tuning;
 pub use art::{LoadingArt, ModelTransform};
 pub use background::LoadingBackground;
 pub use camera::ArtCamera;
-pub use colour_mode::ColourMode;
 pub use model::{CpuArt, LoadedArt, LoadingArtError};
 pub use motion::PanKey;
 
@@ -40,9 +38,6 @@ pub struct LoadingArtRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     encode_srgb: bool,
-    /// The HUD colour in linear light, which the monochrome look draws in.
-    hud_tint: [f32; 3],
-    colours: ColourMode,
     pipeline: ArtPipeline,
     sampler: wgpu::Sampler,
     scene_buffer: wgpu::Buffer,
@@ -52,15 +47,13 @@ pub struct LoadingArtRenderer {
 }
 
 impl LoadingArtRenderer {
-    /// A renderer for views of `target_format`, whose monochrome look is in `hud_tint`, the HUD
-    /// colour in linear light. The menu draws through the swapchain's non-sRGB view, so a format
-    /// that does not encode sRGB itself gets its colour encoded by the shader, and alpha blends
-    /// on the encoded values like the rest of the menu.
+    /// A renderer for views of `target_format`. The menu draws through the swapchain's non-sRGB
+    /// view, so a format that does not encode sRGB itself gets its colour encoded by the shader,
+    /// and alpha blends on the encoded values like the rest of the menu.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         target_format: wgpu::TextureFormat,
-        hud_tint: [f32; 3],
     ) -> Self {
         let pipeline = ArtPipeline::new(device, target_format);
         let scene_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -90,8 +83,6 @@ impl LoadingArtRenderer {
             device: device.clone(),
             queue: queue.clone(),
             encode_srgb: !target_format.is_srgb(),
-            hud_tint,
-            colours: ColourMode::default(),
             pipeline,
             sampler,
             scene_buffer,
@@ -101,10 +92,9 @@ impl LoadingArtRenderer {
         }
     }
 
-    /// Shows `art` from the next render on, with a camera back at its placement as stored and
-    /// the model in its own colours; `None` shows nothing.
+    /// Shows `art` from the next render on, with a camera back at its placement as stored;
+    /// `None` shows nothing.
     pub fn set_art(&mut self, art: Option<LoadedArt>) {
-        self.colours = ColourMode::default();
         self.active = art.map(|art| {
             let texture_groups = art
                 .draws
@@ -169,15 +159,6 @@ impl LoadingArtRenderer {
         }
     }
 
-    /// Switches between the model's own colours and the HUD colour alone.
-    pub fn toggle_colours(&mut self) {
-        self.colours = self.colours.toggled();
-    }
-
-    pub fn colour_mode(&self) -> ColourMode {
-        self.colours
-    }
-
     /// The model's camera, for the screen's input handling to read.
     pub fn camera(&self) -> Option<&ArtCamera> {
         self.active.as_ref().map(|active| &active.art.camera)
@@ -200,8 +181,6 @@ impl LoadingArtRenderer {
             active.art.camera.view_proj(aspect),
             active.art.camera.model_matrix(),
             self.encode_srgb,
-            self.colours,
-            self.hud_tint,
         );
         self.queue
             .write_buffer(&self.scene_buffer, 0, bytes_of(&scene));

@@ -143,7 +143,7 @@ impl State {
     }
 
     /// Keys outside gameplay drive the menu list, or, while a large loading screen shows its
-    /// model, move and recolour the model.
+    /// model, move the model.
     pub(super) fn handle_menu_key(&mut self, code: KeyCode, is_pressed: bool, is_repeat: bool) {
         if let Some(key) = routed_art_key(code, self.art_shown()) {
             self.load_screens.host.key(key, is_pressed, is_repeat);

@@ -4,14 +4,13 @@
 use std::path::{Path, PathBuf};
 
 use super::art_loader::{ArtLoadError, ArtLoader, LoaderPoll};
-use super::keys::{ArtEffect, ArtKey};
 use crate::assets::db::DbClient;
 use crate::assets::db::load_screens::{LoadScreen, LoadScreenCatalog};
 use crate::assets::types::glb_key::glb_key;
 use crate::loading_screen::{LoadScreenContext, Place, select};
 use crate::random::SplitMix64;
 use crate::rendering::loading_screen::{
-    LoadedArt, LoadingArt, LoadingArtRenderer, LoadingBackground, ModelTransform,
+    LoadedArt, LoadingArt, LoadingArtRenderer, LoadingBackground, ModelTransform, PanKey,
 };
 
 /// Names the editor id of the loading screen to show on every large screen, to tune its camera.
@@ -72,7 +71,6 @@ impl LoadScreenHost {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         target_format: wgpu::TextureFormat,
-        hud_tint: [f32; 3],
         asset_root: &Path,
         db_path: String,
         seed: u64,
@@ -84,7 +82,7 @@ impl LoadScreenHost {
             rng: SplitMix64::new(seed),
             forced: forced_screen_from_env(),
             loader: ArtLoader::default(),
-            renderer: LoadingArtRenderer::new(device, queue, target_format, hud_tint),
+            renderer: LoadingArtRenderer::new(device, queue, target_format),
             background: LoadingBackground::new(asset_root.to_path_buf()),
             device: device.clone(),
             queue: queue.clone(),
@@ -205,12 +203,10 @@ impl LoadScreenHost {
         self.renderer.drag(dx_px, dy_px);
     }
 
-    /// A key that acts on the model went down or up.
-    pub fn key(&mut self, key: ArtKey, pressed: bool, repeat: bool) {
-        match key.effect(pressed, repeat) {
-            Some(ArtEffect::Pan { key, held }) => self.renderer.set_pan_key(key, held),
-            Some(ArtEffect::ToggleColours) => self.renderer.toggle_colours(),
-            None => {}
+    /// A pan key went down or up. Key repeats do nothing: the key stays held until its release.
+    pub fn key(&mut self, key: PanKey, pressed: bool, repeat: bool) {
+        if !repeat {
+            self.renderer.set_pan_key(key, pressed);
         }
     }
 
@@ -434,8 +430,8 @@ mod tests {
 
         use super::super::*;
         use crate::rendering::gpu_test::test_device;
+        use crate::rendering::load_transition::DragTracker;
         use crate::rendering::loading_screen::test_support::cube_art;
-        use crate::rendering::loading_screen::{ColourMode, PanKey};
         use crate::rendering::post::tonemap::ui_gamma_format;
 
         const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -447,7 +443,6 @@ mod tests {
                 &device,
                 &queue,
                 ui_gamma_format(FORMAT),
-                [1.0; 3],
                 Path::new("unused"),
                 String::new(),
                 1,
@@ -530,40 +525,6 @@ mod tests {
         }
 
         #[test]
-        fn q_switches_the_colours_once_per_press_and_ignores_its_repeats_and_release() {
-            let Some(mut host) = host("load screen host colours") else {
-                return;
-            };
-            assert_eq!(host.renderer.colour_mode(), ColourMode::Own);
-
-            host.key(ArtKey::ToggleColours, true, false);
-            assert_eq!(host.renderer.colour_mode(), ColourMode::Monochrome);
-            host.key(ArtKey::ToggleColours, true, true);
-            host.key(ArtKey::ToggleColours, false, false);
-            assert_eq!(host.renderer.colour_mode(), ColourMode::Monochrome);
-            host.key(ArtKey::ToggleColours, true, false);
-            assert_eq!(host.renderer.colour_mode(), ColourMode::Own);
-        }
-
-        #[test]
-        fn a_new_screen_starts_in_the_models_own_colours() {
-            let Some(mut host) = host("load screen host colours reset") else {
-                return;
-            };
-            let dir = tempfile::tempdir().unwrap();
-            host.key(ArtKey::ToggleColours, true, false);
-            assert_eq!(host.renderer.colour_mode(), ColourMode::Monochrome);
-
-            host.show(chosen(cube_art(dir.path(), ""))).unwrap();
-            assert_eq!(host.renderer.colour_mode(), ColourMode::Own);
-            assert!(matches!(settled(&mut host), ArtStatus::Ready));
-            host.key(ArtKey::ToggleColours, true, false);
-            host.show(chosen(cube_art(dir.path(), ""))).unwrap();
-            assert!(matches!(settled(&mut host), ArtStatus::Ready));
-            assert_eq!(host.renderer.colour_mode(), ColourMode::Own);
-        }
-
-        #[test]
         fn the_pan_keys_move_the_shown_model_only_while_they_are_held() {
             let Some(mut host) = host("load screen host pan") else {
                 return;
@@ -573,11 +534,11 @@ mod tests {
             assert!(matches!(settled(&mut host), ArtStatus::Ready));
             let pan = |host: &LoadScreenHost| host.renderer.camera().expect("a model").pan();
 
-            host.key(ArtKey::Pan(PanKey::Right), true, false);
+            host.key(PanKey::Right, true, false);
             host.tick(0.1);
             let held = pan(&host);
             assert!(held.0 > 0.0, "{held:?}");
-            host.key(ArtKey::Pan(PanKey::Right), false, false);
+            host.key(PanKey::Right, false, false);
             host.tick(0.1);
             assert_eq!(pan(&host), held);
         }
@@ -598,6 +559,74 @@ mod tests {
             let camera = host.renderer.camera().unwrap();
             assert!(!camera.is_spinning());
             assert!(camera.zoom() > 0.0);
+        }
+
+        #[test]
+        fn a_key_repeat_does_not_move_the_model() {
+            let Some(mut host) = host("load screen host key repeat") else {
+                return;
+            };
+            let dir = tempfile::tempdir().unwrap();
+            host.show(chosen(cube_art(dir.path(), ""))).unwrap();
+            assert!(matches!(settled(&mut host), ArtStatus::Ready));
+
+            host.key(PanKey::Right, true, true);
+            host.tick(0.1);
+
+            assert_eq!(host.renderer.camera().expect("a model").pan(), (0.0, 0.0));
+        }
+
+        /// What the window does with the pointer: a move drags only between a press and its release.
+        fn pointer_move(host: &mut LoadScreenHost, drag: &mut DragTracker, x: f32, y: f32) {
+            if let Some((dx, dy)) = drag.moved(x, y) {
+                host.drag(dx, dy);
+            }
+        }
+
+        #[test]
+        fn pointer_motion_without_the_button_held_leaves_the_model_alone() {
+            let Some(mut host) = host("load screen host free pointer") else {
+                return;
+            };
+            let dir = tempfile::tempdir().unwrap();
+            host.show(chosen(cube_art(dir.path(), ""))).unwrap();
+            assert!(matches!(settled(&mut host), ArtStatus::Ready));
+            let mut drag = DragTracker::default();
+
+            for step in 0..5 {
+                pointer_move(
+                    &mut host,
+                    &mut drag,
+                    100.0 + 40.0 * step as f32,
+                    50.0 + 30.0 * step as f32,
+                );
+            }
+            host.tick(0.0);
+
+            let camera = host.renderer.camera().expect("a model");
+            assert!(camera.is_spinning());
+            assert_eq!((camera.yaw_degrees(), camera.zoom()), (0.0, 0.0));
+            assert_eq!(camera.pan(), (0.0, 0.0));
+        }
+
+        #[test]
+        fn pointer_motion_with_the_button_held_turns_and_zooms_until_it_is_released() {
+            let Some(mut host) = host("load screen host held pointer") else {
+                return;
+            };
+            let dir = tempfile::tempdir().unwrap();
+            host.show(chosen(cube_art(dir.path(), ""))).unwrap();
+            assert!(matches!(settled(&mut host), ArtStatus::Ready));
+            let mut drag = DragTracker::default();
+
+            drag.press(100.0, 100.0);
+            pointer_move(&mut host, &mut drag, 140.0, 60.0);
+            let held = host.renderer.camera().expect("a model").clone();
+            assert!(held.yaw_degrees() > 0.0 && held.zoom() > 0.0, "{held:?}");
+
+            drag.release();
+            pointer_move(&mut host, &mut drag, 400.0, 300.0);
+            assert_eq!(host.renderer.camera().expect("a model"), &held);
         }
 
         #[test]
