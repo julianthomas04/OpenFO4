@@ -241,7 +241,8 @@ impl GameFlow {
                 load_gate::NO_PROGRESS_TIMEOUT_SECONDS,
             );
         }
-        if step.reveal {
+        if let Some(phases) = step.reveal {
+            tracing::info!("LOAD_PHASES {phases}");
             self.enter(Phase::Revealing);
             self.fade = Fade::default();
             FlowAction::LockCursor
@@ -509,6 +510,7 @@ mod tests {
     fn streamed_with_player() -> Readiness {
         Readiness {
             full_ring_complete: true,
+            world_complete: true,
             player_ready: true,
             ..Readiness::default()
         }
@@ -1058,6 +1060,7 @@ mod tests {
     fn waiting_for_colliders() -> Readiness {
         Readiness {
             full_ring_complete: true,
+            world_complete: true,
             colliders_pending: true,
             player_ready: true,
             ..Readiness::default()

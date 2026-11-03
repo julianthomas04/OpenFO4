@@ -1035,12 +1035,35 @@ pub struct StreamUpdate {
 /// measured from `initial_load`, not disjoint shares of `total`.
 pub struct SpawnCompleteReport {
     pub total: Duration,
-    /// Full-detail ring finish time and integrated cell count.
+    /// Time by which the full-detail ring was drawn, and its cell count.
     pub full: Duration,
     pub full_cells: usize,
-    /// LOD ring finish time and integrated cell count.
+    /// Time by which the LOD ring was drawn, and its cell count.
     pub lod: Duration,
     pub lod_cells: usize,
+}
+
+/// When a ring of the initial spawn was first integrated (every cell staged or drawn) and
+/// when it was first drawn (every cell's textures ready), relative to the spawn timer.
+#[derive(Debug, Clone, Copy, Default)]
+struct RingTimes {
+    integrated: Option<Duration>,
+    drawn: Option<Duration>,
+}
+
+impl RingTimes {
+    fn note(&mut self, elapsed: Duration, integrated: bool, drawn: bool) {
+        if integrated && self.integrated.is_none() {
+            self.integrated = Some(elapsed);
+        }
+        if drawn && self.drawn.is_none() {
+            self.drawn = Some(elapsed);
+        }
+    }
+}
+
+fn millis(time: Option<Duration>) -> String {
+    time.map_or_else(|| "never".to_owned(), |time| time.as_millis().to_string())
 }
 
 /// Rolling integration-rate tracker for the debug UI: cells/s averaged over
@@ -1213,11 +1236,9 @@ pub struct WorldStreamer {
     /// Set by `initial_load`; once the initial full+LOD rings finish
     /// integrating, a `SPAWN_COMPLETE` line is logged and this clears.
     spawn_timer: Option<std::time::Instant>,
-    /// Per-ring finish times relative to `spawn_timer`, recorded the first
-    /// frame each ring's pending+buffered sets drain during the initial
-    /// spawn. Feed the `SpawnCompleteReport` breakdown.
-    spawn_full_done: Option<Duration>,
-    spawn_lod_done: Option<Duration>,
+    /// Per-ring finish times of the initial spawn. Feed the `SpawnCompleteReport` breakdown.
+    spawn_full: RingTimes,
+    spawn_lod: RingTimes,
     /// Armed with the spawn timer; fires once when the full ring drains.
     full_ring_signal: OneShot,
     /// Broken assets met during the running update; ending the game is the caller's.
@@ -1498,12 +1519,12 @@ impl WorldStreamer {
             next_residency: 0,
             needs_light_repack: false,
             spawn_timer: None,
-            spawn_full_done: None,
+            spawn_full: RingTimes::default(),
             full_ring_signal: OneShot::default(),
             broken: BrokenAssetSink::default(),
             staging: Staging::default(),
             waiting_only_for_binding: false,
-            spawn_lod_done: None,
+            spawn_lod: RingTimes::default(),
             spawn_progress_tick: 0,
             load_frames: LoadFrameMeter::new(),
             mode,
@@ -1709,13 +1730,19 @@ impl WorldStreamer {
         let mut spawn_complete = None;
         let mut full_ring_complete = false;
         if let Some(start) = self.spawn_timer {
-            if self.spawn_full_done.is_none()
-                && self.pending_cells.is_empty()
-                && self.buffered_full.is_empty()
-            {
-                self.spawn_full_done = Some(start.elapsed());
-            }
-            full_ring_complete = self.full_ring_signal.fire(self.full_ring_integrated());
+            let full_integrated = self.full_ring_integrated();
+            let lod_integrated = self.lod_ring_integrated();
+            self.spawn_full.note(
+                start.elapsed(),
+                full_integrated,
+                full_integrated && self.staging.len(Ring::Full) == 0,
+            );
+            self.spawn_lod.note(
+                start.elapsed(),
+                lod_integrated,
+                lod_integrated && self.staging.len(Ring::Lod) == 0,
+            );
+            full_ring_complete = self.full_ring_signal.fire(full_integrated);
             if full_ring_complete {
                 info!(
                     "FULL_RING_COMPLETE elapsed_ms={} full_cells={} lod_loaded={}/{}",
@@ -1724,12 +1751,6 @@ impl WorldStreamer {
                     self.lod_loaded.len(),
                     self.lod_loaded.len() + self.lod_pending_cells.len(),
                 );
-            }
-            if self.spawn_lod_done.is_none()
-                && self.lod_pending_cells.is_empty()
-                && self.buffered_lod.is_empty()
-            {
-                self.spawn_lod_done = Some(start.elapsed());
             }
             // Ramp-up visibility: one INTEGRATED-side progress line per
             // ~500 ms while the initial spawn runs (worker-side progress is
@@ -1754,8 +1775,12 @@ impl WorldStreamer {
                 && !self.loaded.is_empty()
             {
                 info!(
-                    "SPAWN_COMPLETE elapsed_ms={} full_cells={} lod_cells={} cells_per_frame={} mode={} workers={} worst_frame_ms={:.1}",
+                    "SPAWN_COMPLETE elapsed_ms={} full_integrated_ms={} full_drawn_ms={} lod_integrated_ms={} lod_drawn_ms={} full_cells={} lod_cells={} cells_per_frame={} mode={} workers={} worst_frame_ms={:.1}",
                     start.elapsed().as_millis(),
+                    millis(self.spawn_full.integrated),
+                    millis(self.spawn_full.drawn),
+                    millis(self.spawn_lod.integrated),
+                    millis(self.spawn_lod.drawn),
                     self.loaded.len(),
                     self.lod_loaded.len(),
                     max_cells_per_frame,
@@ -1766,9 +1791,9 @@ impl WorldStreamer {
                 let total = start.elapsed();
                 spawn_complete = Some(SpawnCompleteReport {
                     total,
-                    full: self.spawn_full_done.unwrap_or(total),
+                    full: self.spawn_full.drawn.unwrap_or(total),
                     full_cells: self.loaded.len(),
-                    lod: self.spawn_lod_done.unwrap_or(total),
+                    lod: self.spawn_lod.drawn.unwrap_or(total),
                     lod_cells: self.lod_loaded.len(),
                 });
                 self.spawn_timer = None;
@@ -2687,6 +2712,11 @@ impl WorldStreamer {
         self.buffered_full.is_empty()
             && self.pending_cells.len() == staged
             && (staged > 0 || !self.loaded.is_empty())
+    }
+
+    /// Every requested LOD cell has arrived; some may still wait in staging.
+    fn lod_ring_integrated(&self) -> bool {
+        self.buffered_lod.is_empty() && self.lod_pending_cells.len() == self.staging.len(Ring::Lod)
     }
 
     /// Whether `grid` holds a full-detail cell, drawn or staged.
@@ -3722,8 +3752,8 @@ impl WorldStreamer {
     /// (`enter_interior`) — so the auto-drop back to Streaming fires for each.
     fn arm_spawn_timer(&mut self) {
         self.spawn_timer = Some(std::time::Instant::now());
-        self.spawn_full_done = None;
-        self.spawn_lod_done = None;
+        self.spawn_full = RingTimes::default();
+        self.spawn_lod = RingTimes::default();
         self.full_ring_signal.arm();
         self.spawn_progress_tick = 0;
         self.load_frames.reset();

@@ -699,6 +699,7 @@ fn a_new_load_restarts_the_logo_and_the_reveal_continues_it() {
         flow.tick(0.1);
         flow.readiness(Readiness {
             full_ring_complete: true,
+            world_complete: true,
             player_ready: true,
             ..Readiness::default()
         });

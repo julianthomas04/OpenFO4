@@ -95,12 +95,14 @@ impl State {
         &mut self,
         settled: ColliderSettle,
         full_ring_complete: bool,
+        world_complete: bool,
     ) {
         if self.flow.phase() != Phase::Loading {
             return;
         }
         let report = StreamReport {
             full_ring_complete,
+            world_complete,
             counts: StreamCounts {
                 pending_cells: self.streamer.pending_cell_count(),
                 pending_lod_cells: self.streamer.lod_pending_cell_count(),

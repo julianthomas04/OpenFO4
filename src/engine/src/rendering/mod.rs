@@ -3998,6 +3998,7 @@ impl State {
         self.update_fire_effects(dt);
 
         let full_ring_complete = stream.full_ring_complete;
+        let world_complete = stream.spawn_complete.is_some();
         if let Some(report) = &stream.spawn_complete {
             self.toast_queue.push((
                 format!(
@@ -4022,7 +4023,7 @@ impl State {
             stream.sim_commands,
             crate::sim::COLLIDER_APPLY_BUDGET,
         );
-        self.feed_load_readiness(settled, full_ring_complete);
+        self.feed_load_readiness(settled, full_ring_complete, world_complete);
 
         // Rewrite moving dynamic clutter into the instance buffer. Runs after
         // the streamer's update_gpu_driven (so any repack already ran) and after

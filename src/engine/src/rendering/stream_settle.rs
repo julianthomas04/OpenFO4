@@ -51,6 +51,8 @@ pub(super) fn apply_teardown(sim: &mut SimWorld, commands: Vec<SimCommand>) {
 pub(super) struct StreamReport {
     /// The streamer reported the full-detail ring complete on this frame.
     pub full_ring_complete: bool,
+    /// The streamer reported every cell of both rings drawn on this frame.
+    pub world_complete: bool,
     pub counts: StreamCounts,
     /// The grid cell the player spawns in, whose collision the spawn waits for.
     pub spawn_cell: (i32, i32),
@@ -64,6 +66,7 @@ pub(super) fn readiness(
 ) -> Readiness {
     Readiness {
         full_ring_complete: stream.full_ring_complete,
+        world_complete: stream.world_complete,
         colliders_pending: sim.has_pending_colliders(),
         player_ready: sim.player_eye().is_some(),
         player: PlayerWait {
@@ -135,6 +138,7 @@ mod tests {
             sim,
             StreamReport {
                 full_ring_complete,
+                world_complete: false,
                 counts: StreamCounts::default(),
                 spawn_cell: SPAWN_CELL,
             },
@@ -180,6 +184,7 @@ mod tests {
         };
         let report = |full_ring_complete| StreamReport {
             full_ring_complete,
+            world_complete: false,
             counts,
             spawn_cell: SPAWN_CELL,
         };
