@@ -6,7 +6,7 @@ use glam::{Mat4, Quat, Vec3};
 use tracing::info_span;
 
 use super::{
-    Aabb, CellObjectGroup, CellResources, DynRow, POSE_EPS_BASIS, POSE_EPS_TRANSLATION,
+    Aabb, CellObjectGroup, CellResources, DynRow, POSE_EPS_BASIS, POSE_EPS_TRANSLATION, Ring,
     StreamTargets, WorldStreamer, instance_aabb, world_aabb,
 };
 use crate::rendering::gpu_driven::GpuInstance;
@@ -89,8 +89,14 @@ impl WorldStreamer {
         order.sort_unstable_by_key(|&(grid, _)| grid);
         for cell_run in order.chunk_by(|a, b| a.0 == b.0) {
             let grid = cell_run[0].0;
-            let Some(res) = self.loaded.get_mut(&grid) else {
-                continue;
+            // A staged cell has no slab range yet: only its CPU mirror moves, and promotion
+            // uploads it.
+            let res = match self.loaded.get_mut(&grid) {
+                Some(res) => res,
+                None => match self.staging.get_mut(Ring::Full, grid) {
+                    Some(staged) => &mut staged.res,
+                    None => continue,
+                },
             };
             let slab = res.instance_range;
             let CellResources {

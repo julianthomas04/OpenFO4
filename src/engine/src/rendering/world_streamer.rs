@@ -1184,9 +1184,9 @@ pub struct WorldStreamer {
     /// have static ground). Defaults to `collision_radius`; bigger costs more
     /// (more colliders folded + stepped while dynamics are awake).
     physics_radius: i32,
-    /// Dynamic REFR entity id -> its owning resident cell, so the per-frame pose
-    /// readback finds the cell's `dynamic_instances` in O(1). Maintained beside
-    /// the `loaded` map (integrate adds, retire removes).
+    /// Dynamic REFR entity id -> its owning full-detail cell, drawn or staged, so the per-frame
+    /// pose readback finds the cell's `dynamic_instances` in O(1). Staging adds, retiring or
+    /// dropping a staged cell removes.
     entity_cell: HashMap<EntityId, (i32, i32)>,
     /// Animated objects entering or leaving residency, drained each frame by
     /// the animation runtime.
@@ -2457,6 +2457,11 @@ impl WorldStreamer {
             }
         }
         Self::add_cell_grass(&mut res, &result.grass, &result.grass_models, targets);
+        // Index the dynamic REFRs now: their bodies simulate while the cell is staged, and the
+        // pose readback keeps its rows where the bodies are by the time it is drawn.
+        for entity in res.dynamic_instances.keys() {
+            self.entity_cell.insert(*entity, grid);
+        }
         let spawn = DeferredSpawn {
             mesh_groups: result.meshes.len(),
             lights: std::mem::take(&mut result.lights),
@@ -2667,10 +2672,6 @@ impl WorldStreamer {
             res.shadow_lamps.len()
         );
         self.add_cell_tallies(&res);
-        // Index this cell's dynamic REFRs so the pose readback finds them O(1).
-        for entity in res.dynamic_instances.keys() {
-            self.entity_cell.insert(*entity, grid);
-        }
         res.animated_entities = spawn.animated_refs.iter().map(|refr| refr.entity).collect();
         self.animated_events.extend(
             spawn
@@ -2715,10 +2716,13 @@ impl WorldStreamer {
         }
     }
 
-    /// Release a staged cell that is no longer wanted. It was never drawn, so it holds no slab
-    /// ranges, grass or navigation meshes and is not in the tallies.
+    /// Release a staged cell that is no longer wanted, with its hidden grass. It was never drawn,
+    /// so it holds no slab ranges or navigation meshes and is not in the tallies.
     fn drop_staged(&mut self, res: &CellResources, targets: &mut StreamTargets) {
         self.demand_stale = true;
+        for entity in res.dynamic_instances.keys() {
+            self.entity_cell.remove(entity);
+        }
         if res.has_grass {
             with_grass_gpu(targets, |grass, gpu| grass.remove_cell(res.residency, gpu));
         }

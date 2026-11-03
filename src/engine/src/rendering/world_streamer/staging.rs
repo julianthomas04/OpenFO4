@@ -120,6 +120,10 @@ impl Staging {
         self.cells(ring).get(&grid)
     }
 
+    pub(super) fn get_mut(&mut self, ring: Ring, grid: (i32, i32)) -> Option<&mut StagedCell> {
+        self.cells_mut(ring).get_mut(&grid)
+    }
+
     pub(super) fn holds(&self, ring: Ring, grid: (i32, i32)) -> bool {
         self.cells(ring).contains_key(&grid)
     }
@@ -299,6 +303,26 @@ mod tests {
             Verdict::Promote,
             "a cell that became ready in time is not overdue"
         );
+    }
+
+    #[test]
+    fn a_staged_cell_can_be_changed_in_place() {
+        let mut staging = Staging::default();
+        staged(&mut staging, Ring::Full, (1, 2), 0);
+
+        staging
+            .get_mut(Ring::Full, (1, 2))
+            .expect("the cell is staged")
+            .res
+            .marker_count = 5;
+
+        assert_eq!(
+            staging
+                .get(Ring::Full, (1, 2))
+                .map(|cell| cell.res.marker_count),
+            Some(5)
+        );
+        assert!(staging.get_mut(Ring::Lod, (1, 2)).is_none());
     }
 
     fn staged(staging: &mut Staging, ring: Ring, grid: (i32, i32), marker_count: u32) {
