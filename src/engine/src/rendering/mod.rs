@@ -43,6 +43,7 @@ mod line_buffer;
 mod load_transition;
 pub mod loading_screen;
 pub mod local_lights;
+mod material_rebuild;
 pub mod mega_buffer;
 pub mod menu;
 mod menu_frame;
@@ -220,6 +221,7 @@ use load_transition::{
     ScreenRequest, loading_screen_section, spawn_report_title,
 };
 use loading_screen::{GradeSource, LoadingScene};
+use material_rebuild::MaterialDirt;
 use menu::{MenuRenderer, OverlayForeground, PanelContent};
 use particles::CameraBasis;
 use ragdoll_objects::RagdollObjects;
@@ -4176,7 +4178,7 @@ impl State {
         // first-use re-track of all those views in that frame's queue.submit.
         // During streaming bursts the slot table changes on nearly every
         // integrate frame, so rebuilds are debounced: at most one per
-        // MATERIAL_BG_DEBOUNCE while dirt accumulates. The visible artifact
+        // `MATERIAL_BG_DEBOUNCE` while dirt accumulates. The visible artifact
         // is bounded and benign — a texture acquired into a *recycled* slot
         // samples the slot's previous texture for up to the debounce window,
         // on geometry that just streamed in at the ring edge. Two cases are
@@ -4184,25 +4186,27 @@ impl State {
         // references a dead buffer) and slot high-water growth (indexing an
         // unbound entry of a partially-bound array is UB).
         let material_bind_group_span = tracing::info_span!("material_bind_group").entered();
-        const MATERIAL_BG_DEBOUNCE: Duration = Duration::from_millis(150);
         self.pending_slot_changes.merge(stream.slot_changes);
         let new_alpha_slots = self.texture_array.take_new_alpha_slots();
         if self.shadow_material_bind_group.is_some() {
             self.pending_alpha_slots.extend(new_alpha_slots);
         }
         let cube_added = self.cube_array.take_changed();
-        self.material_bg_dirty |= !self.pending_slot_changes.is_empty()
-            || !self.pending_alpha_slots.is_empty()
-            || material_realloc
-            || cube_added;
-        // Behind the loading screen, staged cells that wait for nothing but
-        // their views being bound are not left waiting out the debounce.
-        let must_rebuild_now = material_realloc
-            || self.texture_array.bind_group_len() > self.material_bg_built_len
-            || (self.streamer.wants_views_bound_now() && self.texture_array.has_unbound_views());
-        if self.material_bg_dirty
-            && (must_rebuild_now || self.material_bg_last_rebuild.elapsed() >= MATERIAL_BG_DEBOUNCE)
-        {
+        let dirt = MaterialDirt {
+            slots_changed: !self.pending_slot_changes.is_empty()
+                || !self.pending_alpha_slots.is_empty()
+                || cube_added,
+            views_unbound: self.texture_array.has_unbound_views(),
+            buffer_reallocated: material_realloc,
+            array_grew: self.texture_array.bind_group_len() > self.material_bg_built_len,
+            views_wanted_now: self.streamer.wants_views_bound_now(),
+        };
+        self.material_bg_dirty |= dirt.is_dirty();
+        if material_rebuild::rebuild_due(
+            self.material_bg_dirty,
+            dirt,
+            self.material_bg_last_rebuild.elapsed(),
+        ) {
             (self.material_bind_group, self.shadow_material_bind_group) =
                 Self::build_material_bind_groups(
                     &self.device,
