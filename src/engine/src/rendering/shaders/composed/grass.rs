@@ -13,6 +13,7 @@ pub static GRASS: ComposedShaderSource = ComposedShaderSource {
         ShaderPart::Static(include_str!("../normal_mapping.wgsl")),
         ShaderPart::Static(include_str!("../shading_math.wgsl")),
         ShaderPart::Static(include_str!("../ambient.wgsl")),
+        ShaderPart::Static(include_str!("../surface_response.wgsl")),
         ShaderPart::Static(include_str!("../surface_shading.wgsl")),
         ShaderPart::Static(include_str!("../lamp_shadow.wgsl")),
         ShaderPart::Static(include_str!("../mip_debug.wgsl")),

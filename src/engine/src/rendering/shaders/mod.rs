@@ -36,6 +36,7 @@ pub const OBJECT: ShaderSource = ShaderSource {
         include_str!("normal_mapping.wgsl"),
         include_str!("shading_math.wgsl"),
         include_str!("ambient.wgsl"),
+        include_str!("surface_response.wgsl"),
         include_str!("surface_shading.wgsl"),
         include_str!("lamp_shadow.wgsl"),
         include_str!("mip_debug.wgsl"),
@@ -60,6 +61,7 @@ pub const TERRAIN: ShaderSource = ShaderSource {
         include_str!("vertex_io.wgsl"),
         include_str!("shading_math.wgsl"),
         include_str!("ambient.wgsl"),
+        include_str!("surface_response.wgsl"),
         include_str!("surface_shading.wgsl"),
         include_str!("lamp_shadow.wgsl"),
         include_str!("mip_debug.wgsl"),
@@ -247,7 +249,12 @@ pub const LOADING_BACKGROUND: ShaderSource = ShaderSource {
 
 pub const LOADING_ART: ShaderSource = ShaderSource {
     label: "loading_art_shader",
-    wgsl: include_str!("loading_art.wgsl"),
+    wgsl: concat!(
+        include_str!("shading_math.wgsl"),
+        include_str!("normal_mapping.wgsl"),
+        include_str!("surface_response.wgsl"),
+        include_str!("loading_art.wgsl"),
+    ),
 };
 
 pub const LIGHT_SPHERES: ShaderSource = ShaderSource {
@@ -281,6 +288,7 @@ pub const SKINNED_OBJECT: ShaderSource = ShaderSource {
         include_str!("normal_mapping.wgsl"),
         include_str!("shading_math.wgsl"),
         include_str!("ambient.wgsl"),
+        include_str!("surface_response.wgsl"),
         include_str!("surface_shading.wgsl"),
         include_str!("lamp_shadow.wgsl"),
         include_str!("mip_debug.wgsl"),

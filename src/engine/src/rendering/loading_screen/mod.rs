@@ -108,7 +108,11 @@ impl LoadingArtRenderer {
                         self.device
                             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                                 label: Some("loading_art_material"),
-                                contents: bytes_of(&MaterialUniform::new(draw.alpha_cutoff)),
+                                contents: bytes_of(&MaterialUniform::new(
+                                    draw.alpha_cutoff,
+                                    draw.smoothness,
+                                    draw.specular_scale,
+                                )),
                                 usage: wgpu::BufferUsages::UNIFORM,
                             });
                     self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -126,6 +130,14 @@ impl LoadingArtRenderer {
                             wgpu::BindGroupEntry {
                                 binding: 2,
                                 resource: material.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 3,
+                                resource: wgpu::BindingResource::TextureView(&draw.normal),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 4,
+                                resource: wgpu::BindingResource::TextureView(&draw.specular),
                             },
                         ],
                     })

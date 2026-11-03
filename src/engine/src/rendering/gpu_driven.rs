@@ -195,7 +195,8 @@ pub const LEGACY_SURFACE: SurfaceParams = SurfaceParams {
 };
 
 impl SurfaceParams {
-    fn specular_scale(&self) -> f32 {
+    /// The factor the specular map's R channel is scaled by; 0 for a matte material.
+    pub fn specular_scale(&self) -> f32 {
         if self.specular_enabled {
             self.specular_mult
         } else {

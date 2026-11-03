@@ -2,7 +2,7 @@
 
 use glam::UVec2;
 
-use super::test_support::{cube_art, layered_quads_art, write_texture};
+use super::test_support::{cube_art, layered_quads_art, write_solid_texture, write_texture};
 use super::{CpuArt, LoadedArt, LoadingArt, LoadingArtRenderer, PanKey};
 use crate::rendering::gpu_test::{linear_to_srgb_byte, read_mip, test_device};
 use crate::rendering::post::tonemap::ui_gamma_format;
@@ -11,8 +11,8 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const SIZE: (u32, u32) = (320, 180);
 const BLACK: wgpu::Color = wgpu::Color::BLACK;
 /// The cube's front face is lit by the ambient term and the light at an angle of
-/// `cos = 0.7 / |(-0.4, 0.6, 0.7)|`; a white texel shows `0.35 + 0.75 * cos` encoded to sRGB.
-const FRONT_FACE_LINEAR: f32 = 0.35 + 0.75 * 0.696_5;
+/// `cos = 0.5 / |(-0.6, 0.6, 0.5)|`; a white texel shows `0.04 + 1.6 * cos` encoded to sRGB.
+const FRONT_FACE_LINEAR: f32 = 0.04 + 1.6 * 0.507_7;
 
 struct Target {
     texture: wgpu::Texture,
@@ -392,4 +392,143 @@ fn a_held_pan_key_moves_the_drawn_model_across_the_screen() {
 
     assert!(right > before + 5.0, "{before} -> {right}");
     assert!(left < before - 5.0, "{before} -> {left}");
+}
+
+/// The centre pixel of the cube whose material is `material`, below `textures` (name and
+/// texel); `None` without a GPU.
+fn centre_with(test: &str, material: &str, textures: &[(&str, [u8; 4])]) -> Option<[u8; 3]> {
+    let mut scene = Scene::new(test)?;
+    let dir = tempfile::tempdir().unwrap();
+    for (name, texel) in textures {
+        write_solid_texture(dir.path(), name, *texel);
+    }
+    scene.show(&cube_art(dir.path(), material));
+    let target = Target::new(&scene, SIZE, BLACK);
+    Some(scene.draw(&target).centre())
+}
+
+const MID_GREY: [u8; 4] = [128, 128, 128, 255];
+const SPECULAR_TOKENS: &str = "|spec:spec.dds|sm:1|sg:0.3";
+
+fn assert_same_colour(actual: [u8; 3], expected: [u8; 3]) {
+    for (actual, expected) in actual.into_iter().zip(expected) {
+        assert_close(actual, expected, 1);
+    }
+}
+
+#[test]
+fn a_specular_map_adds_a_neutral_highlight_to_the_surface() {
+    let (Some(matte), Some(shiny)) = (
+        centre_with("loading art matte", "grey.dds", &[("grey.dds", MID_GREY)]),
+        centre_with(
+            "loading art specular",
+            &format!("grey.dds{SPECULAR_TOKENS}"),
+            &[("grey.dds", MID_GREY), ("spec.dds", [255; 4])],
+        ),
+    ) else {
+        return;
+    };
+    assert!(
+        shiny[0] > matte[0] + 5 && shiny[2] > matte[2] + 5,
+        "{matte:?} -> {shiny:?}"
+    );
+    assert_eq!(shiny[0], shiny[2], "the highlight is white");
+}
+
+#[test]
+fn a_specular_map_without_intensity_adds_nothing() {
+    let (Some(matte), Some(dull)) = (
+        centre_with("loading art matte again", "grey.dds", &[("grey.dds", MID_GREY)]),
+        centre_with(
+            "loading art black specular",
+            &format!("grey.dds{SPECULAR_TOKENS}"),
+            &[("grey.dds", MID_GREY), ("spec.dds", [0, 255, 0, 255])],
+        ),
+    ) else {
+        return;
+    };
+    assert_same_colour(dull, matte);
+}
+
+#[test]
+fn a_specular_map_that_cannot_be_loaded_switches_the_specular_off() {
+    let (Some(matte), Some(unloaded)) = (
+        centre_with("loading art matte third", "grey.dds", &[("grey.dds", MID_GREY)]),
+        centre_with(
+            "loading art missing specular",
+            &format!("grey.dds{SPECULAR_TOKENS}"),
+            &[("grey.dds", MID_GREY)],
+        ),
+    ) else {
+        return;
+    };
+    assert_same_colour(unloaded, matte);
+}
+
+#[test]
+fn a_material_without_specular_parameters_stays_matte_whatever_its_specular_map() {
+    let (Some(matte), Some(unmarked)) = (
+        centre_with("loading art matte fourth", "grey.dds", &[("grey.dds", MID_GREY)]),
+        centre_with(
+            "loading art legacy specular",
+            "grey.dds|spec:spec.dds",
+            &[("grey.dds", MID_GREY), ("spec.dds", [255; 4])],
+        ),
+    ) else {
+        return;
+    };
+    assert_same_colour(unmarked, matte);
+}
+
+/// A normal map texel whose normal leans by `lean` along the surface's U axis.
+fn leaning_normal(lean: f32) -> [u8; 4] {
+    let encode = |component: f32| ((component * 0.5 + 0.5) * 255.0).round() as u8;
+    [encode(lean), encode(0.0), 255, 255]
+}
+
+#[test]
+fn a_normal_map_changes_how_the_surface_catches_the_light() {
+    let lit = |test: &str, lean: Option<f32>| {
+        let material = if lean.is_some() {
+            "grey.dds|normal.dds"
+        } else {
+            "grey.dds"
+        };
+        let mut textures = vec![("grey.dds", MID_GREY)];
+        if let Some(lean) = lean {
+            textures.push(("normal.dds", leaning_normal(lean)));
+        }
+        centre_with(test, material, &textures)
+    };
+    let (Some(flat), Some(one_way), Some(other_way)) = (
+        lit("loading art flat", None),
+        lit("loading art lean one way", Some(0.6)),
+        lit("loading art lean other way", Some(-0.6)),
+    ) else {
+        return;
+    };
+    let (brighter, darker) = if one_way[0] > other_way[0] {
+        (one_way, other_way)
+    } else {
+        (other_way, one_way)
+    };
+    assert!(
+        brighter[0] > flat[0] + 10 && darker[0] + 10 < flat[0],
+        "flat {flat:?}, leaning {one_way:?} and {other_way:?}"
+    );
+}
+
+#[test]
+fn a_normal_map_that_cannot_be_loaded_leaves_the_surface_flat() {
+    let (Some(flat), Some(unloaded)) = (
+        centre_with("loading art flat again", "grey.dds", &[("grey.dds", MID_GREY)]),
+        centre_with(
+            "loading art missing normal",
+            "grey.dds|normal.dds",
+            &[("grey.dds", MID_GREY)],
+        ),
+    ) else {
+        return;
+    };
+    assert_same_colour(unloaded, flat);
 }

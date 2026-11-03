@@ -8,10 +8,16 @@ use crate::rendering::shaders;
 use crate::rendering::texture::Texture;
 use crate::rendering::vertex::Vertex;
 
-/// Inferred: a light above, left of and behind the viewer, with a flat ambient term.
-const LIGHT_TOWARDS: Vec3 = Vec3::new(-0.4, 0.6, 0.7);
-const AMBIENT: f32 = 0.35;
-const DIFFUSE: f32 = 0.75;
+/// Measured from the vanilla screen's T-51 power armour: the key comes from the viewer's upper
+/// left and front, so the left silhouette is bright, the right side dark and the undersides
+/// black; there is no fill or rim light.
+const LIGHT_TOWARDS: Vec3 = Vec3::new(-0.6, 0.6, 0.5);
+/// Near zero: the vanilla shadows go to black (5% of the model's pixels are exactly black).
+const AMBIENT: f32 = 0.04;
+/// The key is 1.5 to 2 times the texture level: 1.8% of the vanilla model's pixels clip.
+const DIFFUSE: f32 = 1.6;
+/// Inferred: the strength of the specular lobe of the world's surface response, white light.
+const SPECULAR_STRENGTH: f32 = 1.25;
 
 /// The uniform block of `loading_art.wgsl`.
 #[repr(C)]
@@ -29,7 +35,12 @@ impl SceneUniform {
             view_proj: view_proj.to_cols_array_2d(),
             model: model.to_cols_array_2d(),
             light_direction: LIGHT_TOWARDS.normalize().extend(0.0).to_array(),
-            shading: [AMBIENT, DIFFUSE, if encode_srgb { 1.0 } else { 0.0 }, 0.0],
+            shading: [
+                AMBIENT,
+                DIFFUSE,
+                if encode_srgb { 1.0 } else { 0.0 },
+                SPECULAR_STRENGTH,
+            ],
         }
     }
 }
@@ -39,12 +50,14 @@ impl SceneUniform {
 #[derive(Debug, Clone, Copy, PartialEq, Pod, Zeroable)]
 pub(super) struct MaterialUniform {
     cutoff: [f32; 4],
+    surface: [f32; 4],
 }
 
 impl MaterialUniform {
-    pub fn new(alpha_cutoff: f32) -> Self {
+    pub fn new(alpha_cutoff: f32, smoothness: f32, specular_scale: f32) -> Self {
         Self {
             cutoff: [alpha_cutoff, 0.0, 0.0, 0.0],
+            surface: [smoothness, specular_scale, 0.0, 0.0],
         }
     }
 }
@@ -74,16 +87,7 @@ impl ArtPipeline {
         let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("loading_art_texture_bgl"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                filterable_texture_entry(0),
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -100,6 +104,8 @@ impl ArtPipeline {
                     },
                     count: None,
                 },
+                filterable_texture_entry(3),
+                filterable_texture_entry(4),
             ],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -173,6 +179,19 @@ impl ArtPipeline {
     }
 }
 
+fn filterable_texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
 /// What differs between the depth prepass and the colour pass.
 struct Stage {
     entry_point: &'static str,
@@ -220,5 +239,36 @@ impl DepthTarget {
             *slot = None;
         }
         &slot.get_or_insert_with(|| Self::new(device, size)).view
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_key_light_is_a_unit_vector_from_the_upper_left_front() {
+        let scene = SceneUniform::new(Mat4::IDENTITY, Mat4::IDENTITY, false);
+        let [x, y, z, _] = scene.light_direction;
+
+        assert!(x < 0.0 && y > 0.0 && z > 0.0, "{x} {y} {z}");
+        assert!((x * x + y * y + z * z - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn the_shading_carries_the_ambient_the_key_the_encode_flag_and_the_specular() {
+        let encoded = SceneUniform::new(Mat4::IDENTITY, Mat4::IDENTITY, true);
+        let direct = SceneUniform::new(Mat4::IDENTITY, Mat4::IDENTITY, false);
+
+        assert_eq!(encoded.shading, [AMBIENT, DIFFUSE, 1.0, SPECULAR_STRENGTH]);
+        assert_eq!(direct.shading[2], 0.0);
+    }
+
+    #[test]
+    fn a_material_uniform_carries_the_cutoff_the_smoothness_and_the_specular_scale() {
+        let material = MaterialUniform::new(0.2, 0.7, 1.5);
+
+        assert_eq!(material.cutoff, [0.2, 0.0, 0.0, 0.0]);
+        assert_eq!(material.surface, [0.7, 1.5, 0.0, 0.0]);
     }
 }
