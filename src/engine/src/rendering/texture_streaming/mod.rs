@@ -2,6 +2,7 @@ pub mod demand;
 pub mod feedback;
 pub mod material;
 pub mod policy;
+pub mod read_failure;
 pub mod residency;
 pub mod role;
 pub mod settings;

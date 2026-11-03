@@ -157,6 +157,11 @@ pub enum TextureError {
 }
 
 impl TextureError {
+    /// Whether the read failed only because the file does not exist.
+    pub fn is_missing_file(&self) -> bool {
+        matches!(self, Self::Io { source, .. } if source.kind() == std::io::ErrorKind::NotFound)
+    }
+
     fn io(path: &str, source: std::io::Error) -> Self {
         Self::Io {
             path: path.to_owned(),

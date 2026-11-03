@@ -35,6 +35,7 @@ use crate::audio::place::PlaceSnapshot;
 use crate::bethesda_space;
 use crate::navmesh::{CellNavmeshes, NavMesh, NavResidency, NavWorld, build_meshes};
 use crate::rendering::animated_objects::{AnimatedObjectEvent, AnimatedRefr};
+use crate::rendering::broken_asset::{BrokenAsset, BrokenAssetSink, BrokenAssets};
 use crate::rendering::cube_array::CubeArray;
 use crate::rendering::effects::geometry::{EffectInstance, EffectMeshData, RefractionInstance};
 use crate::rendering::frustum::Aabb;
@@ -64,6 +65,7 @@ use crate::rendering::texture_streaming::demand::{
     self, CameraMotion, DemandView, NO_DEMAND, ScreenView,
 };
 use crate::rendering::texture_streaming::material::{MaterialSource, build_gpu_material};
+use crate::rendering::texture_streaming::read_failure::ReadFailure;
 use crate::rendering::texture_streaming::role::{Admission, admit_texture};
 use crate::rendering::texture_streaming::{
     ResidencyPolicy, TextureResidency, residency, uv_density,
@@ -555,6 +557,9 @@ impl SubMeshMaterial {
     }
 }
 
+/// The worker's reads of a cell's textures (see `CellLoadResult::textures`).
+type Prereads = HashMap<String, Result<Arc<TexturePayload>, ReadFailure>>;
+
 /// All placements of one (mesh path, material swap) combination within a
 /// cell, sharing the parsed data. Variants of one mesh split into separate
 /// groups but share geometry: mega-buffer slots, AABBs, and colliders are
@@ -628,13 +633,13 @@ struct CellLoadResult {
     ragdoll_refs: Vec<RagdollRefr>,
     /// Pre-read mips for every texture this cell needs, keyed by the exact
     /// cache/refcount path strings the main thread uses. The worker reads only
-    /// the mips the cell's distance calls for. Three states: `Some(Some)` =
-    /// read and ready to upload; `Some(None)` = the worker tried and failed
-    /// (missing/unreadable — already logged, the main thread must NOT probe
-    /// the disk again); key absent = the worker believed it GPU-resident
-    /// (main thread: `try_add_ref`, placeholder plus async load on the rare
-    /// release race).
-    textures: HashMap<String, Option<Arc<TexturePayload>>>,
+    /// the mips the cell's distance calls for. `Ok` = read and ready to
+    /// upload; `Err` = the worker tried and failed (the main thread must NOT
+    /// probe the disk again): a missing file was warned about, a broken one is
+    /// for the main thread to report; key absent = the worker believed it
+    /// GPU-resident (main thread: `try_add_ref`, placeholder plus async load on
+    /// the rare release race).
+    textures: Prereads,
     /// Navigation meshes of the cell, decoded and indexed on the worker. Empty for LOD cells.
     navmeshes: Vec<NavMesh>,
 }
@@ -1201,6 +1206,8 @@ pub struct WorldStreamer {
     spawn_lod_done: Option<Duration>,
     /// Armed with the spawn timer; fires once when the full ring drains.
     full_ring_signal: OneShot,
+    /// Broken assets met during the running update; ending the game is the caller's.
+    broken: BrokenAssetSink,
     /// Last ~500 ms bucket a `SPAWN_PROGRESS` line was logged for.
     spawn_progress_tick: u64,
     /// Worst frame gap in `LoadMode::Loading`, reported at `SPAWN_COMPLETE`.
@@ -1472,6 +1479,7 @@ impl WorldStreamer {
             spawn_timer: None,
             spawn_full_done: None,
             full_ring_signal: OneShot::default(),
+            broken: BrokenAssetSink::default(),
             spawn_lod_done: None,
             spawn_progress_tick: 0,
             load_frames: LoadFrameMeter::new(),
@@ -1578,12 +1586,14 @@ impl WorldStreamer {
         }
     }
 
+    /// Integrates and retires cells, moves the rings and pumps the texture residency. A broken
+    /// asset met on the way ends the game: it is returned once the update has run.
     #[tracing::instrument(skip_all)]
     pub(crate) fn update_gpu_driven(
         &mut self,
         camera_eye: Vec3,
         targets: &mut StreamTargets,
-    ) -> StreamUpdate {
+    ) -> Result<StreamUpdate, BrokenAssets> {
         let mut membership_changed = false;
         let frame_started = Instant::now();
         self.load_frames.observe(frame_started, self.mode);
@@ -1923,6 +1933,7 @@ impl WorldStreamer {
             )
         };
         targets.upload_budget.add(uploaded);
+        self.broken.extend(targets.residency.take_broken());
         self.trace_textures(targets.residency);
         for texture in targets.residency.take_undemanded() {
             warn!(
@@ -1936,12 +1947,13 @@ impl WorldStreamer {
             );
         }
 
-        StreamUpdate {
+        self.broken.take()?;
+        Ok(StreamUpdate {
             slot_changes: targets.texture_array.take_slot_changes(),
             sim_commands: std::mem::take(&mut self.sim_commands),
             spawn_complete,
             full_ring_complete,
-        }
+        })
     }
 
     /// Size and field of view of the screen; takes effect at the next demand
@@ -2867,7 +2879,7 @@ impl WorldStreamer {
         path: &str,
         fallback_slot: u32,
         srgb: bool,
-        preloaded: &HashMap<String, Option<Arc<TexturePayload>>>,
+        preloaded: &Prereads,
         res: &mut CellResources,
         targets: &mut StreamTargets,
     ) -> u32 {
@@ -2876,9 +2888,16 @@ impl WorldStreamer {
             return handle.slot;
         }
         let payload = match preloaded.get(path) {
-            Some(Some(payload)) => Some(payload),
-            // The worker already tried, failed and logged the cause.
-            Some(None) => return fallback_slot,
+            Some(Ok(payload)) => Some(payload),
+            // The worker already tried and warned about the missing file.
+            Some(Err(ReadFailure::Missing)) => return fallback_slot,
+            Some(Err(ReadFailure::Broken(reason))) => {
+                self.broken.push(BrokenAsset::Texture {
+                    path: path.to_owned(),
+                    reason: reason.clone(),
+                });
+                return fallback_slot;
+            }
             None => None,
         };
         let _span = info_span!("texture_admit").entered();
@@ -2914,7 +2933,14 @@ impl WorldStreamer {
                     drained = true;
                     self.drain_retire_queue(targets, std::time::Duration::MAX);
                 }
-                Admission::Exhausted | Admission::Failed => return fallback_slot,
+                Admission::Failed(error) => {
+                    self.broken.push(BrokenAsset::Texture {
+                        path: path.to_owned(),
+                        reason: format!("upload rejected: {error}"),
+                    });
+                    return fallback_slot;
+                }
+                Admission::Exhausted => return fallback_slot,
             }
         }
     }
@@ -2922,7 +2948,7 @@ impl WorldStreamer {
     fn acquire_material_slots(
         &mut self,
         mat: &SubMeshMaterial,
-        preloaded: &HashMap<String, Option<Arc<TexturePayload>>>,
+        preloaded: &Prereads,
         res: &mut CellResources,
         targets: &mut StreamTargets,
     ) -> MaterialSlots {
@@ -3039,7 +3065,7 @@ impl WorldStreamer {
     fn build_mesh_group(
         &mut self,
         group: &PreparedMeshGroup,
-        preloaded: &HashMap<String, Option<Arc<TexturePayload>>>,
+        preloaded: &Prereads,
         res: &mut CellResources,
         targets: &mut StreamTargets,
     ) {
@@ -3215,7 +3241,7 @@ impl WorldStreamer {
         &mut self,
         cpu: &terrain::TerrainCellCpu,
         lod: bool,
-        preloaded: &HashMap<String, Option<Arc<TexturePayload>>>,
+        preloaded: &Prereads,
         res: &mut CellResources,
         targets: &mut StreamTargets,
     ) {
@@ -4108,9 +4134,9 @@ struct WorkerShared {
     /// resolution.
     demand_view: Mutex<DemandView>,
     /// Path -> DDS header. Present entries weigh one (LRU-bounded by
-    /// `LAYOUT_CACHE_CAP`); `None` weighs nothing, is pinned,
-    /// and records missing/unreadable files so they are probed once.
-    layout_cache: SharedCache<String, Option<Arc<texture::TextureLayout>>>,
+    /// `LAYOUT_CACHE_CAP`); a failure weighs nothing, is pinned,
+    /// and records missing or broken files so they are probed once.
+    layout_cache: SharedCache<String, Result<Arc<texture::TextureLayout>, ReadFailure>>,
     /// Path -> parsed submeshes. Failed loads cache as empty vecs so broken
     /// meshes aren't re-parsed per cell.
     mesh_cache: SharedCache<String, Arc<PreparedModel>>,
@@ -4118,14 +4144,14 @@ struct WorkerShared {
     /// `.colbin` miss forces a bake; `None` records missing/unreadable sidecars
     /// so absent files aren't re-probed.
     collider_cache: SharedCache<String, Option<SidecarData>>,
-    /// (Texture path, first mip) -> the mips from there down; `None` records
-    /// unreadable files — they weigh zero bytes and never evict.
+    /// (Texture path, first mip) -> the mips from there down; a failure records
+    /// a missing or broken file — it weighs zero bytes and never evicts.
     ///
     /// This complements (not replaces) the resident-set check: the resident
     /// set dedups against what's already on the GPU; this cache dedups
     /// across cells in flight together — a boundary crossing requests a
     /// whole row of cells sharing ground/rock textures, none resident yet.
-    dds_cache: SharedCache<(String, u32), Option<Arc<TexturePayload>>>,
+    dds_cache: SharedCache<(String, u32), Result<Arc<TexturePayload>, ReadFailure>>,
     bake_cache: crate::sim::bake::ShapeBakeCache,
     /// Baked terrain-LOD tile lookups, memoized for the pool's lifetime: one
     /// DB round-trip per worldspace and one fs metadata call per tile.
@@ -5541,28 +5567,22 @@ fn preload_textures(result: &mut CellLoadResult, shared: &WorkerShared) {
         &paths,
         |path| {
             let full_path = format!("{}/{}", shared.asset_root, path);
-            match texture::read_layout(&full_path) {
-                Ok(layout) => Some(Arc::new(layout)),
-                Err(e) => {
-                    crate::utils::warn_once(&format!("texture-preload:{path}"), || {
-                        format!("texture '{path}' unreadable: {e}")
-                    });
-                    None
-                }
-            }
+            texture::read_layout(&full_path)
+                .map(Arc::new)
+                .map_err(|error| preread_failure(path, &error))
         },
-        |layout| u64::from(layout.is_some()),
+        |layout| u64::from(layout.is_ok()),
     );
 
     let mut wanted: Vec<(String, u32)> = Vec::with_capacity(to_read.len());
     for (path, demand) in to_read {
-        match layouts.get(&path).and_then(Option::as_ref) {
-            Some(layout) => {
+        match &layouts[&path] {
+            Ok(layout) => {
                 let first = residency::initial_first_mip(shared.texture_policy, layout, demand);
                 wanted.push((path, first));
             }
-            None => {
-                result.textures.insert(path, None);
+            Err(failure) => {
+                result.textures.insert(path, Err(failure.clone()));
             }
         }
     }
@@ -5570,24 +5590,32 @@ fn preload_textures(result: &mut CellLoadResult, shared: &WorkerShared) {
     let payloads = shared.dds_cache.resolve(
         &wanted,
         |(path, first)| {
-            let layout = layouts.get(path).and_then(Option::as_ref)?;
+            let Ok(layout) = &layouts[path] else {
+                unreachable!("only textures with a layout are wanted");
+            };
             let full_path = format!("{}/{}", shared.asset_root, path);
-            match texture::read_mips(&full_path, layout, *first..layout.mip_count) {
-                Ok(payload) => Some(Arc::new(payload)),
-                Err(e) => {
-                    crate::utils::warn_once(&format!("texture-preload:{path}"), || {
-                        format!("texture '{path}' unreadable: {e}")
-                    });
-                    None
-                }
-            }
+            texture::read_mips(&full_path, layout, *first..layout.mip_count)
+                .map(Arc::new)
+                .map_err(|error| preread_failure(path, &error))
         },
         |payload| payload.as_ref().map_or(0, |p| p.data.len() as u64),
     );
     for key in wanted {
-        let payload = payloads.get(&key).cloned().flatten();
+        let payload = payloads[&key].clone();
         result.textures.insert(key.0, payload);
     }
+}
+
+/// Classifies a failed pre-read and warns once about a missing file; a broken one is reported
+/// by the main thread when the cell integrates.
+fn preread_failure(path: &str, error: &texture::TextureError) -> ReadFailure {
+    let failure = ReadFailure::from(error);
+    if failure == ReadFailure::Missing {
+        crate::utils::warn_once(&format!("texture-preload:{path}"), || {
+            format!("texture '{path}' unreadable: {error}")
+        });
+    }
+    failure
 }
 
 /// Shared stand-in for marker NIFs that convert to empty GLBs: a chest-high

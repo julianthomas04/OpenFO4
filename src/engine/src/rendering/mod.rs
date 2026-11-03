@@ -6,6 +6,7 @@ pub mod animated_objects;
 mod auto_anim;
 mod auto_character;
 pub mod boot;
+pub mod broken_asset;
 pub mod camera;
 pub mod cube_array;
 pub mod cull_stats;
@@ -3993,7 +3994,7 @@ impl State {
         });
         let stream = self.with_stream_targets(asset_server, |streamer, targets| {
             streamer.update_gpu_driven(eye, targets)
-        });
+        })?;
         self.update_fire_effects(dt);
 
         let full_ring_complete = stream.full_ring_complete;
