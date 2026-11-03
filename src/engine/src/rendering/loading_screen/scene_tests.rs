@@ -370,7 +370,7 @@ fn the_scene_grades_with_the_lut_the_setting_names() {
 fn grade_one(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    pass: &GradePass,
+    pass: &mut GradePass,
     linear: Vec3,
 ) -> [u8; 3] {
     let picture = device.create_texture(&wgpu::TextureDescriptor {
@@ -439,13 +439,13 @@ fn a_grid_point_reads_exactly_its_own_lut_entry() {
     let Some((device, queue)) = test_device("loading grade lut grid point") else {
         return;
     };
-    let pass = plain_pass(&device, &queue, 1.0);
+    let mut pass = plain_pass(&device, &queue, 1.0);
     pass.set_lut(&queue, &distinct());
 
     for (r, g, b) in [(0, 0, 0), (15, 15, 15), (3, 7, 11), (14, 1, 9)] {
         let expected = [(r * 16 + g) as u8, (g * 16 + b) as u8, (b * 16 + r) as u8];
         assert_close(
-            grade_one(&device, &queue, &pass, grid_point(r, g, b)),
+            grade_one(&device, &queue, &mut pass, grid_point(r, g, b)),
             expected,
             &format!("grid point {r} {g} {b}"),
         );
@@ -457,12 +457,12 @@ fn a_colour_between_two_grid_points_reads_their_mean() {
     let Some((device, queue)) = test_device("loading grade lut between points") else {
         return;
     };
-    let pass = plain_pass(&device, &queue, 1.0);
+    let mut pass = plain_pass(&device, &queue, 1.0);
     let ramp = LutTable::from_fn(|r, _, _| [(r * 16) as u8, 0, 0]);
     pass.set_lut(&queue, &ramp);
     let halfway = srgb_unit_to_linear(4.5 / (LUT_SIZE - 1) as f32);
 
-    let graded = grade_one(&device, &queue, &pass, Vec3::new(halfway, 0.0, 0.0));
+    let graded = grade_one(&device, &queue, &mut pass, Vec3::new(halfway, 0.0, 0.0));
 
     assert_close(graded, [72, 0, 0], "halfway between entries 64 and 80");
 }
@@ -472,7 +472,7 @@ fn saturation_is_applied_in_linear_light_before_the_lut() {
     let Some((device, queue)) = test_device("loading grade saturation") else {
         return;
     };
-    let pass = plain_pass(&device, &queue, 0.5);
+    let mut pass = plain_pass(&device, &queue, 0.5);
     pass.set_lut(&queue, &LutTable::identity());
     let colour = Vec3::new(0.5, 0.1, 0.02);
     let look = GradeLook {
@@ -485,7 +485,7 @@ fn saturation_is_applied_in_linear_light_before_the_lut() {
 
     let expected = bytes(graded(colour, &look, |display| display));
     assert_close(
-        grade_one(&device, &queue, &pass, colour),
+        grade_one(&device, &queue, &mut pass, colour),
         expected,
         "half saturated",
     );
@@ -496,14 +496,19 @@ fn an_infinite_picture_colour_is_graded_as_the_largest_finite_one() {
     let Some((device, queue)) = test_device("loading grade infinite colour") else {
         return;
     };
-    let pass = plain_pass(&device, &queue, 1.0);
+    let mut pass = plain_pass(&device, &queue, 1.0);
     pass.set_lut(&queue, &LutTable::identity());
     let look = GradeLook {
         cinematic: ImageSpaceCinematic::NEUTRAL,
         lift: 0.0,
     };
 
-    let graded_infinity = grade_one(&device, &queue, &pass, Vec3::new(f32::INFINITY, 0.5, 0.5));
+    let graded_infinity = grade_one(
+        &device,
+        &queue,
+        &mut pass,
+        Vec3::new(f32::INFINITY, 0.5, 0.5),
+    );
 
     let expected = bytes(graded(Vec3::new(65_000.0, 0.5, 0.5), &look, |display| {
         display

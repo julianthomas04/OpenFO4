@@ -14,6 +14,8 @@ pub struct GradePass {
     lut: ColourLut,
     look: GradeLook,
     target_decodes_srgb: bool,
+    /// The bind group of the picture drawn last, with that picture's view.
+    group: Option<(wgpu::TextureView, wgpu::BindGroup)>,
 }
 
 impl GradePass {
@@ -112,6 +114,7 @@ impl GradePass {
                 lift: 0.0,
             },
             target_decodes_srgb: target_format.is_srgb(),
+            group: None,
         }
     }
 
@@ -128,7 +131,7 @@ impl GradePass {
     /// Grades `picture`, a linear image the size of `target`, over what `target` holds at
     /// `fade`, in a pass of its own.
     pub fn draw(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
@@ -138,28 +141,8 @@ impl GradePass {
     ) {
         let params = GradeParams::new(&self.look, fade, self.target_decodes_srgb);
         queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("loading_grade_group"),
-            layout: &self.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.params.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(picture),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&self.lut.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Sampler(&self.lut.sampler),
-                },
-            ],
-        });
+        self.ensure_group(device, picture);
+        let (_, group) = self.group.as_ref().expect("the group was ensured above");
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Loading Grade Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -177,7 +160,36 @@ impl GradePass {
             multiview_mask: None,
         });
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &group, &[]);
+        pass.set_bind_group(0, group, &[]);
         pass.draw(0..3, 0..1);
+    }
+
+    /// Makes the bind group of `picture` again only when it is another view than last time.
+    fn ensure_group(&mut self, device: &wgpu::Device, picture: &wgpu::TextureView) {
+        if self.group.as_ref().is_none_or(|(view, _)| view != picture) {
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("loading_grade_group"),
+                layout: &self.layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.params.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(picture),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&self.lut.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::Sampler(&self.lut.sampler),
+                    },
+                ],
+            });
+            self.group = Some((picture.clone(), group));
+        }
     }
 }
