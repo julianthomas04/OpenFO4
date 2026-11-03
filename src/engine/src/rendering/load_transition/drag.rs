@@ -14,8 +14,10 @@ impl DragTracker {
     /// The travel since the press or the last move, `(dx, dy)` with right and down positive;
     /// `None` while no drag is on.
     pub fn moved(&mut self, x: f32, y: f32) -> Option<(f32, f32)> {
-        let (last_x, last_y) = self.last.replace((x, y))?;
-        Some((x - last_x, y - last_y))
+        let (last_x, last_y) = self.last.as_mut()?;
+        let travel = (x - *last_x, y - *last_y);
+        (*last_x, *last_y) = (x, y);
+        Some(travel)
     }
 
     pub fn release(&mut self) {
@@ -31,6 +33,14 @@ mod tests {
     fn moves_without_a_press_travel_nowhere() {
         let mut drag = DragTracker::default();
         assert_eq!(drag.moved(40.0, 10.0), None);
+    }
+
+    #[test]
+    fn repeated_moves_without_a_press_never_start_a_drag() {
+        let mut drag = DragTracker::default();
+        assert_eq!(drag.moved(40.0, 10.0), None);
+        assert_eq!(drag.moved(60.0, 30.0), None);
+        assert_eq!(drag.moved(80.0, 50.0), None);
     }
 
     #[test]
