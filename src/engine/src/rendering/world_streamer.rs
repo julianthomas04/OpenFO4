@@ -1026,10 +1026,11 @@ pub struct StreamUpdate {
     pub sim_commands: Vec<SimCommand>,
     /// Set exactly once, on the frame the initial spawn finishes integrating.
     pub spawn_complete: Option<SpawnCompleteReport>,
-    /// True on exactly one frame per load: the frame the full-detail ring (the
-    /// ring that carries the colliders) finishes integrating. The LOD ring
-    /// usually still loads after it.
+    /// Every cell of the full-detail ring (the ring that carries the colliders) is integrated,
+    /// drawn or staged. The LOD ring usually still loads after it.
     pub full_ring_complete: bool,
+    /// Every cell of both rings is drawn, each with its textures ready.
+    pub world_complete: bool,
 }
 
 /// Timing summary for the initial spawn. The rings load concurrently with
@@ -1730,7 +1731,8 @@ impl WorldStreamer {
 
         // Initial-spawn benchmark hook: both rings fully integrated.
         let mut spawn_complete = None;
-        let mut full_ring_complete = false;
+        let full_ring_complete = self.full_ring_integrated();
+        let world_complete = self.rings_drawn();
         if let Some(start) = self.spawn_timer {
             let full_integrated = self.full_ring_integrated();
             let lod_integrated = self.lod_ring_integrated();
@@ -1744,8 +1746,7 @@ impl WorldStreamer {
                 lod_integrated,
                 lod_integrated && self.staging.len(Ring::Lod) == 0,
             );
-            full_ring_complete = self.full_ring_signal.fire(full_integrated);
-            if full_ring_complete {
+            if self.full_ring_signal.fire(full_integrated) {
                 info!(
                     "FULL_RING_COMPLETE elapsed_ms={} full_cells={} lod_loaded={}/{}",
                     start.elapsed().as_millis(),
@@ -1770,12 +1771,7 @@ impl WorldStreamer {
                     self.buffered_full.len() + self.buffered_lod.len(),
                 );
             }
-            if self.pending_cells.is_empty()
-                && self.lod_pending_cells.is_empty()
-                && self.buffered_full.is_empty()
-                && self.buffered_lod.is_empty()
-                && !self.loaded.is_empty()
-            {
+            if world_complete {
                 info!(
                     "SPAWN_COMPLETE elapsed_ms={} full_integrated_ms={} full_drawn_ms={} lod_integrated_ms={} lod_drawn_ms={} full_cells={} lod_cells={} cells_per_frame={} mode={} workers={} worst_frame_ms={:.1}",
                     start.elapsed().as_millis(),
@@ -2022,6 +2018,7 @@ impl WorldStreamer {
             sim_commands: std::mem::take(&mut self.sim_commands),
             spawn_complete,
             full_ring_complete,
+            world_complete,
         })
     }
 
@@ -2708,6 +2705,16 @@ impl WorldStreamer {
         self.buffered_full.is_empty()
             && self.pending_cells.len() == staged
             && (staged > 0 || !self.loaded.is_empty())
+    }
+
+    /// Every cell of both rings is drawn: none is still requested, buffered or staged (a staged
+    /// cell keeps its request marker).
+    fn rings_drawn(&self) -> bool {
+        self.pending_cells.is_empty()
+            && self.lod_pending_cells.is_empty()
+            && self.buffered_full.is_empty()
+            && self.buffered_lod.is_empty()
+            && !self.loaded.is_empty()
     }
 
     /// Every requested LOD cell has arrived; some may still wait in staging.

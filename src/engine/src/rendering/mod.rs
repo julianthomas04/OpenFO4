@@ -4050,7 +4050,7 @@ impl State {
         self.update_fire_effects(dt);
 
         let full_ring_complete = stream.full_ring_complete;
-        let world_complete = stream.spawn_complete.is_some();
+        let world_complete = stream.world_complete;
         if let Some(report) = &stream.spawn_complete {
             self.toast_queue.push((
                 format!(

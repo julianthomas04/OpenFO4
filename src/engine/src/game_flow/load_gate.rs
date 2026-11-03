@@ -40,10 +40,11 @@ pub struct PlayerWait {
 /// One frame's readiness signals from the streamer and the simulation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Readiness {
-    /// The streamer reported the full-detail ring complete on this frame.
+    /// Every cell of the full-detail ring is integrated. Reported on every frame it holds, so a
+    /// gate that starts late still sees it.
     pub full_ring_complete: bool,
-    /// The streamer reported on this frame that every cell of both rings is drawn, each with
-    /// all its textures ready.
+    /// Every cell of both rings is drawn, each with all its textures ready; reported like
+    /// `full_ring_complete`.
     pub world_complete: bool,
     pub colliders_pending: bool,
     pub player_ready: bool,

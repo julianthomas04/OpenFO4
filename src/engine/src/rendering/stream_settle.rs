@@ -49,9 +49,9 @@ pub(super) fn apply_teardown(sim: &mut SimWorld, commands: Vec<SimCommand>) {
 /// What the streamer says about the load after this frame.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct StreamReport {
-    /// The streamer reported the full-detail ring complete on this frame.
+    /// Every cell of the full-detail ring is integrated after this frame.
     pub full_ring_complete: bool,
-    /// The streamer reported every cell of both rings drawn on this frame.
+    /// Every cell of both rings is drawn after this frame.
     pub world_complete: bool,
     pub counts: StreamCounts,
     /// The grid cell the player spawns in, whose collision the spawn waits for.
