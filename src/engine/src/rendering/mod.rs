@@ -2745,8 +2745,7 @@ impl State {
         // be called inside the egui closure once `self.debug_ui` is borrowed
         // mutably by render, so capture the plain bool here.
         let dbg_interactible = self.aimed_door;
-        let developer_window_visible =
-            self.developer_window_visible() && !self.capture_active();
+        let developer_window_visible = self.developer_window_visible() && !self.capture_active();
         let mut preview_request: Option<ScreenRequest> = None;
         let mut memory_section_open = false;
 

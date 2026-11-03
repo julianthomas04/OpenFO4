@@ -27,7 +27,9 @@ pub enum ShotConfigError {
     InvalidSettleFrames(String),
     #[error("{SHOT_ENV} and {CAPTURE_DIR_ENV} cannot be set together")]
     PipBoyCaptureAlsoSet,
-    #[error("{SHOT_LOADING_SCREEN_ENV} is empty; expected the editor id or form key of a loading screen")]
+    #[error(
+        "{SHOT_LOADING_SCREEN_ENV} is empty; expected the editor id or form key of a loading screen"
+    )]
     EmptyLoadingScreen,
     #[error("{SHOT_LOADING_SCREEN_ENV} needs {SHOT_ENV}, which names the .png to write")]
     LoadingScreenWithoutShot,

@@ -121,7 +121,8 @@ mod tests {
     #[test]
     fn a_request_during_a_load_is_dropped_and_not_kept() {
         let mut slot = Some(3);
-        assert_eq!(take_if_accepted(&mut slot, Some(Refusal::LoadRunning), "test request"),
+        assert_eq!(
+            take_if_accepted(&mut slot, Some(Refusal::LoadRunning), "test request"),
             None
         );
         assert_eq!(slot, None, "it must not fire after the reveal");

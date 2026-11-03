@@ -6,11 +6,11 @@ use winit::keyboard::KeyCode;
 
 use super::host::ArtStatus;
 use super::keys::art_key;
-use crate::rendering::loading_screen::PanKey;
 use crate::assets::db::load_screens::{LoadScreen, LoadScreenCatalog};
 use crate::game_flow::{OverlayLayers, Phase};
 use crate::random::RandomSource;
 use crate::rendering::State;
+use crate::rendering::loading_screen::PanKey;
 
 /// Where the logo's animation stands in a pinned preview, which holds still for comparisons.
 const PINNED_LOGO_SECONDS: f64 = 0.0;
@@ -423,7 +423,10 @@ mod tests {
     #[test]
     fn an_entry_shows_the_editor_id_with_the_form_key_or_the_form_key_alone() {
         let catalog = catalog();
-        assert_eq!(ScreenEntry::of(&catalog.screens[0]).text, "LSDeathclaw (0001:DC)");
+        assert_eq!(
+            ScreenEntry::of(&catalog.screens[0]).text,
+            "LSDeathclaw (0001:DC)"
+        );
         assert_eq!(ScreenEntry::of(&catalog.screens[2]).text, "0003:Anon");
     }
 
@@ -470,7 +473,10 @@ mod tests {
     fn escape_closes_on_its_first_press_only() {
         assert_eq!(preview_key(KeyCode::Escape, true, false), PreviewKey::Close);
         assert_eq!(preview_key(KeyCode::Escape, true, true), PreviewKey::Ignore);
-        assert_eq!(preview_key(KeyCode::Escape, false, false), PreviewKey::Ignore);
+        assert_eq!(
+            preview_key(KeyCode::Escape, false, false),
+            PreviewKey::Ignore
+        );
     }
 
     #[test]
@@ -486,7 +492,11 @@ mod tests {
     #[test]
     fn a_gameplay_key_does_nothing_in_the_preview() {
         for code in [KeyCode::KeyE, KeyCode::Space, KeyCode::KeyF, KeyCode::Tab] {
-            assert_eq!(preview_key(code, true, false), PreviewKey::Ignore, "{code:?}");
+            assert_eq!(
+                preview_key(code, true, false),
+                PreviewKey::Ignore,
+                "{code:?}"
+            );
         }
     }
 

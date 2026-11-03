@@ -894,7 +894,12 @@ mod tests {
 
     #[test]
     fn the_whole_panel_is_lowered_so_the_boxs_bottom_meets_the_anchor() {
-        let text = panel().text(&fit(), AUTHORED, &GREEN, &PanelContent::placeholder(Some("tip")));
+        let text = panel().text(
+            &fit(),
+            AUTHORED,
+            &GREEN,
+            &PanelContent::placeholder(Some("tip")),
+        );
         close(text.tip.expect("a tip").map.origin.1, AUTHORED_LIFT);
         close(text.level.expect("a level").map.origin.1, AUTHORED_LIFT);
     }

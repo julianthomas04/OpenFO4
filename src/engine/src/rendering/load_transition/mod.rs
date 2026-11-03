@@ -14,9 +14,9 @@ mod preview_panel;
 pub(super) use drag::DragTracker;
 pub(super) use history::{LoadHistory, spawn_report_title};
 pub(in crate::rendering) use host::LoadScreenHost;
+pub(super) use keys::routed_art_key;
 pub(in crate::rendering) use preview::{LoadScreenPreview, ScreenRequest};
 pub(super) use preview_panel::loading_screen_section;
-pub(super) use keys::routed_art_key;
 
 use history::{LoadOrigin, Refusal, take_if_accepted};
 use host::ArtStatus;
@@ -251,11 +251,7 @@ impl State {
 
 /// Why a switch of place may not start in `phase`, if it may not: from play, unless a loading
 /// screen preview is open, or as the session's first load.
-fn transition_refusal(
-    phase: Phase,
-    next_is_initial: bool,
-    preview_open: bool,
-) -> Option<Refusal> {
+fn transition_refusal(phase: Phase, next_is_initial: bool, preview_open: bool) -> Option<Refusal> {
     match phase {
         Phase::InGame if preview_open => Some(Refusal::PreviewOpen),
         Phase::InGame => None,

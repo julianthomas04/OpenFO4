@@ -12,9 +12,7 @@ use std::time::{Duration, Instant};
 
 use winit::dpi::PhysicalSize;
 
-pub use config::{
-    SHOT_ENV, SHOT_LOADING_SCREEN_ENV, ShotConfig, ShotConfigError, shot_requested,
-};
+pub use config::{SHOT_ENV, SHOT_LOADING_SCREEN_ENV, ShotConfig, ShotConfigError, shot_requested};
 pub use gate::Blocker;
 
 use crate::rendering::frame_capture::FrameCaptureError;

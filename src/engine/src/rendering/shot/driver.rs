@@ -29,8 +29,7 @@ impl State {
         if !matches!(shot.progress, Progress::Waiting) {
             return Ok(());
         }
-        if shot.loading_screen == LoadingScreenStage::Opened
-            && !self.load_screens.preview.is_open()
+        if shot.loading_screen == LoadingScreenStage::Opened && !self.load_screens.preview.is_open()
         {
             let reason = self
                 .load_screens
@@ -43,10 +42,7 @@ impl State {
         let Some(shot) = self.shot.as_mut() else {
             return Ok(());
         };
-        let after = shot
-            .loading_screen_opened
-            .unwrap_or(shot.started)
-            .elapsed();
+        let after = shot.loading_screen_opened.unwrap_or(shot.started).elapsed();
         match shot.gate.step(&frame, after) {
             ShotStep::Wait => Ok(()),
             ShotStep::Capture => {
