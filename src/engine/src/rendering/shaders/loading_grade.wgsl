@@ -2,6 +2,10 @@
 // through the cinematic stage of its image space, encoded to sRGB and looked up in its colour
 // LUT. The result is premultiplied by the fade.
 
+// The largest picture colour graded: a float picture holds infinities, and the saturation's
+// luma difference turns one into NaN that spreads over the whole pixel.
+const PICTURE_MAX = 65000.0;
+
 struct GradeParams {
     // x: the neutral lift added to the linear picture, y: the fade, z: 1 when the target decodes
     // sRGB itself, w: unused.
@@ -31,7 +35,9 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VsOut {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let linear = textureLoad(picture, vec2<i32>(in.clip.xy), 0).rgb + vec3<f32>(params.look.x);
+    let loaded = textureLoad(picture, vec2<i32>(in.clip.xy), 0).rgb;
+    let finite = max(min(loaded, vec3<f32>(PICTURE_MAX)), vec3<f32>(0.0));
+    let linear = finite + vec3<f32>(params.look.x);
     let display = linear_to_srgb(apply_cinematic(linear, params.cinematic, params.tint.rgb));
     let coordinate = colour_lut_coordinate(display, f32(textureDimensions(colour_lut).x));
     let graded = textureSampleLevel(colour_lut, colour_lut_sampler, coordinate, 0.0).rgb;

@@ -114,12 +114,17 @@ pub(super) struct GradeParams {
 }
 
 impl GradeParams {
+    /// The block for `look` at `fade`, which is kept within 0 to 1; NaN counts as 0.
     pub fn new(look: &GradeLook, fade: f32, target_decodes_srgb: bool) -> Self {
         let cinematic = &look.cinematic;
         Self {
             look: [
                 look.lift,
-                fade.clamp(0.0, 1.0),
+                if fade.is_nan() {
+                    0.0
+                } else {
+                    fade.clamp(0.0, 1.0)
+                },
                 if target_decodes_srgb { 1.0 } else { 0.0 },
                 0.0,
             ],
@@ -290,6 +295,16 @@ mod tests {
         assert_eq!(params.look, [INFERRED_LIFT, 1.0, 1.0, 0.0]);
         assert_eq!(params.cinematic, [0.9, 1.0, 1.0, 0.0]);
         assert_eq!(GradeParams::new(&look, -1.0, false).look[1..3], [0.0, 0.0]);
+    }
+
+    #[test]
+    fn a_nan_fade_is_no_fade() {
+        let look = GradeLook {
+            cinematic: ImageSpaceCinematic::NEUTRAL,
+            lift: 0.0,
+        };
+        assert_eq!(GradeParams::new(&look, f32::NAN, false).look[1], 0.0);
+        assert_eq!(GradeParams::new(&look, f32::INFINITY, false).look[1], 1.0);
     }
 
     #[test]

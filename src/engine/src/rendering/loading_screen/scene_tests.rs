@@ -492,6 +492,26 @@ fn saturation_is_applied_in_linear_light_before_the_lut() {
 }
 
 #[test]
+fn an_infinite_picture_colour_is_graded_as_the_largest_finite_one() {
+    let Some((device, queue)) = test_device("loading grade infinite colour") else {
+        return;
+    };
+    let pass = plain_pass(&device, &queue, 1.0);
+    pass.set_lut(&queue, &LutTable::identity());
+    let look = GradeLook {
+        cinematic: ImageSpaceCinematic::NEUTRAL,
+        lift: 0.0,
+    };
+
+    let graded_infinity = grade_one(&device, &queue, &pass, Vec3::new(f32::INFINITY, 0.5, 0.5));
+
+    let expected = bytes(graded(Vec3::new(65_000.0, 0.5, 0.5), &look, |display| {
+        display
+    }));
+    assert_close(graded_infinity, expected, "infinity clamps to 65000");
+}
+
+#[test]
 #[ignore = "needs OPENFO4_INSTALL_DIR with the installed loading screen stage and LUT"]
 fn the_installed_stage_frames_24_degrees_and_its_lut_loads() {
     use super::stage::{CpuStage, stage_paths};
