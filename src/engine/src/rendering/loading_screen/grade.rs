@@ -19,6 +19,9 @@ const LOAD_SCREEN_IMAGE_SPACE_SLOT: &str = "LSIS";
 /// The folder the `sLoadScreenLUT` path starts in, which texture keys leave out.
 const TEXTURES_PREFIX: &str = "textures\\";
 
+/// The game's data folder, which a path may start with.
+const DATA_PREFIX: &str = "data\\";
+
 /// Inferred, not read from any game data: a neutral amount of linear light added to the whole
 /// picture before it is graded. Without it a vanilla screenshot's background is matched about
 /// four times worse (rms 3.9 against 1.5 of 255), with it the fitted lift is the same in every
@@ -48,19 +51,25 @@ impl LoadScreenLut {
         Ok(Self::of_path(&path))
     }
 
-    /// The key of a path that starts in the game's data folder (`Textures\...`).
+    /// The key of a path that starts in the game's data folder (`Textures\...`), with or
+    /// without a leading `Data\` or separator. A path without a `Textures\` folder is taken
+    /// to be below it already.
     fn of_path(path: &str) -> Self {
         let path = path.trim().replace('/', "\\");
-        let below_textures = match path.get(..TEXTURES_PREFIX.len()) {
-            Some(head) if head.eq_ignore_ascii_case(TEXTURES_PREFIX) => {
-                &path[TEXTURES_PREFIX.len()..]
-            }
-            _ => path.as_str(),
-        };
+        let path = path.trim_start_matches('\\');
+        let below_data = strip_prefix_ignoring_case(path, DATA_PREFIX).unwrap_or(path);
+        let below_textures =
+            strip_prefix_ignoring_case(below_data, TEXTURES_PREFIX).unwrap_or(below_data);
         Self {
             key: named_texture_key(below_textures),
         }
     }
+}
+
+fn strip_prefix_ignoring_case<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = text.get(..prefix.len())?;
+    head.eq_ignore_ascii_case(prefix)
+        .then(|| &text[prefix.len()..])
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -178,6 +187,37 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(lut.key, r"textures\effects\luts\mine.dds");
+    }
+
+    #[test]
+    fn a_path_names_the_same_lut_with_or_without_the_data_folder_or_a_leading_separator() {
+        let expected = r"textures\effects\luts\mine.dds";
+        for path in [
+            r"Textures\Effects\LUTs\Mine.dds",
+            r"Data\Textures\Effects\LUTs\Mine.dds",
+            r"data/textures/effects/luts/mine.dds",
+            r"\Textures\Effects\LUTs\Mine.dds",
+            "/Data/Textures/Effects/LUTs/Mine.dds",
+            r"  Textures\Effects\LUTs\Mine.dds ",
+        ] {
+            assert_eq!(LoadScreenLut::of_path(path).key, expected, "{path}");
+        }
+    }
+
+    #[test]
+    fn a_path_without_a_textures_folder_is_taken_to_be_below_it() {
+        assert_eq!(
+            LoadScreenLut::of_path(r"Effects\LUTs\Mine.dds").key,
+            r"textures\effects\luts\mine.dds"
+        );
+    }
+
+    #[test]
+    fn a_textures_folder_deeper_in_the_path_is_kept() {
+        assert_eq!(
+            LoadScreenLut::of_path(r"Effects\Textures\Mine.dds").key,
+            r"textures\effects\textures\mine.dds"
+        );
     }
 
     #[test]
