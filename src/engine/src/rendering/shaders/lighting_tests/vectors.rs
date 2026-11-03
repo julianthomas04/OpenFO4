@@ -302,6 +302,48 @@ fn attenuation_matches_expected_samples() {
 
 #[test]
 #[ignore = "needs a GPU adapter"]
+fn loading_scene_falloff_is_the_product_of_the_record_and_window_falloffs() {
+    // (record, fraction of the radius, world falloff, loading scene falloff)
+    let rows = [
+        ([0.0, 1.0, 2.0], 0.25, 0.867635, 0.75279),
+        ([0.0, 1.0, 2.0], 0.5, 0.531049, 0.282013),
+        ([0.0, 1.0, 2.0], 0.75, 0.162238, 0.026321),
+        ([0.5, 0.5, 3.0], 0.5, 0.162238, 0.086156),
+        ([0.0, 1.0, 2.0], 1.0, 0.0, 0.0),
+    ];
+    let lights: Vec<Light> = rows
+        .iter()
+        .map(|&([constant, scalar, exponent], ..)| Light::attenuated(constant, scalar, exponent))
+        .collect();
+    let distances: Vec<f32> = rows
+        .iter()
+        .map(|&(_, fraction, ..)| fraction * ATTENUATION_RADIUS)
+        .collect();
+    let world_cases: Vec<Case> = lights
+        .iter()
+        .zip(&distances)
+        .map(|(l, &d)| Case::attenuation(l, d))
+        .collect();
+    let loading_cases: Vec<Case> = lights
+        .iter()
+        .zip(&distances)
+        .map(|(l, &d)| Case::loading_falloff(l, d))
+        .collect();
+    let world = run(&world_cases);
+    let loading = run(&loading_cases);
+    for (i, &(record, fraction, world_expected, loading_expected)) in rows.iter().enumerate() {
+        let row = format!("record={record:?} x={fraction}");
+        assert_close(world[i].scalar(), world_expected, &format!("world {row}"));
+        assert_close(
+            loading[i].scalar(),
+            loading_expected,
+            &format!("loading {row}"),
+        );
+    }
+}
+
+#[test]
+#[ignore = "needs a GPU adapter"]
 fn attenuation_at_the_light_is_the_constant_term_only() {
     let light = Light::attenuated(0.5, 0.5, 3.0);
     let near = run(&[Case::attenuation(&light, 1e-4)])[0].scalar();

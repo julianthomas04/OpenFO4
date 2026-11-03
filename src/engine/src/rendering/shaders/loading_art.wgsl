@@ -141,7 +141,7 @@ fn scene_light_radiance(index: u32, surface: SurfaceSample, light: SceneLight, w
     let to_light = light.position_radius.xyz - world_pos;
     let distance = max(length(to_light), MIN_LIGHT_DISTANCE);
     let to_light_unit = to_light / distance;
-    let falloff = placed_light_falloff(light.position_radius.w, light.attenuation.xyz, distance);
+    let falloff = loading_scene_light_falloff(light.position_radius.w, light.attenuation.xyz, distance);
     let cos_axis = -dot(to_light_unit, normalize(scene.aim.xyz - light.position_radius.xyz));
     let cone = spot_cosine_falloff(cos_axis, light.attenuation.w, scene.aim.w);
     let shadow = lamp_shadow(index, world_pos, surface.ng, to_light_unit);

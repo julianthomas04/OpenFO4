@@ -20,10 +20,29 @@ fn terminator(ng: vec3<f32>, l: vec3<f32>) -> f32 {
 // Zero from the radius outwards.
 fn placed_light_falloff(radius: f32, attenuation: vec3<f32>, distance: f32) -> f32 {
     let normalised = distance / radius;
-    let window_loss = normalised * normalised;
+    return falloff_of_loss(max(record_loss(normalised, attenuation), window_loss(normalised)));
+}
+
+// The same two terms as `placed_light_falloff`, multiplied instead of taking the larger loss. This
+// is an interpretation confirmed against a vanilla capture of the loading menu's lights, not
+// documented data, so only the loading art's scene lights use it.
+fn loading_scene_light_falloff(radius: f32, attenuation: vec3<f32>, distance: f32) -> f32 {
+    let normalised = distance / radius;
+    return falloff_of_loss(record_loss(normalised, attenuation))
+        * falloff_of_loss(window_loss(normalised));
+}
+
+fn record_loss(normalised: f32, attenuation: vec3<f32>) -> f32 {
     let distance_power = min(pow_or_zero(normalised, attenuation.z), MAX_DISTANCE_POWER);
-    let record_loss = saturate(attenuation.x + attenuation.y * distance_power);
-    return pow_or_zero(1.0 - saturate(max(record_loss, window_loss)), LIGHT_FALLOFF_POWER);
+    return saturate(attenuation.x + attenuation.y * distance_power);
+}
+
+fn window_loss(normalised: f32) -> f32 {
+    return normalised * normalised;
+}
+
+fn falloff_of_loss(loss: f32) -> f32 {
+    return pow_or_zero(1.0 - saturate(loss), LIGHT_FALLOFF_POWER);
 }
 
 const MIN_CONE_COSINE_SPAN = 1e-6;

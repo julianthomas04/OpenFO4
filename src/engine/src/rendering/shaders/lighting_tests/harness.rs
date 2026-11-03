@@ -43,6 +43,7 @@ const KIND_EFFECT_FACING: u32 = 16;
 const KIND_LIT_ENV_F0: u32 = 17;
 const KIND_FOG: u32 = 18;
 const KIND_APPLY_FOG: u32 = 19;
+const KIND_LOADING_FALLOFF: u32 = 20;
 
 /// Mirrors `TestCase` in `entry.wgsl`.
 #[repr(C)]
@@ -266,6 +267,12 @@ impl Case {
 
     pub fn attenuation(light: &Light, distance: f32) -> Self {
         let mut case = Self::blank(KIND_ATTENUATION).with_light(light);
+        case.to_light = Vec4::new(0.0, 0.0, 0.0, distance);
+        case
+    }
+
+    pub fn loading_falloff(light: &Light, distance: f32) -> Self {
+        let mut case = Self::blank(KIND_LOADING_FALLOFF).with_light(light);
         case.to_light = Vec4::new(0.0, 0.0, 0.0, distance);
         case
     }

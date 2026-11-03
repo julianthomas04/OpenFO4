@@ -35,7 +35,7 @@ fn front_face_linear(lights: &SceneLights) -> [f32; 3] {
     let to_light = position_to_engine(x, y, z) - Vec3::new(0.0, 0.0, -FRONT_FACE_DEPTH);
     let distance = to_light.length();
     let normalised = distance / (fill.radius * UNITS_TO_ENGINE);
-    let falloff = (1.0 - normalised * normalised).max(0.0).powf(2.2);
+    let falloff = (1.0 - normalised * normalised).max(0.0).powf(2.2).powi(2);
     let cosine = to_light.z / distance;
     let cone = spot_cone(fill.position, fill.spot_fov, to_light);
     (linear_colour(fill.diffuse, fill.dimmer) * (falloff * cone * ROUGH_FLATTEN * cosine))
