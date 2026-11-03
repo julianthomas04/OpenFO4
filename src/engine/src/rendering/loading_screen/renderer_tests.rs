@@ -4,14 +4,14 @@ use glam::{UVec2, Vec3};
 
 use super::stage_framing::test_support::vanilla_framing;
 use super::test_support::{cube_art, layered_quads_art, write_solid_texture, write_texture};
-use super::{CpuArt, LoadedArt, LoadingArt, LoadingArtRenderer, PanKey, SceneLights};
+use super::{
+    CpuArt, LoadedArt, LoadingArt, LoadingArtRenderer, PICTURE_FORMAT, PanKey, SceneLights,
+};
 use crate::bethesda_space::{UNITS_TO_ENGINE, position_to_engine};
-use crate::rendering::gpu_test::{linear_to_srgb_byte, read_mip, test_device};
+use crate::rendering::gpu_test::{f16_bits_to_f32, linear_to_srgb_byte, read_mip, test_device};
 use crate::rendering::lighting::cell_lighting::srgb_to_linear;
 use crate::rendering::placed_light::linear_colour;
-use crate::rendering::post::tonemap::ui_gamma_format;
 
-const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const SIZE: (u32, u32) = (320, 180);
 const BLACK: wgpu::Color = wgpu::Color::BLACK;
 /// How far the cube's front face is from the camera, in engine units: the cube's centre is at
@@ -62,21 +62,19 @@ impl Target {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: FORMAT,
+            format: PICTURE_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[ui_gamma_format(FORMAT)],
+            view_formats: &[],
         });
         let target = Self { texture, size };
         target.clear(scene, clear);
         target
     }
 
-    /// The view the menu draws through: the swapchain without its sRGB encoding.
+    /// The view the loading screen draws its linear picture through.
     fn view(&self) -> wgpu::TextureView {
-        self.texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(ui_gamma_format(FORMAT)),
-            ..Default::default()
-        })
+        self.texture
+            .create_view(&wgpu::TextureViewDescriptor::default())
     }
 
     fn clear(&self, scene: &Scene, color: wgpu::Color) {
@@ -100,10 +98,14 @@ impl Target {
     }
 }
 
+/// The picture read back, each channel sRGB-encoded to a byte so that it compares like the
+/// display's colour.
 struct Pixels {
     bytes: Vec<u8>,
     size: (u32, u32),
 }
+
+const BYTES_PER_TEXEL: usize = 8;
 
 impl Pixels {
     fn read(device: &wgpu::Device, queue: &wgpu::Queue, target: &Target) -> Self {
@@ -114,19 +116,19 @@ impl Pixels {
                 &target.texture,
                 0,
                 UVec2::new(target.size.0, target.size.1),
-                4,
+                BYTES_PER_TEXEL as u32,
             ),
             size: target.size,
         }
     }
 
     fn at(&self, x: u32, y: u32) -> [u8; 3] {
-        let start = ((y * self.size.0 + x) * 4) as usize;
-        [
-            self.bytes[start],
-            self.bytes[start + 1],
-            self.bytes[start + 2],
-        ]
+        let start = (y * self.size.0 + x) as usize * BYTES_PER_TEXEL;
+        [0, 1, 2].map(|channel| {
+            let at = start + channel * 2;
+            let half = u16::from_le_bytes([self.bytes[at], self.bytes[at + 1]]);
+            linear_to_srgb_byte(f16_bits_to_f32(half))
+        })
     }
 
     fn centre(&self) -> [u8; 3] {
@@ -165,7 +167,7 @@ impl Scene {
 
     fn lit_by(test: &str, lights: &SceneLights) -> Option<Self> {
         let (device, queue) = test_device(test)?;
-        let renderer = LoadingArtRenderer::new(&device, &queue, ui_gamma_format(FORMAT), lights);
+        let renderer = LoadingArtRenderer::new(&device, &queue, PICTURE_FORMAT, lights);
         Some(Self {
             device,
             queue,
@@ -202,7 +204,7 @@ fn assert_close(actual: u8, expected: u8, tolerance: u8) {
 }
 
 #[test]
-fn a_cube_draws_in_the_centre_lit_and_encoded_and_leaves_the_corners_black() {
+fn a_cube_draws_in_the_centre_lit_and_leaves_the_corners_black() {
     let Some(mut scene) = Scene::new("loading art cube") else {
         return;
     };
@@ -477,7 +479,11 @@ fn a_specular_map_adds_a_highlight_in_the_colour_of_the_light() {
 #[test]
 fn a_specular_map_without_intensity_adds_nothing() {
     let (Some(matte), Some(dull)) = (
-        centre_with("loading art matte again", "grey.dds", &[("grey.dds", MID_GREY)]),
+        centre_with(
+            "loading art matte again",
+            "grey.dds",
+            &[("grey.dds", MID_GREY)],
+        ),
         centre_with(
             "loading art black specular",
             &format!("grey.dds{SPECULAR_TOKENS}"),
@@ -492,7 +498,11 @@ fn a_specular_map_without_intensity_adds_nothing() {
 #[test]
 fn a_specular_map_that_cannot_be_loaded_switches_the_specular_off() {
     let (Some(matte), Some(unloaded)) = (
-        centre_with("loading art matte third", "grey.dds", &[("grey.dds", MID_GREY)]),
+        centre_with(
+            "loading art matte third",
+            "grey.dds",
+            &[("grey.dds", MID_GREY)],
+        ),
         centre_with(
             "loading art missing specular",
             &format!("grey.dds{SPECULAR_TOKENS}"),
@@ -507,7 +517,11 @@ fn a_specular_map_that_cannot_be_loaded_switches_the_specular_off() {
 #[test]
 fn a_material_without_specular_parameters_stays_matte_whatever_its_specular_map() {
     let (Some(matte), Some(unmarked)) = (
-        centre_with("loading art matte fourth", "grey.dds", &[("grey.dds", MID_GREY)]),
+        centre_with(
+            "loading art matte fourth",
+            "grey.dds",
+            &[("grey.dds", MID_GREY)],
+        ),
         centre_with(
             "loading art legacy specular",
             "grey.dds|spec:spec.dds",
@@ -562,7 +576,11 @@ fn a_normal_map_changes_how_the_surface_catches_the_light() {
 #[test]
 fn a_normal_map_that_cannot_be_loaded_leaves_the_surface_flat() {
     let (Some(flat), Some(unloaded)) = (
-        centre_with("loading art flat again", "grey.dds", &[("grey.dds", MID_GREY)]),
+        centre_with(
+            "loading art flat again",
+            "grey.dds",
+            &[("grey.dds", MID_GREY)],
+        ),
         centre_with(
             "loading art missing normal",
             "grey.dds|normal.dds",

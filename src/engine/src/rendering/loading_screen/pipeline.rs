@@ -16,22 +16,14 @@ pub(super) struct SceneUniform {
     view_proj: [[f32; 4]; 4],
     model: [[f32; 4]; 4],
     lights: [GpuSceneLight; LIGHT_COUNT],
-    /// 1 in `x` when the shader has to encode its linear output to sRGB.
-    encode: [f32; 4],
 }
 
 impl SceneUniform {
-    pub fn new(
-        view_proj: Mat4,
-        model: Mat4,
-        lights: [GpuSceneLight; LIGHT_COUNT],
-        encode_srgb: bool,
-    ) -> Self {
+    pub fn new(view_proj: Mat4, model: Mat4, lights: [GpuSceneLight; LIGHT_COUNT]) -> Self {
         Self {
             view_proj: view_proj.to_cols_array_2d(),
             model: model.to_cols_array_2d(),
             lights,
-            encode: [if encode_srgb { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
         }
     }
 }
@@ -243,14 +235,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_uniform_carries_the_lights_and_the_encode_flag() {
+    fn the_uniform_carries_the_lights() {
         let lights = SceneLights::VANILLA.to_gpu();
-        let encoded = SceneUniform::new(Mat4::IDENTITY, Mat4::IDENTITY, lights, true);
-        let direct = SceneUniform::new(Mat4::IDENTITY, Mat4::IDENTITY, lights, false);
 
-        assert_eq!(encoded.lights, lights);
-        assert_eq!(encoded.encode[0], 1.0);
-        assert_eq!(direct.encode[0], 0.0);
+        let uniform = SceneUniform::new(Mat4::IDENTITY, Mat4::IDENTITY, lights);
+
+        assert_eq!(uniform.lights, lights);
     }
 
     #[test]

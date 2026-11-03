@@ -49,7 +49,6 @@ struct Active {
 pub struct LoadingArtRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    encode_srgb: bool,
     lights: [GpuSceneLight; LIGHT_COUNT],
     pipeline: ArtPipeline,
     sampler: wgpu::Sampler,
@@ -60,9 +59,8 @@ pub struct LoadingArtRenderer {
 }
 
 impl LoadingArtRenderer {
-    /// A renderer for views of `target_format`, lit by `lights`. A non-sRGB view of an 8 bit
-    /// format gets its colour encoded by the shader; a float format, like the scene's linear
-    /// picture, gets linear light.
+    /// A renderer for views of `target_format`, lit by `lights`. It writes linear light, so the
+    /// target is the scene's float picture.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -96,7 +94,6 @@ impl LoadingArtRenderer {
         Self {
             device: device.clone(),
             queue: queue.clone(),
-            encode_srgb: stores_encoded_colour(target_format),
             lights: lights.to_gpu(),
             pipeline,
             sampler,
@@ -224,7 +221,6 @@ impl LoadingArtRenderer {
             active.art.camera.view_proj(aspect, vertical_fov_radians),
             active.art.camera.model_matrix(),
             self.lights,
-            self.encode_srgb,
         );
         self.queue
             .write_buffer(&self.scene_buffer, 0, bytes_of(&scene));
@@ -262,23 +258,5 @@ impl LoadingArtRenderer {
                 pass.draw_indexed(draw.indices.clone(), draw.base_vertex, 0..1);
             }
         }
-    }
-}
-
-/// Whether views of `format` store encoded colour the shader has to write itself: the non-sRGB
-/// view of a format that has an sRGB twin.
-fn stores_encoded_colour(format: wgpu::TextureFormat) -> bool {
-    format.add_srgb_suffix() != format
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_the_plain_view_of_an_srgb_capable_format_is_encoded_by_the_shader() {
-        assert!(stores_encoded_colour(wgpu::TextureFormat::Bgra8Unorm));
-        assert!(!stores_encoded_colour(wgpu::TextureFormat::Bgra8UnormSrgb));
-        assert!(!stores_encoded_colour(PICTURE_FORMAT));
     }
 }

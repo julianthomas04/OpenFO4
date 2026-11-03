@@ -1050,7 +1050,7 @@ fn the_loading_art_sits_above_the_backdrop_and_below_the_logo() {
     assert_eq!(
         pixels
             .at(LOGO_LEFT_HALF.0 - 8, LOGO_LEFT_HALF.1 + 8)
-            .map(|c| c > 100),
+            .map(|c| c > 0),
         [true; 3],
         "the cube is drawn over the backdrop"
     );

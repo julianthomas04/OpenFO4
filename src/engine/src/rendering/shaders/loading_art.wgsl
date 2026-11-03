@@ -2,9 +2,8 @@
 // lights fixed relative to the camera, each with the world's placed-light distance falloff
 // (`placed_light.wgsl`) and the world's surface response (`surface_response.wgsl`), and no ambient
 // term. The normal map and the specular map (R = intensity, G = smoothness) are read through the
-// world's tangent frame (`normal_mapping.wgsl`). The output is linear radiance, unclamped. The
-// pass draws through the non-sRGB view of the swapchain like the rest of the menu, so the shader
-// encodes the colour itself when `encode.x` is 1.
+// world's tangent frame (`normal_mapping.wgsl`). The output is linear radiance, unclamped, for the
+// scene's float picture.
 
 const SCENE_LIGHT_COUNT = 3;
 
@@ -21,8 +20,6 @@ struct Scene {
     view_proj: mat4x4<f32>,
     model: mat4x4<f32>,
     lights: array<SceneLight, SCENE_LIGHT_COUNT>,
-    // 1 when the shader has to encode to sRGB.
-    encode: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> scene: Scene;
@@ -71,12 +68,6 @@ fn vs_main(in: VsIn) -> VsOut {
     out.tangent = vec4<f32>(model3 * in.tangent.xyz, in.tangent.w * select(1.0, -1.0, determinant(model3) < 0.0));
     out.world_pos = world.xyz;
     return out;
-}
-
-fn encode_srgb(linear: vec3<f32>) -> vec3<f32> {
-    let low = linear * 12.92;
-    let high = 1.055 * pow(linear, vec3<f32>(1.0 / 2.4)) - 0.055;
-    return select(high, low, linear <= vec3<f32>(0.0031308));
 }
 
 // Whether a texel of `alpha` is cut out (hair, grates, foliage): only a material that asks for
@@ -133,6 +124,5 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     for (var index = 0; index < SCENE_LIGHT_COUNT; index = index + 1) {
         lit += scene_light_radiance(surface, scene.lights[index], in.world_pos);
     }
-    let colour = select(lit, encode_srgb(lit), scene.encode.x > 0.5);
-    return vec4<f32>(colour, 1.0);
+    return vec4<f32>(lit, 1.0);
 }
