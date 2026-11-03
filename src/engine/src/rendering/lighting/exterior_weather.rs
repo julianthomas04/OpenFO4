@@ -173,10 +173,10 @@ struct RawFog {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(from = "RawImageSpaceData")]
-struct ImageSpaceData {
+pub(crate) struct ImageSpaceData {
     depth_of_field: Option<ImageSpaceDepthOfField>,
     hdr: ImageSpaceHdr,
-    cinematic: ImageSpaceCinematic,
+    pub(crate) cinematic: ImageSpaceCinematic,
     lut: ImageSpaceLut,
 }
 
@@ -562,7 +562,7 @@ fn load_image_spaces(
     })
 }
 
-fn load_image_space(
+pub(crate) fn load_image_space(
     db: &DbClient,
     image_space: &str,
 ) -> Result<ImageSpaceData, ExteriorWeatherError> {

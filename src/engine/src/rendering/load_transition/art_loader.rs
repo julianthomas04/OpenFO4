@@ -4,12 +4,14 @@
 use std::io;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
-use crate::rendering::loading_screen::{CpuArt, LoadingArt, LoadingArtError};
+use crate::rendering::loading_screen::{CpuArt, LoadingArt, LoadingArtError, StageError};
 
 #[derive(Debug, thiserror::Error)]
 pub(in crate::rendering) enum ArtLoadError {
     #[error(transparent)]
     Art(#[from] LoadingArtError),
+    #[error(transparent)]
+    Stage(#[from] StageError),
     #[error("the loading worker could not be started: {0}")]
     Spawn(#[source] io::Error),
     #[error("the loading worker stopped without a result")]

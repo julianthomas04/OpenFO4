@@ -547,6 +547,20 @@ impl DbClient {
         weather::get_image_space_data(form_key, &self.conn)
     }
 
+    /// The form key the default object manager assigns to `slot` (`LSIS`, ...); `None` when the
+    /// slot is unassigned or absent.
+    pub fn get_default_object(&self, slot: &str) -> rusqlite::Result<Option<String>> {
+        use rusqlite::OptionalExtension;
+        self.conn
+            .query_row(
+                "SELECT target FROM default_object_slots WHERE slot = ?",
+                rusqlite::params![slot],
+                |row| row.get(0),
+            )
+            .optional()
+            .map(Option::flatten)
+    }
+
     pub fn get_weather(&self, form_key: &str) -> rusqlite::Result<weather::WeatherRow> {
         let schema = self.schema();
         weather::get_weather(

@@ -59,45 +59,81 @@ fn pack_glb(
     indices: &[u16],
     material: &str,
 ) -> Vec<u8> {
-    let vertex_count = positions.len() / 3;
-    let axis = |axis: usize| positions.iter().skip(axis).step_by(3).copied();
-    let min: Vec<f32> = (0..3).map(|a| axis(a).fold(f32::MAX, f32::min)).collect();
-    let max: Vec<f32> = (0..3).map(|a| axis(a).fold(f32::MIN, f32::max)).collect();
+    pack_glb_parts(&[GlbPart {
+        positions,
+        normals,
+        uvs,
+        indices,
+        material: json!({"name": material}),
+    }])
+}
+
+/// One primitive of [`pack_glb_parts`], with its glTF material object.
+struct GlbPart<'a> {
+    positions: &'a [f32],
+    normals: &'a [f32],
+    uvs: &'a [f32],
+    indices: &'a [u16],
+    material: serde_json::Value,
+}
+
+/// A GLB with one node and one primitive per part, each with its own material.
+fn pack_glb_parts(parts: &[GlbPart<'_>]) -> Vec<u8> {
     let mut bin: Vec<u8> = Vec::new();
     let mut views = Vec::new();
-    let mut push = |bytes: Vec<u8>| {
+    let mut accessors = Vec::new();
+    let mut primitives = Vec::new();
+    let mut push = |bytes: Vec<u8>, views: &mut Vec<serde_json::Value>| {
         let view = json!({"buffer": 0, "byteOffset": bin.len(), "byteLength": bytes.len()});
         bin.extend(bytes);
         while !bin.len().is_multiple_of(4) {
             bin.push(0);
         }
         views.push(view);
+        views.len() - 1
     };
-    push(positions.iter().flat_map(|f| f.to_le_bytes()).collect());
-    push(normals.iter().flat_map(|f| f.to_le_bytes()).collect());
-    push(uvs.iter().flat_map(|f| f.to_le_bytes()).collect());
-    push(indices.iter().flat_map(|i| i.to_le_bytes()).collect());
+    let floats =
+        |values: &[f32]| -> Vec<u8> { values.iter().flat_map(|f| f.to_le_bytes()).collect() };
+    for (index, part) in parts.iter().enumerate() {
+        let vertex_count = part.positions.len() / 3;
+        let axis = |axis: usize| part.positions.iter().skip(axis).step_by(3).copied();
+        let min: Vec<f32> = (0..3).map(|a| axis(a).fold(f32::MAX, f32::min)).collect();
+        let max: Vec<f32> = (0..3).map(|a| axis(a).fold(f32::MIN, f32::max)).collect();
+        let position = push(floats(part.positions), &mut views);
+        let normal = push(floats(part.normals), &mut views);
+        let uv = push(floats(part.uvs), &mut views);
+        let indices = push(
+            part.indices.iter().flat_map(|i| i.to_le_bytes()).collect(),
+            &mut views,
+        );
+        let first = accessors.len();
+        accessors.extend([
+            json!({"bufferView": position, "componentType": 5126, "count": vertex_count,
+                   "type": "VEC3", "min": min, "max": max}),
+            json!({"bufferView": normal, "componentType": 5126, "count": vertex_count,
+                   "type": "VEC3"}),
+            json!({"bufferView": uv, "componentType": 5126, "count": vertex_count,
+                   "type": "VEC2"}),
+            json!({"bufferView": indices, "componentType": 5123,
+                   "count": part.indices.len(), "type": "SCALAR"}),
+        ]);
+        primitives.push(json!({
+            "attributes": {"POSITION": first, "NORMAL": first + 1, "TEXCOORD_0": first + 2},
+            "indices": first + 3,
+            "material": index,
+        }));
+    }
 
     let document = json!({
         "asset": {"version": "2.0"},
         "scene": 0,
         "scenes": [{"nodes": [0]}],
         "nodes": [{"mesh": 0}],
-        "meshes": [{"primitives": [{
-            "attributes": {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2},
-            "indices": 3,
-            "material": 0,
-        }]}],
-        "materials": [{"name": material}],
+        "meshes": [{"primitives": primitives}],
+        "materials": parts.iter().map(|part| part.material.clone()).collect::<Vec<_>>(),
         "buffers": [{"byteLength": bin.len()}],
         "bufferViews": views,
-        "accessors": [
-            {"bufferView": 0, "componentType": 5126, "count": vertex_count, "type": "VEC3",
-             "min": min, "max": max},
-            {"bufferView": 1, "componentType": 5126, "count": vertex_count, "type": "VEC3"},
-            {"bufferView": 2, "componentType": 5126, "count": vertex_count, "type": "VEC2"},
-            {"bufferView": 3, "componentType": 5123, "count": indices.len(), "type": "SCALAR"},
-        ],
+        "accessors": accessors,
     });
     let mut json = serde_json::to_vec(&document).expect("the document serialises");
     json.resize(json.len().next_multiple_of(4), b' ');
@@ -121,6 +157,170 @@ fn pack_glb(
     glb.extend(b"BIN\0");
     glb.extend(&bin);
     glb
+}
+
+/// The effect material of one plane of a test stage: the fields the converter writes.
+#[derive(Debug, Clone)]
+pub struct TestEffect {
+    /// Below the textures folder.
+    pub texture: String,
+    /// Additive by source alpha like the game's overlay, or opaque.
+    pub additive: bool,
+    pub base_color: [f32; 4],
+}
+
+impl TestEffect {
+    fn extras(&self) -> serde_json::Value {
+        json!({"effect": self.material()})
+    }
+
+    /// The material as the converter writes it into `extras.effect`.
+    fn material(&self) -> serde_json::Value {
+        let blend = if self.additive {
+            json!({"mode": "add", "src": "src_alpha", "dst": "one", "alpha_test": false})
+        } else {
+            json!({"mode": "none", "alpha_test": false})
+        };
+        json!({
+            "v": 1, "vs": "effect_vs_00000004", "ps": "effect_ps_00000004",
+            "flags1": 0, "flags2": 0, "blend": blend,
+            "z_test": !self.additive, "z_write": false, "double_sided": false,
+            "clamp": "wrap_s_wrap_t",
+            "textures": {"source": self.texture, "greyscale": "", "normal": "", "env": "",
+                         "env_mask": "", "reflectance": "", "lighting": "",
+                         "emit_gradient": ""},
+            "base_color": self.base_color, "base_color_scale": 1.0,
+            "falloff": {"start_angle": 1.0, "stop_angle": 1.0, "start_opacity": 0.0,
+                        "stop_opacity": 0.0},
+            "soft_falloff_depth": 10.0, "uv_offset": [0.0, 0.0], "uv_scale": [1.0, 1.0],
+            "lighting_influence": 1.0, "env_map_scale": 1.0, "emittance_color": [0.0, 0.0, 0.0],
+            "refraction_power": 0.0, "alpha": 1.0, "controllers": []
+        })
+    }
+}
+
+/// One plane of a test stage facing the camera, in engine units.
+#[derive(Debug, Clone)]
+pub struct TestStageLayer {
+    pub half_extent: [f32; 2],
+    pub depth: f32,
+    pub u_max: f32,
+    /// `None` writes a plain material, which no stage accepts.
+    pub effect: Option<TestEffect>,
+}
+
+/// Below the textures folder: the background texture of [`TestStageLayer::vanilla`].
+pub const STAGE_BACKGROUND_TEXTURE: &str = "interface/loadingmenubg.dds";
+/// Below the textures folder: the overlay texture of [`TestStageLayer::vanilla`].
+pub const STAGE_OVERLAY_TEXTURE: &str = "interface/objects/loadscreen/overlay01_d.dds";
+
+impl TestStageLayer {
+    /// The plane's effect material as the converter writes it.
+    pub fn effect_json(&self) -> serde_json::Value {
+        self.effect
+            .as_ref()
+            .expect("the plane has an effect material")
+            .material()
+    }
+
+    /// The planes of the game's 16:9 stage in its file order: the additive overlay at 0.6,
+    /// then the opaque background.
+    pub fn vanilla() -> [Self; 2] {
+        [
+            Self {
+                half_extent: [18.65, 10.5],
+                depth: -1.6756,
+                u_max: 0.89,
+                effect: Some(TestEffect {
+                    texture: STAGE_OVERLAY_TEXTURE.to_string(),
+                    additive: true,
+                    base_color: [1.0, 1.0, 1.0, 0.6],
+                }),
+            },
+            Self {
+                half_extent: [55.75, 31.375],
+                depth: -100.0044,
+                u_max: 0.889,
+                effect: Some(TestEffect {
+                    texture: STAGE_BACKGROUND_TEXTURE.to_string(),
+                    additive: false,
+                    base_color: [1.0; 4],
+                }),
+            },
+        ]
+    }
+}
+
+/// Writes a stage of `layers` to `dir/<name>` and returns its path. Each plane's u runs from 0
+/// at its left edge to its `u_max` at its right edge, v from 0 at the top to 1 at the bottom.
+pub fn write_stage(dir: &Path, name: &str, layers: &[TestStageLayer]) -> PathBuf {
+    const CORNERS: [(f32, f32); 4] = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+    let geometry: Vec<(Vec<f32>, Vec<f32>, Vec<f32>)> = layers
+        .iter()
+        .map(|layer| {
+            let [half_x, half_y] = layer.half_extent;
+            let positions = CORNERS
+                .iter()
+                .flat_map(|(x, y)| [x * half_x, y * half_y, layer.depth])
+                .collect();
+            let normals = CORNERS.iter().flat_map(|_| [0.0, 0.0, 1.0]).collect();
+            let uvs = CORNERS
+                .iter()
+                .flat_map(|(x, y)| {
+                    [
+                        f32::midpoint(*x, 1.0) * layer.u_max,
+                        f32::midpoint(1.0, -*y),
+                    ]
+                })
+                .collect();
+            (positions, normals, uvs)
+        })
+        .collect();
+    let indices = [0, 1, 2, 0, 2, 3];
+    let parts: Vec<GlbPart<'_>> = layers
+        .iter()
+        .zip(&geometry)
+        .map(|(layer, (positions, normals, uvs))| GlbPart {
+            positions,
+            normals,
+            uvs,
+            indices: &indices,
+            material: match &layer.effect {
+                Some(effect) => json!({"name": effect.texture, "extras": effect.extras()}),
+                None => json!({"name": "plain"}),
+            },
+        })
+        .collect();
+    std::fs::create_dir_all(dir).expect("the temp folder is writable");
+    let path = dir.join(name);
+    std::fs::write(&path, pack_glb_parts(&parts)).expect("the temp folder is writable");
+    path
+}
+
+/// The widths of the game's three stages relative to the 16:9 one, in the order of
+/// [`super::stage::STAGE_MODELS`].
+const STAGE_WIDTHS: [f32; 3] = [1.0, 48.4 / 37.3, 74.0 / 37.3];
+
+/// Installs the game's three stage widths below `asset_root`, each [`TestStageLayer::vanilla`]
+/// widened like the game's files, with one-colour `background` and `overlay` textures.
+pub fn install_stage(asset_root: &Path, background: [u8; 4], overlay: [u8; 4]) {
+    for (path, width) in super::stage::stage_paths(asset_root)
+        .into_iter()
+        .zip(STAGE_WIDTHS)
+    {
+        let path = PathBuf::from(path.to_string_lossy().replace('\\', "/"));
+        let layers = TestStageLayer::vanilla().map(|mut layer| {
+            layer.half_extent[0] *= width;
+            layer
+        });
+        write_stage(
+            path.parent().expect("a stage is in a folder"),
+            &path.file_name().expect("a stage file").to_string_lossy(),
+            &layers,
+        );
+    }
+    write_solid_texture(asset_root, STAGE_BACKGROUND_TEXTURE, background);
+    write_solid_texture(asset_root, STAGE_OVERLAY_TEXTURE, overlay);
 }
 
 /// Writes the cube to `dir` and returns its path.
@@ -183,36 +383,6 @@ pub fn write_texture(dir: &Path, name: &str, alpha: u8) {
     write_solid_texture(dir, name, [255, 255, 255, alpha]);
 }
 
-/// Width of the texture [`write_two_band_texture`] writes, as wide as the game's background.
-const BAND_TEXTURE_WIDTH: u32 = 2048;
-
-/// Writes `textures/<name>`, a 2048 x 2 texture whose texels left of `split_u` are `left` and
-/// the others `right`.
-pub fn write_two_band_texture(dir: &Path, name: &str, left: [u8; 4], right: [u8; 4], split_u: f32) {
-    let mut dds = ddsfile::Dds::new_dxgi(ddsfile::NewDxgiParams {
-        height: 2,
-        width: BAND_TEXTURE_WIDTH,
-        depth: None,
-        format: ddsfile::DxgiFormat::R8G8B8A8_UNorm,
-        mipmap_levels: Some(1),
-        array_layers: None,
-        caps2: None,
-        is_cubemap: false,
-        resource_dimension: ddsfile::D3D10ResourceDimension::Texture2D,
-        alpha_mode: ddsfile::AlphaMode::Unknown,
-    })
-    .expect("a valid texture description");
-    let split = (split_u * BAND_TEXTURE_WIDTH as f32).round() as usize;
-    for (index, texel) in dds.data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-        *texel = if (index % BAND_TEXTURE_WIDTH as usize) < split {
-            left
-        } else {
-            right
-        };
-    }
-    write_dds(dir, name, &dds);
-}
-
 /// Writes `textures/<name>`, a 2x2 texture whose texels all are `rgba`; `name` may name a
 /// folder below `textures`.
 pub fn write_solid_texture(dir: &Path, name: &str, rgba: [u8; 4]) {
@@ -232,37 +402,6 @@ pub fn write_solid_texture(dir: &Path, name: &str, rgba: [u8; 4]) {
     for texel in dds.data.as_chunks_mut::<4>().0 {
         *texel = rgba;
     }
-    write_dds(dir, name, &dds);
-}
-
-/// The colour a BC3 block of [`BC3_SOLID_COLOUR_565`] decodes to, as bytes.
-pub const BC3_SOLID_RGB: [u8; 3] = [181, 187, 156];
-
-/// The RGB565 value of [`BC3_SOLID_RGB`]: red 22, green 46, blue 19.
-const BC3_SOLID_COLOUR_565: u16 = 0xB5D3;
-
-/// Writes `textures/<name>`, a 4x4 BC3 (DXT5) texture, the format of the game's interface art,
-/// whose texels all are [`BC3_SOLID_RGB`] at `alpha`.
-pub fn write_solid_bc3_texture(dir: &Path, name: &str, alpha: u8) {
-    let mut dds = ddsfile::Dds::new_dxgi(ddsfile::NewDxgiParams {
-        height: 4,
-        width: 4,
-        depth: None,
-        format: ddsfile::DxgiFormat::BC3_UNorm,
-        mipmap_levels: Some(1),
-        array_layers: None,
-        caps2: None,
-        is_cubemap: false,
-        resource_dimension: ddsfile::D3D10ResourceDimension::Texture2D,
-        alpha_mode: ddsfile::AlphaMode::Unknown,
-    })
-    .expect("a valid texture description");
-    let (alpha_block, colour_block) = dds.data.split_at_mut(8);
-    alpha_block[..2].fill(alpha);
-    alpha_block[2..].fill(0);
-    colour_block[..2].copy_from_slice(&BC3_SOLID_COLOUR_565.to_le_bytes());
-    colour_block[2..4].copy_from_slice(&BC3_SOLID_COLOUR_565.to_le_bytes());
-    colour_block[4..].fill(0);
     write_dds(dir, name, &dds);
 }
 

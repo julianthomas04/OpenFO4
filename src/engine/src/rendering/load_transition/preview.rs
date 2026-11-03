@@ -322,9 +322,10 @@ impl State {
         }
     }
 
-    /// Whether the model, its background and the panel are all on the screen.
-    pub(in crate::rendering) fn loading_screen_fully_shown(&mut self) -> bool {
-        self.art_shown() && self.load_screens.host.background().is_some()
+    /// Whether the model, its stage and the panel are all on the screen: a model is only shown
+    /// once the stage that frames it has loaded.
+    pub(in crate::rendering) fn loading_screen_fully_shown(&self) -> bool {
+        self.art_shown()
     }
 }
 

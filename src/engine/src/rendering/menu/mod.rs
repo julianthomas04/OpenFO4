@@ -1,7 +1,6 @@
 //! The main menu, the spawn picker and the loading overlay, drawn with the HUD's quad pipeline,
 //! glyphon text and the loading logo.
 
-mod background_quad;
 mod image_quad;
 mod layout;
 mod loading_icon;
@@ -16,4 +15,4 @@ mod video_layer_tests;
 
 pub use layout::{LAYOUT_KEYS, MenuLayout, RowRect};
 pub use loading_panel::PanelContent;
-pub use renderer::{Backdrop, MenuError, MenuRenderer, MenuScene, OverlayForeground};
+pub use renderer::{MenuError, MenuRenderer, MenuScene, OverlayForeground};

@@ -2,6 +2,7 @@
 
 use glam::{UVec2, Vec3};
 
+use super::stage_framing::test_support::vanilla_framing;
 use super::test_support::{cube_art, layered_quads_art, write_solid_texture, write_texture};
 use super::{CpuArt, LoadedArt, LoadingArt, LoadingArtRenderer, PanKey, SceneLights};
 use crate::bethesda_space::{UNITS_TO_ENGINE, position_to_engine};
@@ -182,8 +183,12 @@ impl Scene {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        self.renderer
-            .render(&mut encoder, &target.view(), target.size);
+        self.renderer.render(
+            &mut encoder,
+            &target.view(),
+            target.size,
+            vanilla_framing().vertical_fov_radians,
+        );
         self.queue.submit(std::iter::once(encoder.finish()));
         Pixels::read(&self.device, &self.queue, target)
     }
@@ -472,11 +477,7 @@ fn a_specular_map_adds_a_highlight_in_the_colour_of_the_light() {
 #[test]
 fn a_specular_map_without_intensity_adds_nothing() {
     let (Some(matte), Some(dull)) = (
-        centre_with(
-            "loading art matte again",
-            "grey.dds",
-            &[("grey.dds", MID_GREY)],
-        ),
+        centre_with("loading art matte again", "grey.dds", &[("grey.dds", MID_GREY)]),
         centre_with(
             "loading art black specular",
             &format!("grey.dds{SPECULAR_TOKENS}"),
@@ -491,11 +492,7 @@ fn a_specular_map_without_intensity_adds_nothing() {
 #[test]
 fn a_specular_map_that_cannot_be_loaded_switches_the_specular_off() {
     let (Some(matte), Some(unloaded)) = (
-        centre_with(
-            "loading art matte third",
-            "grey.dds",
-            &[("grey.dds", MID_GREY)],
-        ),
+        centre_with("loading art matte third", "grey.dds", &[("grey.dds", MID_GREY)]),
         centre_with(
             "loading art missing specular",
             &format!("grey.dds{SPECULAR_TOKENS}"),
@@ -510,11 +507,7 @@ fn a_specular_map_that_cannot_be_loaded_switches_the_specular_off() {
 #[test]
 fn a_material_without_specular_parameters_stays_matte_whatever_its_specular_map() {
     let (Some(matte), Some(unmarked)) = (
-        centre_with(
-            "loading art matte fourth",
-            "grey.dds",
-            &[("grey.dds", MID_GREY)],
-        ),
+        centre_with("loading art matte fourth", "grey.dds", &[("grey.dds", MID_GREY)]),
         centre_with(
             "loading art legacy specular",
             "grey.dds|spec:spec.dds",
@@ -569,11 +562,7 @@ fn a_normal_map_changes_how_the_surface_catches_the_light() {
 #[test]
 fn a_normal_map_that_cannot_be_loaded_leaves_the_surface_flat() {
     let (Some(flat), Some(unloaded)) = (
-        centre_with(
-            "loading art flat again",
-            "grey.dds",
-            &[("grey.dds", MID_GREY)],
-        ),
+        centre_with("loading art flat again", "grey.dds", &[("grey.dds", MID_GREY)]),
         centre_with(
             "loading art missing normal",
             "grey.dds|normal.dds",

@@ -6,16 +6,15 @@ use super::layout::{
 };
 use super::loading_icon::test_support::{library, svg};
 use super::loading_panel::{PanelContent, PanelText};
-use super::renderer::{Backdrop, MenuError, MenuRenderer, MenuScene, OverlayForeground};
+use super::renderer::{MenuError, MenuRenderer, MenuScene, OverlayForeground};
 use crate::game_flow::{GameFlow, MenuView, StartMode};
 use crate::rendering::game_settings::SafeZone;
 use crate::rendering::gpu_test::test_device;
 use crate::rendering::hud::field_text::TextItem;
-use crate::rendering::loading_screen::test_support::{
-    BC3_SOLID_RGB, cube_art, write_solid_bc3_texture, write_solid_texture, write_two_band_texture,
-};
+use crate::rendering::loading_screen::test_support::cube_art;
 use crate::rendering::loading_screen::{
-    BackgroundImages, background_uv, CpuArt, LoadedArt, LoadingArtRenderer, LoadingBackground, SceneLights, graded, GRADE_TINT, OVERLAY_GAIN,
+    CpuArt, LoadedArt, LoadingArtRenderer, SceneLights,
+    stage_framing::test_support::vanilla_framing,
 };
 use crate::rendering::post::tonemap::ui_gamma_format;
 use crate::rendering::ui_colour::UiTint;
@@ -1031,12 +1030,13 @@ fn the_loading_art_sits_above_the_backdrop_and_below_the_logo() {
 
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
     let view = menu.target_view(&target.texture);
-    let backdrop = Backdrop {
-        alpha: 1.0,
-        image: None,
-    };
-    menu.render_backdrop(&device, &queue, &mut encoder, &view, SIZE, backdrop);
-    art_renderer.render(&mut encoder, &view, SIZE);
+    menu.render_backdrop(&device, &queue, &mut encoder, &view, SIZE, 1.0);
+    art_renderer.render(
+        &mut encoder,
+        &view,
+        SIZE,
+        vanilla_framing().vertical_fov_radians,
+    );
     let foreground = OverlayForeground {
         alpha: 1.0,
         loading_seconds: Some(0.0),
@@ -1058,317 +1058,5 @@ fn the_loading_art_sits_above_the_backdrop_and_below_the_logo() {
         pixels.at(LOGO_LEFT_HALF.0, LOGO_LEFT_HALF.1),
         [0, 255, 0],
         "the logo is drawn over the cube"
-    );
-}
-
-const BACKGROUND_COLOUR: [u8; 3] = [200, 100, 50];
-
-/// A background image of one colour that the install's folder layout names.
-fn background_in(dir: &std::path::Path) -> LoadingBackground {
-    write_solid_texture(
-        dir,
-        "Interface/LoadingMenuBG.DDS",
-        [
-            BACKGROUND_COLOUR[0],
-            BACKGROUND_COLOUR[1],
-            BACKGROUND_COLOUR[2],
-            255,
-        ],
-    );
-    LoadingBackground::new(dir.to_path_buf())
-}
-
-fn corners_and_centre(pixels: &Pixels) -> [[u8; 3]; 5] {
-    let (width, height) = SIZE;
-    [
-        pixels.at(0, 0),
-        pixels.at(width - 1, 0),
-        pixels.at(0, height - 1),
-        pixels.at(width - 1, height - 1),
-        pixels.at(width / 2, height / 2),
-    ]
-}
-
-/// What the shader writes for `background` and `overlay` texels of the given bytes.
-fn graded_bytes(background: [u8; 3], overlay: [u8; 4]) -> [u8; 3] {
-    let unit = |byte: u8| f32::from(byte) / 255.0;
-    let out = graded(background.map(unit), overlay.map(unit));
-    out.map(|channel| (channel * 255.0).round().clamp(0.0, 255.0) as u8)
-}
-
-/// The background of [`background_in`] as drawn without an overlay.
-fn graded_background() -> [u8; 3] {
-    graded_bytes(BACKGROUND_COLOUR, [0; 4])
-}
-
-fn assert_close(actual: [u8; 3], expected: [u8; 3], context: &str) {
-    for (a, e) in actual.into_iter().zip(expected) {
-        assert!(
-            a.abs_diff(e) <= 2,
-            "{context}: {actual:?} is not {expected:?}"
-        );
-    }
-}
-
-#[test]
-fn the_right_edge_of_the_target_shows_the_image_left_of_its_padding() {
-    let Some((device, queue)) = test_device("menu backdrop padding") else {
-        return;
-    };
-    let dir = tempfile::tempdir().unwrap();
-    let [red, green, blue] = BACKGROUND_COLOUR;
-    write_two_band_texture(
-        dir.path(),
-        "Interface/LoadingMenuBG.DDS",
-        [red, green, blue, 255],
-        [0, 255, 0, 255],
-        background_uv([1.0, 0.5])[0],
-    );
-    let mut background = LoadingBackground::new(dir.path().to_path_buf());
-    let image = background.images(&device, &queue).expect("the image loads");
-    let target = Target::new(&device);
-    let mut menu = renderer(&device, &queue, HUD_GREEN);
-
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    let view = menu.target_view(&target.texture);
-    let backdrop = Backdrop {
-        alpha: 1.0,
-        image: Some(image),
-    };
-    menu.render_backdrop(&device, &queue, &mut encoder, &view, SIZE, backdrop);
-    queue.submit(std::iter::once(encoder.finish()));
-
-    let pixels = target.pixels(&device, &queue);
-    let (width, height) = SIZE;
-    for x in [0, width / 2, width - 1] {
-        assert_close(
-            pixels.at(x, height / 2),
-            graded_background(),
-            "every column shows the left band, the padding never shows",
-        );
-    }
-}
-
-#[test]
-fn a_backdrop_image_covers_the_whole_target_graded() {
-    let Some((device, queue)) = test_device("menu backdrop image") else {
-        return;
-    };
-    let dir = tempfile::tempdir().unwrap();
-    let mut background = background_in(dir.path());
-    let image = background.images(&device, &queue).expect("the image loads");
-    let target = Target::new(&device);
-    target.fill(&device, &queue, RED);
-    let mut menu = renderer(&device, &queue, HUD_GREEN);
-
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    let view = menu.target_view(&target.texture);
-    let backdrop = Backdrop {
-        alpha: 1.0,
-        image: Some(image),
-    };
-    menu.render_backdrop(&device, &queue, &mut encoder, &view, SIZE, backdrop);
-    queue.submit(std::iter::once(encoder.finish()));
-
-    for pixel in corners_and_centre(&target.pixels(&device, &queue)) {
-        assert_close(
-            pixel,
-            graded_background(),
-            "the graded image fills the target",
-        );
-    }
-}
-
-#[test]
-fn a_backdrop_overlay_is_added_over_the_image() {
-    let Some((device, queue)) = test_device("menu backdrop overlay") else {
-        return;
-    };
-    let dir = tempfile::tempdir().unwrap();
-    let overlay = [90, 160, 255, 128];
-    write_solid_texture(
-        dir.path(),
-        "Interface/Objects/LoadScreen/Overlay01_d.DDS",
-        overlay,
-    );
-    let mut background = background_in(dir.path());
-    let images = background.images(&device, &queue).expect("the images load");
-    assert!(images.overlay.is_some());
-    let target = Target::new(&device);
-    target.fill(&device, &queue, RED);
-    let mut menu = renderer(&device, &queue, HUD_GREEN);
-
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    let view = menu.target_view(&target.texture);
-    let backdrop = Backdrop {
-        alpha: 1.0,
-        image: Some(images),
-    };
-    menu.render_backdrop(&device, &queue, &mut encoder, &view, SIZE, backdrop);
-    queue.submit(std::iter::once(encoder.finish()));
-
-    let expected = graded_bytes(BACKGROUND_COLOUR, overlay);
-    assert_ne!(
-        expected,
-        graded_background(),
-        "the overlay changes the colour"
-    );
-    for pixel in corners_and_centre(&target.pixels(&device, &queue)) {
-        assert_close(pixel, expected, "the overlay is added to the image");
-    }
-}
-
-/// The game's overlay is a BC3 texture: an sRGB view of it, or its alpha applied twice, would
-/// weaken the grid. Its texel adds exactly `gain * alpha * rgb`, rgb as stored, tinted.
-#[test]
-fn a_bc3_overlay_adds_its_alpha_times_its_stored_colour_at_the_overlay_gain() {
-    const ALPHA: u8 = 128;
-    let Some((device, queue)) = test_device("menu backdrop bc3 overlay") else {
-        return;
-    };
-    let dir = tempfile::tempdir().unwrap();
-    write_solid_bc3_texture(
-        dir.path(),
-        "Interface/Objects/LoadScreen/Overlay01_d.DDS",
-        ALPHA,
-    );
-    let mut background = background_in(dir.path());
-    let images = background.images(&device, &queue).expect("the images load");
-    assert!(images.overlay.is_some());
-    let target = Target::new(&device);
-    let mut menu = renderer(&device, &queue, HUD_GREEN);
-
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    let view = menu.target_view(&target.texture);
-    let backdrop = Backdrop {
-        alpha: 1.0,
-        image: Some(images),
-    };
-    menu.render_backdrop(&device, &queue, &mut encoder, &view, SIZE, backdrop);
-    queue.submit(std::iter::once(encoder.finish()));
-
-    let plain = graded_background();
-    let alpha = f32::from(ALPHA) / 255.0;
-    let expected: [u8; 3] = std::array::from_fn(|channel| {
-        let added = GRADE_TINT[channel]
-            * OVERLAY_GAIN
-            * alpha
-            * f32::from(BC3_SOLID_RGB[channel]);
-        (f32::from(plain[channel]) + added).round() as u8
-    });
-    for pixel in corners_and_centre(&target.pixels(&device, &queue)) {
-        assert_close(pixel, expected, "the BC3 overlay is added as stored");
-    }
-}
-
-#[test]
-fn a_backdrop_image_fades_in_with_the_overlay() {
-    let Some((device, queue)) = test_device("menu backdrop image opacity") else {
-        return;
-    };
-    let dir = tempfile::tempdir().unwrap();
-    let mut background = background_in(dir.path());
-    let image = background.images(&device, &queue).expect("the image loads");
-    let target = Target::new(&device);
-    let mut menu = renderer(&device, &queue, HUD_GREEN);
-    let draw_at = |menu: &mut MenuRenderer, alpha: f32| {
-        target.fill(&device, &queue, RED);
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        let view = menu.target_view(&target.texture);
-        let backdrop = Backdrop {
-            alpha,
-            image: Some(image),
-        };
-        menu.render_backdrop(&device, &queue, &mut encoder, &view, SIZE, backdrop);
-        queue.submit(std::iter::once(encoder.finish()));
-        target.pixels(&device, &queue).at(SIZE.0 / 2, SIZE.1 / 2)
-    };
-
-    let half = draw_at(&mut menu, 0.5);
-    let over = draw_at(&mut menu, 7.0);
-
-    let [_, green, blue] = graded_background();
-    assert_close(
-        half,
-        [half[0], green / 2, blue / 2],
-        "half of the image over the red frame, which has no green or blue",
-    );
-    assert_close(
-        over,
-        graded_background(),
-        "an opacity above 1 is fully opaque",
-    );
-}
-
-#[test]
-fn a_backdrop_without_an_image_is_only_the_black_layer() {
-    let Some((device, queue)) = test_device("menu backdrop without image") else {
-        return;
-    };
-    let dir = tempfile::tempdir().unwrap();
-    let mut background = background_in(dir.path());
-    let image = background.images(&device, &queue).expect("the image loads");
-    let target = Target::new(&device);
-    let mut menu = renderer(&device, &queue, HUD_GREEN);
-    let draw = |menu: &mut MenuRenderer, image: Option<BackgroundImages<'_>>| {
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        let view = menu.target_view(&target.texture);
-        let backdrop = Backdrop { alpha: 1.0, image };
-        menu.render_backdrop(&device, &queue, &mut encoder, &view, SIZE, backdrop);
-        queue.submit(std::iter::once(encoder.finish()));
-    };
-
-    draw(&mut menu, Some(image));
-    draw(&mut menu, None);
-
-    for pixel in corners_and_centre(&target.pixels(&device, &queue)) {
-        assert_eq!(pixel, [0, 0, 0], "the image of an earlier frame is gone");
-    }
-}
-
-#[test]
-fn the_loading_art_is_drawn_over_the_backdrop_image() {
-    let Some((device, queue)) = test_device("menu art over backdrop image") else {
-        return;
-    };
-    let dir = tempfile::tempdir().unwrap();
-    let mut background = background_in(dir.path());
-    let image = background.images(&device, &queue).expect("the image loads");
-    let target = Target::new(&device);
-    let mut menu = renderer(&device, &queue, HUD_GREEN);
-    let mut art_renderer = LoadingArtRenderer::new(
-        &device,
-        &queue,
-        ui_gamma_format(FORMAT),
-        &SceneLights::VANILLA,
-    );
-    let cpu = CpuArt::load(&cube_art(dir.path(), "")).expect("the synthetic cube loads");
-    art_renderer.set_art(Some(
-        LoadedArt::upload(&device, &queue, cpu).expect("the cube uploads"),
-    ));
-
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    let view = menu.target_view(&target.texture);
-    let backdrop = Backdrop {
-        alpha: 1.0,
-        image: Some(image),
-    };
-    menu.render_backdrop(&device, &queue, &mut encoder, &view, SIZE, backdrop);
-    art_renderer.render(&mut encoder, &view, SIZE);
-    queue.submit(std::iter::once(encoder.finish()));
-    let pixels = target.pixels(&device, &queue);
-
-    assert_close(
-        pixels.at(0, 0),
-        graded_background(),
-        "the corner shows the image",
-    );
-    let centre = pixels.at(SIZE.0 / 2, SIZE.1 / 2);
-    assert!(
-        centre
-            .iter()
-            .zip(graded_background())
-            .any(|(a, b)| a.abs_diff(b) > 20),
-        "the cube hides the image at the centre: {centre:?}"
     );
 }

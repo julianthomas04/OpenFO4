@@ -1,34 +1,39 @@
-//! The 3D model of a large loading screen, drawn between the black backdrop and the logo with a
-//! pipeline of its own. The world pass is not reused: its buffers churn while a load tears the
-//! old scene down.
+//! The 3D scene of a large loading screen, drawn between the black backdrop and the logo with
+//! pipelines of its own: the stage, the model in front of it and the colour pass over both. The
+//! world pass is not reused: its buffers churn while a load tears the old scene down.
 //!
 //! A model is loaded in two steps, [`CpuArt::load`] and [`LoadedArt::upload`], neither of which
 //! needs the frame thread. [`LoadingArtRenderer::set_art`] only builds bind groups.
 
 mod art;
-mod background;
-mod background_look;
 mod camera;
+mod grade;
+mod grade_pass;
 mod model;
 mod motion;
 mod pan_window;
 mod pipeline;
 #[cfg(test)]
 mod renderer_tests;
+mod scene;
 mod scene_lights;
+#[cfg(test)]
+mod scene_tests;
+mod stage;
+pub(crate) mod stage_framing;
+mod stage_renderer;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod tuning;
 
 pub use art::{LoadingArt, ModelTransform};
-pub use background::{BackgroundImages, LoadingBackground};
-pub use background_look::{BACKGROUND_U_MAX, GRADE_LIFT, GRADE_TINT, OVERLAY_GAIN, light_colour};
-#[cfg(test)]
-pub use background_look::{background_uv, graded};
 pub use camera::ArtCamera;
+pub use grade::LoadScreenLut;
 pub use model::{CpuArt, LoadedArt, LoadingArtError};
 pub use motion::PanKey;
+pub use scene::{GradeSource, LoadingScene, PICTURE_FORMAT};
 pub use scene_lights::SceneLights;
+pub use stage::StageError;
 
 use bytemuck::bytes_of;
 use wgpu::util::DeviceExt;
@@ -55,9 +60,9 @@ pub struct LoadingArtRenderer {
 }
 
 impl LoadingArtRenderer {
-    /// A renderer for views of `target_format`, lit by `lights`. The menu draws through the
-    /// swapchain's non-sRGB view, so a format that does not encode sRGB itself gets its colour
-    /// encoded by the shader, and alpha blends on the encoded values like the rest of the menu.
+    /// A renderer for views of `target_format`, lit by `lights`. A non-sRGB view of an 8 bit
+    /// format gets its colour encoded by the shader; a float format, like the scene's linear
+    /// picture, gets linear light.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -91,7 +96,7 @@ impl LoadingArtRenderer {
         Self {
             device: device.clone(),
             queue: queue.clone(),
-            encode_srgb: !target_format.is_srgb(),
+            encode_srgb: stores_encoded_colour(target_format),
             lights: lights.to_gpu(),
             pipeline,
             sampler,
@@ -201,12 +206,14 @@ impl LoadingArtRenderer {
     }
 
     /// Draws the model over what `view`, of `size` pixels, holds, opaque, in a pass of
-    /// its own. Nothing is encoded without a model or for an empty target.
+    /// its own, seen through a vertical field of `vertical_fov_radians`. Nothing is encoded
+    /// without a model or for an empty target.
     pub fn render(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         size: (u32, u32),
+        vertical_fov_radians: f32,
     ) {
         let Some(active) = &self.active else { return };
         if size.0 == 0 || size.1 == 0 {
@@ -214,7 +221,7 @@ impl LoadingArtRenderer {
         }
         let aspect = size.0 as f32 / size.1 as f32;
         let scene = SceneUniform::new(
-            active.art.camera.view_proj(aspect),
+            active.art.camera.view_proj(aspect, vertical_fov_radians),
             active.art.camera.model_matrix(),
             self.lights,
             self.encode_srgb,
@@ -255,5 +262,23 @@ impl LoadingArtRenderer {
                 pass.draw_indexed(draw.indices.clone(), draw.base_vertex, 0..1);
             }
         }
+    }
+}
+
+/// Whether views of `format` store encoded colour the shader has to write itself: the non-sRGB
+/// view of a format that has an sRGB twin.
+fn stores_encoded_colour(format: wgpu::TextureFormat) -> bool {
+    format.add_srgb_suffix() != format
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_plain_view_of_an_srgb_capable_format_is_encoded_by_the_shader() {
+        assert!(stores_encoded_colour(wgpu::TextureFormat::Bgra8Unorm));
+        assert!(!stores_encoded_colour(wgpu::TextureFormat::Bgra8UnormSrgb));
+        assert!(!stores_encoded_colour(PICTURE_FORMAT));
     }
 }

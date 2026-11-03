@@ -4,7 +4,6 @@
 
 use std::sync::Arc;
 
-use super::background_quad::BackgroundQuad;
 use super::layout::MenuLayout;
 use super::loading_icon::{IconScene, LoadingIcon, LoadingIconError};
 use super::loading_panel::{ColouredRect, PanelContent};
@@ -17,7 +16,6 @@ use crate::rendering::hud::{
     pipeline::HudPipeline,
     quad::{HudVertex, PxRect, QuadBuilder},
 };
-use crate::rendering::loading_screen::BackgroundImages;
 use crate::rendering::post::tonemap::ui_gamma_format;
 use crate::rendering::ui_colour::UiTint;
 use crate::rendering::ui_fonts::{UiFontError, UiFonts};
@@ -55,15 +53,6 @@ pub enum MenuScene<'a> {
         /// The text panel of a large loading screen.
         panel: Option<PanelContent<'a>>,
     },
-}
-
-/// What an overlay draws first: its black layer and, on a large loading screen, the image behind
-/// the loading art.
-#[derive(Debug, Clone, Copy)]
-pub struct Backdrop<'a> {
-    pub alpha: f32,
-    /// Stretched over the whole target above the black layer.
-    pub image: Option<BackgroundImages<'a>>,
 }
 
 /// What an overlay draws above its backdrop and the loading art.
@@ -143,7 +132,6 @@ pub struct MenuRenderer {
     foreground_quads: QuadLayer,
     text: FieldText,
     video: VideoLayer,
-    background: BackgroundQuad,
     loading_icon: LoadingIcon,
     icon_state: IconState,
     safe_zone: SafeZone,
@@ -180,7 +168,6 @@ impl MenuRenderer {
         let pipeline = HudPipeline::new(device, format);
         let tint_bind_group = pipeline.create_tint_bind_group(device, &NEUTRAL_TINT);
         let loading_icon = LoadingIcon::new(device, format, art)?;
-        let background = BackgroundQuad::new(device, queue, format);
         Ok(Self {
             gamma_format: format,
             layout,
@@ -192,7 +179,6 @@ impl MenuRenderer {
             foreground_quads: QuadLayer::new(device),
             text: FieldText::new(device, queue, format, fonts, glyphon::ColorMode::Web),
             video: VideoLayer::new(device, format),
-            background,
             loading_icon,
             icon_state: IconState::default(),
             safe_zone,
@@ -259,8 +245,7 @@ impl MenuRenderer {
                 loading_seconds,
                 panel,
             } => {
-                let backdrop = Backdrop { alpha, image: None };
-                self.render_backdrop(device, queue, encoder, view, fb, backdrop);
+                self.render_backdrop(device, queue, encoder, view, fb, alpha);
                 let foreground = OverlayForeground {
                     alpha,
                     loading_seconds,
@@ -304,9 +289,9 @@ impl MenuRenderer {
         self.text.render_into(&mut pass);
     }
 
-    /// Encodes the pass of an overlay's black layer and, over it, its image, over `view`'s
-    /// contents. An overlay is drawn in three steps so that the loading art can be drawn between
-    /// the backdrop and the foreground: this, the art's own pass, then
+    /// Encodes the pass of an overlay's black layer at `alpha` over `view`'s contents. An
+    /// overlay is drawn in three steps so that a large loading screen's scene can be drawn
+    /// between the backdrop and the foreground: this, the scene's own passes, then
     /// [`Self::render_foreground`].
     pub fn render_backdrop(
         &mut self,
@@ -315,24 +300,17 @@ impl MenuRenderer {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         fb: (u32, u32),
-        backdrop: Backdrop<'_>,
+        alpha: f32,
     ) {
         let mut verts = std::mem::take(&mut self.quads.verts);
         let mut quads = QuadBuilder::new(&mut verts, fb.0 as f32, fb.1 as f32, 0.0, [0.0; 4]);
-        Self::draw_overlay(fb, backdrop.alpha, &mut quads);
+        Self::draw_overlay(fb, alpha, &mut quads);
         self.quads.verts = verts;
         self.quads.upload(device, queue);
-        match backdrop.image {
-            Some(images) => self
-                .background
-                .prepare(device, queue, images, backdrop.alpha),
-            None => self.background.clear(),
-        }
 
         let mut pass = Self::begin_pass(encoder, "Menu Backdrop Pass", view, wgpu::LoadOp::Load);
         self.quads
             .draw(&mut pass, &self.pipeline, &self.tint_bind_group);
-        self.background.draw(&mut pass);
     }
 
     /// Encodes the pass of an overlay's loading logo and panel over `view`'s contents.

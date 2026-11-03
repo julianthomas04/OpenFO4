@@ -18,12 +18,6 @@ use super::tuning::{
 };
 use crate::bethesda_space::{position_to_engine, rotation_to_engine};
 
-/// Inferred, not documented by the game: fitted to a vanilla 2560x1440 screenshot of the T-51
-/// loading screen. With the camera at the origin and the transform's placement as stored, the
-/// silhouette matches best at 23.9 degrees (24.6 and 23.2 already fit clearly worse), and moving
-/// the camera instead of narrowing the field fits worse at every distance. Kept vertical, so a
-/// wider window shows more at the sides, as the world camera does.
-pub const VERTICAL_FOV_DEGREES: f32 = 24.0;
 const NEAR: f32 = 0.1;
 const FAR: f32 = 2000.0;
 /// Zoom never reaches -1, where the distance would be infinite.
@@ -204,16 +198,23 @@ impl ArtCamera {
         }
     }
 
-    pub fn view_proj(&self, aspect: f32) -> Mat4 {
-        let projection = Mat4::perspective_rh(
-            VERTICAL_FOV_DEGREES.to_radians(),
-            aspect.max(f32::MIN_POSITIVE),
-            NEAR,
-            FAR,
-        );
+    /// The model seen from the origin, looking along -Z, `vertical_fov_radians` high; the field
+    /// is the stage's (see [`super::stage_framing`]) and stays vertical, so a wider window shows
+    /// more at the sides.
+    pub fn view_proj(&self, aspect: f32, vertical_fov_radians: f32) -> Mat4 {
         let view = Mat4::look_to_rh(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y);
-        projection * view
+        perspective(vertical_fov_radians, aspect) * view
     }
+}
+
+/// The projection of the loading screen's scene, the model's and the stage's alike.
+pub fn perspective(vertical_fov_radians: f32, aspect: f32) -> Mat4 {
+    Mat4::perspective_rh(
+        vertical_fov_radians,
+        aspect.max(f32::MIN_POSITIVE),
+        NEAR,
+        FAR,
+    )
 }
 
 fn ordered(a: f32, b: f32) -> (f32, f32) {
@@ -245,6 +246,12 @@ mod tests {
     }
 
     const PAN_LIMIT: f32 = 4.0;
+
+    /// The field of view of the game's own stage.
+    fn fov() -> f32 {
+        crate::rendering::loading_screen::stage_framing::test_support::vanilla_framing()
+            .vertical_fov_radians
+    }
 
     fn camera(edit: impl FnOnce(&mut LoadingArt)) -> ArtCamera {
         let mut art = art();
@@ -467,13 +474,13 @@ mod tests {
     #[test]
     fn a_point_straight_ahead_projects_to_the_middle_of_the_screen() {
         let camera = camera(|_| {});
-        let clip = camera.view_proj(16.0 / 9.0) * Vec3::new(0.0, 0.0, -50.0).extend(1.0);
+        let clip = camera.view_proj(16.0 / 9.0, fov()) * Vec3::new(0.0, 0.0, -50.0).extend(1.0);
         assert!(clip.w > 0.0);
         assert!((clip.x / clip.w).abs() < 1e-5 && (clip.y / clip.w).abs() < 1e-5);
     }
 
     fn pixel_of(camera: &ArtCamera, point: Vec3, size: (f32, f32)) -> (f32, f32) {
-        let clip = camera.view_proj(size.0 / size.1) * point.extend(1.0);
+        let clip = camera.view_proj(size.0 / size.1, fov()) * point.extend(1.0);
         let ndc = clip.truncate() / clip.w;
         (f32::midpoint(ndc.x, 1.0) * size.0, f32::midpoint(1.0, -ndc.y) * size.1)
     }
@@ -481,7 +488,7 @@ mod tests {
     #[test]
     fn a_point_at_the_top_edge_of_the_vertical_field_projects_to_the_top_of_the_screen() {
         let camera = camera(|_| {});
-        let half_fov = (VERTICAL_FOV_DEGREES / 2.0).to_radians();
+        let half_fov = fov() / 2.0;
         let point = Vec3::new(0.0, 50.0 * half_fov.tan(), -50.0);
         let (_, y) = pixel_of(&camera, point, (2560.0, 1440.0));
         assert!(y.abs() < 1e-2, "{y}");

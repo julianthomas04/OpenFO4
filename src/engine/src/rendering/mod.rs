@@ -214,7 +214,8 @@ use load_transition::{
     Destination, DragTracker, LoadHistory, LoadScreenHost, LoadScreenPreview, LoadScreens,
     ScreenRequest, loading_screen_section, spawn_report_title,
 };
-use menu::{Backdrop, MenuRenderer, OverlayForeground, PanelContent};
+use loading_screen::{GradeSource, LoadingScene};
+use menu::{MenuRenderer, OverlayForeground, PanelContent};
 use particles::CameraBasis;
 use ragdoll_objects::RagdollObjects;
 use refraction::{RefractionFrameInputs, RefractionStage};
@@ -1774,11 +1775,21 @@ impl State {
         timer.mark("sim_and_profiler")?;
 
         let material_bg_built_len = texture_array.bind_group_len();
+        let loading_scene = LoadingScene::new(
+            &device,
+            &queue,
+            tonemap::ui_gamma_format(surface_format),
+            Path::new(asset_server.asset_location()),
+            GradeSource {
+                lut: settings.loading_screen_lut.clone(),
+                db_path: db_path.clone(),
+            },
+        );
         let load_screens = LoadScreens {
             host: LoadScreenHost::new(
                 &device,
                 &queue,
-                tonemap::ui_gamma_format(surface_format),
+                loading_scene,
                 &settings.loading_lights,
                 Path::new(asset_server.asset_location()),
                 db_path.clone(),
@@ -2664,26 +2675,18 @@ impl State {
             let framebuffer = (self.config.width, self.config.height);
             let layers = overlay.layers;
             let art_shown = self.art_shown();
-            let backdrop = Backdrop {
-                alpha: overlay_alpha,
-                image: if art_shown {
-                    self.load_screens.host.background()
-                } else {
-                    None
-                },
-            };
             self.menu.render_backdrop(
                 &self.device,
                 &self.queue,
                 &mut encoder,
                 &menu_view,
                 framebuffer,
-                backdrop,
+                overlay_alpha,
             );
             if art_shown {
                 self.load_screens
                     .host
-                    .render(&mut encoder, &menu_view, framebuffer);
+                    .render(&mut encoder, &menu_view, framebuffer, overlay_alpha);
             }
             let foreground = OverlayForeground {
                 alpha: overlay_alpha,

@@ -40,13 +40,6 @@ impl State {
                 .unwrap_or_else(|| "it was closed".to_owned());
             return self.fail_shot(ShotError::LoadingScreen(reason));
         }
-        if shot.loading_screen == LoadingScreenStage::Opened
-            && self.load_screens.host.background_unavailable()
-        {
-            return self.fail_shot(ShotError::LoadingScreen(
-                "background texture missing".to_owned(),
-            ));
-        }
         let Some(shot) = self.shot.as_mut() else {
             return Ok(());
         };

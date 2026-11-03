@@ -11,7 +11,7 @@ use crate::assets::types::glb_key::glb_key;
 use crate::loading_screen::{LoadScreenContext, Place, select};
 use crate::random::SplitMix64;
 use crate::rendering::loading_screen::{
-    BackgroundImages, LoadedArt, LoadingArt, LoadingArtRenderer, LoadingBackground, ModelTransform,
+    LoadedArt, LoadingArt, LoadingArtRenderer, LoadingScene, ModelTransform, PICTURE_FORMAT,
     PanKey, SceneLights,
 };
 
@@ -61,7 +61,7 @@ pub(in crate::rendering) struct LoadScreenHost {
     forced: Option<String>,
     loader: ArtLoader,
     renderer: LoadingArtRenderer,
-    background: LoadingBackground,
+    scene: LoadingScene,
     device: wgpu::Device,
     queue: wgpu::Queue,
     pending: Option<Showing>,
@@ -69,10 +69,11 @@ pub(in crate::rendering) struct LoadScreenHost {
 }
 
 impl LoadScreenHost {
+    /// A host drawing the model into `scene`, lit by `lights`.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        target_format: wgpu::TextureFormat,
+        scene: LoadingScene,
         lights: &SceneLights,
         asset_root: &Path,
         db_path: String,
@@ -85,8 +86,8 @@ impl LoadScreenHost {
             rng: SplitMix64::new(seed),
             forced: forced_screen_from_env(),
             loader: ArtLoader::default(),
-            renderer: LoadingArtRenderer::new(device, queue, target_format, lights),
-            background: LoadingBackground::new(asset_root.to_path_buf()),
+            renderer: LoadingArtRenderer::new(device, queue, PICTURE_FORMAT, lights),
+            scene,
             device: device.clone(),
             queue: queue.clone(),
             pending: None,
@@ -152,8 +153,10 @@ impl LoadScreenHost {
     }
 
     /// Starts loading `chosen`'s model; what was shown before goes. The tip waits for the model.
+    /// Fails without a usable stage, which frames the model's camera.
     pub fn show(&mut self, chosen: ChosenScreen) -> Result<(), ArtLoadError> {
         self.clear();
+        self.scene.prepare()?;
         self.loader.start(chosen.art)?;
         self.pending = Some(Showing {
             label: chosen.label,
@@ -212,17 +215,6 @@ impl LoadScreenHost {
             .filter(|_| self.renderer.has_art())
     }
 
-    /// Whether the background failed to load, which no later frame retries.
-    pub fn background_unavailable(&self) -> bool {
-        self.background.is_unavailable()
-    }
-
-    /// The images behind a large screen's model, loaded on first use; none when the install lacks
-    /// the background.
-    pub fn background(&mut self) -> Option<BackgroundImages<'_>> {
-        self.background.images(&self.device, &self.queue)
-    }
-
     /// A drag of `dx_px` pixels to the right and `dy_px` down.
     pub fn drag(&mut self, dx_px: f32, dy_px: f32) {
         self.renderer.drag(dx_px, dy_px);
@@ -245,13 +237,19 @@ impl LoadScreenHost {
         self.renderer.tick(seconds);
     }
 
+    /// Draws the shown screen's stage and model, graded, over what `view`, of `size` pixels,
+    /// holds at `fade`.
     pub fn render(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         size: (u32, u32),
+        fade: f32,
     ) {
-        self.renderer.render(encoder, view, size);
+        if self.renderer.has_art() {
+            self.scene
+                .render(encoder, &mut self.renderer, view, size, fade);
+        }
     }
 }
 
@@ -485,23 +483,53 @@ mod tests {
             DragTracker, LoadHistory, LoadScreenPreview, LoadScreens,
         };
         use crate::rendering::loading_screen::ArtCamera;
-        use crate::rendering::loading_screen::test_support::cube_art;
+        use crate::rendering::loading_screen::test_support::{cube_art, install_stage};
+        use crate::rendering::loading_screen::{GradeSource, LoadScreenLut};
         use crate::rendering::post::tonemap::ui_gamma_format;
 
         const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
         const WAIT: Duration = Duration::from_secs(20);
 
-        fn host(test: &str) -> Option<LoadScreenHost> {
+        /// A host whose asset root, kept alive by the returned folder, holds a stage.
+        fn host(test: &str) -> Option<(LoadScreenHost, tempfile::TempDir)> {
+            let root = tempfile::tempdir().unwrap();
+            install_stage(root.path(), [255; 4], [0; 4]);
+            Some((host_in(test, root.path())?, root))
+        }
+
+        fn host_in(test: &str, asset_root: &Path) -> Option<LoadScreenHost> {
             let (device, queue) = test_device(test)?;
-            Some(LoadScreenHost::new(
+            let scene = LoadingScene::new(
                 &device,
                 &queue,
                 ui_gamma_format(FORMAT),
+                asset_root,
+                GradeSource {
+                    lut: LoadScreenLut::from_ini(&crate::assets::ini::GameIni::from_texts([""]))
+                        .unwrap(),
+                    db_path: String::new(),
+                },
+            );
+            Some(LoadScreenHost::new(
+                &device,
+                &queue,
+                scene,
                 &SceneLights::VANILLA,
-                Path::new("unused"),
+                asset_root,
                 String::new(),
                 1,
             ))
+        }
+
+        #[test]
+        fn without_a_stage_no_screen_is_shown() {
+            let root = tempfile::tempdir().unwrap();
+            let Some(mut host) = host_in("load screen host without stage", root.path()) else {
+                return;
+            };
+            let error = host.show(chosen(cube_art(root.path(), ""))).unwrap_err();
+            assert!(matches!(error, ArtLoadError::Stage(_)), "{error}");
+            assert!(!host.is_active());
         }
 
         fn chosen(art: LoadingArt) -> ChosenScreen {
@@ -527,7 +555,7 @@ mod tests {
 
         #[test]
         fn the_tip_shows_once_the_model_has_arrived_and_not_before() {
-            let Some(mut host) = host("load screen host ready") else {
+            let Some((mut host, _root)) = host("load screen host ready") else {
                 return;
             };
             let dir = tempfile::tempdir().unwrap();
@@ -541,7 +569,7 @@ mod tests {
 
         #[test]
         fn a_model_that_fails_reports_its_screen_and_leaves_nothing_shown() {
-            let Some(mut host) = host("load screen host failed") else {
+            let Some((mut host, _root)) = host("load screen host failed") else {
                 return;
             };
             let dir = tempfile::tempdir().unwrap();
@@ -560,7 +588,7 @@ mod tests {
 
         #[test]
         fn clearing_takes_down_a_shown_screen_and_one_still_loading() {
-            let Some(mut host) = host("load screen host clear") else {
+            let Some((mut host, _root)) = host("load screen host clear") else {
                 return;
             };
             let dir = tempfile::tempdir().unwrap();
@@ -581,7 +609,7 @@ mod tests {
 
         #[test]
         fn the_pan_keys_move_the_shown_model_only_while_they_are_held() {
-            let Some(mut host) = host("load screen host pan") else {
+            let Some((mut host, _root)) = host("load screen host pan") else {
                 return;
             };
             let dir = tempfile::tempdir().unwrap();
@@ -600,7 +628,7 @@ mod tests {
 
         #[test]
         fn a_drag_turns_and_zooms_the_shown_model_and_stops_its_spin() {
-            let Some(mut host) = host("load screen host drag") else {
+            let Some((mut host, _root)) = host("load screen host drag") else {
                 return;
             };
             let dir = tempfile::tempdir().unwrap();
@@ -618,7 +646,7 @@ mod tests {
 
         #[test]
         fn a_key_repeat_does_not_move_the_model() {
-            let Some(mut host) = host("load screen host key repeat") else {
+            let Some((mut host, _root)) = host("load screen host key repeat") else {
                 return;
             };
             let dir = tempfile::tempdir().unwrap();
@@ -632,7 +660,7 @@ mod tests {
         }
 
         fn screens(test: &str) -> Option<LoadScreens> {
-            let mut host = host(test)?;
+            let (mut host, _root) = host(test)?;
             let dir = tempfile::tempdir().unwrap();
             host.show(chosen(cube_art(dir.path(), ""))).unwrap();
             assert!(matches!(settled(&mut host), ArtStatus::Ready));
@@ -710,7 +738,7 @@ mod tests {
 
         #[test]
         fn a_new_screen_replaces_the_one_before() {
-            let Some(mut host) = host("load screen host replace") else {
+            let Some((mut host, _root)) = host("load screen host replace") else {
                 return;
             };
             let dir = tempfile::tempdir().unwrap();
