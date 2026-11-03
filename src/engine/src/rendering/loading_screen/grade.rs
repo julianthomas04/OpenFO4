@@ -1,6 +1,6 @@
 //! How the large loading screen's picture is graded: by the image space the default object
 //! manager names for loading screens (`LSIS`) and the colour LUT the `sLoadScreenLUT` setting
-//! names, over a picture lifted by a small neutral amount.
+//! names.
 
 use crate::assets::db::DbClient;
 use crate::assets::ini::{GameIni, IniError, IniKey};
@@ -22,8 +22,8 @@ const TEXTURES_PREFIX: &str = "textures\\";
 /// The game's data folder, which a path may start with.
 const DATA_PREFIX: &str = "data\\";
 
-/// Inferred, not read from any game data: a neutral amount of linear light added to the whole
-/// picture before it is graded. Without it a vanilla screenshot's background is matched about
+/// Inferred, not read from any game data: a neutral amount of linear light added to the stage's
+/// opaque background, before the picture is graded; the model does not get it. Without it a vanilla screenshot's background is matched about
 /// four times worse (rms 3.9 against 1.5 of 255), with it the fitted lift is the same in every
 /// channel (0.0035, 0.0037, 0.0034); about one step of 255 once encoded.
 pub const INFERRED_LIFT: f32 = 0.0035;
@@ -101,7 +101,6 @@ fn cinematic_in(db: &DbClient) -> Result<ImageSpaceCinematic, GradeDataError> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GradeLook {
     pub cinematic: ImageSpaceCinematic,
-    pub lift: f32,
 }
 
 /// The uniform block of `loading_grade.wgsl`.
@@ -119,7 +118,7 @@ impl GradeParams {
         let cinematic = &look.cinematic;
         Self {
             look: [
-                look.lift,
+                0.0,
                 if fade.is_nan() {
                     0.0
                 } else {
@@ -150,9 +149,8 @@ pub fn graded(
 ) -> glam::Vec3 {
     use glam::Vec3;
     const LUMA: Vec3 = Vec3::new(0.2126, 0.7152, 0.0722);
-    let lifted = picture + Vec3::splat(look.lift);
-    let luma = Vec3::splat(lifted.dot(LUMA));
-    let saturated = luma + (lifted - luma) * look.cinematic.saturation;
+    let luma = Vec3::splat(picture.dot(LUMA));
+    let saturated = luma + (picture - luma) * look.cinematic.saturation;
     let encode = |linear: f32| {
         let linear = linear.clamp(0.0, 1.0);
         if linear <= 0.003_130_8 {
@@ -283,16 +281,15 @@ mod tests {
     }
 
     #[test]
-    fn the_uniform_carries_the_lift_the_fade_the_target_and_the_cinematic_stage() {
+    fn the_uniform_carries_the_fade_the_target_and_the_cinematic_stage() {
         let look = GradeLook {
             cinematic: ImageSpaceCinematic {
                 saturation: 0.9,
                 ..ImageSpaceCinematic::NEUTRAL
             },
-            lift: INFERRED_LIFT,
         };
         let params = GradeParams::new(&look, 3.0, true);
-        assert_eq!(params.look, [INFERRED_LIFT, 1.0, 1.0, 0.0]);
+        assert_eq!(params.look, [0.0, 1.0, 1.0, 0.0]);
         assert_eq!(params.cinematic, [0.9, 1.0, 1.0, 0.0]);
         assert_eq!(GradeParams::new(&look, -1.0, false).look[1..3], [0.0, 0.0]);
     }
@@ -301,7 +298,6 @@ mod tests {
     fn a_nan_fade_is_no_fade() {
         let look = GradeLook {
             cinematic: ImageSpaceCinematic::NEUTRAL,
-            lift: 0.0,
         };
         assert_eq!(GradeParams::new(&look, f32::NAN, false).look[1], 0.0);
         assert_eq!(GradeParams::new(&look, f32::INFINITY, false).look[1], 1.0);
@@ -314,7 +310,6 @@ mod tests {
                 saturation: 0.5,
                 ..ImageSpaceCinematic::NEUTRAL
             },
-            lift: 0.0,
         };
         let decoded =
             |display: glam::Vec3| glam::Vec3::from(display.to_array().map(srgb_unit_to_linear));
@@ -327,20 +322,5 @@ mod tests {
         let red = graded(glam::Vec3::new(0.5, 0.0, 0.0), &look, decoded);
         let expected = glam::Vec3::new(0.303_15, 0.053_15, 0.053_15);
         assert!((red - expected).abs().max_element() < 1e-4, "{red:?}");
-    }
-
-    #[test]
-    fn the_lift_is_added_to_the_linear_picture_before_it_is_encoded() {
-        let look = GradeLook {
-            cinematic: ImageSpaceCinematic::NEUTRAL,
-            lift: INFERRED_LIFT,
-        };
-        let black = graded(glam::Vec3::ZERO, &look, |display| display);
-        for channel in black.to_array() {
-            assert!(
-                (srgb_unit_to_linear(channel) - INFERRED_LIFT).abs() < 1e-6,
-                "{black:?}"
-            );
-        }
     }
 }

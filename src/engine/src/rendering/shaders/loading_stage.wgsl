@@ -9,6 +9,8 @@ struct StageView {
 struct StageMaterial {
     // rgb: the base colour times its scale; a: the base colour's alpha times the material's.
     colour: vec4<f32>,
+    // x: linear light added to the plane, the lift of an opaque background.
+    lift: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> stage: StageView;
@@ -37,5 +39,5 @@ fn vs_main(in: VsIn) -> VsOut {
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let texel = textureSample(source, source_sampler, in.uv);
-    return vec4<f32>(texel.rgb * material.colour.rgb, texel.a * material.colour.a);
+    return vec4<f32>(texel.rgb * material.colour.rgb + vec3<f32>(material.lift.x), texel.a * material.colour.a);
 }

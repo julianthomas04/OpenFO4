@@ -110,12 +110,16 @@ fn assert_close(actual: [u8; 3], expected: [u8; 3], context: &str) {
     }
 }
 
-/// The scene's grade without a database: no cinematic stage, the inferred lift and no LUT file.
+/// The scene's grade without a database: no cinematic stage and no LUT file.
 fn neutral_look() -> GradeLook {
     GradeLook {
         cinematic: ImageSpaceCinematic::NEUTRAL,
-        lift: INFERRED_LIFT,
     }
+}
+
+/// The stage's background in the picture: its colour plus the inferred lift.
+fn lifted_background() -> Vec3 {
+    decoded(BACKGROUND) + Vec3::splat(INFERRED_LIFT)
 }
 
 fn scene(device: &wgpu::Device, queue: &wgpu::Queue, root: &Path) -> LoadingScene {
@@ -175,7 +179,7 @@ fn the_stage_background_fills_the_target_graded() {
         1.0,
     );
 
-    let expected = bytes(graded(decoded(BACKGROUND), &neutral_look(), |display| {
+    let expected = bytes(graded(lifted_background(), &neutral_look(), |display| {
         display
     }));
     for pixel in target.corners_and_centre(&device, &queue) {
@@ -195,7 +199,7 @@ fn every_width_of_screen_is_covered_by_the_stage_of_its_shape() {
         [0; 4],
     );
     let mut scene = scene(&device, &queue, root.path());
-    let expected = bytes(graded(decoded(BACKGROUND), &neutral_look(), |display| {
+    let expected = bytes(graded(lifted_background(), &neutral_look(), |display| {
         display
     }));
 
@@ -241,11 +245,11 @@ fn the_overlay_adds_its_colour_at_its_alpha_times_the_materials() {
 
     let added = decoded([overlay[0], overlay[1], overlay[2]]) * 0.6 * (128.0 / 255.0);
     let expected = bytes(graded(
-        decoded(BACKGROUND) + added,
+        lifted_background() + added,
         &neutral_look(),
         |display| display,
     ));
-    let plain = bytes(graded(decoded(BACKGROUND), &neutral_look(), |display| {
+    let plain = bytes(graded(lifted_background(), &neutral_look(), |display| {
         display
     }));
     assert_ne!(expected, plain, "the overlay changes the colour");
@@ -277,7 +281,7 @@ fn the_scene_fades_with_the_overlay() {
         0.5,
     );
 
-    let [red, green, blue] = bytes(graded(decoded(BACKGROUND), &neutral_look(), |display| {
+    let [red, green, blue] = bytes(graded(lifted_background(), &neutral_look(), |display| {
         display
     }));
     let half = |channel: u8, under: u8| u8::midpoint(channel, under);
@@ -309,7 +313,7 @@ fn the_model_is_drawn_in_front_of_the_stage() {
 
     render(&device, &queue, &mut scene, &mut art, &target, 1.0);
 
-    let background = bytes(graded(decoded(BACKGROUND), &neutral_look(), |display| {
+    let background = bytes(graded(lifted_background(), &neutral_look(), |display| {
         display
     }));
     assert_close(
@@ -356,7 +360,7 @@ fn the_scene_grades_with_the_lut_the_setting_names() {
         1.0,
     );
 
-    let expected = bytes(graded(decoded(BACKGROUND), &neutral_look(), |display| {
+    let expected = bytes(graded(lifted_background(), &neutral_look(), |display| {
         Vec3::ONE - display
     }));
     assert_close(
@@ -429,7 +433,6 @@ fn plain_pass(device: &wgpu::Device, queue: &wgpu::Queue, saturation: f32) -> Gr
             saturation,
             ..ImageSpaceCinematic::NEUTRAL
         },
-        lift: 0.0,
     });
     pass
 }
@@ -480,7 +483,6 @@ fn saturation_is_applied_in_linear_light_before_the_lut() {
             saturation: 0.5,
             ..ImageSpaceCinematic::NEUTRAL
         },
-        lift: 0.0,
     };
 
     let expected = bytes(graded(colour, &look, |display| display));
@@ -500,7 +502,6 @@ fn an_infinite_picture_colour_is_graded_as_the_largest_finite_one() {
     pass.set_lut(&queue, &LutTable::identity());
     let look = GradeLook {
         cinematic: ImageSpaceCinematic::NEUTRAL,
-        lift: 0.0,
     };
 
     let graded_infinity = grade_one(

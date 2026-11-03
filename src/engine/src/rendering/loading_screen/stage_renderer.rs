@@ -10,6 +10,7 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
 use super::camera::perspective;
+use super::grade::INFERRED_LIFT;
 use super::stage::{CpuStage, StageError, StageLayer, keep_usable, nearest_aspect};
 use super::stage_framing::StageFraming;
 use crate::assets::layout::named_texture_key;
@@ -24,12 +25,14 @@ use crate::rendering::vertex::Vertex;
 #[derive(Debug, Clone, Copy, PartialEq, Pod, Zeroable)]
 struct StageMaterialUniform {
     colour: [f32; 4],
+    /// `x`: the lift added to the plane.
+    lift: [f32; 4],
 }
 
 impl StageMaterialUniform {
     /// An effect shape's colour: its base colour times its scale, and the base colour's alpha
     /// times the material's.
-    fn new(material: &EffectMaterial) -> Self {
+    fn new(material: &EffectMaterial, lift: f32) -> Self {
         let [red, green, blue, alpha] = material.base_color;
         let scale = material.base_color_scale;
         Self {
@@ -39,6 +42,7 @@ impl StageMaterialUniform {
                 blue * scale,
                 alpha * material.alpha,
             ],
+            lift: [lift, 0.0, 0.0, 0.0],
         }
     }
 }
@@ -213,7 +217,14 @@ impl StageRenderer {
     ) -> wgpu::BindGroup {
         let material = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("loading_stage_material"),
-            contents: bytemuck::bytes_of(&StageMaterialUniform::new(&layer.material)),
+            contents: bytemuck::bytes_of(&StageMaterialUniform::new(
+                &layer.material,
+                if layer.is_opaque() {
+                    INFERRED_LIFT
+                } else {
+                    0.0
+                },
+            )),
             usage: wgpu::BufferUsages::UNIFORM,
         });
         let (address_mode_u, address_mode_v) = address_modes(layer.material.clamp);
@@ -382,7 +393,7 @@ mod tests {
         material.base_color_scale = 2.0;
         material.alpha = 0.5;
 
-        let uniform = StageMaterialUniform::new(&material);
+        let uniform = StageMaterialUniform::new(&material, 0.0);
 
         assert_eq!(uniform.colour[..3], [1.0, 0.5, 2.0]);
         assert!((uniform.colour[3] - 0.3).abs() < 1e-6);

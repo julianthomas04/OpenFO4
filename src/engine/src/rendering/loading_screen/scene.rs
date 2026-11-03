@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::LoadingArtRenderer;
-use super::grade::{GradeLook, INFERRED_LIFT, LoadScreenLut, load_screen_cinematic};
+use super::grade::{GradeLook, LoadScreenLut, load_screen_cinematic};
 use super::grade_pass::GradePass;
 use super::stage::{CpuStage, StageError, keep_usable, stage_paths};
 use super::stage_renderer::{LoadedStage, StageRenderer};
@@ -94,10 +94,7 @@ impl LoadingScene {
             );
             ImageSpaceCinematic::NEUTRAL
         });
-        self.grade.set_look(GradeLook {
-            cinematic,
-            lift: INFERRED_LIFT,
-        });
+        self.grade.set_look(GradeLook { cinematic });
         let key: Arc<str> = self.grade_source.lut.key.as_str().into();
         match load_table(&self.asset_root.to_string_lossy(), &key) {
             Ok(table) => self.grade.set_lut(&self.queue, &table),

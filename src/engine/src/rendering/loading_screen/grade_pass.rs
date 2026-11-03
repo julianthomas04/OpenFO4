@@ -20,7 +20,7 @@ pub struct GradePass {
 
 impl GradePass {
     /// A pass onto targets of `target_format`, grading with no LUT, a neutral cinematic stage
-    /// and no lift until told otherwise.
+    /// until told otherwise.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -111,7 +111,6 @@ impl GradePass {
             lut: ColourLut::new(device, queue, "loading_grade_lut"),
             look: GradeLook {
                 cinematic: ImageSpaceCinematic::NEUTRAL,
-                lift: 0.0,
             },
             target_decodes_srgb: target_format.is_srgb(),
             group: None,
