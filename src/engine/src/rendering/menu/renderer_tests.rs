@@ -11,9 +11,11 @@ use crate::game_flow::{GameFlow, MenuView, StartMode};
 use crate::rendering::game_settings::SafeZone;
 use crate::rendering::gpu_test::test_device;
 use crate::rendering::hud::field_text::TextItem;
-use crate::rendering::loading_screen::test_support::{cube_art, write_solid_texture};
+use crate::rendering::loading_screen::test_support::{
+    cube_art, write_solid_texture, write_two_band_texture,
+};
 use crate::rendering::loading_screen::{
-    BackgroundImages, CpuArt, LoadedArt, LoadingArtRenderer, LoadingBackground, graded,
+    BackgroundImages, background_uv, CpuArt, LoadedArt, LoadingArtRenderer, LoadingBackground, graded,
 };
 use crate::rendering::post::tonemap::ui_gamma_format;
 use crate::rendering::ui_colour::UiTint;
@@ -1099,6 +1101,45 @@ fn assert_close(actual: [u8; 3], expected: [u8; 3], context: &str) {
         assert!(
             a.abs_diff(e) <= 2,
             "{context}: {actual:?} is not {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn the_right_edge_of_the_target_shows_the_image_left_of_its_padding() {
+    let Some((device, queue)) = test_device("menu backdrop padding") else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let [red, green, blue] = BACKGROUND_COLOUR;
+    write_two_band_texture(
+        dir.path(),
+        "Interface/LoadingMenuBG.DDS",
+        [red, green, blue, 255],
+        [0, 255, 0, 255],
+        background_uv([1.0, 0.5])[0],
+    );
+    let mut background = LoadingBackground::new(dir.path().to_path_buf());
+    let image = background.images(&device, &queue).expect("the image loads");
+    let target = Target::new(&device);
+    let mut menu = renderer(&device, &queue, HUD_GREEN);
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    let view = menu.target_view(&target.texture);
+    let backdrop = Backdrop {
+        alpha: 1.0,
+        image: Some(image),
+    };
+    menu.render_backdrop(&device, &queue, &mut encoder, &view, SIZE, backdrop);
+    queue.submit(std::iter::once(encoder.finish()));
+
+    let pixels = target.pixels(&device, &queue);
+    let (width, height) = SIZE;
+    for x in [0, width / 2, width - 1] {
+        assert_close(
+            pixels.at(x, height / 2),
+            graded_background(),
+            "every column shows the left band, the padding never shows",
         );
     }
 }

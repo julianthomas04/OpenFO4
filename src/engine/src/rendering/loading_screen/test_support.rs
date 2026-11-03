@@ -183,6 +183,36 @@ pub fn write_texture(dir: &Path, name: &str, alpha: u8) {
     write_solid_texture(dir, name, [255, 255, 255, alpha]);
 }
 
+/// Width of the texture [`write_two_band_texture`] writes, as wide as the game's background.
+const BAND_TEXTURE_WIDTH: u32 = 2048;
+
+/// Writes `textures/<name>`, a 2048 x 2 texture whose texels left of `split_u` are `left` and
+/// the others `right`.
+pub fn write_two_band_texture(dir: &Path, name: &str, left: [u8; 4], right: [u8; 4], split_u: f32) {
+    let mut dds = ddsfile::Dds::new_dxgi(ddsfile::NewDxgiParams {
+        height: 2,
+        width: BAND_TEXTURE_WIDTH,
+        depth: None,
+        format: ddsfile::DxgiFormat::R8G8B8A8_UNorm,
+        mipmap_levels: Some(1),
+        array_layers: None,
+        caps2: None,
+        is_cubemap: false,
+        resource_dimension: ddsfile::D3D10ResourceDimension::Texture2D,
+        alpha_mode: ddsfile::AlphaMode::Unknown,
+    })
+    .expect("a valid texture description");
+    let split = (split_u * BAND_TEXTURE_WIDTH as f32).round() as usize;
+    for (index, texel) in dds.data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+        *texel = if (index % BAND_TEXTURE_WIDTH as usize) < split {
+            left
+        } else {
+            right
+        };
+    }
+    write_dds(dir, name, &dds);
+}
+
 /// Writes `textures/<name>`, a 2x2 texture whose texels all are `rgba`; `name` may name a
 /// folder below `textures`.
 pub fn write_solid_texture(dir: &Path, name: &str, rgba: [u8; 4]) {
@@ -202,6 +232,10 @@ pub fn write_solid_texture(dir: &Path, name: &str, rgba: [u8; 4]) {
     for texel in dds.data.as_chunks_mut::<4>().0 {
         *texel = rgba;
     }
+    write_dds(dir, name, &dds);
+}
+
+fn write_dds(dir: &Path, name: &str, dds: &ddsfile::Dds) {
     let path = dir.join("textures").join(name);
     std::fs::create_dir_all(path.parent().expect("a texture is in a folder"))
         .expect("the temp folder is writable");

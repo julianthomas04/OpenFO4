@@ -5,7 +5,8 @@
 
 /// The right end of the background image's u range. The 2048 x 1024 texture holds a 16:9 image
 /// 1820 px wide, padded to 2048; its right strip is unrelated scraps. The image is stretched, not
-/// cropped, over any aspect: wider screens take a wider mesh with the same UVs.
+/// cropped, over any aspect: the background is one full-screen strip whose u runs from 0 to
+/// this value, whatever the screen's shape.
 pub const BACKGROUND_U_MAX: f32 = 16.0 / 9.0 / 2.0;
 
 /// The factor of the additive grid overlay's alpha, which is blended with (source alpha, one).
