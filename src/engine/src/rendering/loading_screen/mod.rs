@@ -19,6 +19,7 @@ mod scene;
 mod scene_lights;
 #[cfg(test)]
 mod scene_tests;
+mod spot_shadow;
 mod stage;
 pub(crate) mod stage_framing;
 mod stage_renderer;
@@ -38,8 +39,10 @@ pub use stage::StageError;
 use bytemuck::bytes_of;
 use wgpu::util::DeviceExt;
 
+use crate::rendering::shadows::lamps::LampShadowConfig;
 use pipeline::{ArtPipeline, DepthTarget, MaterialUniform, SceneUniform};
 use scene_lights::{GpuSceneLight, LIGHT_COUNT};
+use spot_shadow::{Casters, LightShadowFrame, SpotShadows};
 
 struct Active {
     art: LoadedArt,
@@ -50,7 +53,9 @@ pub struct LoadingArtRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     lights: [GpuSceneLight; LIGHT_COUNT],
+    lamp_shadows: LampShadowConfig,
     pipeline: ArtPipeline,
+    shadows: SpotShadows,
     sampler: wgpu::Sampler,
     scene_buffer: wgpu::Buffer,
     scene_group: wgpu::BindGroup,
@@ -59,15 +64,23 @@ pub struct LoadingArtRenderer {
 }
 
 impl LoadingArtRenderer {
-    /// A renderer for views of `target_format`, lit by `lights`. It writes linear light, so the
+    /// A renderer for views of `target_format`, lit by `lights`, whose shadows are filtered and
+    /// biased as the world's lamp shadows of `lamp_shadows`. It writes linear light, so the
     /// target is the scene's float picture.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         target_format: wgpu::TextureFormat,
         lights: &SceneLights,
+        lamp_shadows: &LampShadowConfig,
     ) -> Self {
         let pipeline = ArtPipeline::new(device, target_format);
+        let shadows = SpotShadows::new(
+            device,
+            &pipeline.shadow_layout,
+            &pipeline.scene_layout,
+            &pipeline.texture_layout,
+        );
         let scene_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("loading_art_scene"),
             size: std::mem::size_of::<SceneUniform>() as u64,
@@ -95,7 +108,9 @@ impl LoadingArtRenderer {
             device: device.clone(),
             queue: queue.clone(),
             lights: lights.to_gpu(),
+            lamp_shadows: *lamp_shadows,
             pipeline,
+            shadows,
             sampler,
             scene_buffer,
             scene_group,
@@ -227,6 +242,18 @@ impl LoadingArtRenderer {
         );
         self.queue
             .write_buffer(&self.scene_buffer, 0, bytes_of(&scene));
+        self.shadows.render(
+            &self.queue,
+            encoder,
+            &LightShadowFrame::of(&self.lights, aim, &self.lamp_shadows),
+            &Casters {
+                scene_group: &self.scene_group,
+                vertices: &active.art.vertices,
+                indices: &active.art.indices,
+                draws: &active.art.draws,
+                texture_groups: &active.texture_groups,
+            },
+        );
         let depth = DepthTarget::view_for(&mut self.depth, &self.device, size);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Loading Art Pass"),
@@ -252,6 +279,7 @@ impl LoadingArtRenderer {
             multiview_mask: None,
         });
         pass.set_bind_group(0, &self.scene_group, &[]);
+        pass.set_bind_group(2, &self.shadows.receiver_group, &[]);
         pass.set_vertex_buffer(0, active.art.vertices.slice(..));
         pass.set_index_buffer(active.art.indices.slice(..), wgpu::IndexFormat::Uint32);
         for pipeline in [&self.pipeline.depth_prepass, &self.pipeline.pipeline] {

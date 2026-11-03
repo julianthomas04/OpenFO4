@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 
 use super::art::{LoadingArt, ModelTransform};
+use crate::rendering::shadows::lamps::LampShadowConfig;
+use crate::rendering::shadows::settings::ShadowFilter;
 
 /// Half the edge of the test cube, in engine units: at the fixture's 30 units distance it spans
 /// about a fifth of the view's height.
@@ -378,6 +380,53 @@ pub fn layered_quads_art(dir: &Path) -> LoadingArt {
     art
 }
 
+/// Where the occluder of [`occluded_quad_art`] hangs, in the model's space: in front of the
+/// receiver, on the ray from the vanilla fill light to the receiver's centre.
+const OCCLUDER_CENTRE: [f32; 3] = [2.9, 1.6, 8.0];
+const OCCLUDER_HALF: f32 = 1.0;
+
+/// A square receiver of 5 units half edge facing the viewer, and a small occluder in front of
+/// it that stands between the vanilla fill light and the receiver's centre but not between the
+/// viewer and it. The occluder's material is `occluder_material`; the receiver's is plain.
+pub fn occluded_quad_art(dir: &Path, occluder_material: &str) -> LoadingArt {
+    let corners = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+    let uvs: Vec<f32> = corners
+        .iter()
+        .flat_map(|(u, v)| [u * 0.5 + 0.5, v * 0.5 + 0.5])
+        .collect();
+    let quad = |centre: [f32; 3], half: f32| -> (Vec<f32>, Vec<f32>) {
+        let positions = corners
+            .iter()
+            .flat_map(|(u, v)| [centre[0] + u * half, centre[1] + v * half, centre[2]])
+            .collect();
+        let normals = corners.iter().flat_map(|_| [0.0, 0.0, 1.0]).collect();
+        (positions, normals)
+    };
+    let (receiver_positions, normals) = quad([0.0; 3], HALF_EDGE);
+    let (occluder_positions, _) = quad(OCCLUDER_CENTRE, OCCLUDER_HALF);
+    let indices = [0u16, 1, 2, 0, 2, 3];
+    let glb = pack_glb_parts(&[
+        GlbPart {
+            positions: &receiver_positions,
+            normals: &normals,
+            uvs: &uvs,
+            indices: &indices,
+            material: json!({"name": ""}),
+        },
+        GlbPart {
+            positions: &occluder_positions,
+            normals: &normals,
+            uvs: &uvs,
+            indices: &indices,
+            material: json!({"name": occluder_material}),
+        },
+    ]);
+    let mut art = cube_art(dir, "");
+    art.model_path = dir.join("occluded_quads.glb");
+    std::fs::write(&art.model_path, glb).expect("the temp folder is writable");
+    art
+}
+
 /// Writes `textures/<name>`, a 2x2 texture whose texels all have the given alpha and are white.
 pub fn write_texture(dir: &Path, name: &str, alpha: u8) {
     write_solid_texture(dir, name, [255, 255, 255, alpha]);
@@ -411,4 +460,17 @@ fn write_dds(dir: &Path, name: &str, dds: &ddsfile::Dds) {
         .expect("the temp folder is writable");
     let mut file = std::fs::File::create(path).expect("the texture is writable");
     dds.write(&mut file).expect("the texture is written");
+}
+
+/// The lamp-shadow settings the loading art's tests render with: the highest filter quality and
+/// a bias scale like a game INI's.
+pub fn lamp_shadow_config() -> LampShadowConfig {
+    LampShadowConfig {
+        max_lamps: 3,
+        filter: ShadowFilter::from_quality(ShadowFilter::MAX_QUALITY),
+        halve_distance: 100.0,
+        fade_end: 100.0,
+        atlas_resolution: 2048,
+        bias_scale: 0.25,
+    }
 }

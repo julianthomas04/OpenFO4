@@ -7,7 +7,7 @@ use glam::{UVec2, Vec3};
 
 use super::grade::{GradeLook, INFERRED_LIFT, LoadScreenLut, graded};
 use super::grade_pass::GradePass;
-use super::test_support::{cube_art, install_stage};
+use super::test_support::{cube_art, install_stage, lamp_shadow_config};
 use super::{
     CpuArt, GradeSource, LoadedArt, LoadingArtRenderer, LoadingScene, PICTURE_FORMAT, SceneLights,
 };
@@ -138,7 +138,13 @@ fn scene(device: &wgpu::Device, queue: &wgpu::Queue, root: &Path) -> LoadingScen
 }
 
 fn empty_art_renderer(device: &wgpu::Device, queue: &wgpu::Queue) -> LoadingArtRenderer {
-    LoadingArtRenderer::new(device, queue, PICTURE_FORMAT, &SceneLights::VANILLA)
+    LoadingArtRenderer::new(
+        device,
+        queue,
+        PICTURE_FORMAT,
+        &SceneLights::VANILLA,
+        &lamp_shadow_config(),
+    )
 }
 
 fn render(

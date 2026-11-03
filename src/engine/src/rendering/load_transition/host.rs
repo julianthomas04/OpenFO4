@@ -14,6 +14,7 @@ use crate::rendering::loading_screen::{
     LoadedArt, LoadingArt, LoadingArtRenderer, LoadingScene, ModelTransform, PICTURE_FORMAT,
     PanKey, SceneLights,
 };
+use crate::rendering::shadows::lamps::LampShadowConfig;
 
 /// Names the editor id of the loading screen to show on every large screen, to tune its camera.
 pub(super) const FORCED_SCREEN_VAR: &str = "OPENFO4_LOADSCREEN";
@@ -69,12 +70,13 @@ pub(in crate::rendering) struct LoadScreenHost {
 }
 
 impl LoadScreenHost {
-    /// A host drawing the model into `scene`, lit by `lights`.
+    /// A host drawing the model into `scene`, lit by `lights` with shadows as `lamp_shadows`.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         scene: LoadingScene,
         lights: &SceneLights,
+        lamp_shadows: &LampShadowConfig,
         asset_root: &Path,
         db_path: String,
         seed: u64,
@@ -86,7 +88,7 @@ impl LoadScreenHost {
             rng: SplitMix64::new(seed),
             forced: forced_screen_from_env(),
             loader: ArtLoader::default(),
-            renderer: LoadingArtRenderer::new(device, queue, PICTURE_FORMAT, lights),
+            renderer: LoadingArtRenderer::new(device, queue, PICTURE_FORMAT, lights, lamp_shadows),
             scene,
             device: device.clone(),
             queue: queue.clone(),
@@ -483,7 +485,9 @@ mod tests {
             DragTracker, LoadHistory, LoadScreenPreview, LoadScreens,
         };
         use crate::rendering::loading_screen::ArtCamera;
-        use crate::rendering::loading_screen::test_support::{cube_art, install_stage};
+        use crate::rendering::loading_screen::test_support::{
+            cube_art, install_stage, lamp_shadow_config,
+        };
         use crate::rendering::loading_screen::{GradeSource, LoadScreenLut};
         use crate::rendering::post::tonemap::ui_gamma_format;
 
@@ -515,6 +519,7 @@ mod tests {
                 &queue,
                 scene,
                 &SceneLights::VANILLA,
+                &lamp_shadow_config(),
                 asset_root,
                 String::new(),
                 1,

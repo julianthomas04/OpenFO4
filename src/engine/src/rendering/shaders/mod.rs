@@ -275,9 +275,13 @@ pub const LOADING_GRADE: ShaderSource = ShaderSource {
 pub const LOADING_ART: ShaderSource = ShaderSource {
     label: "loading_art_shader",
     wgsl: concat!(
+        include_str!("light_data.wgsl"),
+        include_str!("lamp_shadow_types.wgsl"),
         include_str!("shading_math.wgsl"),
         include_str!("normal_mapping.wgsl"),
         include_str!("placed_light.wgsl"),
+        include_str!("shadow_bias.wgsl"),
+        include_str!("lamp_shadow.wgsl"),
         include_str!("surface_response.wgsl"),
         include_str!("loading_art.wgsl"),
     ),

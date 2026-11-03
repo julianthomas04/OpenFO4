@@ -3,7 +3,10 @@
 use glam::{UVec2, Vec3};
 
 use super::stage_framing::test_support::vanilla_framing;
-use super::test_support::{cube_art, layered_quads_art, write_solid_texture, write_texture};
+use super::test_support::{
+    cube_art, lamp_shadow_config, layered_quads_art, occluded_quad_art, write_solid_texture,
+    write_texture,
+};
 use super::{
     CpuArt, LoadedArt, LoadingArt, LoadingArtRenderer, PICTURE_FORMAT, PanKey, SceneLights,
 };
@@ -183,7 +186,13 @@ impl Scene {
 
     fn lit_by(test: &str, lights: &SceneLights) -> Option<Self> {
         let (device, queue) = test_device(test)?;
-        let renderer = LoadingArtRenderer::new(&device, &queue, PICTURE_FORMAT, lights);
+        let renderer = LoadingArtRenderer::new(
+            &device,
+            &queue,
+            PICTURE_FORMAT,
+            lights,
+            &lamp_shadow_config(),
+        );
         Some(Self {
             device,
             queue,
@@ -697,4 +706,48 @@ fn a_nearer_light_is_brighter_than_a_farther_one() {
     };
 
     assert!(near[1] > far[1] + 0.05, "{near:?} against {far:?}");
+}
+
+/// The linear colour of the centre of the occluded quad, whose occluder has `material`; `None`
+/// without a GPU.
+fn centre_behind_occluder(test: &str, occluder_alpha: u8, material: &str) -> Option<[f32; 3]> {
+    let mut scene = Scene::new(test)?;
+    let dir = tempfile::tempdir().unwrap();
+    write_texture(dir.path(), "leaf.dds", occluder_alpha);
+    scene.show(&occluded_quad_art(dir.path(), material));
+    let target = Target::new(&scene, SIZE, BLACK);
+    Some(scene.draw(&target).centre().map(srgb_to_linear))
+}
+
+#[test]
+fn a_part_between_a_light_and_the_surface_it_lights_shadows_it() {
+    let (Some(shadowed), Some(lit)) = (
+        centre_behind_occluder("loading art shadow", 255, "leaf.dds"),
+        linear_centre("loading art unshadowed", &SceneLights::VANILLA),
+    ) else {
+        return;
+    };
+
+    assert!(lit[0] > 0.2, "the fill light lights the face: {lit:?}");
+    assert!(
+        shadowed.iter().all(|channel| *channel < lit[0] * 0.1),
+        "the occluder leaves the face in the dark: {shadowed:?} against {lit:?}"
+    );
+}
+
+#[test]
+fn a_cut_out_part_casts_no_shadow() {
+    let (Some(cut_out), Some(lit)) = (
+        centre_behind_occluder("loading art cut-out shadow", 0, "leaf.dds|test:128"),
+        linear_centre("loading art unshadowed cut-out", &SceneLights::VANILLA),
+    ) else {
+        return;
+    };
+
+    for (channel, (actual, expected)) in cut_out.into_iter().zip(lit).enumerate() {
+        assert!(
+            (actual - expected).abs() < 0.01,
+            "channel {channel}: {actual} is not {expected}"
+        );
+    }
 }

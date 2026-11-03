@@ -11,7 +11,7 @@ use crate::game_flow::{GameFlow, MenuView, StartMode};
 use crate::rendering::game_settings::SafeZone;
 use crate::rendering::gpu_test::test_device;
 use crate::rendering::hud::field_text::TextItem;
-use crate::rendering::loading_screen::test_support::cube_art;
+use crate::rendering::loading_screen::test_support::{cube_art, lamp_shadow_config};
 use crate::rendering::loading_screen::{
     CpuArt, LoadedArt, LoadingArtRenderer, SceneLights,
     stage_framing::test_support::vanilla_framing,
@@ -1018,6 +1018,7 @@ fn the_loading_art_sits_above_the_backdrop_and_below_the_logo() {
         &queue,
         ui_gamma_format(FORMAT),
         &SceneLights::VANILLA,
+        &lamp_shadow_config(),
     );
     let dir = tempfile::tempdir().unwrap();
     let mut art = cube_art(dir.path(), "");

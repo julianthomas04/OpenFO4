@@ -1791,6 +1791,7 @@ impl State {
                 &queue,
                 loading_scene,
                 &settings.loading_lights,
+                &settings.lamp_shadows,
                 Path::new(asset_server.asset_location()),
                 db_path.clone(),
                 seed_from_clock(),

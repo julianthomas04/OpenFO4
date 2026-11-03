@@ -59,6 +59,8 @@ pub(super) struct ArtPipeline {
     pub pipeline: wgpu::RenderPipeline,
     pub scene_layout: wgpu::BindGroupLayout,
     pub texture_layout: wgpu::BindGroupLayout,
+    /// The lights' shadows as the colour pass reads them.
+    pub shadow_layout: wgpu::BindGroupLayout,
 }
 
 impl ArtPipeline {
@@ -100,9 +102,44 @@ impl ArtPipeline {
                 filterable_texture_entry(4),
             ],
         });
+        let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("loading_art_shadow_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
+            ],
+        });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("loading_art_layout"),
-            bind_group_layouts: &[Some(&scene_layout), Some(&texture_layout)],
+            bind_group_layouts: &[
+                Some(&scene_layout),
+                Some(&texture_layout),
+                Some(&shadow_layout),
+            ],
             immediate_size: 0,
         });
         let shader = shaders::LOADING_ART.compile(device);
@@ -167,6 +204,7 @@ impl ArtPipeline {
             pipeline,
             scene_layout,
             texture_layout,
+            shadow_layout,
         }
     }
 }

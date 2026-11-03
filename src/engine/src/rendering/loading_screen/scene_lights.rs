@@ -218,6 +218,22 @@ pub(super) struct GpuSceneLight {
     attenuation: [f32; 4],
 }
 
+impl GpuSceneLight {
+    /// The light's position in engine space.
+    pub(super) fn position(&self) -> glam::Vec3 {
+        glam::Vec3::new(
+            self.position_radius[0],
+            self.position_radius[1],
+            self.position_radius[2],
+        )
+    }
+
+    /// The cosine of the half-angle of its cone.
+    pub(super) fn half_angle_cosine(&self) -> f32 {
+        self.attenuation[3]
+    }
+}
+
 impl SceneLight {
     fn to_gpu(self) -> GpuSceneLight {
         let [x, y, z] = self.position.to_array();
