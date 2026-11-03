@@ -333,11 +333,11 @@ mod tests {
         staging.stage(ring, grid, res, DeferredSpawn::default());
     }
 
-    /// Readiness keyed on a marker count, which stands in for the cell's textures.
     fn by_marker_verdict(res: &CellResources, waited: Duration) -> Verdict {
         verdict(by_marker(res), waited)
     }
 
+    /// Readiness keyed on a marker count, which stands in for the cell's textures.
     fn by_marker(res: &CellResources) -> Vec<TextureReadiness> {
         match res.marker_count {
             0 => vec![Ready],

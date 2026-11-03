@@ -3404,12 +3404,6 @@ impl State {
         f(&mut self.streamer, &mut targets)
     }
 
-    /// Finish a streamer teardown+load (worldspace switch or interior enter):
-    /// apply the queued `RemoveCellColliders` and fold the broad phase BEFORE
-    /// teleporting, then move the camera and request the player spawn at
-    /// `start`. The remove-before-teleport order is load-bearing — otherwise the
-    /// spawn's ground-snap can latch onto the old content's still-resident
-    /// terrain at a grid that numerically aliases the new start.
     /// Feeds the reveal texture check this frame's draws, now that the material bind group is
     /// final for the frame, and logs its report once a fade ends.
     fn check_reveal_textures(&mut self) {
@@ -3453,6 +3447,12 @@ impl State {
         draws
     }
 
+    /// Finish a streamer teardown+load (worldspace switch or interior enter):
+    /// apply the queued `RemoveCellColliders` and fold the broad phase BEFORE
+    /// teleporting, then move the camera and request the player spawn at
+    /// `start`. The remove-before-teleport order is load-bearing — otherwise the
+    /// spawn's ground-snap can latch onto the old content's still-resident
+    /// terrain at a grid that numerically aliases the new start.
     fn apply_stream_teleport(&mut self, start: Vec3) {
         stream_settle::apply_teardown(&mut self.sim, self.streamer.take_sim_commands());
         self.walk_in.rearm();

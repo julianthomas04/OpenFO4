@@ -2048,10 +2048,6 @@ impl WorldStreamer {
         *self.worker_shared.demand_view.lock().unwrap() = self.demand_view;
     }
 
-    /// Record every texture of `res` as a user at the strongest demand its
-    /// sources place on it. A source whose bounding box cannot beat what its
-    /// textures already have in the running sweep is skipped without walking
-    /// its placements.
     /// A staged cell's demand, with every texture held at least at `STAGED_DEMAND_FLOOR`.
     fn note_staged_cell_demand(
         res: &CellResources,
@@ -2064,6 +2060,10 @@ impl WorldStreamer {
         }
     }
 
+    /// Record every texture of `res` as a user at the strongest demand its
+    /// sources place on it. A source whose bounding box cannot beat what its
+    /// textures already have in the running sweep is skipped without walking
+    /// its placements.
     fn note_cell_demand(res: &CellResources, view: &DemandView, residency: &mut TextureResidency) {
         for source in &res.demand_sources {
             let textures = &res.texture_refs[source.textures.clone()];
