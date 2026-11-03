@@ -706,6 +706,12 @@ const POSE_EPS_BASIS: f32 = 1e-3;
 /// slot of group `g`'s instance `i` is `instance_range.offset + base[g] + i`.
 /// Single source for that layout so the per-frame dynamic-pose rewrite can't
 /// drift from how the slab is actually packed.
+/// Fixes a staged cell's group offsets, through which the pose readback resolves its rows
+/// before promotion uploads them.
+fn index_staged_rows(res: &mut CellResources) {
+    res.group_base = group_base_offsets(&res.object_groups);
+}
+
 fn group_base_offsets(groups: &[CellObjectGroup]) -> Vec<u32> {
     let mut base = Vec::with_capacity(groups.len());
     let mut acc = 0u32;
@@ -2472,6 +2478,7 @@ impl WorldStreamer {
             animated_refs: std::mem::take(&mut result.animated_refs),
             ragdoll_refs: std::mem::take(&mut result.ragdoll_refs),
         };
+        index_staged_rows(&mut res);
         self.stage(Ring::Full, grid, res, spawn, targets);
         // The staged cell's static collision registers at once.
         self.collision_ring_dirty = true;

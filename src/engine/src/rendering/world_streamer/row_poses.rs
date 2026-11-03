@@ -5,6 +5,8 @@
 use glam::{Mat4, Quat, Vec3};
 use tracing::info_span;
 
+#[cfg(test)]
+use super::index_staged_rows;
 use super::{
     Aabb, CellObjectGroup, CellResources, DynRow, POSE_EPS_BASIS, POSE_EPS_TRANSLATION, Ring,
     StreamTargets, WorldStreamer, instance_aabb, world_aabb,
@@ -99,29 +101,12 @@ impl WorldStreamer {
                 },
             };
             let slab = res.instance_range;
-            let CellResources {
-                object_groups,
-                dynamic_instances,
-                group_base,
-                ..
-            } = res;
             self.pose_writes.clear();
-            let mut slots = SlabSlots {
-                object_groups,
-                group_base,
-                slab_count: slab.map(|(_, count)| count),
-            };
-            for &(_, pose_index) in cell_run {
-                let Some(rows) = dynamic_instances.get_mut(&poses.entity(pose_index)) else {
-                    continue;
-                };
-                let Some(pose) = poses.pose(pose_index) else {
-                    continue;
-                };
-                if let Some(bounds) = rewrite_rows(rows, &pose, &mut slots, &mut self.pose_writes) {
-                    self.shadow_invalidations.region(bounds);
-                }
-            }
+            let pose_indices = cell_run.iter().map(|&(_, pose_index)| pose_index);
+            let invalidations = &mut self.shadow_invalidations;
+            rewrite_cell_rows(res, poses, pose_indices, &mut self.pose_writes, |bounds| {
+                invalidations.region(bounds);
+            });
             if let Some((slab_offset, _)) = slab {
                 self.flush_pose_writes(slab_offset, targets);
             }
@@ -147,6 +132,41 @@ impl WorldStreamer {
                 .object_instances
                 .write(slab_offset + first, &self.pose_run, targets.queue);
             start = end;
+        }
+    }
+}
+
+/// Move the rows of `res` that the poses at `pose_indices` place: its CPU mirror always, and,
+/// once the cell has a slab range, queue the slab writes into `writes`. `moved` gets the bounds
+/// each moved body touched.
+fn rewrite_cell_rows<P: PoseSource + ?Sized>(
+    res: &mut CellResources,
+    poses: &P,
+    pose_indices: impl Iterator<Item = usize>,
+    writes: &mut Vec<(u32, GpuInstance)>,
+    mut moved: impl FnMut(Aabb),
+) {
+    let CellResources {
+        object_groups,
+        dynamic_instances,
+        group_base,
+        instance_range,
+        ..
+    } = res;
+    let mut slots = SlabSlots {
+        object_groups,
+        group_base,
+        slab_count: instance_range.map(|(_, count)| count),
+    };
+    for pose_index in pose_indices {
+        let Some(rows) = dynamic_instances.get_mut(&poses.entity(pose_index)) else {
+            continue;
+        };
+        let Some(pose) = poses.pose(pose_index) else {
+            continue;
+        };
+        if let Some(bounds) = rewrite_rows(rows, &pose, &mut slots, writes) {
+            moved(bounds);
         }
     }
 }
@@ -242,6 +262,49 @@ mod tests {
             translation,
             rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
         }
+    }
+
+    #[test]
+    fn a_staged_cell_moves_its_rows_in_the_cpu_mirror_only() {
+        use bytemuck::Zeroable;
+
+        use crate::sim::{DynamicPose, EntityId};
+
+        let group = |instances: usize| CellObjectGroup {
+            mega_key: "mesh".into(),
+            instances: vec![GpuInstance::zeroed(); instances],
+        };
+        let body = EntityId(7);
+        let mut res = CellResources {
+            object_groups: vec![group(2), group(1)],
+            dynamic_instances: [(
+                body,
+                vec![DynRow {
+                    group_idx: 1,
+                    ..row(1.0, Mat4::IDENTITY)
+                }],
+            )]
+            .into(),
+            ..CellResources::default()
+        };
+        index_staged_rows(&mut res);
+        let poses = [DynamicPose {
+            entity: body,
+            translation: Vec3::new(5.0, 6.0, 7.0),
+            rotation: Quat::IDENTITY,
+        }];
+        let mut writes = Vec::new();
+        let mut moves = 0;
+
+        rewrite_cell_rows(&mut res, &poses[..], 0..1, &mut writes, |_| moves += 1);
+
+        let moved = Mat4::from_cols_array_2d(&res.object_groups[1].instances[0].transform);
+        assert_eq!(moved.w_axis.truncate(), Vec3::new(5.0, 6.0, 7.0));
+        assert_eq!(moves, 1);
+        assert!(
+            writes.is_empty(),
+            "a staged cell has no slab range to write"
+        );
     }
 
     #[test]
