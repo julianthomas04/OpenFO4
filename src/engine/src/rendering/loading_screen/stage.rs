@@ -53,6 +53,10 @@ pub enum StageError {
         #[source]
         source: StageFramingError,
     },
+    #[error("a plane of the loading screen stage '{}' names no texture", path.display())]
+    PlaneWithoutTexture { path: PathBuf },
+    #[error("a plane of the loading screen stage '{}' has no usable texture: {reason}", path.display())]
+    PlaneTextureUnavailable { path: PathBuf, reason: String },
     #[error("no loading screen stage is usable: {0}")]
     NoneUsable(String),
 }
@@ -75,6 +79,7 @@ impl StageLayer {
 /// One width of the stage, read from disk.
 #[derive(Debug, Clone)]
 pub struct CpuStage {
+    pub path: PathBuf,
     /// In the order they are drawn: the opaque ones, then the blended ones, each in file order.
     pub layers: Vec<StageLayer>,
     pub framing: StageFraming,
@@ -133,11 +138,34 @@ impl CpuStage {
             })?;
         layers.sort_by_key(|layer| !layer.is_opaque());
         Ok(Self {
+            path: path.to_path_buf(),
             layers,
             framing,
             aspect: farthest.aspect(),
         })
     }
+}
+
+/// The widths that came out usable, in order. Each width that did not is logged, since screens
+/// of its shape use another one. An error when none did.
+pub fn keep_usable<T>(
+    widths: impl IntoIterator<Item = Result<T, StageError>>,
+) -> Result<Vec<T>, StageError> {
+    let mut usable = Vec::new();
+    let mut failures = Vec::new();
+    for width in widths {
+        match width {
+            Ok(width) => usable.push(width),
+            Err(error) => {
+                tracing::warn!("{error}; screens of its shape use another width");
+                failures.push(error.to_string());
+            }
+        }
+    }
+    if usable.is_empty() {
+        return Err(StageError::NoneUsable(failures.join("; ")));
+    }
+    Ok(usable)
 }
 
 /// The planes of the layers nearest and farthest from the camera; `None` with fewer than two.
@@ -176,6 +204,31 @@ mod tests {
     const ULTRAWIDE: f32 = 48.4 / 21.0;
     const SUPER_ULTRAWIDE: f32 = 74.0 / 21.0;
     const GAME_STAGES: [f32; 3] = [SIXTEEN_NINE, ULTRAWIDE, SUPER_ULTRAWIDE];
+
+    fn missing(name: &str) -> StageError {
+        StageError::Missing { path: name.into() }
+    }
+
+    #[test]
+    fn only_the_usable_widths_are_kept_in_order() {
+        let kept = keep_usable([Ok(1), Err(missing("a")), Ok(3)]).unwrap();
+        assert_eq!(kept, [1, 3]);
+    }
+
+    #[test]
+    fn no_usable_width_is_an_error_naming_every_failure() {
+        let error = keep_usable::<u8>([Err(missing("first")), Err(missing("second"))])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("first") && error.contains("second"),
+            "{error}"
+        );
+        assert!(matches!(
+            keep_usable::<u8>([]),
+            Err(StageError::NoneUsable(_))
+        ));
+    }
 
     #[test]
     fn each_common_screen_gets_the_stage_of_its_shape() {

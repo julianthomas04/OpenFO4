@@ -7,7 +7,7 @@ use std::sync::Arc;
 use super::LoadingArtRenderer;
 use super::grade::{GradeLook, INFERRED_LIFT, LoadScreenLut, load_screen_cinematic};
 use super::grade_pass::GradePass;
-use super::stage::{CpuStage, StageError, stage_paths};
+use super::stage::{CpuStage, StageError, keep_usable, stage_paths};
 use super::stage_renderer::{LoadedStage, StageRenderer};
 use crate::rendering::lighting::tonemap_settings::ImageSpaceCinematic;
 use crate::rendering::post::tonemap::lut_library::load_table;
@@ -66,13 +66,8 @@ impl LoadingScene {
     /// A grade that cannot be read is logged and left neutral.
     pub fn prepare(&mut self) -> Result<(), StageError> {
         if matches!(self.stage, StageState::NotLoaded) {
-            self.stage = match load_stages(&self.asset_root) {
-                Ok(stages) => StageState::Ready(self.stage_renderer.upload(
-                    &self.device,
-                    &self.queue,
-                    &stages,
-                    &self.asset_root,
-                )),
+            self.stage = match self.load_stage() {
+                Ok(stage) => StageState::Ready(stage),
                 Err(error) => StageState::Unavailable(error.to_string()),
             };
             if matches!(self.stage, StageState::Ready(_)) {
@@ -84,6 +79,12 @@ impl LoadingScene {
             StageState::Unavailable(reason) => Err(StageError::NoneUsable(reason.clone())),
             StageState::NotLoaded => unreachable!("the stage was loaded above"),
         }
+    }
+
+    fn load_stage(&mut self) -> Result<LoadedStage, StageError> {
+        let stages = load_stages(&self.asset_root)?;
+        self.stage_renderer
+            .upload(&self.device, &self.queue, &stages, &self.asset_root)
     }
 
     fn load_grade(&mut self) {
@@ -156,22 +157,11 @@ impl LoadingScene {
 
 /// Every width of the stage that loads; the ones that do not are logged. An error when none do.
 fn load_stages(asset_root: &Path) -> Result<Vec<CpuStage>, StageError> {
-    let mut failures = Vec::new();
-    let stages: Vec<CpuStage> = stage_paths(asset_root)
-        .iter()
-        .filter_map(|path| match CpuStage::load(path) {
-            Ok(stage) => Some(stage),
-            Err(error) => {
-                tracing::warn!("{error}; screens of its shape use another width");
-                failures.push(error.to_string());
-                None
-            }
-        })
-        .collect();
-    if stages.is_empty() {
-        return Err(StageError::NoneUsable(failures.join("; ")));
-    }
-    Ok(stages)
+    keep_usable(
+        stage_paths(asset_root)
+            .iter()
+            .map(|path| CpuStage::load(path)),
+    )
 }
 
 /// The linear picture, sized like the target it is graded onto.

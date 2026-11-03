@@ -521,3 +521,37 @@ fn the_installed_stage_frames_24_degrees_and_its_lut_loads() {
     )
     .expect("the installed loading screen LUT loads");
 }
+
+#[test]
+fn a_stage_with_a_missing_plane_texture_is_unusable() {
+    let Some((device, queue)) = test_device("loading scene missing texture") else {
+        return;
+    };
+    let root = tempfile::tempdir().unwrap();
+    install_stage(
+        root.path(),
+        [BACKGROUND[0], BACKGROUND[1], BACKGROUND[2], 255],
+        [0; 4],
+    );
+    std::fs::remove_file(
+        root.path()
+            .join("textures")
+            .join(super::test_support::STAGE_OVERLAY_TEXTURE),
+    )
+    .unwrap();
+    let mut scene = LoadingScene::new(
+        &device,
+        &queue,
+        TARGET_FORMAT,
+        root.path(),
+        GradeSource {
+            lut: LoadScreenLut::from_ini(&GameIni::from_texts([""])).unwrap(),
+            db_path: String::new(),
+        },
+    );
+
+    let error = scene.prepare().expect_err("the overlay is missing");
+
+    assert!(matches!(error, super::StageError::NoneUsable(_)), "{error}");
+    assert!(scene.prepare().is_err(), "the failure is not retried away");
+}

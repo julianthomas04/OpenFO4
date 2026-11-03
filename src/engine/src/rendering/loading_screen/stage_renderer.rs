@@ -10,7 +10,7 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
 use super::camera::perspective;
-use super::stage::{CpuStage, StageLayer, nearest_aspect};
+use super::stage::{CpuStage, StageError, StageLayer, keep_usable, nearest_aspect};
 use super::stage_framing::StageFraming;
 use crate::assets::layout::named_texture_key;
 use crate::assets::types::effect_material::{ClampMode, EffectMaterial, EffectTextures};
@@ -146,20 +146,21 @@ impl StageRenderer {
     }
 
     /// Puts `stages` on the GPU with the textures their materials name below `asset_root`. A
-    /// plane whose texture does not load is left out, with a warning logged once.
+    /// width with a plane that cannot be drawn is left out, logged; an error when none is left.
     pub fn upload(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         stages: &[CpuStage],
         asset_root: &Path,
-    ) -> LoadedStage {
+    ) -> Result<LoadedStage, StageError> {
         let mut textures = HashMap::new();
-        let stages = stages
-            .iter()
-            .map(|stage| self.upload_stage(device, queue, stage, asset_root, &mut textures))
-            .collect();
-        LoadedStage { stages }
+        let stages = keep_usable(
+            stages
+                .iter()
+                .map(|stage| self.upload_stage(device, queue, stage, asset_root, &mut textures)),
+        )?;
+        Ok(LoadedStage { stages })
     }
 
     fn upload_stage(
@@ -168,8 +169,8 @@ impl StageRenderer {
         queue: &wgpu::Queue,
         stage: &CpuStage,
         asset_root: &Path,
-        textures: &mut HashMap<String, Option<wgpu::TextureView>>,
-    ) -> GpuStage {
+        textures: &mut TextureCache,
+    ) -> Result<GpuStage, StageError> {
         let mut vertices: Vec<Vertex> = Vec::new();
         let mut indices: Vec<u32> = Vec::new();
         let mut draws = Vec::new();
@@ -179,9 +180,7 @@ impl StageRenderer {
             vertices.extend_from_slice(&layer.vertices);
             indices.extend_from_slice(&layer.indices);
             let last = u32::try_from(indices.len()).unwrap_or(u32::MAX);
-            let Some(texture) = layer_texture(device, queue, layer, asset_root, textures) else {
-                continue;
-            };
+            let texture = layer_texture(device, queue, stage, layer, asset_root, textures)?;
             draws.push(StageDraw {
                 indices: first..last,
                 base_vertex,
@@ -189,7 +188,7 @@ impl StageRenderer {
                 group: self.material_group(device, layer, &texture),
             });
         }
-        GpuStage {
+        Ok(GpuStage {
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("loading_stage_vertices"),
                 contents: bytemuck::cast_slice(&vertices),
@@ -203,7 +202,7 @@ impl StageRenderer {
             draws,
             framing: stage.framing,
             aspect: stage.aspect,
-        }
+        })
     }
 
     fn material_group(
@@ -309,34 +308,36 @@ impl StageRenderer {
     }
 }
 
-/// The view of the plane's source texture, each texture loaded once; `None`, with a warning
-/// logged once, when the material names none or it does not load.
+/// The views of the textures loaded so far by key, or why one did not load.
+type TextureCache = HashMap<String, Result<wgpu::TextureView, String>>;
+
+/// The view of the plane's source texture, each texture loaded once. An error when the material
+/// names none or it does not load: the stage cannot be drawn without it.
 fn layer_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
+    stage: &CpuStage,
     layer: &StageLayer,
     asset_root: &Path,
-    textures: &mut HashMap<String, Option<wgpu::TextureView>>,
-) -> Option<wgpu::TextureView> {
+    textures: &mut TextureCache,
+) -> Result<wgpu::TextureView, StageError> {
     let Some(source) = EffectTextures::used(&layer.material.textures.source) else {
-        crate::utils::warn_once("loading-stage-untextured", || {
-            "a loading screen stage plane names no texture; it is left out".to_string()
+        return Err(StageError::PlaneWithoutTexture {
+            path: stage.path.clone(),
         });
-        return None;
     };
     let key = named_texture_key(source);
     textures
         .entry(key.clone())
         .or_insert_with(|| {
             load_texture_asset_srgb(device, queue, &asset_root.to_string_lossy(), &key)
-                .map_err(|error| {
-                    crate::utils::warn_once(&format!("loading-stage-texture:{key}"), || {
-                        format!("{error}; the loading screen stage plane is left out")
-                    });
-                })
-                .ok()
+                .map_err(|error| error.to_string())
         })
         .clone()
+        .map_err(|reason| StageError::PlaneTextureUnavailable {
+            path: stage.path.clone(),
+            reason,
+        })
 }
 
 fn address_modes(clamp: ClampMode) -> (wgpu::AddressMode, wgpu::AddressMode) {
