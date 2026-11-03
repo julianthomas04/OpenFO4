@@ -1662,7 +1662,8 @@ impl WorldStreamer {
         self.staging.advance(frame_started);
 
         // Integrate: first promote the staged cells whose textures became
-        // ready, then stage buffered results one at a time — full cells
+        // ready, then stage buffered results one at a time, promotions and
+        // stagings sharing the frame's cell cap — full cells
         // (player-facing) before LOD — stopping once the cell count OR the
         // upload byte budget is spent. The first successful staging is exempt
         // so a single oversized cell can't stall streaming forever; gated/
@@ -1678,9 +1679,9 @@ impl WorldStreamer {
         )
         .entered();
         let integrate_started = Instant::now();
-        membership_changed |=
-            self.promote_ready_cells(targets, max_cells_per_frame, integrate_started);
-        let mut integrated = 0usize;
+        let promoted = self.promote_ready_cells(targets, max_cells_per_frame, integrate_started);
+        membership_changed |= promoted > 0;
+        let mut integrated = promoted;
         loop {
             if integration_must_stop(
                 self.mode,
@@ -2521,13 +2522,13 @@ impl WorldStreamer {
 
     /// Promote the staged cells whose textures are all loaded and bound, oldest first, within
     /// the frame's integration budget. A cell still waiting after `TEXTURE_READY_DEADLINE` is
-    /// reported as broken. Returns true when cell membership changed.
+    /// reported as broken. Returns how many cells it promoted.
     fn promote_ready_cells(
         &mut self,
         targets: &mut StreamTargets,
         cell_cap: usize,
         started: Instant,
-    ) -> bool {
+    ) -> usize {
         let _span = info_span!("promote_ready_cells").entered();
         let judgement = {
             let residency = &*targets.residency;
@@ -2573,7 +2574,7 @@ impl WorldStreamer {
             }
             promoted += 1;
         }
-        promoted > 0
+        promoted
     }
 
     /// The broken-asset report of a staged cell whose textures did not get ready in time.
