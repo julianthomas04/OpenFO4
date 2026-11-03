@@ -2534,10 +2534,12 @@ impl WorldStreamer {
             let residency = &*targets.residency;
             let array = &*targets.texture_array;
             let grass = &*targets.grass;
-            self.staging.judge(|res| {
-                Self::cell_textures(res, grass)
-                    .map(|handle| TextureReadiness::of_handle(residency, array, handle))
-                    .collect()
+            self.staging.judge(|res, waited| {
+                staging::verdict(
+                    Self::cell_textures(res, grass)
+                        .map(|handle| TextureReadiness::of_handle(residency, array, handle)),
+                    waited,
+                )
             })
         };
         self.waiting_only_for_binding = judgement.waiting_only_for_binding;

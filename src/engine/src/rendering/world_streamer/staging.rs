@@ -45,6 +45,7 @@ pub(super) fn verdict(
             TextureReadiness::Loading => {
                 ready = false;
                 only_unbound = false;
+                break;
             }
         }
     }
@@ -198,16 +199,17 @@ impl Staging {
         self.last_update = None;
     }
 
-    /// The verdict on every staged cell, with the ready ones oldest first.
+    /// The verdict on every staged cell, with the ready ones oldest first. `verdict_of` judges
+    /// a cell's resources after it waited the given time, typically with [`verdict`].
     pub(super) fn judge(
         &self,
-        readiness: impl Fn(&CellResources) -> Vec<TextureReadiness>,
+        verdict_of: impl Fn(&CellResources, Duration) -> Verdict,
     ) -> Judgement {
         let mut ready: Vec<(u64, Ring, (i32, i32))> = Vec::new();
         let mut judgement = Judgement::default();
         for ring in [Ring::Full, Ring::Lod] {
             for (&grid, cell) in self.cells(ring) {
-                match verdict(readiness(&cell.res), cell.waited) {
+                match verdict_of(&cell.res, cell.waited) {
                     Verdict::Promote => ready.push((cell.sequence, ring, grid)),
                     Verdict::Wait { only_unbound } => {
                         judgement.waiting_only_for_binding |= only_unbound;
@@ -270,6 +272,19 @@ mod tests {
     }
 
     #[test]
+    fn the_verdict_stops_reading_at_the_first_loading_texture() {
+        let textures = [Ready, Loading]
+            .into_iter()
+            .chain(std::iter::from_fn(|| panic!("read past a loading texture")));
+        assert_eq!(
+            verdict(textures, Duration::ZERO),
+            Verdict::Wait {
+                only_unbound: false
+            }
+        );
+    }
+
+    #[test]
     fn a_cell_still_waiting_at_the_deadline_is_overdue() {
         let just_before = TEXTURE_READY_DEADLINE.saturating_sub(Duration::from_millis(1));
         assert_eq!(
@@ -295,6 +310,10 @@ mod tests {
     }
 
     /// Readiness keyed on a marker count, which stands in for the cell's textures.
+    fn by_marker_verdict(res: &CellResources, waited: Duration) -> Verdict {
+        verdict(by_marker(res), waited)
+    }
+
     fn by_marker(res: &CellResources) -> Vec<TextureReadiness> {
         match res.marker_count {
             0 => vec![Ready],
@@ -311,7 +330,7 @@ mod tests {
         staged(&mut staging, Ring::Full, (1, 0), 0);
         staged(&mut staging, Ring::Lod, (6, 5), 0);
 
-        let judgement = staging.judge(by_marker);
+        let judgement = staging.judge(by_marker_verdict);
 
         assert_eq!(
             judgement.ready,
@@ -330,7 +349,7 @@ mod tests {
         let mut staging = Staging::default();
         staged(&mut staging, Ring::Full, (0, 0), 1);
 
-        assert!(staging.judge(by_marker).waiting_only_for_binding);
+        assert!(staging.judge(by_marker_verdict).waiting_only_for_binding);
     }
 
     #[test]
@@ -366,7 +385,7 @@ mod tests {
             staging.advance(now);
         }
 
-        let judgement = staging.judge(by_marker);
+        let judgement = staging.judge(by_marker_verdict);
 
         assert_eq!(judgement.overdue, vec![(Ring::Lod, (3, 4))]);
         assert_eq!(judgement.ready, vec![(Ring::Lod, (3, 5))]);
