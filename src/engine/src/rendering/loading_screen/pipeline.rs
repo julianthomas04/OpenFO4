@@ -4,6 +4,7 @@
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
 
+use super::background_look::light_colour;
 use crate::rendering::shaders;
 use crate::rendering::texture::Texture;
 use crate::rendering::vertex::Vertex;
@@ -11,13 +12,19 @@ use crate::rendering::vertex::Vertex;
 /// Measured from the vanilla screen's T-51 power armour: the key comes from the viewer's upper
 /// left and front, so the left silhouette is bright, the right side dark and the undersides
 /// black; there is no fill or rim light.
-const LIGHT_TOWARDS: Vec3 = Vec3::new(-0.6, 0.6, 0.5);
-/// Near zero: the vanilla shadows go to black (5% of the model's pixels are exactly black).
-const AMBIENT: f32 = 0.04;
-/// The key is 1.5 to 2 times the texture level: 1.8% of the vanilla model's pixels clip.
-const DIFFUSE: f32 = 1.6;
-/// Inferred: the strength of the specular lobe of the world's surface response, white light.
-const SPECULAR_STRENGTH: f32 = 1.25;
+///
+/// Inferred from a comparison with a vanilla screenshot: the left and right p90 brightness differ
+/// by about 1.8 and surfaces facing the viewer's right fall to black.
+const LIGHT_TOWARDS: Vec3 = Vec3::new(-0.75, 0.55, 0.3);
+/// Inferred: practically none, vanilla has 6.7% pure black model pixels. The shader adds no wrap
+/// light, and back faces of two-sided geometry are lit as their own side, not brightened.
+const AMBIENT: f32 = 0.01;
+/// Inferred: the strength of the key, aiming at a p99 luma of about 250 with 1.5 to 2% of the
+/// model's pixels clipped.
+const DIFFUSE: f32 = 2.2;
+/// Inferred: the strength of the specular lobe of the world's surface response, in the key's
+/// colour, aiming at white-looking highlights.
+const SPECULAR_STRENGTH: f32 = 2.0;
 
 /// The uniform block of `loading_art.wgsl`.
 #[repr(C)]
@@ -27,6 +34,8 @@ pub(super) struct SceneUniform {
     model: [[f32; 4]; 4],
     light_direction: [f32; 4],
     shading: [f32; 4],
+    /// The linear colour of the key, applied to its diffuse and specular terms.
+    light_colour: [f32; 4],
 }
 
 impl SceneUniform {
@@ -41,6 +50,10 @@ impl SceneUniform {
                 if encode_srgb { 1.0 } else { 0.0 },
                 SPECULAR_STRENGTH,
             ],
+            light_colour: {
+                let [red, green, blue] = light_colour();
+                [red, green, blue, 0.0]
+            },
         }
     }
 }

@@ -18,6 +18,16 @@ pub const GRADE_TINT: [f32; 3] = [0.662, 0.673, 0.489];
 /// The per-channel offset added after the multiplier, in encoded space.
 pub const GRADE_LIFT: [f32; 3] = [6.3 / 255.0, 5.5 / 255.0, 5.1 / 255.0];
 
+/// The colour of the light on the 3D model, linear, scaled so that green is 1: the grade's
+/// per-channel multiplier read as a gamma-encoded colour. Vanilla's model has the same warm cast
+/// as its graded background (blue about 0.73 of green when encoded), so the one tint is taken to
+/// colour both.
+pub fn light_colour() -> [f32; 3] {
+    use crate::rendering::lighting::cell_lighting::srgb_unit_to_linear;
+    let linear = GRADE_TINT.map(srgb_unit_to_linear);
+    linear.map(|channel| channel / linear[1])
+}
+
 /// The texture coordinates both layers are sampled at for a point of the screen: `screen_uv` runs
 /// from (0, 0) at the top left to (1, 1) at the bottom right. The reference the shader's vertex
 /// stage is tested against.
@@ -74,6 +84,14 @@ mod tests {
                 GRADE_LIFT[2],
             ],
         );
+    }
+
+    #[test]
+    fn the_light_is_the_grade_tint_as_linear_light_scaled_to_green() {
+        let [red, green, blue] = light_colour();
+        assert_eq!(green, 1.0);
+        assert!((red - 0.964).abs() < 0.002, "{red}");
+        assert!((blue - 0.497).abs() < 0.002, "{blue}");
     }
 
     #[test]

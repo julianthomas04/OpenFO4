@@ -12,10 +12,10 @@ use crate::rendering::game_settings::SafeZone;
 use crate::rendering::gpu_test::test_device;
 use crate::rendering::hud::field_text::TextItem;
 use crate::rendering::loading_screen::test_support::{
-    cube_art, write_solid_texture, write_two_band_texture,
+    BC3_SOLID_RGB, cube_art, write_solid_bc3_texture, write_solid_texture, write_two_band_texture,
 };
 use crate::rendering::loading_screen::{
-    BackgroundImages, background_uv, CpuArt, LoadedArt, LoadingArtRenderer, LoadingBackground, graded,
+    BackgroundImages, background_uv, CpuArt, LoadedArt, LoadingArtRenderer, LoadingBackground, graded, GRADE_TINT, OVERLAY_ALPHA_FACTOR,
 };
 use crate::rendering::post::tonemap::ui_gamma_format;
 use crate::rendering::ui_colour::UiTint;
@@ -1210,6 +1210,49 @@ fn a_backdrop_overlay_is_added_over_the_image() {
     );
     for pixel in corners_and_centre(&target.pixels(&device, &queue)) {
         assert_close(pixel, expected, "the overlay is added to the image");
+    }
+}
+
+/// The game's overlay is a BC3 texture: an sRGB view of it, or its alpha applied twice, would
+/// weaken the grid. Its texel adds exactly `0.6 * alpha * rgb`, rgb as stored, tinted.
+#[test]
+fn a_bc3_overlay_adds_six_tenths_of_its_alpha_times_its_stored_colour() {
+    const ALPHA: u8 = 128;
+    let Some((device, queue)) = test_device("menu backdrop bc3 overlay") else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    write_solid_bc3_texture(
+        dir.path(),
+        "Interface/Objects/LoadScreen/Overlay01_d.DDS",
+        ALPHA,
+    );
+    let mut background = background_in(dir.path());
+    let images = background.images(&device, &queue).expect("the images load");
+    assert!(images.overlay.is_some());
+    let target = Target::new(&device);
+    let mut menu = renderer(&device, &queue, HUD_GREEN);
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    let view = menu.target_view(&target.texture);
+    let backdrop = Backdrop {
+        alpha: 1.0,
+        image: Some(images),
+    };
+    menu.render_backdrop(&device, &queue, &mut encoder, &view, SIZE, backdrop);
+    queue.submit(std::iter::once(encoder.finish()));
+
+    let plain = graded_background();
+    let alpha = f32::from(ALPHA) / 255.0;
+    let expected: [u8; 3] = std::array::from_fn(|channel| {
+        let added = GRADE_TINT[channel]
+            * OVERLAY_ALPHA_FACTOR
+            * alpha
+            * f32::from(BC3_SOLID_RGB[channel]);
+        (f32::from(plain[channel]) + added).round() as u8
+    });
+    for pixel in corners_and_centre(&target.pixels(&device, &queue)) {
+        assert_close(pixel, expected, "the BC3 overlay is added as stored");
     }
 }
 

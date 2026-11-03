@@ -2,17 +2,30 @@
 
 use glam::UVec2;
 
+use super::light_colour;
 use super::test_support::{cube_art, layered_quads_art, write_solid_texture, write_texture};
 use super::{CpuArt, LoadedArt, LoadingArt, LoadingArtRenderer, PanKey};
 use crate::rendering::gpu_test::{linear_to_srgb_byte, read_mip, test_device};
+use crate::rendering::lighting::cell_lighting::srgb_to_linear;
 use crate::rendering::post::tonemap::ui_gamma_format;
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const SIZE: (u32, u32) = (320, 180);
 const BLACK: wgpu::Color = wgpu::Color::BLACK;
-/// The cube's front face is lit by the ambient term and the light at an angle of
-/// `cos = 0.5 / |(-0.6, 0.6, 0.5)|`; a white texel shows `0.04 + 1.6 * cos` encoded to sRGB.
-const FRONT_FACE_LINEAR: f32 = 0.04 + 1.6 * 0.507_7;
+/// The cube's front face is lit by the ambient term and the tinted light at an angle of
+/// `cos = 0.3 / |(-0.75, 0.55, 0.3)|`; a white texel shows `0.01 + 2.2 * cos * tint` per channel,
+/// encoded to sRGB.
+const FRONT_FACE_COS: f32 = 0.307;
+
+fn front_face_bytes() -> [u8; 3] {
+    light_colour().map(|tint| linear_to_srgb_byte(0.01 + 2.2 * FRONT_FACE_COS * tint))
+}
+
+fn assert_close_colour(actual: [u8; 3], expected: [u8; 3], tolerance: u8) {
+    for (a, e) in actual.into_iter().zip(expected) {
+        assert_close(a, e, tolerance);
+    }
+}
 
 struct Target {
     texture: wgpu::Texture,
@@ -173,10 +186,7 @@ fn a_cube_draws_in_the_centre_lit_and_encoded_and_leaves_the_corners_black() {
 
     let pixels = scene.draw(&target);
 
-    let expected = linear_to_srgb_byte(FRONT_FACE_LINEAR);
-    for channel in pixels.centre() {
-        assert_close(channel, expected, 4);
-    }
+    assert_close_colour(pixels.centre(), front_face_bytes(), 4);
     let (width, height) = SIZE;
     for corner in [
         (0, 0),
@@ -199,10 +209,7 @@ fn a_part_whose_texture_is_missing_draws_white() {
 
     let pixels = scene.draw(&target);
 
-    let expected = linear_to_srgb_byte(FRONT_FACE_LINEAR);
-    for channel in pixels.centre() {
-        assert_close(channel, expected, 4);
-    }
+    assert_close_colour(pixels.centre(), front_face_bytes(), 4);
 }
 
 #[test]
@@ -299,10 +306,7 @@ fn overlapping_surfaces_show_the_nearest_whatever_the_draw_order() {
 
     let pixels = scene.draw(&target);
 
-    let near = linear_to_srgb_byte(FRONT_FACE_LINEAR);
-    for channel in pixels.centre() {
-        assert_close(channel, near, 3);
-    }
+    assert_close_colour(pixels.centre(), front_face_bytes(), 3);
 }
 
 /// How many pixels the cube lights when its texture has `alpha` and its material is `tokens`;
@@ -408,7 +412,7 @@ fn centre_with(test: &str, material: &str, textures: &[(&str, [u8; 4])]) -> Opti
 }
 
 const MID_GREY: [u8; 4] = [128, 128, 128, 255];
-const SPECULAR_TOKENS: &str = "|spec:spec.dds|sm:1|sg:0.3";
+const SPECULAR_TOKENS: &str = "|spec:spec.dds|sm:1|sg:0.0";
 
 fn assert_same_colour(actual: [u8; 3], expected: [u8; 3]) {
     for (actual, expected) in actual.into_iter().zip(expected) {
@@ -417,7 +421,7 @@ fn assert_same_colour(actual: [u8; 3], expected: [u8; 3]) {
 }
 
 #[test]
-fn a_specular_map_adds_a_neutral_highlight_to_the_surface() {
+fn a_specular_map_adds_a_highlight_in_the_colour_of_the_light() {
     let (Some(matte), Some(shiny)) = (
         centre_with("loading art matte", "grey.dds", &[("grey.dds", MID_GREY)]),
         centre_with(
@@ -432,7 +436,15 @@ fn a_specular_map_adds_a_neutral_highlight_to_the_surface() {
         shiny[0] > matte[0] + 5 && shiny[2] > matte[2] + 5,
         "{matte:?} -> {shiny:?}"
     );
-    assert_eq!(shiny[0], shiny[2], "the highlight is white");
+    let added = |channel: usize| {
+        srgb_to_linear(shiny[channel]) - srgb_to_linear(matte[channel])
+    };
+    let tint = light_colour();
+    let (red_to_blue, tint_red_to_blue) = (added(0) / added(2), tint[0] / tint[2]);
+    assert!(
+        (red_to_blue / tint_red_to_blue - 1.0).abs() < 0.1,
+        "{matte:?} -> {shiny:?}: red to blue {red_to_blue}, the light's {tint_red_to_blue}"
+    );
 }
 
 #[test]

@@ -235,6 +235,37 @@ pub fn write_solid_texture(dir: &Path, name: &str, rgba: [u8; 4]) {
     write_dds(dir, name, &dds);
 }
 
+/// The colour a BC3 block of [`BC3_SOLID_COLOUR_565`] decodes to, as bytes.
+pub const BC3_SOLID_RGB: [u8; 3] = [181, 187, 156];
+
+/// The RGB565 value of [`BC3_SOLID_RGB`]: red 22, green 46, blue 19.
+const BC3_SOLID_COLOUR_565: u16 = 0xB5D3;
+
+/// Writes `textures/<name>`, a 4x4 BC3 (DXT5) texture, the format of the game's interface art,
+/// whose texels all are [`BC3_SOLID_RGB`] at `alpha`.
+pub fn write_solid_bc3_texture(dir: &Path, name: &str, alpha: u8) {
+    let mut dds = ddsfile::Dds::new_dxgi(ddsfile::NewDxgiParams {
+        height: 4,
+        width: 4,
+        depth: None,
+        format: ddsfile::DxgiFormat::BC3_UNorm,
+        mipmap_levels: Some(1),
+        array_layers: None,
+        caps2: None,
+        is_cubemap: false,
+        resource_dimension: ddsfile::D3D10ResourceDimension::Texture2D,
+        alpha_mode: ddsfile::AlphaMode::Unknown,
+    })
+    .expect("a valid texture description");
+    let (alpha_block, colour_block) = dds.data.split_at_mut(8);
+    alpha_block[..2].fill(alpha);
+    alpha_block[2..].fill(0);
+    colour_block[..2].copy_from_slice(&BC3_SOLID_COLOUR_565.to_le_bytes());
+    colour_block[2..4].copy_from_slice(&BC3_SOLID_COLOUR_565.to_le_bytes());
+    colour_block[4..].fill(0);
+    write_dds(dir, name, &dds);
+}
+
 fn write_dds(dir: &Path, name: &str, dds: &ddsfile::Dds) {
     let path = dir.join("textures").join(name);
     std::fs::create_dir_all(path.parent().expect("a texture is in a folder"))

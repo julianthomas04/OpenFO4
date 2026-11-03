@@ -21,7 +21,9 @@ mod tuning;
 
 pub use art::{LoadingArt, ModelTransform};
 pub use background::{BackgroundImages, LoadingBackground};
-pub use background_look::{BACKGROUND_U_MAX, GRADE_LIFT, GRADE_TINT, OVERLAY_ALPHA_FACTOR};
+pub use background_look::{
+    BACKGROUND_U_MAX, GRADE_LIFT, GRADE_TINT, OVERLAY_ALPHA_FACTOR, light_colour,
+};
 #[cfg(test)]
 pub use background_look::{background_uv, graded};
 pub use camera::ArtCamera;
