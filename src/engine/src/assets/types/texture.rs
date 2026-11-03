@@ -162,6 +162,26 @@ impl TextureError {
         matches!(self, Self::Io { source, .. } if source.kind() == std::io::ErrorKind::NotFound)
     }
 
+    /// Whether the read failed for a reason that may pass, such as another process holding the
+    /// file open, so trying again later may succeed.
+    pub fn is_transient(&self) -> bool {
+        /// `ERROR_SHARING_VIOLATION` and `ERROR_LOCK_VIOLATION`: another process holds the file.
+        const WINDOWS_FILE_IN_USE: [i32; 2] = [32, 33];
+        let Self::Io { source, .. } = self else {
+            return false;
+        };
+        matches!(
+            source.kind(),
+            std::io::ErrorKind::Interrupted
+                | std::io::ErrorKind::TimedOut
+                | std::io::ErrorKind::WouldBlock
+                | std::io::ErrorKind::ResourceBusy
+        ) || (cfg!(windows)
+            && source
+                .raw_os_error()
+                .is_some_and(|code| WINDOWS_FILE_IN_USE.contains(&code)))
+    }
+
     fn io(path: &str, source: std::io::Error) -> Self {
         Self::Io {
             path: path.to_owned(),

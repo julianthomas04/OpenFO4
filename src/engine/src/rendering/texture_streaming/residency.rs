@@ -34,6 +34,10 @@ const READY_BYTE_CAP: u64 = 64 * 1024 * 1024;
 /// A failed upgrade read is retried after a backoff, this many times at most.
 const MAX_UPGRADE_FAILURES: u32 = 5;
 const UPGRADE_RETRY_BASE: Duration = Duration::from_secs(2);
+/// A first read that failed for a reason that may pass is retried after a backoff; failing this
+/// many times, about 8 s in all, the file counts as broken.
+const MAX_TRANSIENT_LOAD_FAILURES: u32 = 6;
+const TRANSIENT_RETRY_BASE: Duration = Duration::from_millis(250);
 /// Feedback requests older than this are dropped; reuses the downgrade hold so
 /// a texture the GPU asked for is not shrunk again before it is asked about.
 const FEEDBACK_HOLD: Duration = DOWNGRADE_HOLD;
@@ -208,6 +212,9 @@ struct Entry {
     downgrade_since: Option<Instant>,
     upgrade_failures: u32,
     upgrade_retry_at: Option<Instant>,
+    /// First reads that failed for a reason that may pass, and when to try again.
+    transient_load_failures: u32,
+    load_retry_at: Option<Instant>,
     /// Since when the texture has wanted a finer mip than it holds; only
     /// tracked by the stuck detector.
     behind_since: Option<Instant>,
@@ -228,6 +235,26 @@ impl Entry {
     fn may_upgrade(&self, now: Instant) -> bool {
         self.upgrade_failures < MAX_UPGRADE_FAILURES
             && self.upgrade_retry_at.is_none_or(|retry_at| now >= retry_at)
+    }
+
+    fn may_retry_load(&self, now: Instant) -> bool {
+        self.load_retry_at.is_none_or(|retry_at| now >= retry_at)
+    }
+
+    /// A first read failed for a reason that may pass: try again after a backoff, or, after
+    /// `MAX_TRANSIENT_LOAD_FAILURES`, the reason the file counts as broken.
+    fn note_transient_load_failure(&mut self, reason: String, now: Instant) -> Option<String> {
+        self.transient_load_failures += 1;
+        if self.transient_load_failures >= MAX_TRANSIENT_LOAD_FAILURES {
+            return Some(format!(
+                "{reason} (still failing after {} attempts)",
+                self.transient_load_failures
+            ));
+        }
+        self.load_retry_at =
+            Some(now + TRANSIENT_RETRY_BASE * 2u32.pow(self.transient_load_failures - 1));
+        self.last_failure = Some(reason);
+        None
     }
 
     fn note_upgrade_failure(&mut self, reason: &str, now: Instant) {
@@ -530,6 +557,8 @@ impl TextureResidency {
                 downgrade_since: None,
                 upgrade_failures: 0,
                 upgrade_retry_at: None,
+                transient_load_failures: 0,
+                load_retry_at: None,
                 behind_since: None,
                 undemanded_since: None,
                 last_failure: None,
@@ -794,31 +823,37 @@ impl TextureResidency {
     }
 
     /// A read or upload failed. A placeholder whose file is missing keeps its stand-in, one whose
-    /// file is broken is returned for the caller to report; a resident texture keeps its
+    /// read may pass is read again after a backoff, and one whose file is broken, or whose read
+    /// kept failing, is returned for the caller to report; a resident texture keeps its
     /// resolution and retries the upgrade after a backoff.
     fn note_failed_read(
         entry: &mut Entry,
         array: &mut TextureArray,
         failure: ReadFailure,
     ) -> Option<BrokenAsset> {
+        let broken = |entry: &mut Entry, reason: String| {
+            entry.state = State::Broken;
+            entry.last_failure = Some(reason.clone());
+            Some(BrokenAsset::Texture {
+                path: entry.path.clone(),
+                reason,
+            })
+        };
         match (&entry.state, failure) {
             (State::Placeholder, ReadFailure::Missing) => {
                 entry.keep_stand_in(array, "the file does not exist");
                 None
             }
-            (State::Placeholder, ReadFailure::Broken(reason)) => {
-                entry.state = State::Broken;
-                entry.last_failure = Some(reason.clone());
-                Some(BrokenAsset::Texture {
-                    path: entry.path.clone(),
-                    reason,
-                })
+            (State::Placeholder, ReadFailure::Transient(reason)) => {
+                let reason = entry.note_transient_load_failure(reason, Instant::now())?;
+                broken(entry, reason)
             }
+            (State::Placeholder, ReadFailure::Broken(reason)) => broken(entry, reason),
             (_, ReadFailure::Missing) => {
                 entry.note_upgrade_failure("the file does not exist", Instant::now());
                 None
             }
-            (_, ReadFailure::Broken(reason)) => {
+            (_, ReadFailure::Transient(reason) | ReadFailure::Broken(reason)) => {
                 entry.note_upgrade_failure(&reason, Instant::now());
                 None
             }
@@ -908,7 +943,9 @@ impl TextureResidency {
                 continue;
             }
             match &entry.state {
-                State::Placeholder if has_demand => loads.push((demand, slot)),
+                State::Placeholder if has_demand && entry.may_retry_load(now) => {
+                    loads.push((demand, slot));
+                }
                 State::Resident(gpu) => {
                     let target =
                         target_first_mip(policy, &gpu.layout, demand, feedback, gpu.first_mip);
@@ -1211,6 +1248,8 @@ mod tests {
             downgrade_since: None,
             upgrade_failures: 0,
             upgrade_retry_at: None,
+            transient_load_failures: 0,
+            load_retry_at: None,
             behind_since: None,
             undemanded_since: None,
             last_failure: None,
@@ -1277,6 +1316,47 @@ mod tests {
                 std::thread::yield_now();
             }
         }
+    }
+
+    #[test]
+    fn a_transient_read_failure_is_retried_after_a_growing_backoff() {
+        let mut entry = placeholder_entry();
+        let now = Instant::now();
+
+        assert_eq!(
+            entry.note_transient_load_failure("busy".to_owned(), now),
+            None
+        );
+        assert!(!entry.may_retry_load(now));
+        assert!(entry.may_retry_load(now + TRANSIENT_RETRY_BASE));
+
+        assert_eq!(
+            entry.note_transient_load_failure("busy".to_owned(), now),
+            None
+        );
+        assert!(!entry.may_retry_load(now + TRANSIENT_RETRY_BASE));
+        assert!(entry.may_retry_load(now + TRANSIENT_RETRY_BASE * 2));
+    }
+
+    #[test]
+    fn a_read_that_keeps_failing_transiently_counts_as_broken() {
+        let mut entry = placeholder_entry();
+        let now = Instant::now();
+        for _ in 1..MAX_TRANSIENT_LOAD_FAILURES {
+            assert_eq!(
+                entry.note_transient_load_failure("busy".to_owned(), now),
+                None
+            );
+        }
+
+        let reason = entry.note_transient_load_failure("busy".to_owned(), now);
+
+        assert_eq!(
+            reason,
+            Some(format!(
+                "busy (still failing after {MAX_TRANSIENT_LOAD_FAILURES} attempts)"
+            ))
+        );
     }
 
     #[test]

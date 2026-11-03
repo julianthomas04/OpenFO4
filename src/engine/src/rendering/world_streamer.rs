@@ -3234,7 +3234,8 @@ impl WorldStreamer {
                 });
                 return fallback_slot;
             }
-            None => None,
+            // The residency reads it again, with its own retries.
+            Some(Err(ReadFailure::Transient(_))) | None => None,
         };
         let _span = info_span!("texture_admit").entered();
         // Cells integrate atomically, so one texture-heavy cell would upload
@@ -5964,7 +5965,7 @@ fn preload_textures(result: &mut CellLoadResult, shared: &WorkerShared) {
     let _span = info_span!("preload_textures", count = to_read.len()).entered();
 
     let paths: Vec<String> = to_read.iter().map(|(path, _)| path.clone()).collect();
-    let layouts = shared.layout_cache.resolve(
+    let layouts = shared.layout_cache.resolve_keeping(
         &paths,
         |path| {
             let full_path = format!("{}/{}", shared.asset_root, path);
@@ -5973,6 +5974,7 @@ fn preload_textures(result: &mut CellLoadResult, shared: &WorkerShared) {
                 .map_err(|error| preread_failure(path, &error))
         },
         |layout| u64::from(layout.is_ok()),
+        |layout| !is_transient(layout),
     );
 
     let mut wanted: Vec<(String, u32)> = Vec::with_capacity(to_read.len());
@@ -5988,7 +5990,7 @@ fn preload_textures(result: &mut CellLoadResult, shared: &WorkerShared) {
         }
     }
 
-    let payloads = shared.dds_cache.resolve(
+    let payloads = shared.dds_cache.resolve_keeping(
         &wanted,
         |(path, first)| {
             let Ok(layout) = &layouts[path] else {
@@ -6000,6 +6002,7 @@ fn preload_textures(result: &mut CellLoadResult, shared: &WorkerShared) {
                 .map_err(|error| preread_failure(path, &error))
         },
         |payload| payload.as_ref().map_or(0, |p| p.data.len() as u64),
+        |payload| !is_transient(payload),
     );
     for key in wanted {
         let payload = payloads[&key].clone();
@@ -6007,8 +6010,14 @@ fn preload_textures(result: &mut CellLoadResult, shared: &WorkerShared) {
     }
 }
 
+/// Whether a pre-read failed for a reason that may pass; such a failure is not cached.
+fn is_transient<T>(read: &Result<T, ReadFailure>) -> bool {
+    matches!(read, Err(ReadFailure::Transient(_)))
+}
+
 /// Classifies a failed pre-read and warns once about a missing file; a broken one is reported
-/// by the main thread when the cell integrates.
+/// by the main thread when the cell integrates, and a transient one is read again by the
+/// texture residency.
 fn preread_failure(path: &str, error: &texture::TextureError) -> ReadFailure {
     let failure = ReadFailure::from(error);
     if failure == ReadFailure::Missing {
