@@ -149,6 +149,13 @@ impl LoadingArtRenderer {
         }
     }
 
+    /// Puts the model's camera back at its start and stops the spin.
+    pub fn pin_camera(&mut self) {
+        if let Some(active) = &mut self.active {
+            active.art.camera.pin();
+        }
+    }
+
     /// A pan key went down or up.
     pub fn set_pan_key(&mut self, key: PanKey, held: bool) {
         if let Some(active) = &mut self.active {

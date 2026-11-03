@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use super::art_loader::{ArtLoadError, ArtLoader, LoaderPoll};
+use super::preview::{PreviewError, ScreenEntry, ScreenRequest, requested_screen};
 use crate::assets::db::DbClient;
 use crate::assets::db::load_screens::{LoadScreen, LoadScreenCatalog};
 use crate::assets::types::glb_key::glb_key;
@@ -125,11 +126,28 @@ impl LoadScreenHost {
             );
             return None;
         };
-        Some(ChosenScreen {
-            label: screen.label().to_string(),
-            tip: screen.tip.clone(),
-            art: art_for(screen, &self.asset_root),
-        })
+        Some(chosen_from(screen, &self.asset_root))
+    }
+
+    /// Picks the screen `request` asks for, whatever the place.
+    pub fn choose_requested(
+        &mut self,
+        request: &ScreenRequest,
+    ) -> Result<ChosenScreen, PreviewError> {
+        let catalog = ready_catalog(&mut self.catalog, &self.db_path)?;
+        let screen = requested_screen(catalog, request, &mut self.rng)?;
+        Ok(chosen_from(screen, &self.asset_root))
+    }
+
+    /// Every screen of the catalog, for the debug menu's list.
+    pub fn screen_entries(&mut self) -> Result<Vec<ScreenEntry>, PreviewError> {
+        let catalog = ready_catalog(&mut self.catalog, &self.db_path)?;
+        Ok(catalog.screens.iter().map(ScreenEntry::of).collect())
+    }
+
+    /// Puts the shown model's camera back at its start and stops its spin.
+    pub fn pin_camera(&mut self) {
+        self.renderer.pin_camera();
     }
 
     /// Starts loading `chosen`'s model; what was shown before goes. The tip waits for the model.
@@ -275,6 +293,27 @@ fn pick<'a>(
     }
     let context = LoadScreenContext::new(catalog, destination, cell, rng.fork());
     select(catalog, &context, &mut rng.fork())
+}
+
+fn ready_catalog<'a>(
+    slot: &'a mut Option<CatalogState>,
+    db_path: &str,
+) -> Result<&'a LoadScreenCatalog, PreviewError> {
+    match slot.get_or_insert_with(|| load_catalog(db_path)) {
+        CatalogState::Ready(catalog) => Ok(catalog),
+        CatalogState::Missing => Err(PreviewError::CatalogUnavailable(
+            "the database predates their export, re-run the installer".to_string(),
+        )),
+        CatalogState::Failed(reason) => Err(PreviewError::CatalogUnavailable(reason.clone())),
+    }
+}
+
+fn chosen_from(screen: &LoadScreen, asset_root: &Path) -> ChosenScreen {
+    ChosenScreen {
+        label: screen.label().to_string(),
+        tip: screen.tip.clone(),
+        art: art_for(screen, asset_root),
+    }
 }
 
 /// The model and its limits as the renderer takes them. A screen without zoom limits of its own
@@ -436,7 +475,9 @@ mod tests {
 
         use super::super::*;
         use crate::rendering::gpu_test::test_device;
-        use crate::rendering::load_transition::{DragTracker, LoadHistory, LoadScreens};
+        use crate::rendering::load_transition::{
+            DragTracker, LoadHistory, LoadScreenPreview, LoadScreens,
+        };
         use crate::rendering::loading_screen::ArtCamera;
         use crate::rendering::loading_screen::test_support::cube_art;
         use crate::rendering::post::tonemap::ui_gamma_format;
@@ -592,6 +633,7 @@ mod tests {
                 host,
                 drag: DragTracker::default(),
                 history: LoadHistory::default(),
+                preview: LoadScreenPreview::default(),
             })
         }
 

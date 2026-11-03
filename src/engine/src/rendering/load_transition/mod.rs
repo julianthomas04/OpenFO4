@@ -8,10 +8,14 @@ mod history;
 mod host;
 mod keys;
 mod pointer;
+mod preview;
+mod preview_panel;
 
 pub(super) use drag::DragTracker;
 pub(super) use history::{LoadHistory, spawn_report_title};
 pub(in crate::rendering) use host::LoadScreenHost;
+pub(in crate::rendering) use preview::{LoadScreenPreview, ScreenRequest};
+pub(super) use preview_panel::loading_screen_section;
 pub(super) use keys::routed_art_key;
 
 use history::{LoadOrigin, take_if_accepted};
@@ -26,6 +30,7 @@ pub(super) struct LoadScreens {
     pub host: LoadScreenHost,
     pub drag: DragTracker,
     pub history: LoadHistory,
+    pub preview: LoadScreenPreview,
 }
 
 /// Where a switch of place arrives.
@@ -115,7 +120,7 @@ impl State {
     /// Whether a switch of place may start now: from play, or as the session's first load.
     pub(super) fn accepts_transition(&self) -> bool {
         match self.flow.phase() {
-            Phase::InGame => true,
+            Phase::InGame => !self.load_screens.preview.is_open(),
             Phase::Loading => self.load_screens.history.next_is_initial(),
             Phase::MainMenu | Phase::SpawnSelect | Phase::Revealing => false,
         }
@@ -211,6 +216,10 @@ impl State {
     /// down once the load screen is. A model that fails to load turns the large screen into the
     /// small one.
     pub(super) fn sync_load_screen(&mut self, seconds: f32) {
+        if self.load_screens.preview.is_open() {
+            self.sync_preview(seconds);
+            return;
+        }
         if self.flow.phase() != Phase::Loading {
             if self.load_screens.host.is_active() {
                 self.load_screens.host.clear();
@@ -230,7 +239,7 @@ impl State {
     /// keys act on the model: its layer is up and its model is ready.
     pub(super) fn art_shown(&self) -> bool {
         art_shown(
-            self.flow.overlay_layers().art,
+            self.overlay_view().layers.art,
             self.load_screens.host.has_art(),
         )
     }

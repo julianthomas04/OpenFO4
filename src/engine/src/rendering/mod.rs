@@ -211,7 +211,8 @@ use effects::stage::{EffectFrameInputs, EffectStage};
 use light_anim::LightAnimator;
 use lighting::frame_uniform::FrameUniform;
 use load_transition::{
-    Destination, DragTracker, LoadHistory, LoadScreenHost, LoadScreens, spawn_report_title,
+    Destination, DragTracker, LoadHistory, LoadScreenHost, LoadScreenPreview, LoadScreens,
+    ScreenRequest, loading_screen_section, spawn_report_title,
 };
 use menu::{Backdrop, MenuRenderer, OverlayForeground, PanelContent};
 use particles::CameraBasis;
@@ -1784,6 +1785,7 @@ impl State {
             ),
             drag: DragTracker::default(),
             history: LoadHistory::default(),
+            preview: LoadScreenPreview::default(),
         };
         Ok(Self {
             surface,
@@ -2654,11 +2656,12 @@ impl State {
 
         // The black layer of the loading screen and the reveal fade, over the world and
         // the HUD and under the debug UI.
-        let overlay_alpha = self.flow.overlay_alpha();
+        let overlay = self.overlay_view();
+        let overlay_alpha = overlay.alpha;
         if overlay_alpha > 0.0 {
             let menu_view = self.menu.target_view(&output.texture);
             let framebuffer = (self.config.width, self.config.height);
-            let layers = self.flow.overlay_layers();
+            let layers = overlay.layers;
             let art_shown = self.art_shown();
             let backdrop = Backdrop {
                 alpha: overlay_alpha,
@@ -2683,7 +2686,7 @@ impl State {
             }
             let foreground = OverlayForeground {
                 alpha: overlay_alpha,
-                loading_seconds: self.flow.loading_seconds(),
+                loading_seconds: overlay.loading_seconds,
                 panel: (layers.panel && art_shown)
                     .then(|| PanelContent::placeholder(self.load_screens.host.tip())),
             };
@@ -2727,7 +2730,8 @@ impl State {
         // mutably by render, so capture the plain bool here.
         let dbg_interactible = self.aimed_door;
         let developer_window_visible =
-            self.flow.developer_window_visible() && !self.capture_active();
+            self.developer_window_visible() && !self.capture_active();
+        let mut preview_request: Option<ScreenRequest> = None;
         let mut memory_section_open = false;
 
         // Debug UI
@@ -2980,6 +2984,12 @@ impl State {
                                         });
                                     }
                                 }
+                            });
+
+                        egui::CollapsingHeader::new("Loading screen")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                preview_request = loading_screen_section(ui, &mut self.load_screens);
                             });
 
                         egui::CollapsingHeader::new("Streaming")
@@ -3269,6 +3279,9 @@ impl State {
         }
 
         drop(egui_span);
+        if let Some(request) = preview_request {
+            self.open_requested_loading_screen(&request);
+        }
         if !memory_section_open {
             // Drop the cached report so a reopened header refreshes at once
             // instead of showing a stale reading.
@@ -4393,6 +4406,10 @@ impl State {
     }
 
     pub fn handle_key(&mut self, code: KeyCode, is_pressed: bool, is_repeat: bool) {
+        if self.loading_screen_preview_open() {
+            self.handle_preview_key(code, is_pressed, is_repeat);
+            return;
+        }
         if !self.flow.gameplay_input_enabled() {
             self.handle_menu_key(code, is_pressed, is_repeat);
             return;

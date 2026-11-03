@@ -40,6 +40,8 @@ pub struct ArtCamera {
     rotation_limits_deg: (f32, f32),
     zoom_limits: (f32, f32),
     no_rotation: bool,
+    /// The turn the model starts at, within its limits.
+    start_yaw_deg: f32,
     yaw_deg: f32,
     zoom: f32,
     /// How far the pan keys have moved the model right and up, in engine units.
@@ -69,6 +71,7 @@ impl ArtCamera {
             rotation_limits_deg,
             zoom_limits,
             no_rotation: art.no_rotation,
+            start_yaw_deg: start_deg,
             yaw_deg: start_deg,
             zoom: 0.0_f32.clamp(zoom_limits.0, zoom_limits.1),
             pan: (0.0, 0.0),
@@ -127,6 +130,17 @@ impl ArtCamera {
         } else {
             yaw.clamp(limits.0, limits.1)
         };
+    }
+
+    /// Puts the model back where it starts, still: no spin, no zoom, no pan and no held key.
+    /// Two cameras of the same art look the same after this, whatever came before.
+    pub fn pin(&mut self) {
+        let (zoom_min, zoom_max) = self.zoom_limits;
+        self.spin = None;
+        self.yaw_deg = self.start_yaw_deg;
+        self.zoom = 0.0_f32.clamp(zoom_min, zoom_max);
+        self.pan = (0.0, 0.0);
+        self.release_pan_keys();
     }
 
     /// A pan key went down or up.
@@ -251,6 +265,32 @@ mod tests {
             actual.abs_diff_eq(expected, 1e-4),
             "expected {expected:?}, got {actual:?}"
         );
+    }
+
+    #[test]
+    fn pinning_puts_a_moved_camera_back_at_its_start_without_spin_or_held_keys() {
+        let fresh = camera(|_| {});
+        let mut moved = camera(|_| {});
+        moved.tick(1.0);
+        moved.drag(30.0, -40.0);
+        moved.set_pan_key(PanKey::Right, true);
+        moved.tick(0.1);
+
+        moved.pin();
+        moved.tick(1.0);
+
+        assert!(!moved.is_spinning());
+        assert_eq!(moved.yaw_degrees(), fresh.yaw_degrees());
+        assert_eq!(moved.zoom(), fresh.zoom());
+        assert_eq!(moved.pan(), (0.0, 0.0));
+    }
+
+    #[test]
+    fn pinning_keeps_the_start_inside_the_rotation_limits() {
+        let mut limited = camera(|art| art.rotation_limits_deg = (20, 45));
+        limited.drag(100.0, 0.0);
+        limited.pin();
+        assert_eq!(limited.yaw_degrees(), 20.0);
     }
 
     #[test]

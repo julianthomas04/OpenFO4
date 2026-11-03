@@ -25,7 +25,7 @@ fn menu_event_for_key(code: KeyCode, is_repeat: bool) -> Option<FlowEvent> {
 
 impl State {
     pub fn handle_mouse_motion(&mut self, dx: f64, dy: f64) {
-        if self.flow.gameplay_input_enabled() {
+        if self.flow.gameplay_input_enabled() && !self.loading_screen_preview_open() {
             self.mouse_capture
                 .steer(&mut self.camera_controller, dx, dy);
         }
@@ -67,7 +67,7 @@ impl State {
 
     /// Whether the developer window is shown and so takes pointer and keyboard input.
     pub fn developer_window_visible(&self) -> bool {
-        self.flow.developer_window_visible()
+        self.flow.developer_window_visible() && !self.loading_screen_preview_open()
     }
 
     /// Whether the player asked to quit from the main menu.

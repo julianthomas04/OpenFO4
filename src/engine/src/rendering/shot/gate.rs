@@ -12,6 +12,9 @@ const EXPOSURE_TOLERANCE: f32 = 0.02;
 /// What one frame reports about the world.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ShotFrame {
+    /// A loading screen is to be photographed and its background, model and panel are not all
+    /// shown yet.
+    pub loading_screen_pending: bool,
     /// The loading screen and its fade are gone.
     pub world_shown: bool,
     /// No cell of the detail or LOD ring is still loading or waiting to be integrated.
@@ -29,6 +32,7 @@ pub struct ShotFrame {
 /// The first condition a frame fails, in the order the world gets ready.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Blocker {
+    LoadingScreen,
     Loading,
     Cells,
     Textures(u32),
@@ -40,6 +44,10 @@ pub enum Blocker {
 impl fmt::Display for Blocker {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::LoadingScreen => write!(
+                f,
+                "the loading screen's background, model and panel are not all shown yet"
+            ),
             Self::Loading => write!(f, "the loading screen is still up"),
             Self::Cells => write!(f, "cells are still streaming"),
             Self::Textures(pending) => write!(f, "{pending} texture reads are still pending"),
@@ -100,7 +108,9 @@ impl ShotGate {
     }
 
     fn blocker(&self, frame: &ShotFrame) -> Option<Blocker> {
-        if !frame.world_shown {
+        if frame.loading_screen_pending {
+            Some(Blocker::LoadingScreen)
+        } else if !frame.world_shown {
             Some(Blocker::Loading)
         } else if !frame.cells_streamed {
             Some(Blocker::Cells)
@@ -136,6 +146,7 @@ mod tests {
 
     fn ready() -> ShotFrame {
         ShotFrame {
+            loading_screen_pending: false,
             world_shown: true,
             cells_streamed: true,
             textures_pending: 0,
@@ -181,6 +192,10 @@ mod tests {
     #[test]
     fn each_condition_alone_holds_the_shot() {
         let frames = [
+            ShotFrame {
+                loading_screen_pending: true,
+                ..ready()
+            },
             ShotFrame {
                 world_shown: false,
                 ..ready()
