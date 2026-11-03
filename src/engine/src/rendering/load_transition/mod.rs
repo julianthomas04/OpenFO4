@@ -18,7 +18,7 @@ pub(in crate::rendering) use preview::{LoadScreenPreview, ScreenRequest};
 pub(super) use preview_panel::loading_screen_section;
 pub(super) use keys::routed_art_key;
 
-use history::{LoadOrigin, take_if_accepted};
+use history::{LoadOrigin, Refusal, take_if_accepted};
 use host::ArtStatus;
 
 use super::State;
@@ -117,13 +117,12 @@ fn transition_effects(
 }
 
 impl State {
-    /// Whether a switch of place may start now: from play, or as the session's first load.
-    pub(super) fn accepts_transition(&self) -> bool {
-        match self.flow.phase() {
-            Phase::InGame => !self.load_screens.preview.is_open(),
-            Phase::Loading => self.load_screens.history.next_is_initial(),
-            Phase::MainMenu | Phase::SpawnSelect | Phase::Revealing => false,
-        }
+    fn transition_refusal(&self) -> Option<Refusal> {
+        transition_refusal(
+            self.flow.phase(),
+            self.load_screens.history.next_is_initial(),
+            self.load_screens.preview.is_open(),
+        )
     }
 
     /// Takes the pending request in the slot `select` names if a switch of place may start now;
@@ -133,8 +132,8 @@ impl State {
         select: fn(&mut State) -> &mut Option<T>,
         request: &str,
     ) -> Option<T> {
-        let accepting = self.accepts_transition();
-        take_if_accepted(select(self), accepting, request)
+        let refusal = self.transition_refusal();
+        take_if_accepted(select(self), refusal, request)
     }
 
     fn current_place(&self) -> Place {
@@ -174,14 +173,19 @@ impl State {
         if effects.hold_physics_fold {
             self.sim.set_fold_hold(true);
         }
-        self.load_screens.drag.release();
         if effects.set_spawn_cell {
             self.load_spawn_cell = plan.target_grid;
         }
         if effects.release_movement_keys {
-            self.release_held_movement();
+            self.release_held_input();
         }
         self.show_chosen_screen(chosen);
+    }
+
+    /// Lets go of everything the player holds: the model drag and the movement keys.
+    pub(super) fn release_held_input(&mut self) {
+        self.load_screens.drag.release();
+        self.release_held_movement();
     }
 
     fn show_chosen_screen(&mut self, chosen: Option<host::ChosenScreen>) {
@@ -245,6 +249,23 @@ impl State {
     }
 }
 
+/// Why a switch of place may not start in `phase`, if it may not: from play, unless a loading
+/// screen preview is open, or as the session's first load.
+fn transition_refusal(
+    phase: Phase,
+    next_is_initial: bool,
+    preview_open: bool,
+) -> Option<Refusal> {
+    match phase {
+        Phase::InGame if preview_open => Some(Refusal::PreviewOpen),
+        Phase::InGame => None,
+        Phase::Loading if next_is_initial => None,
+        Phase::Loading | Phase::MainMenu | Phase::SpawnSelect | Phase::Revealing => {
+            Some(Refusal::LoadRunning)
+        }
+    }
+}
+
 /// Nothing of a large screen but black and the logo shows until its model is ready; then the
 /// background, the model and the panel appear together.
 fn art_shown(art_layer: bool, art_ready: bool) -> bool {
@@ -254,6 +275,37 @@ fn art_shown(art_layer: bool, art_ready: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn play_accepts_a_transition_unless_the_preview_is_open() {
+        assert_eq!(transition_refusal(Phase::InGame, false, false), None);
+        assert_eq!(
+            transition_refusal(Phase::InGame, false, true),
+            Some(Refusal::PreviewOpen)
+        );
+    }
+
+    #[test]
+    fn only_the_first_load_accepts_a_transition_while_loading() {
+        assert_eq!(transition_refusal(Phase::Loading, true, false), None);
+        assert_eq!(
+            transition_refusal(Phase::Loading, false, false),
+            Some(Refusal::LoadRunning)
+        );
+    }
+
+    #[test]
+    fn the_menus_and_the_reveal_accept_no_transition() {
+        for phase in [Phase::MainMenu, Phase::SpawnSelect, Phase::Revealing] {
+            for next_is_initial in [false, true] {
+                assert_eq!(
+                    transition_refusal(phase, next_is_initial, false),
+                    Some(Refusal::LoadRunning),
+                    "{phase:?}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn the_large_screen_shows_only_while_its_layer_is_up_and_its_model_is_ready() {

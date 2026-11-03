@@ -1,14 +1,15 @@
 //! The engine side of the shot: reads how ready the world is and writes the frame.
 
+use std::time::Instant;
+
 use winit::dpi::PhysicalSize;
 
-use super::gate::{ShotFrame, ShotStep};
-use super::gate::ShotGate;
+use super::gate::{ShotFrame, ShotGate, ShotStep};
 use super::{LoadingScreenStage, Progress, ShotError};
 use crate::game_flow::Phase;
 use crate::rendering::State;
-use crate::rendering::load_transition::ScreenRequest;
 use crate::rendering::frame_capture::PendingFrame;
+use crate::rendering::load_transition::ScreenRequest;
 
 impl State {
     pub(in crate::rendering) fn shot_active(&self) -> bool {
@@ -39,10 +40,20 @@ impl State {
                 .unwrap_or_else(|| "it was closed".to_owned());
             return self.fail_shot(ShotError::LoadingScreen(reason));
         }
+        if shot.loading_screen == LoadingScreenStage::Opened
+            && self.load_screens.host.background_unavailable()
+        {
+            return self.fail_shot(ShotError::LoadingScreen(
+                "background texture missing".to_owned(),
+            ));
+        }
         let Some(shot) = self.shot.as_mut() else {
             return Ok(());
         };
-        let after = shot.started.elapsed();
+        let after = shot
+            .loading_screen_opened
+            .unwrap_or(shot.started)
+            .elapsed();
         match shot.gate.step(&frame, after) {
             ShotStep::Wait => Ok(()),
             ShotStep::Capture => {
@@ -71,7 +82,8 @@ impl State {
             return self.fail_shot(ShotError::LoadingScreen(error.to_string()));
         }
         if let Some(shot) = self.shot.as_mut() {
-            shot.gate = ShotGate::new(settle_frames);
+            shot.gate = ShotGate::for_loading_screen(settle_frames);
+            shot.loading_screen_opened = Some(Instant::now());
         }
         Ok(())
     }

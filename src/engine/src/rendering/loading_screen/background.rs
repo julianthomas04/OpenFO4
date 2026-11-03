@@ -67,6 +67,11 @@ impl LoadingBackground {
         }
     }
 
+    /// Whether loading the background has failed, which is not retried.
+    pub fn is_unavailable(&self) -> bool {
+        matches!(self.state, State::Unavailable)
+    }
+
     fn load(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> State {
         let background = match self.load_texture(device, queue, BACKGROUND_TEXTURE) {
             Ok(view) => view,

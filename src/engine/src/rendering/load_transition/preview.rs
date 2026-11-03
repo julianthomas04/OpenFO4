@@ -6,6 +6,7 @@ use winit::keyboard::KeyCode;
 
 use super::host::ArtStatus;
 use super::keys::art_key;
+use crate::rendering::loading_screen::PanKey;
 use crate::assets::db::load_screens::{LoadScreen, LoadScreenCatalog};
 use crate::game_flow::{OverlayLayers, Phase};
 use crate::random::RandomSource;
@@ -36,6 +37,8 @@ pub(in crate::rendering) enum PreviewError {
     EmptyCatalog,
     #[error("the loading screen can only be opened while the world is shown")]
     WorldNotShown,
+    #[error("a loading screen is already open")]
+    AlreadyOpen,
     #[error("loading screen {label} cannot be shown: {error}")]
     Load { label: String, error: String },
 }
@@ -71,6 +74,39 @@ pub(in crate::rendering) fn matching_entries<'a>(
         .iter()
         .filter(|entry| entry.text.to_lowercase().contains(&needle))
         .collect()
+}
+
+/// Whether a preview may open now: in play, with none open.
+fn check_can_open(phase: Phase, preview_open: bool) -> Result<(), PreviewError> {
+    if preview_open {
+        Err(PreviewError::AlreadyOpen)
+    } else if phase != Phase::InGame {
+        Err(PreviewError::WorldNotShown)
+    } else {
+        Ok(())
+    }
+}
+
+/// What a key does while a preview is open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreviewKey {
+    Close,
+    Pan(PanKey),
+    Ignore,
+}
+
+/// Esc, pressed and not repeated, closes the preview; the pan keys move the model; every other key
+/// does nothing.
+fn preview_key(code: KeyCode, is_pressed: bool, is_repeat: bool) -> PreviewKey {
+    if code == KeyCode::Escape {
+        if is_pressed && !is_repeat {
+            PreviewKey::Close
+        } else {
+            PreviewKey::Ignore
+        }
+    } else {
+        art_key(code).map_or(PreviewKey::Ignore, PreviewKey::Pan)
+    }
 }
 
 /// The screen `request` asks for.
@@ -212,9 +248,7 @@ impl State {
         request: &ScreenRequest,
         pinned: bool,
     ) -> Result<(), PreviewError> {
-        if self.flow.phase() != Phase::InGame {
-            return Err(PreviewError::WorldNotShown);
-        }
+        check_can_open(self.flow.phase(), self.load_screens.preview.is_open())?;
         let chosen = self.load_screens.host.choose_requested(request)?;
         let label = chosen.label.clone();
         self.load_screens
@@ -224,17 +258,12 @@ impl State {
                 label,
                 error: error.to_string(),
             })?;
-        let was_locked = self
-            .load_screens
-            .preview
-            .end()
-            .unwrap_or_else(|| self.mouse_capture.is_locked());
+        let was_locked = self.mouse_capture.is_locked();
         self.load_screens.preview.begin(pinned, was_locked);
         self.mouse_capture.set_locked(false);
         self.mouse_capture.apply(&self.window);
         self.debug_ui.release_keyboard_focus();
-        self.release_held_movement();
-        self.load_screens.drag.release();
+        self.release_held_input();
         Ok(())
     }
 
@@ -279,19 +308,17 @@ impl State {
         }
     }
 
-    /// Esc closes the preview, the pan keys move the model, every other key does nothing.
+    /// Applies what `preview_key` makes of the key.
     pub(in crate::rendering) fn handle_preview_key(
         &mut self,
         code: KeyCode,
         is_pressed: bool,
         is_repeat: bool,
     ) {
-        if code == KeyCode::Escape {
-            if is_pressed && !is_repeat {
-                self.close_loading_screen_preview();
-            }
-        } else if let Some(key) = art_key(code) {
-            self.load_screens.host.key(key, is_pressed, is_repeat);
+        match preview_key(code, is_pressed, is_repeat) {
+            PreviewKey::Close => self.close_loading_screen_preview(),
+            PreviewKey::Pan(key) => self.load_screens.host.key(key, is_pressed, is_repeat),
+            PreviewKey::Ignore => {}
         }
     }
 
@@ -416,6 +443,65 @@ mod tests {
     }
 
     #[test]
+    fn a_preview_opens_in_play_with_none_open_only() {
+        assert!(check_can_open(Phase::InGame, false).is_ok());
+        assert!(matches!(
+            check_can_open(Phase::InGame, true),
+            Err(PreviewError::AlreadyOpen)
+        ));
+        for phase in [
+            Phase::MainMenu,
+            Phase::SpawnSelect,
+            Phase::Loading,
+            Phase::Revealing,
+        ] {
+            assert!(
+                matches!(
+                    check_can_open(phase, false),
+                    Err(PreviewError::WorldNotShown)
+                ),
+                "{phase:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn escape_closes_on_its_first_press_only() {
+        assert_eq!(preview_key(KeyCode::Escape, true, false), PreviewKey::Close);
+        assert_eq!(preview_key(KeyCode::Escape, true, true), PreviewKey::Ignore);
+        assert_eq!(preview_key(KeyCode::Escape, false, false), PreviewKey::Ignore);
+    }
+
+    #[test]
+    fn the_pan_keys_move_the_model_pressed_or_released_or_repeated() {
+        for (is_pressed, is_repeat) in [(true, false), (false, false), (true, true)] {
+            assert_eq!(
+                preview_key(KeyCode::KeyA, is_pressed, is_repeat),
+                PreviewKey::Pan(PanKey::Left)
+            );
+        }
+    }
+
+    #[test]
+    fn a_gameplay_key_does_nothing_in_the_preview() {
+        for code in [KeyCode::KeyE, KeyCode::Space, KeyCode::KeyF, KeyCode::Tab] {
+            assert_eq!(preview_key(code, true, false), PreviewKey::Ignore, "{code:?}");
+        }
+    }
+
+    #[test]
+    fn a_preview_remembers_the_cursor_it_found_and_gives_it_back_once() {
+        for locked in [false, true] {
+            let mut preview = LoadScreenPreview::default();
+            preview.begin(false, locked);
+            assert!(preview.is_open());
+            assert_eq!(preview.end(), Some(locked));
+            assert!(!preview.is_open());
+            assert_eq!(preview.end(), None, "a second close restores nothing");
+        }
+    }
+
+    #[test]
     fn a_closed_preview_has_no_clock_and_a_pin_does_nothing() {
         let mut preview = LoadScreenPreview::default();
         assert!(!preview.is_open());
@@ -453,16 +539,6 @@ mod tests {
         assert!(!preview.take_pin(false), "the model is not shown yet");
         assert!(preview.take_pin(true));
         assert!(!preview.take_pin(true), "pinned once only");
-    }
-
-    #[test]
-    fn ending_a_preview_hands_back_the_cursor_it_found() {
-        let mut preview = LoadScreenPreview::default();
-        preview.begin(false, true);
-        assert!(preview.is_open());
-        assert_eq!(preview.end(), Some(true));
-        assert!(!preview.is_open());
-        assert_eq!(preview.end(), None);
     }
 
     #[test]

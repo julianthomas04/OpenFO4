@@ -79,6 +79,8 @@ pub struct ShotSession {
     config: ShotConfig,
     gate: ShotGate,
     loading_screen: LoadingScreenStage,
+    /// When the loading screen was opened, which its own deadline counts from.
+    loading_screen_opened: Option<Instant>,
     started: Instant,
     progress: Progress,
 }
@@ -92,6 +94,7 @@ impl ShotSession {
         Self {
             gate: ShotGate::new(config.settle_frames),
             loading_screen,
+            loading_screen_opened: None,
             config,
             started: Instant::now(),
             progress: Progress::Waiting,

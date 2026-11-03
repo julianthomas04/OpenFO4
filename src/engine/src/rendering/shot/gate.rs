@@ -6,6 +6,9 @@ use std::time::Duration;
 
 /// How long the shot waits for the world before it gives up.
 pub const SHOT_TIMEOUT: Duration = Duration::from_secs(300);
+/// How long the shot waits for a loading screen it opened: a model and a background load in
+/// seconds, so a longer wait means something is stuck.
+pub const LOADING_SCREEN_TIMEOUT: Duration = Duration::from_secs(60);
 /// The largest frame-to-frame change of the exposure, relative to it, that counts as adapted.
 const EXPOSURE_TOLERANCE: f32 = 0.02;
 
@@ -69,6 +72,7 @@ pub enum ShotStep {
 #[derive(Debug, Clone)]
 pub struct ShotGate {
     settle_frames: u32,
+    timeout: Duration,
     ready_frames: u32,
     previous_exposure: Option<f32>,
     last_blocker: Blocker,
@@ -76,8 +80,18 @@ pub struct ShotGate {
 
 impl ShotGate {
     pub fn new(settle_frames: u32) -> Self {
+        Self::with_timeout(settle_frames, SHOT_TIMEOUT)
+    }
+
+    /// The gate of the loading screen stage, which gives up sooner.
+    pub fn for_loading_screen(settle_frames: u32) -> Self {
+        Self::with_timeout(settle_frames, LOADING_SCREEN_TIMEOUT)
+    }
+
+    fn with_timeout(settle_frames: u32, timeout: Duration) -> Self {
         Self {
             settle_frames,
+            timeout,
             ready_frames: 0,
             previous_exposure: None,
             last_blocker: Blocker::Loading,
@@ -100,7 +114,7 @@ impl ShotGate {
         }
         if self.ready_frames >= self.settle_frames {
             ShotStep::Capture
-        } else if elapsed >= SHOT_TIMEOUT {
+        } else if elapsed >= self.timeout {
             ShotStep::TimedOut(self.last_blocker)
         } else {
             ShotStep::Wait
@@ -253,6 +267,20 @@ mod tests {
             gate.step(&textures, SHOT_TIMEOUT),
             ShotStep::TimedOut(Blocker::Textures(4))
         );
+    }
+
+    #[test]
+    fn the_loading_screen_stage_gives_up_long_before_the_world_does() {
+        let held = ShotFrame {
+            loading_screen_pending: true,
+            ..ready()
+        };
+        let elapsed = LOADING_SCREEN_TIMEOUT;
+        assert_eq!(
+            ShotGate::for_loading_screen(1).step(&held, elapsed),
+            ShotStep::TimedOut(Blocker::LoadingScreen)
+        );
+        assert_eq!(ShotGate::new(1).step(&held, elapsed), ShotStep::Wait);
     }
 
     #[test]

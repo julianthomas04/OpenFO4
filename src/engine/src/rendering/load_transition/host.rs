@@ -211,6 +211,11 @@ impl LoadScreenHost {
             .filter(|_| self.renderer.has_art())
     }
 
+    /// Whether the background failed to load, which no later frame retries.
+    pub fn background_unavailable(&self) -> bool {
+        self.background.is_unavailable()
+    }
+
     /// The images behind a large screen's model, loaded on first use; none when the install lacks
     /// the background.
     pub fn background(&mut self) -> Option<BackgroundImages<'_>> {

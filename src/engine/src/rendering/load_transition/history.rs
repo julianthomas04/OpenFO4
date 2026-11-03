@@ -56,19 +56,36 @@ pub(in crate::rendering) fn spawn_report_title(origin: LoadOrigin) -> &'static s
     }
 }
 
-/// A request that arrives while another load is already running is dropped, with a warning, rather
-/// than kept for after the reveal, when it would be stale.
+/// Why a switch of place may not start now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::rendering) enum Refusal {
+    LoadRunning,
+    PreviewOpen,
+}
+
+impl Refusal {
+    fn reason(self) -> &'static str {
+        match self {
+            Self::LoadRunning => "a load is already running",
+            Self::PreviewOpen => "the loading screen preview is open",
+        }
+    }
+}
+
+/// A request that arrives while a switch of place may not start is dropped, with a warning naming
+/// why, rather than kept for later, when it would be stale.
 pub(in crate::rendering) fn take_if_accepted<T>(
     slot: &mut Option<T>,
-    accepting: bool,
+    refusal: Option<Refusal>,
     request: &str,
 ) -> Option<T> {
     let taken = slot.take()?;
-    if accepting {
-        Some(taken)
-    } else {
-        tracing::warn!("{request} dropped: a load is already running");
-        None
+    match refusal {
+        None => Some(taken),
+        Some(refusal) => {
+            tracing::warn!("{request} dropped: {}", refusal.reason());
+            None
+        }
     }
 }
 
@@ -97,21 +114,35 @@ mod tests {
     #[test]
     fn an_accepted_request_is_taken() {
         let mut slot = Some(3);
-        assert_eq!(take_if_accepted(&mut slot, true, "test request"), Some(3));
+        assert_eq!(take_if_accepted(&mut slot, None, "test request"), Some(3));
         assert_eq!(slot, None);
     }
 
     #[test]
     fn a_request_during_a_load_is_dropped_and_not_kept() {
         let mut slot = Some(3);
-        assert_eq!(take_if_accepted(&mut slot, false, "test request"), None);
+        assert_eq!(take_if_accepted(&mut slot, Some(Refusal::LoadRunning), "test request"),
+            None
+        );
         assert_eq!(slot, None, "it must not fire after the reveal");
+    }
+
+    #[test]
+    fn each_refusal_names_its_own_reason() {
+        assert_eq!(Refusal::LoadRunning.reason(), "a load is already running");
+        assert_eq!(
+            Refusal::PreviewOpen.reason(),
+            "the loading screen preview is open"
+        );
     }
 
     #[test]
     fn no_request_stays_no_request() {
         let mut slot: Option<i32> = None;
-        assert_eq!(take_if_accepted(&mut slot, true, "test request"), None);
-        assert_eq!(take_if_accepted(&mut slot, false, "test request"), None);
+        assert_eq!(take_if_accepted(&mut slot, None, "test request"), None);
+        assert_eq!(
+            take_if_accepted(&mut slot, Some(Refusal::PreviewOpen), "test request"),
+            None
+        );
     }
 }
