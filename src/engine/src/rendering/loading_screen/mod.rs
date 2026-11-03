@@ -217,10 +217,13 @@ impl LoadingArtRenderer {
             return;
         }
         let aspect = size.0 as f32 / size.1 as f32;
+        let aim = active.art.camera.spot_aim();
+        let model = active.art.camera.model_matrix();
         let scene = SceneUniform::new(
             active.art.camera.view_proj(aspect, vertical_fov_radians),
-            active.art.camera.model_matrix(),
+            model,
             self.lights,
+            aim,
         );
         self.queue
             .write_buffer(&self.scene_buffer, 0, bytes_of(&scene));

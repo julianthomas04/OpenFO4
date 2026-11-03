@@ -230,22 +230,12 @@ fn light_cluster(p: ShadingPoint) -> u32 {
     return cluster_index(tile, u32(clamp(slice, 0.0, f32(grid.z - 1u))), grid.x);
 }
 
-const MIN_CONE_COSINE_SPAN = 1e-6;
 const MIN_CONE_SIN_SQ = 1e-12;
 const MIN_CONE_TAN_DIVISOR = 1e-30;
 
 // Distance falloff of a placed light, `distance` in engine units (see placed_light.wgsl).
 fn local_light_attenuation(light: VisibleLight, distance: f32) -> f32 {
     return placed_light_falloff(light.radius, light.attenuation, distance);
-}
-
-// Falloff of a spot light without a lamp shadow: the cosine of the angle off
-// the axis rescaled to 1 on the axis and 0 at the cone edge, raised to the
-// exponent. The rescaled cosine stays 0 past the edge, so the result is 0
-// outside the cone whatever `cos_outer` is.
-fn spot_cosine_falloff(cos_axis: f32, cos_outer: f32, exponent: f32) -> f32 {
-    let inside = saturate(1.0 - (1.0 - cos_axis) / max(1.0 - cos_outer, MIN_CONE_COSINE_SPAN));
-    return pow_or_zero(inside, max(exponent, 0.0));
 }
 
 // Falloff of a spot light with a lamp shadow: 1 - min(1, r^exponent), where r is

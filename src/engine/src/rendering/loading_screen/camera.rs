@@ -44,6 +44,8 @@ pub struct ArtCamera {
     zoom: f32,
     /// How far the pan keys have moved the model right and up, in engine units.
     pan: (f32, f32),
+    /// The centre of the model's bounds in its own space, which the spotlights aim at.
+    local_centre: Vec3,
     /// The model may be moved this far from its placement along each axis, in engine units.
     pan_limit: f32,
     pan_keys: PanKeys,
@@ -73,6 +75,7 @@ impl ArtCamera {
             yaw_deg: start_deg,
             zoom: 0.0_f32.clamp(zoom_limits.0, zoom_limits.1),
             pan: (0.0, 0.0),
+            local_centre: Vec3::ZERO,
             pan_limit: pan_limit.max(0.0),
             pan_keys: PanKeys::default(),
             spin: (!art.no_rotation).then_some(Spin {
@@ -182,6 +185,16 @@ impl ArtCamera {
             position_to_engine(0.0, FALLBACK_DISTANCE, 0.0)
         };
         placed / (1.0 + self.zoom)
+    }
+
+    pub fn set_local_centre(&mut self, centre: Vec3) {
+        self.local_centre = centre;
+    }
+
+    /// Where the spotlights aim, in the scene's space: the centre of the model's bounds, moved
+    /// with the model.
+    pub fn spot_aim(&self) -> Vec3 {
+        self.model_matrix().transform_point3(self.local_centre)
     }
 
     pub fn model_matrix(&self) -> Mat4 {
@@ -492,6 +505,32 @@ mod tests {
         let point = Vec3::new(0.0, 50.0 * half_fov.tan(), -50.0);
         let (_, y) = pixel_of(&camera, point, (2560.0, 1440.0));
         assert!(y.abs() < 1e-2, "{y}");
+    }
+
+    #[test]
+    fn the_spotlights_aim_at_the_centre_of_the_models_bounds_where_the_model_stands() {
+        let mut camera = still_camera(|_| {});
+        camera.set_local_centre(Vec3::new(0.0, 3.0, 0.0));
+
+        let aim = camera.spot_aim();
+
+        let expected = camera.model_matrix().transform_point3(Vec3::new(0.0, 3.0, 0.0));
+        assert!(aim.abs_diff_eq(expected, 1e-5), "{aim}");
+        let placement = camera.model_matrix().transform_point3(Vec3::ZERO);
+        assert!(!aim.abs_diff_eq(placement, 1e-3), "the aim is not the pivot");
+    }
+
+    #[test]
+    fn the_spot_aim_follows_the_model_when_it_is_panned() {
+        let mut camera = still_camera(|_| {});
+        camera.set_local_centre(Vec3::new(1.0, 0.0, 0.0));
+        let before = camera.spot_aim();
+
+        camera.set_pan_key(PanKey::Right, true);
+        camera.tick(0.1);
+
+        let after = camera.spot_aim();
+        assert!((after - before).length() > 1e-3, "{before} -> {after}");
     }
 
     #[test]

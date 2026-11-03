@@ -25,3 +25,14 @@ fn placed_light_falloff(radius: f32, attenuation: vec3<f32>, distance: f32) -> f
     let record_loss = saturate(attenuation.x + attenuation.y * distance_power);
     return pow_or_zero(1.0 - saturate(max(record_loss, window_loss)), LIGHT_FALLOFF_POWER);
 }
+
+const MIN_CONE_COSINE_SPAN = 1e-6;
+
+// Falloff of a spot light without a lamp shadow: the cosine of the angle off
+// the axis rescaled to 1 on the axis and 0 at the cone edge, raised to the
+// exponent. The rescaled cosine stays 0 past the edge, so the result is 0
+// outside the cone whatever `cos_outer` is.
+fn spot_cosine_falloff(cos_axis: f32, cos_outer: f32, exponent: f32) -> f32 {
+    let inside = saturate(1.0 - (1.0 - cos_axis) / max(1.0 - cos_outer, MIN_CONE_COSINE_SPAN));
+    return pow_or_zero(inside, max(exponent, 0.0));
+}

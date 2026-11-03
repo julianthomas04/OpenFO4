@@ -97,12 +97,37 @@ impl CpuArt {
                 .iter()
                 .flat_map(|part| part.vertices.iter().map(|vertex| vertex.position)),
         );
+        let mut camera = ArtCamera::new(art, pan_limit(radius, art.transform.scale));
+        camera.set_local_centre(bounds_centre(
+            submeshes
+                .iter()
+                .flat_map(|part| part.vertices.iter().map(|vertex| vertex.position)),
+        ));
         Ok(Self {
             model_path: path.clone(),
             submeshes,
             asset_root: art.asset_root.clone(),
-            camera: ArtCamera::new(art, pan_limit(radius, art.transform.scale)),
+            camera,
         })
+    }
+}
+
+/// The centre of the box around `positions`; the origin without any.
+fn bounds_centre(positions: impl Iterator<Item = [f32; 3]>) -> glam::Vec3 {
+    let (min, max) = positions.fold(
+        (
+            glam::Vec3::splat(f32::INFINITY),
+            glam::Vec3::splat(f32::NEG_INFINITY),
+        ),
+        |(min, max), position| {
+            let position = glam::Vec3::from(position);
+            (min.min(position), max.max(position))
+        },
+    );
+    if min.cmple(max).all() {
+        (min + max) * 0.5
+    } else {
+        glam::Vec3::ZERO
     }
 }
 
@@ -351,6 +376,35 @@ fn texel(
 mod tests {
     use super::*;
     use crate::rendering::loading_screen::test_support::cube_art;
+
+    #[test]
+    fn the_bounds_centre_is_the_middle_of_the_box_not_the_mean_of_the_vertices() {
+        let centre = bounds_centre([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [4.0, 2.0, -6.0]].into_iter());
+
+        assert_eq!(centre, glam::Vec3::new(2.0, 1.0, -3.0));
+    }
+
+    #[test]
+    fn a_model_without_vertices_has_its_bounds_centre_at_the_origin() {
+        assert_eq!(bounds_centre(std::iter::empty()), glam::Vec3::ZERO);
+    }
+
+    #[test]
+    fn a_loaded_models_camera_aims_at_its_bounds_centre() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut art = cube_art(dir.path(), "");
+        art.transform.rotation_radians = [0.0; 3];
+        art.transform.scale = 1.0;
+
+        let cpu = CpuArt::load(&art).expect("the synthetic cube loads");
+
+        let at_placement = cpu.camera.model_matrix().transform_point3(glam::Vec3::ZERO);
+        let aim = cpu.camera.spot_aim();
+        assert!(
+            aim.abs_diff_eq(at_placement, 1e-3),
+            "the cube is centred on its origin: {aim} vs {at_placement}"
+        );
+    }
 
     #[test]
     fn a_model_that_does_not_exist_is_reported_as_missing() {

@@ -7,16 +7,21 @@
 //! overrides it. Interpretation, not documented by the game: the position is in game units from
 //! the camera along the camera's axes (X right, Y forward, Z up), the dimmer multiplies the
 //! diffuse colour as a placed light's fade does, and the radius is the distance at which the
-//! falloff reaches zero. The documented `SpotFOV` of 10 is not used: these are point lights.
+//! falloff reaches zero. The lights are spotlights, as the documented `SpotFOV` of 10 degrees
+//! says: the full cone angle, shaded like a placed spotlight without a lamp shadow, aimed at the
+//! model.
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 
 use crate::assets::ini::{GameIni, IniError, IniKey};
 use crate::bethesda_space::position_to_engine;
-use crate::rendering::placed_light::{defaults, linear_colour, radius_for};
+use crate::rendering::placed_light::{defaults, linear_colour, outer_cone_cos, radius_for};
 
 pub const LIGHT_COUNT: usize = 3;
+
+/// The documented hidden default of every light's `SpotFOV`, in degrees.
+const VANILLA_SPOT_FOV: f32 = 10.0;
 
 /// One light as its settings state it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -29,6 +34,8 @@ pub struct SceneLight {
     pub radius: f32,
     /// In game units from the camera: X right, Y forward, Z up.
     pub position: Vec3,
+    /// The full cone angle in degrees, above 0 and at most 180.
+    pub spot_fov: f32,
 }
 
 /// The loading menu's lights, in the order of the settings: the key from the upper left behind
@@ -43,6 +50,7 @@ struct LightKeys {
     dimmer: IniKey,
     radius: IniKey,
     position: [IniKey; 3],
+    spot_fov: IniKey,
 }
 
 macro_rules! light_keys {
@@ -60,6 +68,7 @@ macro_rules! light_keys {
                 IniKey::new("Interface", concat!($prefix, "Y")),
                 IniKey::new("Interface", concat!($prefix, "Z")),
             ],
+            spot_fov: IniKey::new("Interface", concat!($prefix, "SpotFOV")),
         }
     };
 }
@@ -79,18 +88,21 @@ impl SceneLights {
                 dimmer: 8.5,
                 radius: 5000.0,
                 position: Vec3::new(-1800.0, 1000.0, 1500.0),
+                spot_fov: VANILLA_SPOT_FOV,
             },
             SceneLight {
                 diffuse: Vec3::new(0.64, 0.78, 0.74),
                 dimmer: 12.0,
                 radius: 4000.0,
                 position: Vec3::new(1450.0, 2400.0, 1700.0),
+                spot_fov: VANILLA_SPOT_FOV,
             },
             SceneLight {
                 diffuse: Vec3::new(0.8, 0.82, 0.74),
                 dimmer: 1.2,
                 radius: 5000.0,
                 position: Vec3::new(400.0, -800.0, 220.0),
+                spot_fov: VANILLA_SPOT_FOV,
             },
         ],
     };
@@ -118,6 +130,7 @@ impl SceneLights {
                     light.position.to_array(),
                     FINITE,
                 )?),
+                spot_fov: reader.read(keys.spot_fov, light.spot_fov, SPOT_FOV)?,
             };
         }
         reader.note_defaults();
@@ -143,6 +156,11 @@ const FINITE: Rule = Rule {
 const NON_NEGATIVE: Rule = Rule {
     requirement: "a finite number, 0 or more",
     holds: |value| value.is_finite() && *value >= 0.0,
+};
+
+const SPOT_FOV: Rule = Rule {
+    requirement: "a finite number above 0 and at most 180",
+    holds: |value| value.is_finite() && *value > 0.0 && *value <= 180.0,
 };
 
 const POSITIVE: Rule = Rule {
@@ -195,7 +213,8 @@ pub(super) struct GpuSceneLight {
     position_radius: [f32; 4],
     /// The linear colour with the dimmer applied.
     colour: [f32; 4],
-    /// The falloff's constant, scalar and exponent: the modal values of the world's light records.
+    /// The falloff's constant, scalar and exponent: the modal values of the world's light records;
+    /// and the cosine of the cone's half-angle.
     attenuation: [f32; 4],
 }
 
@@ -213,7 +232,7 @@ impl SceneLight {
                 defaults::CONSTANT,
                 defaults::SCALAR,
                 defaults::EXPONENT,
-                0.0,
+                outer_cone_cos(self.spot_fov).expect("a scene light's SpotFOV is within (0, 180]"),
             ],
         }
     }
@@ -354,6 +373,7 @@ mod tests {
             dimmer: 4.0,
             radius: 1000.0,
             position: Vec3::ZERO,
+            spot_fov: 10.0,
         };
 
         let [red, green, blue, _] = light.to_gpu().colour;
@@ -367,6 +387,57 @@ mod tests {
     fn the_falloff_is_the_worlds_modal_record_attenuation() {
         let [light, ..] = SceneLights::VANILLA.to_gpu();
 
-        assert_eq!(light.attenuation, [0.0, 1.0, 2.0, 0.0]);
+        assert_eq!(light.attenuation[..3], [0.0, 1.0, 2.0]);
+    }
+
+    #[test]
+    fn every_vanilla_light_is_a_spotlight_of_10_degrees() {
+        for light in SceneLights::VANILLA.lights {
+            assert_eq!(light.spot_fov, 10.0);
+        }
+    }
+
+    #[test]
+    fn the_cone_is_stored_as_the_cosine_of_the_half_angle_of_the_full_angle() {
+        let light = SceneLight {
+            spot_fov: 60.0,
+            ..SceneLights::VANILLA.lights[0]
+        };
+
+        let cosine = light.to_gpu().attenuation[3];
+
+        assert!(
+            (cosine - 30.0_f32.to_radians().cos()).abs() < 1e-6,
+            "{cosine}"
+        );
+    }
+
+    #[test]
+    fn a_spot_fov_setting_overrides_only_its_own_light() {
+        let lights = SceneLights::from_ini(&ini(
+            "[Interface]\nfLoadingMenuSceneLight2SpotFOV=45\nfLoadingMenuSceneLight3SpotFOV=180\n",
+        ))
+        .unwrap();
+
+        let fovs = lights.lights.map(|light| light.spot_fov);
+        assert_eq!(fovs, [10.0, 45.0, 180.0]);
+    }
+
+    #[test]
+    fn a_spot_fov_outside_the_cone_range_is_an_error_naming_the_key() {
+        for text in [
+            "fLoadingMenuSceneLightSpotFOV=0\n",
+            "fLoadingMenuSceneLightSpotFOV=-10\n",
+            "fLoadingMenuSceneLightSpotFOV=180.5\n",
+            "fLoadingMenuSceneLightSpotFOV=inf\n",
+            "fLoadingMenuSceneLightSpotFOV=wide\n",
+        ] {
+            let error = SceneLights::from_ini(&ini(text)).unwrap_err();
+
+            assert!(
+                error.to_string().contains("fLoadingMenuSceneLightSpotFOV"),
+                "{text:?}: {error}"
+            );
+        }
     }
 }

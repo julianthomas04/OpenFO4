@@ -2,9 +2,10 @@
 //! uniform block and the depth buffer.
 
 use bytemuck::{Pod, Zeroable};
-use glam::Mat4;
+use glam::{Mat4, Vec3};
 
 use super::scene_lights::{GpuSceneLight, LIGHT_COUNT};
+use crate::rendering::placed_light::defaults;
 use crate::rendering::shaders;
 use crate::rendering::texture::Texture;
 use crate::rendering::vertex::Vertex;
@@ -16,14 +17,22 @@ pub(super) struct SceneUniform {
     view_proj: [[f32; 4]; 4],
     model: [[f32; 4]; 4],
     lights: [GpuSceneLight; LIGHT_COUNT],
+    /// xyz: the point the spotlights aim at, w: their falloff exponent.
+    aim: [f32; 4],
 }
 
 impl SceneUniform {
-    pub fn new(view_proj: Mat4, model: Mat4, lights: [GpuSceneLight; LIGHT_COUNT]) -> Self {
+    pub fn new(
+        view_proj: Mat4,
+        model: Mat4,
+        lights: [GpuSceneLight; LIGHT_COUNT],
+        aim: Vec3,
+    ) -> Self {
         Self {
             view_proj: view_proj.to_cols_array_2d(),
             model: model.to_cols_array_2d(),
             lights,
+            aim: aim.extend(defaults::FALLOFF_EXPONENT).to_array(),
         }
     }
 }
@@ -235,12 +244,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_uniform_carries_the_lights() {
+    fn the_uniform_carries_the_lights_and_the_spot_aim_with_the_worlds_default_exponent() {
         let lights = SceneLights::VANILLA.to_gpu();
 
-        let uniform = SceneUniform::new(Mat4::IDENTITY, Mat4::IDENTITY, lights);
+        let uniform = SceneUniform::new(
+            Mat4::IDENTITY,
+            Mat4::IDENTITY,
+            lights,
+            Vec3::new(1.0, 2.0, 3.0),
+        );
 
         assert_eq!(uniform.lights, lights);
+        assert_eq!(uniform.aim, [1.0, 2.0, 3.0, defaults::FALLOFF_EXPONENT]);
     }
 
     #[test]

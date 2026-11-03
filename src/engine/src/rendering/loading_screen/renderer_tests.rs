@@ -17,6 +17,8 @@ const BLACK: wgpu::Color = wgpu::Color::BLACK;
 /// How far the cube's front face is from the camera, in engine units: the cube's centre is at
 /// 30 and its half edge 5.
 const FRONT_FACE_DEPTH: f32 = 25.0;
+/// Half the cube's edge in engine units.
+const CUBE_HALF_EDGE: f32 = 5.0;
 /// The diffuse of a fully rough surface seen along its normal, relative to Lambert:
 /// `1 - 0.5 * 1 / (1 + 0.57)` from the world's roughness coefficients.
 const ROUGH_FLATTEN: f32 = 0.681_5;
@@ -32,7 +34,21 @@ fn front_face_linear(lights: &SceneLights) -> [f32; 3] {
     let normalised = distance / (fill.radius * UNITS_TO_ENGINE);
     let falloff = (1.0 - normalised * normalised).max(0.0).powf(2.2);
     let cosine = to_light.z / distance;
-    (linear_colour(fill.diffuse, fill.dimmer) * (falloff * ROUGH_FLATTEN * cosine)).to_array()
+    let cone = spot_cone(fill.position, fill.spot_fov, to_light);
+    (linear_colour(fill.diffuse, fill.dimmer) * (falloff * cone * ROUGH_FLATTEN * cosine))
+        .to_array()
+}
+
+/// The share of a spotlight's light that reaches the front face's centre: the light aims at the
+/// cube's centre, and the world's cone falloff (exponent 1) rescales the cosine off the axis from
+/// the cone's edge to its axis.
+fn spot_cone(position: Vec3, full_angle_degrees: f32, to_light: Vec3) -> f32 {
+    let [x, y, z] = position.to_array();
+    let light = position_to_engine(x, y, z);
+    let axis = (Vec3::new(0.0, 0.0, -FRONT_FACE_DEPTH - CUBE_HALF_EDGE) - light).normalize();
+    let cos_axis = -to_light.normalize().dot(axis);
+    let cos_outer = (full_angle_degrees.to_radians() * 0.5).cos();
+    (1.0 - (1.0 - cos_axis) / (1.0 - cos_outer)).clamp(0.0, 1.0)
 }
 
 fn front_face_bytes() -> [u8; 3] {

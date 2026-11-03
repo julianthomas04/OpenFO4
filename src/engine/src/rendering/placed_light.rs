@@ -412,7 +412,7 @@ const OMNI_CONE_COS: f32 = -1.0;
 /// LIGH FOV is the full cone angle in degrees (the ref's XLIG FOV is added to
 /// it); the shader wants the cosine of the half-angle:
 /// `cos(radians(fov) / 2)`. 180 degrees gives 0 (a hemisphere).
-fn outer_cone_cos(fov_degrees: f32) -> Result<f32, PlacedLightError> {
+pub(crate) fn outer_cone_cos(fov_degrees: f32) -> Result<f32, PlacedLightError> {
     if !(fov_degrees > MIN_FOV_DEGREES && fov_degrees <= MAX_FOV_DEGREES) {
         return Err(PlacedLightError::InvalidFov(fov_degrees));
     }

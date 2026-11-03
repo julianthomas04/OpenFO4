@@ -1,5 +1,5 @@
-// The 3D model of a large loading screen, lit by the game's three loading-menu scene lights: point
-// lights fixed relative to the camera, each with the world's placed-light distance falloff
+// The 3D model of a large loading screen, lit by the game's three loading-menu scene lights:
+// spotlights aimed at the model, fixed relative to the camera, each with the world's placed-light distance falloff
 // (`placed_light.wgsl`) and the world's surface response (`surface_response.wgsl`), and no ambient
 // term. The normal map and the specular map (R = intensity, G = smoothness) are read through the
 // world's tangent frame (`normal_mapping.wgsl`). The output is linear radiance, unclamped, for the
@@ -20,9 +20,12 @@ struct Scene {
     view_proj: mat4x4<f32>,
     model: mat4x4<f32>,
     lights: array<SceneLight, SCENE_LIGHT_COUNT>,
+    // xyz: the point the spotlights aim at, w: their falloff exponent.
+    aim: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> scene: Scene;
+
 @group(1) @binding(0) var diffuse: texture_2d<f32>;
 @group(1) @binding(1) var diffuse_sampler: sampler;
 @group(1) @binding(3) var normal_map: texture_2d<f32>;
@@ -90,14 +93,17 @@ fn direction_to_viewer(world_pos: vec3<f32>) -> vec3<f32> {
     return safe_normalize(-world_pos);
 }
 
-// What `light` adds to `surface` at `world_pos`: the world's local light, a point light with no
-// flags, so the full surface response. The response is zero where the light is behind the surface.
+// What `light` adds to `surface` at `world_pos`: the world's local light, a spotlight without a
+// lamp shadow aimed at `scene.aim` (`attenuation.w` is the cosine of its half-angle), so the full
+// surface response. The response is zero where the light is behind the surface.
 fn scene_light_radiance(surface: SurfaceSample, light: SceneLight, world_pos: vec3<f32>) -> vec3<f32> {
     let to_light = light.position_radius.xyz - world_pos;
     let distance = max(length(to_light), MIN_LIGHT_DISTANCE);
     let to_light_unit = to_light / distance;
     let falloff = placed_light_falloff(light.position_radius.w, light.attenuation.xyz, distance);
-    let colour = light.colour.rgb * (falloff * terminator(surface.ng, to_light_unit));
+    let cos_axis = -dot(to_light_unit, normalize(scene.aim.xyz - light.position_radius.xyz));
+    let cone = spot_cosine_falloff(cos_axis, light.attenuation.w, scene.aim.w);
+    let colour = light.colour.rgb * (falloff * cone * terminator(surface.ng, to_light_unit));
     let response = surface_response(surface, to_light_unit, direction_to_viewer(world_pos), FULL_RESPONSE);
     return surface.albedo * colour * response.diffuse + colour * response.specular;
 }
