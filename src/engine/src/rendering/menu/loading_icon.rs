@@ -306,7 +306,7 @@ pub(super) mod test_support {
             },
         });
         let panel = crate::rendering::menu::loading_panel::test_support::parts();
-        for section in ["characters", "instances", "literals"] {
+        for section in ["constants", "characters", "instances", "literals"] {
             let additions = panel[section]
                 .as_object()
                 .expect("the panel has the section");

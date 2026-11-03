@@ -874,10 +874,10 @@ fn the_meter_is_a_frame_with_a_fill_from_the_left_up_to_the_experience() {
         experience,
         ..PanelContent::placeholder(None)
     };
-    // The fixture's meter covers the stage rectangle (142.55, 513.05) to (361.55, 524.05), the
-    // pixels (71.3, 256.5) to (180.8, 262).
+    // The fixture's meter covers the stage rectangle (142.55, 449.45) to (361.55, 460.45), once
+    // the panel is lowered to its bottom anchor: the pixels (71.3, 224.7) to (180.8, 230.2).
     let (left, right) = (72, 180);
-    let inside_y = 259;
+    let inside_y = 227;
     let quarter = (left + (right - left) / 4, inside_y);
     let three_quarters = (right - (right - left) / 4, inside_y);
 

@@ -19,7 +19,8 @@ use crate::rendering::hud::shape::{StageRect, shown_fill, stage_rect};
 use crate::rendering::ui_colour::UiTint;
 use crate::ui_layout::scaleform_text::FieldGeometry;
 use crate::ui_layout::{
-    KeyGroup, LiteralKey, PlacementKey, ShapeKey, TextKey, TranslateKey, UiLayout, UiLayoutError,
+    KeyGroup, LiteralKey, NumberKey, PlacementKey, ShapeKey, TextKey, TranslateKey, UiLayout,
+    UiLayoutError,
 };
 
 const MAX_COLOUR: f64 = 16_777_215.0;
@@ -48,6 +49,10 @@ pub static METER_FILL: ShapeKey = ShapeKey::new(
     MOVIE,
     "FilterHolder_mc/Menu_mc/LeftText_mc/LevelMeter_mc/Fill_mc/@1",
 );
+/// The stage y the script's layout constants name for the tip's bottom. Inferred from a vanilla
+/// screenshot, not read from the script: the bottom of the box around the tip's field, outline
+/// included, sits on it.
+static SLIDE_TEXT_Y: NumberKey = NumberKey::new(MOVIE, "LoadingMenu.SLIDE_TEXT_Y_POSITION");
 static LEVEL_PREFIX: TranslateKey = TranslateKey::text("$LEVEL");
 static CATALOGUE_PREFIX: TranslateKey = TranslateKey::text("$VDSGPrepend");
 static BORDER_WIDTH: LiteralKey = LiteralKey::new(
@@ -78,6 +83,7 @@ pub static KEYS: KeyGroup = KeyGroup(&[
     &BORDER_WIDTH,
     &BORDER_COLOUR,
     &BORDER_INSET,
+    &SLIDE_TEXT_Y,
 ]);
 
 /// Distances in stage pixels from the sides of the tip's lines out to the box's outline.
@@ -127,6 +133,8 @@ pub struct PanelLayout {
     border_width: f32,
     border_colour: [u8; 3],
     pub border_padding: Padding,
+    /// The stage y the bottom of the tip's box is laid out at, see [`SLIDE_TEXT_Y`].
+    tip_bottom_anchor: f32,
 }
 
 /// What the panel shows.
@@ -269,13 +277,20 @@ impl PanelLayout {
                 right: inset(2)?,
                 bottom: inset(3)?,
             },
+            tip_bottom_anchor: layout.get(&SLIDE_TEXT_Y)? as f32,
         })
     }
 
-    /// The stage offset the loading screen's script moves the panel by: it puts the clip's
-    /// registration point on the left edge of the safe zone.
-    fn safe_rect_shift(&self, fit: &Layout, safe_zone: SafeZone) -> f32 {
-        Anchor::Left.shift(fit, safe_zone, self.origin).0
+    /// The stage offset the loading screen's script moves the panel by: sideways, it puts the
+    /// clip's registration point on the left edge of the safe zone; down, the bottom of the tip's
+    /// box goes to the script's anchor.
+    fn safe_rect_shift(&self, fit: &Layout, safe_zone: SafeZone) -> (f32, f32) {
+        let (sideways, _) = Anchor::Left.shift(fit, safe_zone, self.origin);
+        let lower_bound = self.tip.geometry.bottom + self.border_padding.bottom;
+        (
+            sideways,
+            tip_box_shift(self.tip_bottom_anchor, lower_bound, self.border_width),
+        )
     }
 
     /// The text of `content` on a framebuffer fitted by `fit`, in the colour of `tint`, with the
@@ -318,6 +333,9 @@ impl PanelLayout {
         let colour = |rgb: [u8; 3]| tinted(tint, rgb);
         let mut rects = Vec::new();
         if let Some(extent) = tip {
+            let field = self.tip.geometry;
+            let (field_left, _) = fit.stage_point(field.left + shift.0, 0.0);
+            let extent = across_field(extent, field_left, fit.s(field.right - field.left));
             let path = padded(extent, self.border_padding, fit.scale());
             let width = fit.s(self.border_width);
             rects.extend(
@@ -348,8 +366,14 @@ fn tinted(tint: &UiTint, rgb: [u8; 3]) -> [f32; 4] {
     [red, green, blue, 1.0]
 }
 
-fn item(style: &TextStyle, fit: &Layout, shift: f32, tint: &UiTint, text: String) -> TextItem {
-    let (origin_x, origin_y) = fit.stage_point(shift, 0.0);
+fn item(
+    style: &TextStyle,
+    fit: &Layout,
+    shift: (f32, f32),
+    tint: &UiTint,
+    text: String,
+) -> TextItem {
+    let (origin_x, origin_y) = fit.stage_point(shift.0, shift.1);
     let [red, green, blue] = tint.apply_to(style.colour);
     TextItem {
         text,
@@ -371,7 +395,7 @@ fn item(style: &TextStyle, fit: &Layout, shift: f32, tint: &UiTint, text: String
 fn wrapped_item(
     style: &TextStyle,
     fit: &Layout,
-    shift: f32,
+    shift: (f32, f32),
     tint: &UiTint,
     text: &str,
 ) -> TextItem {
@@ -395,10 +419,27 @@ fn wrapped_item(
     }
 }
 
-fn shifted(rect: StageRect, shift: f32) -> StageRect {
+fn shifted(rect: StageRect, shift: (f32, f32)) -> StageRect {
     StageRect {
-        x: rect.x + shift,
+        x: rect.x + shift.0,
+        y: rect.y + shift.1,
         ..rect
+    }
+}
+
+/// The vertical shift that puts the outer bottom of the tip's box on `anchor`, when the box's
+/// path would end at `path_bottom` as authored and the outline is `line_width` thick.
+fn tip_box_shift(anchor: f32, path_bottom: f32, line_width: f32) -> f32 {
+    anchor - (path_bottom + line_width / 2.0)
+}
+
+/// `extent` with the horizontal span of the tip's field: the script draws the box around the
+/// whole field, so its width does not depend on how far the lines reach.
+fn across_field(extent: TextExtent, field_left: f32, field_width: f32) -> TextExtent {
+    TextExtent {
+        left: field_left,
+        width: field_width,
+        ..extent
     }
 }
 
@@ -504,6 +545,9 @@ pub(super) mod test_support {
     /// The tip field's authored width, wider than the content by the gutters.
     pub const TIP_WIDTH: f64 = 504.95;
 
+    /// The fixture's value of the script's constant for the bottom of the tip.
+    pub const SLIDE_TEXT_Y_POSITION: f64 = 651.0;
+
     /// Where the fixture puts the panel's clip: on the left edge of the tests' safe zone.
     pub const LEFT_TEXT_ORIGIN: (f64, f64) = (64.0, 506.65);
 
@@ -512,6 +556,7 @@ pub(super) mod test_support {
     pub fn parts() -> Value {
         let literal = |value: Value| json!({ "values": [value] });
         json!({
+            "constants": {"LoadingMenu.SLIDE_TEXT_Y_POSITION": SLIDE_TEXT_Y_POSITION},
             "characters": {
                 "16": text_field([-2.0, -2.0, 502.95, 115.6], 19, [221, 221, 221, 255], true),
                 "17": text_field([-2.0, -2.0, 398.0, 24.8], 17, [255, 255, 255, 255], false),
@@ -567,6 +612,10 @@ mod tests {
     /// A safe zone whose left edge is where the fixture places the panel's clip, so the lock moves
     /// nothing.
     const AUTHORED: SafeZone = SafeZone { x: 64.0, y: 36.0 };
+
+    /// How far the fixture's panel moves down for its bottom anchor of 651: its tip field ends at
+    /// 703.6, with 10 of padding and half of the 2 pixel outline below.
+    const AUTHORED_LIFT: f32 = 651.0 - (703.6 + 10.0 + 1.0);
 
     fn panel() -> PanelLayout {
         standard().loading_panel
@@ -797,7 +846,7 @@ mod tests {
         assert_eq!(rects.len(), 5);
         let (fill, colour) = rects[4];
         close(fill.x, 142.55);
-        close(fill.y, 513.05);
+        close(fill.y, 513.05 + AUTHORED_LIFT);
         close(fill.w, 219.0 / 2.0);
         close(fill.h, 11.0);
         assert_eq!(colour, [0.0, 1.0, 0.0, 1.0]);
@@ -824,8 +873,50 @@ mod tests {
         let without = panel().rects(&fit(), AUTHORED, &GREEN, None, 0.0);
         assert_eq!(with_box.len(), without.len() + 4);
         let (top, _) = with_box[0];
-        close(top.x, 152.0 - 8.0 - 1.0);
         close(top.y, 588.0 - 3.0 - 1.0);
-        close(top.w, 400.0 + 13.0 + 2.0);
+        close(top.x, 150.0 - 8.0 - 1.0);
+        close(top.w, 504.95 + 13.0 + 2.0);
+    }
+
+    #[test]
+    fn the_box_spans_the_whole_field_however_short_the_lines_are() {
+        let rects_for = |width: f32| {
+            let extent = TextExtent {
+                left: 152.0,
+                top: 588.0,
+                width,
+                height: 80.0,
+            };
+            panel().rects(&fit(), AUTHORED, &GREEN, Some(extent), 0.0)[0].0
+        };
+        assert_eq!(rects_for(40.0), rects_for(480.0));
+    }
+
+    #[test]
+    fn the_whole_panel_is_lowered_so_the_boxs_bottom_meets_the_anchor() {
+        let text = panel().text(&fit(), AUTHORED, &GREEN, &PanelContent::placeholder(Some("tip")));
+        close(text.tip.expect("a tip").map.origin.1, AUTHORED_LIFT);
+        close(text.level.expect("a level").map.origin.1, AUTHORED_LIFT);
+    }
+
+    #[test]
+    fn the_shift_puts_the_outer_bottom_of_the_outline_on_the_anchor() {
+        assert_eq!(tip_box_shift(651.0, 700.0, 2.0), -50.0);
+        assert_eq!(tip_box_shift(651.0, 649.0, 4.0), 0.0);
+    }
+
+    #[test]
+    fn across_field_replaces_only_the_horizontal_span() {
+        let extent = TextExtent {
+            left: 10.0,
+            top: 20.0,
+            width: 30.0,
+            height: 40.0,
+        };
+        let spanned = across_field(extent, 5.0, 100.0);
+        assert_eq!(
+            (spanned.left, spanned.width, spanned.top, spanned.height),
+            (5.0, 100.0, 20.0, 40.0)
+        );
     }
 }
