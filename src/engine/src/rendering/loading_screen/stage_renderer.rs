@@ -31,19 +31,15 @@ struct StageMaterialUniform {
 
 impl StageMaterialUniform {
     /// An effect shape's colour: its base colour times its scale, and the base colour's alpha
-    /// times the material's. A plane that blends by its source alpha, as the additive overlay
-    /// does, takes the base colour's alpha twice: an interpretation confirmed against a vanilla
-    /// capture within about 8%, not documented data.
+    /// times the material's. An additive plane (source alpha, destination one) takes the base
+    /// colour's alpha twice: an interpretation confirmed against a vanilla capture within about
+    /// 8%, not documented data. A plane that covers what is behind it is not squared.
     fn new(material: &EffectMaterial, lift: f32) -> Self {
         let [red, green, blue, alpha] = material.base_color;
         let scale = material.base_color_scale;
-        let blends_by_source_alpha = blend_factors(&material.blend)
-            .is_some_and(|(source, _)| source == wgpu::BlendFactor::SrcAlpha);
-        let base_alpha = if blends_by_source_alpha {
-            alpha * alpha
-        } else {
-            alpha
-        };
+        let is_additive = blend_factors(&material.blend)
+            == Some((wgpu::BlendFactor::SrcAlpha, wgpu::BlendFactor::One));
+        let base_alpha = if is_additive { alpha * alpha } else { alpha };
         Self {
             colour: [
                 red * scale,
@@ -393,7 +389,7 @@ mod tests {
     use crate::assets::types::effect_material::{Blend, BlendMode};
 
     #[test]
-    fn a_material_colour_is_its_scaled_base_colour_and_its_combined_alpha() {
+    fn an_alpha_blended_material_colour_is_its_scaled_base_colour_and_its_combined_alpha() {
         let mut material: EffectMaterial = serde_json::from_value(
             crate::rendering::loading_screen::test_support::TestStageLayer::vanilla()[0]
                 .effect_json(),
@@ -403,7 +399,7 @@ mod tests {
         material.base_color_scale = 2.0;
         material.alpha = 0.5;
         material.blend = Blend {
-            mode: BlendMode::Mult,
+            mode: BlendMode::Alpha,
             src: None,
             dst: None,
             ..material.blend
@@ -416,7 +412,7 @@ mod tests {
     }
 
     #[test]
-    fn a_material_blending_by_source_alpha_takes_its_base_colour_alpha_twice() {
+    fn an_additive_material_takes_its_base_colour_alpha_twice() {
         let mut material: EffectMaterial = serde_json::from_value(
             crate::rendering::loading_screen::test_support::TestStageLayer::vanilla()[0]
                 .effect_json(),
@@ -424,7 +420,12 @@ mod tests {
         .unwrap();
         material.base_color = [1.0, 1.0, 1.0, 0.6];
         material.alpha = 1.0;
-        material.blend.mode = BlendMode::Add;
+        material.blend = Blend {
+            mode: BlendMode::Add,
+            src: None,
+            dst: None,
+            ..material.blend
+        };
 
         let uniform = StageMaterialUniform::new(&material, 0.0);
 
