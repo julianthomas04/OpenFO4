@@ -202,19 +202,7 @@ fn category_chain_db(
 mod tests {
     use super::*;
     use crate::assets::db::sound_catalog::OutputChannel;
-
-    /// Replays fixed unit draws, so a test can pin the variance to either end.
-    struct ScriptedUnits(Vec<f32>);
-
-    impl RandomSource for ScriptedUnits {
-        fn below(&mut self, _n: usize) -> usize {
-            unreachable!("only unit draws are scripted")
-        }
-
-        fn unit(&mut self) -> f32 {
-            self.0.remove(0)
-        }
-    }
+    use crate::random::test_support::ScriptedRandom;
 
     const MIDDLE: f32 = 0.5;
     const TOLERANCE: f32 = 1e-4;
@@ -285,13 +273,18 @@ mod tests {
         descriptor: &SoundDescriptor,
         model: &SoundOutputModel,
         categories: &HashMap<String, SoundCategory>,
-        units: Vec<f32>,
+        units: &[f32],
     ) -> Result<LayerMix, MixError> {
-        LayerMix::draw(descriptor, model, categories, &mut ScriptedUnits(units))
+        LayerMix::draw(
+            descriptor,
+            model,
+            categories,
+            &mut ScriptedRandom::new(&[], units),
+        )
     }
 
     fn mix(descriptor: &SoundDescriptor, model: &SoundOutputModel) -> LayerMix {
-        draw(descriptor, model, &unity_categories(), vec![MIDDLE, MIDDLE]).unwrap()
+        draw(descriptor, model, &unity_categories(), &[MIDDLE, MIDDLE]).unwrap()
     }
 
     fn assert_close(actual: f32, expected: f32) {
@@ -329,7 +322,7 @@ mod tests {
                 &varied,
                 &unity_model(),
                 &unity_categories(),
-                vec![first_draw, MIDDLE],
+                &[first_draw, MIDDLE],
             )
             .unwrap()
             .playback_rate
@@ -359,7 +352,7 @@ mod tests {
                 &varied,
                 &unity_model(),
                 &unity_categories(),
-                vec![MIDDLE, second_draw],
+                &[MIDDLE, second_draw],
             )
             .unwrap()
             .gain_db
@@ -407,7 +400,7 @@ mod tests {
             &descriptor(),
             &model(0.0, vec![channel("L", 75), channel("R", 50)]),
             &unity_categories(),
-            vec![MIDDLE, MIDDLE],
+            &[MIDDLE, MIDDLE],
         );
         assert!(matches!(
             result,
@@ -425,7 +418,7 @@ mod tests {
             &descriptor(),
             &model(0.0, vec![channel("L", 75)]),
             &unity_categories(),
-            vec![MIDDLE, MIDDLE],
+            &[MIDDLE, MIDDLE],
         );
         assert!(matches!(
             result,
@@ -440,7 +433,7 @@ mod tests {
             category("mid", Some(0.5), Some("master")),
             category("master", Some(0.85), None),
         ]);
-        let result = draw(&descriptor(), &unity_model(), &chain, vec![MIDDLE, MIDDLE]).unwrap();
+        let result = draw(&descriptor(), &unity_model(), &chain, &[MIDDLE, MIDDLE]).unwrap();
         assert_close(result.gain_db, 20.0 * (0.95_f32 * 0.5 * 0.85).log10());
     }
 
@@ -456,7 +449,7 @@ mod tests {
             &full,
             &model(1.0, vec![channel("L", 50), channel("R", 50)]),
             &chain,
-            vec![MIDDLE, 1.0],
+            &[MIDDLE, 1.0],
         )
         .unwrap();
         let expected = -2.0 + 2.0 - 1.0 + 20.0 * 0.5_f32.log10() + 20.0 * 0.5_f32.log10();
@@ -490,7 +483,7 @@ mod tests {
             ),
         ];
         for (chain, expected) in cases {
-            let result = draw(&descriptor(), &unity_model(), &chain, vec![MIDDLE, MIDDLE]);
+            let result = draw(&descriptor(), &unity_model(), &chain, &[MIDDLE, MIDDLE]);
             assert_eq!(result, Err(expected));
         }
     }
@@ -506,7 +499,7 @@ mod tests {
                 &orphan,
                 &unity_model(),
                 &unity_categories(),
-                vec![MIDDLE, MIDDLE]
+                &[MIDDLE, MIDDLE]
             ),
             Err(MixError::NoCategory("step".to_string()))
         );
@@ -523,7 +516,7 @@ mod tests {
                 &silent,
                 &unity_model(),
                 &unity_categories(),
-                vec![MIDDLE, MIDDLE]
+                &[MIDDLE, MIDDLE]
             ),
             Err(MixError::InvalidPlaybackRate { .. })
         ));
@@ -550,7 +543,7 @@ mod tests {
 
     #[test]
     fn a_steady_sound_is_the_middle_of_what_a_drawn_one_can_be() {
-        let draws = vec![MIDDLE, MIDDLE];
+        let draws = &[MIDDLE, MIDDLE];
         let drawn = draw(
             &varied_descriptor(),
             &unity_model(),

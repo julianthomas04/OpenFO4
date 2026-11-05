@@ -9,6 +9,7 @@ use crate::assets::types::grass_placement::GrassSettings;
 use crate::assets::world_settings::LoadedGrid;
 use crate::audio::MenuMusicSettings;
 use crate::rendering::grass::FadeLimits;
+use crate::rendering::loading_screen::{LoadScreenLut, ModelControls, SceneLights};
 use crate::rendering::local_lights::LightFade;
 use crate::rendering::post::depth_of_field::BokehGate;
 use crate::rendering::post::night_sky::SunSizes;
@@ -59,6 +60,12 @@ pub struct GameSettings {
     /// The depth of field gate in normal gameplay.
     pub bokeh_gate: BokehGate,
     pub sun: SunSizes,
+    /// The lights of the loading screens' 3D scene.
+    pub loading_lights: SceneLights,
+    /// The colour LUT the loading screens' 3D scene is graded with.
+    pub loading_screen_lut: LoadScreenLut,
+    /// How the loading screens' 3D model answers the viewer.
+    pub loading_model: ModelControls,
     pub menu_music: MenuMusicSettings,
     pub menu_video: MenuVideoSettings,
 }
@@ -90,6 +97,9 @@ impl GameSettings {
             water: WaterConfig::from_ini(ini)?,
             bokeh_gate: BokehGate::gameplay_from_ini(ini)?,
             sun: SunSizes::from_ini(ini)?,
+            loading_lights: SceneLights::from_ini(ini)?,
+            loading_screen_lut: LoadScreenLut::from_ini(ini)?,
+            loading_model: ModelControls::from_ini(ini)?,
             menu_music: MenuMusicSettings::from_ini(ini)?,
             menu_video: MenuVideoSettings::from_ini(ini)?,
         })

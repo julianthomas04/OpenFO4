@@ -20,12 +20,8 @@ const CLASS_OPAQUE_EFFECT = vec3<f32>(0.0, 1.0, 0.0);
 const CLASS_LIT_ENV = vec3<f32>(0.0, 0.0, 1.0);
 const CLASS_OTHER = vec3<f32>(0.08);
 
-const TERMINATOR_SHARPNESS = 8.0;
-
 const NO_CASCADE = 0xffffffffu;
 const LAST_CASCADE_FADE_FRACTION = 0.1;
-const MAX_SLOPE_BIAS_TANGENT = 10.0;
-const MIN_NO_L = 1e-4;
 // Radius of the sun's shadow filter in world units: constant plus a share of the distance from the
 // receiver to its caster along the shadow direction. Fitted to vanilla's shadow edges (a linear ramp
 // 11.7 + 0.0059 x distance units wide, which this filter disc matches at 0.586 of that width).
@@ -43,7 +39,6 @@ const RECEIVER_OBJECT = 0u;
 const RECEIVER_LANDSCAPE = LIGHT_FLAG_REF_DOES_NOT_LIGHT_LANDSCAPE;
 
 const MIN_CLUSTER_DEPTH = 1e-3;
-const MIN_LIGHT_DISTANCE = 1e-4;
 const HEATMAP_FULL_SCALE = 32.0;
 const HEATMAP_EMPTY_COLOR = vec3<f32>(0.0, 0.1, 0.6);
 const HEATMAP_MID_COLOR = vec3<f32>(0.0, 1.0, 0.2);
@@ -63,11 +58,6 @@ struct ShadingPoint {
     // Framebuffer position in pixels.
     frag_xy: vec2<f32>,
     excluded_light_flags: u32,
-}
-
-// Hides the shading-normal light leak past the geometric terminator.
-fn terminator(ng: vec3<f32>, l: vec3<f32>) -> f32 {
-    return saturate(dot(ng, l) * TERMINATOR_SHARPNESS);
 }
 
 fn cascade_containing(world_pos: vec3<f32>) -> u32 {
@@ -174,17 +164,6 @@ fn filtered_shadow(uv: vec2<f32>, cascade: u32, depth: f32, slope: vec2<f32>) ->
     return lit / f32(taps);
 }
 
-// Receiver-side biases in texels of the shadow map at the receiver (x
-// constant, y slope, z normal offset): constant and slope push the receiver
-// towards the light, the normal offset along the geometric normal.
-fn biased_receiver(world_pos: vec3<f32>, ng: vec3<f32>, l: vec3<f32>, texel: f32, bias: vec3<f32>) -> vec3<f32> {
-    let n_dot_l = saturate(dot(ng, l));
-    let slope = min(sqrt(1.0 - n_dot_l * n_dot_l) / max(n_dot_l, MIN_NO_L), MAX_SLOPE_BIAS_TANGENT);
-    return world_pos
-        + ng * (bias.z * texel * (1.0 - n_dot_l))
-        + l * ((bias.x + bias.y * slope) * texel);
-}
-
 fn cascade_visibility(cascade: u32, world_pos: vec3<f32>, ng: vec3<f32>, l: vec3<f32>) -> f32 {
     let biased = biased_receiver(world_pos, ng, l, frame.cascade_texel_world[cascade], frame.shadow_params.xyz);
     let clip = frame.cascade_view_proj[cascade] * vec4<f32>(biased, 1.0);
@@ -238,33 +217,12 @@ fn light_cluster(p: ShadingPoint) -> u32 {
     return cluster_index(tile, u32(clamp(slice, 0.0, f32(grid.z - 1u))), grid.x);
 }
 
-const LIGHT_FALLOFF_POWER = 2.2;
-const MAX_DISTANCE_POWER = 1e30;
-const MIN_CONE_COSINE_SPAN = 1e-6;
 const MIN_CONE_SIN_SQ = 1e-12;
 const MIN_CONE_TAN_DIVISOR = 1e-30;
 
-// Distance falloff of a placed light, `distance` in engine units: the share of
-// light lost, raised to a power. It is the larger of the light's own loss (its
-// constant plus scalar times the normalised distance raised to its exponent) and
-// the squared normalised distance, so the falloff never exceeds
-// (1 - normalised^2)^power and reaches 0 with zero slope at the radius whatever
-// the record says. Zero from the radius outwards.
+// Distance falloff of a placed light, `distance` in engine units (see placed_light.wgsl).
 fn local_light_attenuation(light: VisibleLight, distance: f32) -> f32 {
-    let normalised = distance / light.radius;
-    let window_loss = normalised * normalised;
-    let distance_power = min(pow_or_zero(normalised, light.attenuation.z), MAX_DISTANCE_POWER);
-    let record_loss = saturate(light.attenuation.x + light.attenuation.y * distance_power);
-    return pow_or_zero(1.0 - saturate(max(record_loss, window_loss)), LIGHT_FALLOFF_POWER);
-}
-
-// Falloff of a spot light without a lamp shadow: the cosine of the angle off
-// the axis rescaled to 1 on the axis and 0 at the cone edge, raised to the
-// exponent. The rescaled cosine stays 0 past the edge, so the result is 0
-// outside the cone whatever `cos_outer` is.
-fn spot_cosine_falloff(cos_axis: f32, cos_outer: f32, exponent: f32) -> f32 {
-    let inside = saturate(1.0 - (1.0 - cos_axis) / max(1.0 - cos_outer, MIN_CONE_COSINE_SPAN));
-    return pow_or_zero(inside, max(exponent, 0.0));
+    return placed_light_falloff(light.radius, light.attenuation, distance);
 }
 
 // Falloff of a spot light with a lamp shadow: 1 - min(1, r^exponent), where r is

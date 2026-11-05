@@ -108,7 +108,7 @@ pub fn build_cell_cpu(
     record: &Landscape,
     ltex_to_diffuse: &HashMap<String, String>,
 ) -> anyhow::Result<TerrainCellCpu> {
-    let heights = HeightGrid::decode(&record.vertex_height_map)?;
+    let heights = HeightGrid::decode(record.height_map()?)?;
     let (vertices, indices) = generate_mesh(&heights, record.grid_x, record.grid_y, 1);
     let (splatmaps, texture_paths) = build_splatmap(record, ltex_to_diffuse);
 
@@ -132,7 +132,7 @@ pub fn build_cell_cpu_lod(
     record: &Landscape,
     ltex_to_diffuse: &HashMap<String, String>,
 ) -> anyhow::Result<TerrainCellCpu> {
-    let heights = HeightGrid::decode(&record.vertex_height_map)?;
+    let heights = HeightGrid::decode(record.height_map()?)?;
     let (vertices, indices) = generate_mesh(&heights, record.grid_x, record.grid_y, 4);
     let (splatmaps, texture_paths) = build_splatmap(record, ltex_to_diffuse);
 
@@ -620,7 +620,7 @@ mod tests {
             cell: "cell".into(),
             grid_x,
             grid_y,
-            vertex_height_map: blob,
+            vertex_height_map: Some(blob),
             vertex_colors: None,
             layers,
             flags: None,
@@ -814,7 +814,11 @@ mod tests {
     #[test]
     fn short_height_blob_is_rejected() {
         let mut record = landscape(0, 0, 0.0, &[], None);
-        record.vertex_height_map.truncate(HEIGHT_BLOB_LEN - 1);
+        record
+            .vertex_height_map
+            .as_mut()
+            .expect("the fixture has heights")
+            .truncate(HEIGHT_BLOB_LEN - 1);
         assert!(build_cell_cpu(&record, &HashMap::new()).is_err());
         assert!(build_cell_cpu_lod(&record, &HashMap::new()).is_err());
     }
@@ -822,7 +826,7 @@ mod tests {
     #[test]
     fn empty_height_blob_is_rejected_without_panicking() {
         let mut record = landscape(0, 0, 0.0, &[], None);
-        record.vertex_height_map.clear();
+        record.vertex_height_map = Some(Vec::new());
         assert!(build_cell_cpu(&record, &HashMap::new()).is_err());
     }
 
@@ -1208,8 +1212,8 @@ mod tests {
             blob in proptest::collection::vec(any::<u8>(), 0..1200),
         ) {
             let mut record = landscape(0, 0, 0.0, &[], None);
-            record.vertex_height_map = blob;
-            let long_enough = record.vertex_height_map.len() >= HEIGHT_BLOB_LEN;
+            let long_enough = blob.len() >= HEIGHT_BLOB_LEN;
+            record.vertex_height_map = Some(blob);
             let full = build_cell_cpu(&record, &HashMap::new());
             let lod = build_cell_cpu_lod(&record, &HashMap::new());
             prop_assert_eq!(full.is_ok(), long_enough);

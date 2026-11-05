@@ -4,7 +4,6 @@ const DISPLAY_GAMMA = 2.2;
 const DITHER_AMPLITUDE = 1.0 / 255.0;
 const TONEMAP_FILMIC = 0u;
 const TONEMAP_AGX = 1u;
-const LUMA = vec3<f32>(0.2126, 0.7152, 0.0722);
 
 // The filmic curve's fixed constants; its toe numerator is the image space's TonemapE.
 const FILMIC_SHOULDER = 0.15;
@@ -15,8 +14,6 @@ const FILMIC_TOE_DENOMINATOR = 0.3;
 const FILMIC_WHITE = 11.2;
 // Exposed scene light (a fog colour byte decoded with gamma 2.2 is its light) to the curve's input.
 const FILMIC_INPUT_SCALE = 4.113;
-// Contrast pivots about the display's middle: 0.5 once encoded.
-const CONTRAST_PIVOT = 0.217638;
 
 const LINEAR_SRGB_TO_REC2020 = mat3x3<f32>(
     vec3<f32>(0.6274, 0.0691, 0.0164),
@@ -94,16 +91,6 @@ fn filmic(exposed: vec3<f32>, toe: f32) -> vec3<f32> {
     return clamp(filmic_curve(exposed * FILMIC_INPUT_SCALE, toe) / white, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
-// cinematic: x saturation, y brightness, z contrast, w tint amount; tint: linear colour.
-fn apply_cinematic(picture: vec3<f32>, cinematic: vec4<f32>, tint: vec3<f32>) -> vec3<f32> {
-    let luma = dot(picture, LUMA);
-    let saturated = vec3<f32>(luma) + (picture - vec3<f32>(luma)) * cinematic.x;
-    let tinted = mix(saturated, dot(saturated, LUMA) * tint, cinematic.w);
-    let brightened = tinted * cinematic.y;
-    let contrasted = vec3<f32>(CONTRAST_PIVOT) + (brightened - vec3<f32>(CONTRAST_PIVOT)) * cinematic.z;
-    return clamp(contrasted, vec3<f32>(0.0), vec3<f32>(1.0));
-}
-
 fn tone_mapped(exposed: vec3<f32>) -> vec3<f32> {
     if (u32(frame.tonemap.x) == TONEMAP_AGX) {
         return display_to_linear_srgb(agx_display(exposed));
@@ -118,15 +105,9 @@ fn graded(display: vec3<f32>) -> vec3<f32> {
     if (amount <= 0.0) {
         return display;
     }
-    let size = f32(textureDimensions(colour_lut).x);
-    let coordinate = (display * (size - 1.0) + 0.5) / size;
+    let coordinate = colour_lut_coordinate(display, f32(textureDimensions(colour_lut).x));
     let table = textureSampleLevel(colour_lut, colour_lut_sampler, coordinate, 0.0).rgb;
     return mix(display, table, amount);
-}
-
-fn srgb_to_linear(srgb: vec3<f32>) -> vec3<f32> {
-    let c = clamp(srgb, vec3<f32>(0.0), vec3<f32>(1.0));
-    return select(pow((c + 0.055) / 1.055, vec3<f32>(2.4)), c / 12.92, c <= vec3<f32>(0.04045));
 }
 
 fn interleaved_gradient_noise(pixel: vec2<f32>) -> f32 {

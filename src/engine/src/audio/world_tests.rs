@@ -5,13 +5,11 @@ use std::time::Duration;
 
 use kira::sound::PlaybackState;
 
-use super::conditions::GameTime;
 use super::scheduler::{FLAG_ABRUPT_TRANSITION, FLAG_CYCLE_TRACKS, PlayPlan};
 use super::test_support::catalog::{
     MASTER_CATEGORY_MULTIPLIER, MUSIC_CATEGORY_MULTIPLIER, exterior_place, palette, silent, single,
     timed_music_type as typed, world_catalog,
 };
-use super::test_support::condition::{day, night};
 use super::test_support::{
     HALF_SECOND_SAMPLES, MockAudio, PeakReader, SAMPLE_RATE, SEED, SETTLED_BUFFERS,
     mock_manager_settings, render, render_buffer, sine_flac, undecodable_flac, wait_until,
@@ -20,6 +18,8 @@ use super::test_support::{
 use super::world_music::WorldMusic;
 use super::{AudioError, AudioFrame, AudioSystem, MenuMusicSettings};
 use crate::assets::db::music::MusicCatalog;
+use crate::conditions::GameTime;
+use crate::conditions::test_support::{day, night};
 use crate::game_flow::Phase;
 
 const MENU_FADE: Duration = Duration::from_millis(100);

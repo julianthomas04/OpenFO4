@@ -1,13 +1,14 @@
 //! Builders for the catalog's condition type, so tests can state a condition in one line.
 
-use crate::assets::db::music::{Comparand, CompareOp, Condition, ConditionParam};
-use crate::audio::conditions::GET_CURRENT_TIME;
+use crate::assets::db::conditions::{Comparand, CompareOp, Condition, ConditionParam};
+use crate::conditions::GET_CURRENT_TIME;
 
 pub fn condition(function: u16, op: CompareOp, comparand: Comparand) -> Condition {
     Condition {
         function,
         op,
         or_flag: false,
+        flags: 0,
         comparand,
         run_on: 0,
         reference: None,

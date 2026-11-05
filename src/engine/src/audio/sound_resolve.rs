@@ -13,12 +13,12 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use super::conditions::{ConditionContext, ConditionError, evaluate};
 use super::sound_mix::{LayerMix, MixError, is_looping};
 use crate::assets::db::sound_catalog::{
     COMPOUND_DESCRIPTOR, STANDARD_DESCRIPTOR_TYPE, SoundCatalog, SoundDescriptor, SoundOutputModel,
 };
 use crate::assets::layout::{AudioKeyError, audio_key};
+use crate::conditions::{ConditionContext, ConditionError, evaluate};
 use crate::random::RandomSource;
 
 /// One sound to start: the file below the audio folder and how it plays.
@@ -296,14 +296,14 @@ fn mix_error(descriptor: &SoundDescriptor, source: MixError) -> SoundError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::db::music::{Comparand, CompareOp};
-    use crate::audio::conditions::FreshWorldContext;
+    use crate::assets::db::conditions::{Comparand, CompareOp};
     use crate::audio::test_support::SEED;
-    use crate::audio::test_support::condition::condition;
     use crate::audio::test_support::footsteps::{
         DIRT_FIRST_PERSON_FILES, DIRT_QUIET_FILE, STONE_FILE, catalog, compound, expected_gain_db,
         silent_running,
     };
+    use crate::conditions::FreshWorldContext;
+    use crate::conditions::test_support::condition;
     use crate::random::SplitMix64;
 
     const GAIN_TOLERANCE: f32 = 1e-4;

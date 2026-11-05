@@ -3,7 +3,6 @@
 
 mod audio_files;
 pub mod catalog;
-pub mod condition;
 mod flac;
 pub mod footsteps;
 mod log_capture;

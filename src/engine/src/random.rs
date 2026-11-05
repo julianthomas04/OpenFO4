@@ -4,6 +4,9 @@
 /// exactly representable and 1.0 is never reached.
 const UNIT_STEPS: usize = 1 << 24;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 pub trait RandomSource {
     /// A uniform value in `0..n`; `n` is never zero.
     fn below(&mut self, n: usize) -> usize;
@@ -16,6 +19,21 @@ pub trait RandomSource {
     /// A uniform value in `[-bound, bound)`; exactly 0 for a bound of 0.
     fn symmetric(&mut self, bound: f32) -> f32 {
         (2.0 * self.unit() - 1.0) * bound
+    }
+}
+
+/// A borrowed source is a source, so one generator can serve several consumers in turn.
+impl<R: RandomSource + ?Sized> RandomSource for &mut R {
+    fn below(&mut self, n: usize) -> usize {
+        (**self).below(n)
+    }
+
+    fn unit(&mut self) -> f32 {
+        (**self).unit()
+    }
+
+    fn symmetric(&mut self, bound: f32) -> f32 {
+        (**self).symmetric(bound)
     }
 }
 
@@ -37,6 +55,13 @@ impl SplitMix64 {
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         z ^ (z >> 31)
     }
+
+    /// A generator seeded from this one's next value, so every consumer of randomness gets a
+    /// sequence of its own.
+    #[must_use]
+    pub fn fork(&mut self) -> Self {
+        Self::new(self.next_u64())
+    }
 }
 
 impl RandomSource for SplitMix64 {
@@ -54,6 +79,22 @@ mod tests {
         let mut a = SplitMix64::new(5);
         let mut b = SplitMix64::new(5);
         assert!((0..20).all(|_| a.below(1000) == b.below(1000)));
+    }
+
+    #[test]
+    fn forks_are_deterministic_and_each_one_continues_from_the_parent() {
+        let mut parent = SplitMix64::new(9);
+        let mut twin = SplitMix64::new(9);
+        let mut fork = parent.fork();
+        let mut twin_fork = twin.fork();
+        assert!((0..20).all(|_| fork.below(1000) == twin_fork.below(1000)));
+        let mut sibling = parent.fork();
+        let mut first = SplitMix64::new(9).fork();
+        assert_ne!(
+            (0..20).map(|_| sibling.below(1000)).collect::<Vec<_>>(),
+            (0..20).map(|_| first.below(1000)).collect::<Vec<_>>(),
+            "the second fork continues from where the first left the parent"
+        );
     }
 
     #[test]
@@ -75,5 +116,19 @@ mod tests {
     fn symmetric_with_a_zero_bound_is_zero() {
         let mut rng = SplitMix64::new(3);
         assert!((0..100).all(|_| rng.symmetric(0.0).abs() == 0.0));
+    }
+
+    fn draw_from(mut rng: impl RandomSource) -> (usize, f32) {
+        (rng.below(5), rng.unit())
+    }
+
+    #[test]
+    fn a_borrowed_source_forwards_every_draw_to_the_owner() {
+        let mut owner = test_support::ScriptedRandom::new(&[3], &[0.25]);
+
+        let drawn = draw_from(&mut owner);
+
+        assert_eq!(drawn, (3, 0.25));
+        assert!(owner.is_spent());
     }
 }

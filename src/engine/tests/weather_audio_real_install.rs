@@ -12,11 +12,11 @@ use std::time::Duration;
 
 use openfo4::assets::db::DbClient;
 use openfo4::assets::layout::audio_dir;
-use openfo4::audio::conditions::GameTime;
 use openfo4::audio::weather::{
     ThunderStrike, WeatherAudio, WeatherAudioInput, WeatherPlay, WeatherSide, WeatherSoundTable,
     load_weather_audio,
 };
+use openfo4::conditions::GameTime;
 use openfo4::game_flow::spawn_locations::COMMONWEALTH;
 use openfo4::rendering::weather::WeatherLibrary;
 use openfo4::weather::{SoundKind, TransitionSide, WeatherId};

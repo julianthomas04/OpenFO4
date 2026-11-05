@@ -6,6 +6,7 @@ pub mod animated_objects;
 mod auto_anim;
 mod auto_character;
 pub mod boot;
+pub mod broken_asset;
 pub mod camera;
 pub mod cube_array;
 pub mod cull_stats;
@@ -39,7 +40,10 @@ pub mod instance;
 pub mod light_anim;
 pub mod lighting;
 mod line_buffer;
+mod load_transition;
+pub mod loading_screen;
 pub mod local_lights;
+mod material_rebuild;
 pub mod mega_buffer;
 pub mod menu;
 mod menu_frame;
@@ -59,6 +63,7 @@ mod rain_stage;
 pub mod readback_ring;
 pub mod refraction;
 pub mod render_pipelines;
+mod reveal_texture_check;
 pub(crate) mod row_pose;
 pub mod scene_copy;
 pub mod scene_overrides;
@@ -98,13 +103,13 @@ use crate::assets::AssetServer;
 use crate::assets::layout;
 use crate::assets::pipboy_art::ArtLibrary;
 use crate::assets::sky_game_settings::load_sky_game_config;
-use crate::audio::conditions::GameTime;
 use crate::audio::weather::load_or_report;
 use crate::audio::world_music_loader::{load_world_music, seed_from_clock};
 use crate::audio::{
     AudioError, AudioFrame, AudioSystem, Footsteps, PLACE_POLLS_PER_SECOND, PlacePoll,
 };
 use crate::bethesda_space::UNITS_FROM_ENGINE;
+use crate::conditions::GameTime;
 use crate::game_flow::{GameFlow, Phase, SpawnLocation, SpawnPlace, StartMode};
 use crate::rendering::water::ssr::constants::Surroundings;
 use crate::rendering::{
@@ -172,11 +177,14 @@ use crate::rendering::{
     },
     skeleton_overlay::{OverlayView, SkeletonOverlay},
     skinning::{
-        CharacterSystem, materials::CharacterGpuContext, pipelines::SkinnedPipelines,
-        scene::Visibility,
+        CharacterSystem, gpu_mesh::GpuSkinnedMesh, materials::CharacterGpuContext,
+        pipelines::SkinnedPipelines, scene::Visibility,
     },
     texture::Texture,
-    texture_streaming::{ResidencyPolicy, TextureFeedback, TextureResidency, demand::ScreenView},
+    texture_streaming::{
+        ResidencyPolicy, TextureFeedback, TextureResidency, demand::ScreenView,
+        readiness::TextureReadiness,
+    },
     water::{CameraWater, WaterSetting, WaterStage, water_panel},
     weather::{
         StartupWeather, WeatherSync,
@@ -208,10 +216,17 @@ use cube_array::CubeArray;
 use effects::stage::{EffectFrameInputs, EffectStage};
 use light_anim::LightAnimator;
 use lighting::frame_uniform::FrameUniform;
-use menu::{MenuRenderer, MenuScene};
+use load_transition::{
+    Destination, DragTracker, LoadHistory, LoadScreenHost, LoadScreenPreview, LoadScreens,
+    ScreenRequest, loading_screen_section, spawn_report_title,
+};
+use loading_screen::{GradeSource, LoadingScene};
+use material_rebuild::MaterialDirt;
+use menu::{MenuRenderer, OverlayForeground, PanelContent};
 use particles::CameraBasis;
 use ragdoll_objects::RagdollObjects;
 use refraction::{RefractionFrameInputs, RefractionStage};
+use reveal_texture_check::{Draw, RevealTextureCheck};
 use shaders::startup::EffectValidation;
 use startup_reads::StartupDbReads;
 use ui_colour::UiColourSet;
@@ -293,6 +308,8 @@ struct ResolvedTarget {
     /// `None` keeps the current look direction: spawns without a stored heading,
     /// and the initial spawn when `OPENFO4_SPAWN_LOOK` is set.
     yaw: Option<f32>,
+    /// The door skips the loading screen (XTEL flag); the spawn cell and the debug pickers do not.
+    no_load_screen: bool,
 }
 
 impl ResolvedTarget {
@@ -313,6 +330,7 @@ impl ResolvedTarget {
                     .heading
                     .map(|heading| crate::bethesda_space::yaw_from_rotation_z(heading as f32))
             },
+            no_load_screen: false,
         }
     }
 
@@ -338,8 +356,34 @@ impl ResolvedTarget {
                     yaw: location
                         .heading
                         .map(|heading| crate::bethesda_space::yaw_from_rotation_z(heading as f32)),
+                    no_load_screen: false,
                 }
             }
+        }
+    }
+
+    /// Where the teleport arrives, for choosing its loading screen. An exterior arrival names no
+    /// cell: its destination ref may sit in the worldspace's persistent `TopCell`, so the cell's own
+    /// location (XLCN) is not used and the worldspace's location stands in for it.
+    fn destination(&self) -> Destination {
+        let (place, cell) = if self.is_interior {
+            (
+                crate::loading_screen::Place::Interior,
+                self.cell_form_key.as_str(),
+            )
+        } else {
+            (
+                crate::loading_screen::Place::Exterior {
+                    worldspace: self.worldspace.clone(),
+                },
+                "",
+            )
+        };
+        Destination {
+            place,
+            cell: cell.to_string(),
+            grid: self.grid,
+            no_load_screen: self.no_load_screen,
         }
     }
 
@@ -657,6 +701,7 @@ pub struct State {
     auto_anim: AutoAnim,
     /// Dev override (`OPENFO4_AUTO_CHARACTER`): spawn skinned characters playing given clips.
     auto_characters: AutoCharacters,
+    reveal_texture_check: RevealTextureCheck,
 
     // Simulation (sim/render split: commands in, poses out)
     sim: SimWorld,
@@ -719,6 +764,8 @@ pub struct State {
     pointer_px: (f32, f32),
     /// The grid cell the load in progress spawns the player in; only the stall report reads it.
     load_spawn_cell: (i32, i32),
+    /// The large loading screen's model and tip, its drag input and the loads so far.
+    load_screens: LoadScreens,
     quit_requested: bool,
 
     // Debug UI
@@ -859,6 +906,7 @@ impl State {
             // to (0,0); trusting that would stream the wrong ring and drop the
             // player through unloaded terrain far from the origin.
             let grid = WorldStreamer::camera_to_grid(start_pos);
+            let no_load_screen = r.no_load_screen();
             map.insert(
                 r.source_ref,
                 ResolvedTarget {
@@ -870,6 +918,7 @@ impl State {
                     yaw: Some(crate::bethesda_space::yaw_from_rotation_z(
                         r.dest_rot_z as f32,
                     )),
+                    no_load_screen,
                 },
             );
         }
@@ -933,11 +982,15 @@ impl State {
     }
 
     /// Queues the teleport of the walk-in door the player just entered, if any. Only while
-    /// walking with the world running: sampling during a pending teleport would spend the
-    /// entering edge on a refused request.
+    /// walking in play, not while a load runs or fades in: sampling during a pending teleport
+    /// would spend the entering edge on a refused request.
     fn sample_walk_in(&mut self, pipboy_open: bool, dt: f32) {
         self.walk_in_fired = None;
-        if self.input_mode != InputMode::Walk || pipboy_open || self.pending_teleport.is_some() {
+        if self.input_mode != InputMode::Walk
+            || pipboy_open
+            || self.pending_teleport.is_some()
+            || self.flow.phase() != Phase::InGame
+        {
             return;
         }
         let body = self.sim.player_body();
@@ -1104,11 +1157,12 @@ impl State {
     }
 
     /// The one entry for every request to teleport through a load door, by the door's ref id.
-    /// Only a spawned player with no teleport already pending may queue one; the teleport
-    /// itself runs in `update`. The menu spawn path (`begin_play`) bypasses this gate: the
+    /// Only a spawned player with no teleport pending and no loading screen up may queue one; the
+    /// teleport itself runs in `update`. The menu spawn path (`begin_play`) bypasses this gate: the
     /// player is not spawned there by design.
     fn queue_teleport(&mut self, source_ref: &str) -> Result<(), TeleportRefusal> {
         teleport_gate(
+            self.flow.transition_active(),
             self.sim.player_eye().is_some(),
             self.pending_teleport.is_some(),
         )?;
@@ -1730,6 +1784,32 @@ impl State {
         timer.mark("sim_and_profiler")?;
 
         let material_bg_built_len = texture_array.bind_group_len();
+        let loading_scene = LoadingScene::new(
+            &device,
+            &queue,
+            tonemap::ui_gamma_format(surface_format),
+            Path::new(asset_server.asset_location()),
+            GradeSource {
+                lut: settings.loading_screen_lut.clone(),
+                db_path: db_path.clone(),
+            },
+        );
+        let load_screens = LoadScreens {
+            host: LoadScreenHost::new(
+                &device,
+                &queue,
+                loading_scene,
+                &settings.loading_lights,
+                &settings.lamp_shadows,
+                Path::new(asset_server.asset_location()),
+                db_path.clone(),
+                seed_from_clock(),
+            )
+            .with_model_controls(settings.loading_model),
+            drag: DragTracker::default(),
+            history: LoadHistory::default(),
+            preview: LoadScreenPreview::default(),
+        };
         Ok(Self {
             surface,
             device,
@@ -1838,6 +1918,7 @@ impl State {
             ragdoll_objects: RagdollObjects::default(),
             auto_anim: AutoAnim::from_env(),
             auto_characters: AutoCharacters::from_env(),
+            reveal_texture_check: RevealTextureCheck::default(),
             sim,
             input_mode: InputMode::Walk,
             freeze_camera,
@@ -1872,6 +1953,7 @@ impl State {
             menu,
             pointer_px: (0.0, 0.0),
             load_spawn_cell: WorldStreamer::camera_to_grid(start_pos),
+            load_screens,
             quit_requested: false,
             debug_ui,
             mouse_capture,
@@ -2598,19 +2680,39 @@ impl State {
 
         // The black layer of the loading screen and the reveal fade, over the world and
         // the HUD and under the debug UI.
-        let overlay_alpha = self.flow.overlay_alpha();
+        let overlay = self.overlay_view();
+        let overlay_alpha = overlay.alpha;
         if overlay_alpha > 0.0 {
             let menu_view = self.menu.target_view(&output.texture);
-            self.menu.render(
+            let framebuffer = (self.config.width, self.config.height);
+            let layers = overlay.layers;
+            let art_shown = self.art_shown();
+            self.menu.render_backdrop(
                 &self.device,
                 &self.queue,
                 &mut encoder,
                 &menu_view,
-                (self.config.width, self.config.height),
-                MenuScene::Overlay {
-                    alpha: overlay_alpha,
-                    loading_seconds: self.flow.loading_seconds(),
-                },
+                framebuffer,
+                overlay_alpha,
+            );
+            if art_shown {
+                self.load_screens
+                    .host
+                    .render(&mut encoder, &menu_view, framebuffer, overlay_alpha);
+            }
+            let foreground = OverlayForeground {
+                alpha: overlay_alpha,
+                loading_seconds: overlay.loading_seconds,
+                panel: (layers.panel && art_shown)
+                    .then(|| PanelContent::placeholder(self.load_screens.host.tip())),
+            };
+            self.menu.render_foreground(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                &menu_view,
+                framebuffer,
+                foreground,
             );
         }
 
@@ -2643,8 +2745,8 @@ impl State {
         // be called inside the egui closure once `self.debug_ui` is borrowed
         // mutably by render, so capture the plain bool here.
         let dbg_interactible = self.aimed_door;
-        let developer_window_visible =
-            self.flow.developer_window_visible() && !self.capture_active();
+        let developer_window_visible = self.developer_window_visible() && !self.capture_active();
+        let mut preview_request: Option<ScreenRequest> = None;
         let mut memory_section_open = false;
 
         // Debug UI
@@ -2897,6 +2999,12 @@ impl State {
                                         });
                                     }
                                 }
+                            });
+
+                        egui::CollapsingHeader::new("Loading screen")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                preview_request = loading_screen_section(ui, &mut self.load_screens);
                             });
 
                         egui::CollapsingHeader::new("Streaming")
@@ -3186,6 +3294,9 @@ impl State {
         }
 
         drop(egui_span);
+        if let Some(request) = preview_request {
+            self.open_requested_loading_screen(&request);
+        }
         if !memory_section_open {
             // Drop the cached report so a reopened header refreshes at once
             // instead of showing a stale reading.
@@ -3291,6 +3402,49 @@ impl State {
             upload_budget: UploadBudget::new(limit),
         };
         f(&mut self.streamer, &mut targets)
+    }
+
+    /// Feeds the reveal texture check this frame's draws, now that the material bind group is
+    /// final for the frame, and logs its report once a fade ends.
+    fn check_reveal_textures(&mut self) {
+        let fading = self.flow.phase() == Phase::Revealing;
+        let mut check = std::mem::take(&mut self.reveal_texture_check);
+        let report = check.frame(fading, || self.draws_with_unready_textures());
+        self.reveal_texture_check = check;
+        match report {
+            Some(report) if report.is_clean() => tracing::info!("REVEAL_TEXTURE_CHECK {report}"),
+            Some(report) => tracing::warn!(
+                "REVEAL_TEXTURE_CHECK {report}: the fade showed meshes whose textures were not ready"
+            ),
+            None => {}
+        }
+    }
+
+    fn draws_with_unready_textures(&self) -> Vec<Draw> {
+        let residency = &self.texture_residency;
+        let array = &self.texture_array;
+        let mut draws =
+            self.streamer
+                .drawn_cells_with_unready_textures(residency, array, &self.grass);
+        draws.extend(
+            self.characters
+                .characters()
+                .iter()
+                .filter(|character| !character.is_faulted())
+                .filter(|character| {
+                    character
+                        .rig()
+                        .meshes
+                        .iter()
+                        .flat_map(GpuSkinnedMesh::texture_refs)
+                        .any(|handle| {
+                            TextureReadiness::of_handle(residency, array, handle)
+                                != TextureReadiness::Ready
+                        })
+                })
+                .map(|character| Draw::Skinned(character.rig().name.clone())),
+        );
+        draws
     }
 
     /// Finish a streamer teardown+load (worldspace switch or interior enter):
@@ -3537,7 +3691,9 @@ impl State {
         // camera this frame: the streamer tears the old content down and reports
         // the new start. The input-mode block below recomputes camera.target
         // from the controller, so only eye is set here (in apply_stream_teleport).
-        if let Some(ws) = self.pending_worldspace.take() {
+        if let Some(ws) =
+            self.take_pending_transition(|state| &mut state.pending_worldspace, "worldspace pick")
+        {
             // Re-picking the current worldspace is a no-op — unless we're in an
             // interior, where it is the way back out and must reload.
             if ws != self.streamer.worldspace || self.streamer.in_interior() {
@@ -3548,9 +3704,17 @@ impl State {
                     .iter()
                     .find(|w| w.form_key == ws)
                     .map_or((0, 0), |w| w.start_cell);
+                let plan = self.plan_transition(Destination::picked(
+                    crate::loading_screen::Place::Exterior {
+                        worldspace: ws.clone(),
+                    },
+                    "",
+                    start_cell,
+                ));
                 let start = self.with_stream_targets(asset_server, |streamer, targets| {
                     streamer.switch_worldspace(&ws, start_cell, targets)
                 });
+                self.begin_transition(&plan);
                 if leaving_interior {
                     // Restore terrain-gated walking for the worldspace spawn.
                     self.sim.apply(SimCommand::SetInteriorMode(false));
@@ -3563,7 +3727,9 @@ impl State {
         // Apply a debug-UI interior selection: drop the worldspace cells and
         // load the single interior cell as a walkable unit (sim interior mode on
         // so the player grounds on its object-mesh floors).
-        if let Some(fk) = self.pending_interior.take() {
+        if let Some(fk) =
+            self.take_pending_transition(|state| &mut state.pending_interior, "interior pick")
+        {
             // Copy out grid + start (Copy) so the &self.interiors borrow ends
             // before with_stream_targets takes &mut self.
             let target = self
@@ -3572,9 +3738,15 @@ impl State {
                 .find(|i| i.form_key == fk)
                 .map(|i| (i.grid, i.start_pos));
             if let Some((grid, start_pos)) = target {
+                let plan = self.plan_transition(Destination::picked(
+                    crate::loading_screen::Place::Interior,
+                    &fk,
+                    grid,
+                ));
                 let start = self.with_stream_targets(asset_server, |streamer, targets| {
                     streamer.enter_interior(&fk, grid, start_pos, targets)
                 })?;
+                self.begin_transition(&plan);
                 self.sim.apply(SimCommand::SetInteriorMode(true));
                 self.input_mode = InputMode::Walk;
                 self.apply_stream_teleport(start);
@@ -3619,7 +3791,10 @@ impl State {
         // the debug pickers, but the arrival position, grid and facing all come
         // from the door's XTEL. `switch_worldspace`'s returned default start is
         // intentionally discarded — we always arrive at the door's destination.
-        if let Some(t) = self.pending_teleport.take() {
+        if let Some(t) =
+            self.take_pending_transition(|state| &mut state.pending_teleport, "load door teleport")
+        {
+            let plan = self.plan_transition(t.destination());
             self.with_stream_targets(asset_server, |streamer, targets| {
                 if t.is_interior {
                     streamer
@@ -3630,6 +3805,7 @@ impl State {
                     Ok(())
                 }
             })?;
+            self.begin_transition(&plan);
             self.sim.apply(SimCommand::SetInteriorMode(t.is_interior));
             self.input_mode = InputMode::Walk;
             if let Some(yaw) = t.yaw {
@@ -3646,6 +3822,9 @@ impl State {
                 DebugWorldMode::Worldspace
             };
         }
+
+        self.begin_unstarted_initial_load();
+        self.sync_load_screen(dt);
 
         self.tick_animated_objects(world_dt);
 
@@ -3866,14 +4045,16 @@ impl State {
         });
         let stream = self.with_stream_targets(asset_server, |streamer, targets| {
             streamer.update_gpu_driven(eye, targets)
-        });
+        })?;
         self.update_fire_effects(dt);
 
         let full_ring_complete = stream.full_ring_complete;
+        let world_complete = stream.world_complete;
         if let Some(report) = &stream.spawn_complete {
             self.toast_queue.push((
                 format!(
-                    "Initial spawn: {:.1}s total — detail {:.1}s ({} cells), LOD {:.1}s ({} cells)",
+                    "{}: {:.1}s total — detail {:.1}s ({} cells), LOD {:.1}s ({} cells)",
+                    spawn_report_title(self.load_screens.history.current()),
                     report.total.as_secs_f32(),
                     report.full.as_secs_f32(),
                     report.full_cells,
@@ -3893,7 +4074,7 @@ impl State {
             stream.sim_commands,
             crate::sim::COLLIDER_APPLY_BUDGET,
         );
-        self.feed_load_readiness(settled, full_ring_complete);
+        self.feed_load_readiness(settled, full_ring_complete, world_complete);
 
         // Rewrite moving dynamic clutter into the instance buffer. Runs after
         // the streamer's update_gpu_driven (so any repack already ran) and after
@@ -3996,7 +4177,7 @@ impl State {
         // first-use re-track of all those views in that frame's queue.submit.
         // During streaming bursts the slot table changes on nearly every
         // integrate frame, so rebuilds are debounced: at most one per
-        // MATERIAL_BG_DEBOUNCE while dirt accumulates. The visible artifact
+        // `MATERIAL_BG_DEBOUNCE` while dirt accumulates. The visible artifact
         // is bounded and benign — a texture acquired into a *recycled* slot
         // samples the slot's previous texture for up to the debounce window,
         // on geometry that just streamed in at the ring edge. Two cases are
@@ -4004,22 +4185,27 @@ impl State {
         // references a dead buffer) and slot high-water growth (indexing an
         // unbound entry of a partially-bound array is UB).
         let material_bind_group_span = tracing::info_span!("material_bind_group").entered();
-        const MATERIAL_BG_DEBOUNCE: Duration = Duration::from_millis(150);
         self.pending_slot_changes.merge(stream.slot_changes);
         let new_alpha_slots = self.texture_array.take_new_alpha_slots();
         if self.shadow_material_bind_group.is_some() {
             self.pending_alpha_slots.extend(new_alpha_slots);
         }
         let cube_added = self.cube_array.take_changed();
-        self.material_bg_dirty |= !self.pending_slot_changes.is_empty()
-            || !self.pending_alpha_slots.is_empty()
-            || material_realloc
-            || cube_added;
-        let must_rebuild_now =
-            material_realloc || self.texture_array.bind_group_len() > self.material_bg_built_len;
-        if self.material_bg_dirty
-            && (must_rebuild_now || self.material_bg_last_rebuild.elapsed() >= MATERIAL_BG_DEBOUNCE)
-        {
+        let dirt = MaterialDirt {
+            slots_changed: !self.pending_slot_changes.is_empty()
+                || !self.pending_alpha_slots.is_empty()
+                || cube_added,
+            views_unbound: self.texture_array.has_unbound_views(),
+            buffer_reallocated: material_realloc,
+            array_grew: self.texture_array.bind_group_len() > self.material_bg_built_len,
+            views_wanted_now: self.streamer.wants_views_bound_now(),
+        };
+        self.material_bg_dirty |= dirt.is_dirty();
+        if material_rebuild::rebuild_due(
+            self.material_bg_dirty,
+            dirt,
+            self.material_bg_last_rebuild.elapsed(),
+        ) {
             (self.material_bind_group, self.shadow_material_bind_group) =
                 Self::build_material_bind_groups(
                     &self.device,
@@ -4033,6 +4219,7 @@ impl State {
                     &self.splatmaps.view,
                 );
             self.texture_array.upload_slot_mips(&self.queue);
+            self.texture_array.mark_views_bound();
             self.material_bg_dirty = false;
             self.material_bg_last_rebuild = Instant::now();
             self.material_bg_built_len = self.texture_array.bind_group_len();
@@ -4056,6 +4243,7 @@ impl State {
         }
 
         drop(material_bind_group_span);
+        self.check_reveal_textures();
         let lamp_shadows_span = tracing::info_span!("lamp_shadows").entered();
         let mut shadow_invalidations = self.streamer.take_shadow_invalidations();
         self.characters
@@ -4256,6 +4444,14 @@ impl State {
         }
     }
 
+    /// Drops the movement keys the player holds, as if they were let go, in both camera modes.
+    fn release_held_movement(&mut self) {
+        self.walk_keys.release_held();
+        for code in FLY_CAMERA_KEYS {
+            self.camera_controller.handle_key(code, false);
+        }
+    }
+
     /// Follows the model's open flag: opening frees the mouse, drops held movement keys and the
     /// developer menu's keyboard focus,
     /// closing restores the capture the player had.
@@ -4268,10 +4464,7 @@ impl State {
             self.capture_before_pipboy = self.mouse_capture.is_locked();
             self.mouse_capture.set_locked(false);
             self.debug_ui.release_keyboard_focus();
-            self.walk_keys.release_held();
-            for code in FLY_CAMERA_KEYS {
-                self.camera_controller.handle_key(code, false);
-            }
+            self.release_held_movement();
         } else {
             self.mouse_capture.set_locked(self.capture_before_pipboy);
         }
@@ -4279,6 +4472,10 @@ impl State {
     }
 
     pub fn handle_key(&mut self, code: KeyCode, is_pressed: bool, is_repeat: bool) {
+        if self.loading_screen_preview_open() {
+            self.handle_preview_key(code, is_pressed, is_repeat);
+            return;
+        }
         if !self.flow.gameplay_input_enabled() {
             self.handle_menu_key(code, is_pressed, is_repeat);
             return;
@@ -4468,6 +4665,51 @@ mod walk_keys_tests {
 
         assert!(!keys.forward && !keys.jump && !keys.sprint_held && !keys.crouch_held);
         assert!(keys.sprint_active && keys.crouch_active);
+    }
+}
+
+#[cfg(test)]
+mod destination_tests {
+    use super::*;
+    use crate::loading_screen::Place;
+
+    fn door(is_interior: bool, no_load_screen: bool) -> ResolvedTarget {
+        ResolvedTarget {
+            is_interior,
+            worldspace: "00003C:Fallout4.esm".to_string(),
+            cell_form_key: "001234:Fallout4.esm".to_string(),
+            start_pos: Vec3::ZERO,
+            grid: (7, -2),
+            yaw: None,
+            no_load_screen,
+        }
+    }
+
+    #[test]
+    fn a_door_that_skips_its_screen_says_so() {
+        assert!(door(true, true).destination().no_load_screen);
+        assert!(door(false, true).destination().no_load_screen);
+        assert!(!door(true, false).destination().no_load_screen);
+    }
+
+    #[test]
+    fn an_interior_door_arrives_in_its_cell() {
+        let destination = door(true, false).destination();
+        assert_eq!(destination.place, Place::Interior);
+        assert_eq!(destination.cell, "001234:Fallout4.esm");
+        assert_eq!(destination.grid, (7, -2));
+    }
+
+    #[test]
+    fn an_exterior_door_arrives_in_its_worldspace_without_a_cell() {
+        let destination = door(false, false).destination();
+        assert_eq!(
+            destination.place,
+            Place::Exterior {
+                worldspace: "00003C:Fallout4.esm".to_string()
+            }
+        );
+        assert_eq!(destination.cell, "");
     }
 }
 

@@ -660,12 +660,12 @@ fn landscape_blobs_round_trip_byte_for_byte_and_optional_blobs_are_none() {
     let db = client(conn);
 
     let plain = db.get_landscape("C1", 4, -5).unwrap();
-    assert_eq!(plain.vertex_height_map, heights);
+    assert_eq!(plain.vertex_height_map, Some(heights));
     assert_eq!((plain.vertex_colors, plain.layers), (None, None));
     assert_eq!((plain.grid_x, plain.grid_y), (4, -5));
 
     let full = db.get_landscape("C2", 0, 0).unwrap();
-    assert_eq!(full.vertex_height_map, [1, 0, 2]);
+    assert_eq!(full.vertex_height_map.as_deref(), Some(&[1, 0, 2][..]));
     assert_eq!(full.vertex_colors.as_deref(), Some(&[9, 8, 7][..]));
     assert_eq!(full.layers.as_deref(), Some(&[0, 0][..]));
 }
@@ -782,7 +782,7 @@ fn seed_cell_without_land(conn: &Connection, worldspace: &str) {
 fn marker_at(db: &DbClient, worldspace: &str) -> Option<u8> {
     db.get_landscape_at(worldspace, 1, 2)
         .unwrap()
-        .map(|land| land.vertex_height_map[0])
+        .and_then(|land| land.vertex_height_map?.first().copied())
 }
 
 #[test]
@@ -791,9 +791,30 @@ fn a_worldspace_with_its_own_land_reads_it_with_the_requested_grid() {
     seed_worldspaces(&conn, &[("WS", None, 0)]);
     seed_land(&conn, "WS", 7);
     let land = client(conn).get_landscape_at("WS", 1, 2).unwrap().unwrap();
-    assert_eq!(land.vertex_height_map, [7]);
+    assert_eq!(land.vertex_height_map.as_deref(), Some(&[7][..]));
     assert_eq!((land.grid_x, land.grid_y), (1, 2));
     assert_eq!(land.cell, "WS-cell");
+}
+
+#[test]
+fn a_land_without_heights_is_read_without_them() {
+    let conn = schema_connection();
+    seed_worldspaces(&conn, &[("WS", None, 0)]);
+    insert(
+        &conn,
+        "cells",
+        &cell_row("WS-cell", Some("WS"), Some((1, 2))),
+    );
+    insert(
+        &conn,
+        "landscapes",
+        &[("form_key", text("WS-land")), ("cell", text("WS-cell"))],
+    );
+
+    let land = client(conn).get_landscape_at("WS", 1, 2).unwrap().unwrap();
+
+    assert_eq!(land.vertex_height_map, None);
+    assert!(land.height_map().is_err());
 }
 
 #[test]
@@ -807,7 +828,7 @@ fn a_cell_without_land_inherits_it_from_the_parent_when_the_land_bit_is_set() {
     seed_land(&conn, "PARENT", 9);
     let db = client(conn);
     let land = db.get_landscape_at("CHILD", 1, 2).unwrap().unwrap();
-    assert_eq!(land.vertex_height_map, [9]);
+    assert_eq!(land.vertex_height_map.as_deref(), Some(&[9][..]));
     assert_eq!((land.grid_x, land.grid_y), (1, 2));
 }
 
@@ -1315,6 +1336,190 @@ fn teleport_into_a_cell_picks_the_lowest_source_ref() {
         "door_a"
     );
     assert!(db.get_teleport_into_cell("EXT").unwrap().is_none());
+}
+
+#[test]
+fn teleports_carry_their_stored_flags_and_report_no_load_screen() {
+    let conn = teleport_world();
+    teleport(&conn, "door_plain", "dest_int");
+    teleport(&conn, "door_skip", "dest_ext");
+    teleport(&conn, "door_alarm_only", "dest_ext");
+    conn.execute_batch(
+        "UPDATE placed_teleports SET flags = 2 WHERE source_ref = 'door_skip';
+         UPDATE placed_teleports SET flags = 5 WHERE source_ref = 'door_alarm_only';",
+    )
+    .unwrap();
+    let mut all = client(conn).get_placed_teleports().unwrap();
+    all.sort_by(|a, b| a.source_ref.cmp(&b.source_ref));
+
+    let seen: Vec<(&str, u32, bool)> = all
+        .iter()
+        .map(|t| (t.source_ref.as_str(), t.flags, t.no_load_screen()))
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            ("door_alarm_only", 5, false),
+            ("door_plain", 0, false),
+            ("door_skip", 2, true),
+        ]
+    );
+}
+
+#[test]
+fn teleport_flags_read_as_zero_on_a_database_from_an_older_installer() {
+    let conn = legacy_connection(&[("placed_teleports", "flags")]);
+    insert(
+        &conn,
+        "cells",
+        &[("form_key", text("INT")), ("is_interior", int(1))],
+    );
+    insert(
+        &conn,
+        "placed_objects",
+        &placed("dest_int", "INT", (0.0, 0.0, 0.0)),
+    );
+    teleport(&conn, "door_a", "dest_int");
+    let db = client(conn);
+    assert!(!db.schema().teleport_flags_column_present);
+
+    let all = db.get_placed_teleports().unwrap();
+    let into_cell = db.get_teleport_into_cell("INT").unwrap().unwrap();
+
+    assert_eq!((all[0].flags, all[0].no_load_screen()), (0, false));
+    assert_eq!(into_cell.flags, 0);
+}
+
+const LOAD_SCREEN_COLUMNS: [&str; 8] = [
+    "tip",
+    "model",
+    "flags",
+    "transform",
+    "rotation_min",
+    "rotation_max",
+    "zoom_min",
+    "zoom_max",
+];
+
+#[test]
+fn the_load_screen_catalog_is_read_from_the_real_schema() {
+    let conn = schema_connection();
+    insert(
+        &conn,
+        "statics",
+        &[
+            ("form_key", text("STAT")),
+            ("model_path", text("loadscreen/truck.nif")),
+        ],
+    );
+    insert(
+        &conn,
+        "transforms",
+        &[
+            ("form_key", text("TRNS")),
+            ("pos_x", real(0.0)),
+            ("pos_y", real(0.0)),
+            ("pos_z", real(0.0)),
+            ("rot_x", real(0.0)),
+            ("rot_y", real(0.0)),
+            ("rot_z", real(0.0)),
+            ("scale", real(1.0)),
+            ("flags", int(0x10000)),
+            ("zoom_min", real(0.0)),
+            ("zoom_max", real(1.0)),
+        ],
+    );
+    insert(
+        &conn,
+        "load_screens",
+        &[
+            ("form_key", text("LSCR")),
+            ("editor_id", text("LS_Truck")),
+            ("model", text("STAT")),
+            ("flags", int(0)),
+            ("transform", text("TRNS")),
+        ],
+    );
+
+    let catalog = client(conn).get_load_screen_catalog().unwrap().unwrap();
+
+    assert_eq!(catalog.screens.len(), 1);
+    assert_eq!(catalog.screens[0].model_path, "loadscreen/truck.nif");
+    assert!(catalog.screens[0].transform.around_origin);
+}
+
+#[test]
+fn the_load_screen_catalog_is_absent_on_a_database_from_an_older_installer() {
+    let dropped: Vec<(&str, &str)> = LOAD_SCREEN_COLUMNS
+        .iter()
+        .map(|column| ("load_screens", *column))
+        .collect();
+    let conn = legacy_connection(&dropped);
+    conn.execute_batch("DROP TABLE load_screen_conditions; DROP TABLE transforms;")
+        .unwrap();
+    let db = client(conn);
+
+    assert!(!db.schema().load_screen_columns_present);
+    assert!(db.get_load_screen_catalog().unwrap().is_none());
+}
+
+#[test]
+fn detect_rejects_a_partial_load_screen_group_naming_the_missing_columns() {
+    let conn = legacy_connection(&[("load_screens", "tip"), ("load_screens", "zoom_max")]);
+
+    let error = DbSchema::detect(&conn).unwrap_err().to_string();
+
+    assert!(
+        error.contains("tip") && error.contains("zoom_max"),
+        "{error}"
+    );
+}
+
+#[test]
+fn detect_rejects_load_screen_data_present_in_only_some_of_its_tables() {
+    let conn = schema_connection();
+    conn.execute_batch("DROP TABLE transforms;").unwrap();
+
+    let error = DbSchema::detect(&conn).unwrap_err().to_string();
+
+    assert!(
+        error.contains("transform") && error.contains("half converted"),
+        "{error}"
+    );
+}
+
+#[test]
+fn detect_reports_load_screen_data_absent_from_every_table_as_absent() {
+    let conn = schema_connection();
+    conn.execute_batch(
+        "DROP TABLE load_screen_conditions; DROP TABLE transforms; DROP TABLE load_screens;",
+    )
+    .unwrap();
+
+    assert!(!DbSchema::detect(&conn).unwrap().load_screen_columns_present);
+}
+
+#[test]
+fn a_migrated_stub_screen_makes_the_catalog_fail_naming_the_screen() {
+    let conn = schema_connection();
+    insert(
+        &conn,
+        "load_screens",
+        &[
+            ("form_key", text("LSCR")),
+            ("editor_id", text("LS_Stub")),
+            ("model", text("")),
+            ("flags", int(0)),
+        ],
+    );
+
+    let error = client(conn).get_load_screen_catalog().unwrap_err();
+
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("LSCR") && message.contains("LS_Stub"),
+        "{message}"
+    );
 }
 
 // ---------------------------------------------------------- walk-in doors

@@ -8,6 +8,8 @@ use crate::rendering::frame_capture::{InvalidCaptureSize, capture_size, size_fro
 use crate::rendering::pipboy_capture::CAPTURE_DIR_ENV;
 
 pub const SHOT_ENV: &str = "OPENFO4_SHOT";
+/// Names the loading screen (editor id or form key) to photograph instead of the world.
+pub const SHOT_LOADING_SCREEN_ENV: &str = "OPENFO4_SHOT_LOADSCREEN";
 const SETTLE_FRAMES_ENV: &str = "OPENFO4_SHOT_SETTLE_FRAMES";
 /// Consecutive ready frames before the shot: a second at 60 fps, long enough for rain and other
 /// particles to fill the view after the world settled.
@@ -25,6 +27,12 @@ pub enum ShotConfigError {
     InvalidSettleFrames(String),
     #[error("{SHOT_ENV} and {CAPTURE_DIR_ENV} cannot be set together")]
     PipBoyCaptureAlsoSet,
+    #[error(
+        "{SHOT_LOADING_SCREEN_ENV} is empty; expected the editor id or form key of a loading screen"
+    )]
+    EmptyLoadingScreen,
+    #[error("{SHOT_LOADING_SCREEN_ENV} needs {SHOT_ENV}, which names the .png to write")]
+    LoadingScreenWithoutShot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +41,8 @@ pub struct ShotConfig {
     pub window_size: PhysicalSize<u32>,
     /// Consecutive frames the world must be ready before it is photographed.
     pub settle_frames: u32,
+    /// The loading screen to photograph in place of the world.
+    pub loading_screen: Option<String>,
 }
 
 /// The environment variables the shot mode reads, as given.
@@ -41,6 +51,7 @@ struct ShotEnv {
     path: Option<String>,
     size: Option<String>,
     settle_frames: Option<String>,
+    loading_screen: Option<String>,
     pipboy_capture_set: bool,
 }
 
@@ -56,13 +67,17 @@ impl ShotConfig {
             path: crate::utils::optional_env_var(SHOT_ENV),
             size: size_from_env(),
             settle_frames: crate::utils::optional_env_var(SETTLE_FRAMES_ENV),
+            loading_screen: crate::utils::optional_env_var(SHOT_LOADING_SCREEN_ENV),
             pipboy_capture_set: std::env::var_os(CAPTURE_DIR_ENV).is_some(),
         })
     }
 
     fn parse(env: ShotEnv) -> Result<Option<Self>, ShotConfigError> {
         let Some(path) = env.path else {
-            return Ok(None);
+            return match env.loading_screen {
+                Some(_) => Err(ShotConfigError::LoadingScreenWithoutShot),
+                None => Ok(None),
+            };
         };
         if env.pipboy_capture_set {
             return Err(ShotConfigError::PipBoyCaptureAlsoSet);
@@ -77,12 +92,24 @@ impl ShotConfig {
         if !is_png {
             return Err(ShotConfigError::NotPng(path.display().to_string()));
         }
+        let loading_screen = env
+            .loading_screen
+            .map(|name| {
+                let name = name.trim().to_owned();
+                if name.is_empty() {
+                    Err(ShotConfigError::EmptyLoadingScreen)
+                } else {
+                    Ok(name)
+                }
+            })
+            .transpose()?;
         Ok(Some(Self {
             path,
             window_size: capture_size(env.size.as_deref())?,
             settle_frames: env
                 .settle_frames
                 .map_or(Ok(DEFAULT_SETTLE_FRAMES), |text| parse_settle_frames(&text))?,
+            loading_screen,
         }))
     }
 }
@@ -177,6 +204,42 @@ mod tests {
             Err(ShotConfigError::InvalidSize(InvalidCaptureSize(
                 "big".to_owned()
             )))
+        );
+    }
+
+    #[test]
+    fn a_named_loading_screen_is_taken_trimmed_and_none_stays_none() {
+        let env = ShotEnv {
+            loading_screen: Some(" LSDog ".to_owned()),
+            ..shot("view.png")
+        };
+        let config = ShotConfig::parse(env).unwrap().unwrap();
+        assert_eq!(config.loading_screen.as_deref(), Some("LSDog"));
+        let plain = ShotConfig::parse(shot("view.png")).unwrap().unwrap();
+        assert_eq!(plain.loading_screen, None);
+    }
+
+    #[test]
+    fn a_blank_loading_screen_name_is_rejected() {
+        let env = ShotEnv {
+            loading_screen: Some("  ".to_owned()),
+            ..shot("view.png")
+        };
+        assert_eq!(
+            ShotConfig::parse(env),
+            Err(ShotConfigError::EmptyLoadingScreen)
+        );
+    }
+
+    #[test]
+    fn a_loading_screen_without_the_path_to_write_is_rejected() {
+        let env = ShotEnv {
+            loading_screen: Some("LSDog".to_owned()),
+            ..ShotEnv::default()
+        };
+        assert_eq!(
+            ShotConfig::parse(env),
+            Err(ShotConfigError::LoadingScreenWithoutShot)
         );
     }
 

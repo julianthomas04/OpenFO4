@@ -33,6 +33,8 @@ pub(super) fn resolve(
 /// Why a teleport request was not queued.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub(super) enum TeleportRefusal {
+    #[error("a loading screen is up")]
+    TransitionActive,
     #[error("the player is not spawned yet")]
     PlayerNotSpawned,
     #[error("another teleport is already pending")]
@@ -41,12 +43,17 @@ pub(super) enum TeleportRefusal {
     UnknownSource(String),
 }
 
-/// Whether a teleport request may be queued now. Spawning is checked first: a request made
-/// while the player is still loading in is stale whatever else is queued.
+/// Whether a teleport request may be queued now. A running load comes first: whatever else is
+/// the case, the request is stale. Spawning is checked next, since a request made while the
+/// player is still loading in is stale whatever else is queued.
 pub(super) fn teleport_gate(
+    transition_active: bool,
     player_spawned: bool,
     teleport_pending: bool,
 ) -> Result<(), TeleportRefusal> {
+    if transition_active {
+        return Err(TeleportRefusal::TransitionActive);
+    }
     if !player_spawned {
         return Err(TeleportRefusal::PlayerNotSpawned);
     }
@@ -62,13 +69,13 @@ mod tests {
 
     #[test]
     fn spawned_player_without_pending_teleport_may_teleport() {
-        assert_eq!(teleport_gate(true, false), Ok(()));
+        assert_eq!(teleport_gate(false, true, false), Ok(()));
     }
 
     #[test]
     fn unspawned_player_is_refused() {
         assert_eq!(
-            teleport_gate(false, false),
+            teleport_gate(false, false, false),
             Err(TeleportRefusal::PlayerNotSpawned)
         );
     }
@@ -76,7 +83,7 @@ mod tests {
     #[test]
     fn pending_teleport_blocks_a_second_request() {
         assert_eq!(
-            teleport_gate(true, true),
+            teleport_gate(false, true, true),
             Err(TeleportRefusal::TeleportPending)
         );
     }
@@ -84,8 +91,27 @@ mod tests {
     #[test]
     fn unspawned_player_is_reported_before_a_pending_teleport() {
         assert_eq!(
-            teleport_gate(false, true),
+            teleport_gate(false, false, true),
             Err(TeleportRefusal::PlayerNotSpawned)
         );
+    }
+
+    #[test]
+    fn a_running_load_refuses_the_request_even_for_a_spawned_player() {
+        assert_eq!(
+            teleport_gate(true, true, false),
+            Err(TeleportRefusal::TransitionActive)
+        );
+    }
+
+    #[test]
+    fn a_running_load_is_reported_before_every_other_reason() {
+        for (spawned, pending) in [(false, false), (false, true), (true, true)] {
+            assert_eq!(
+                teleport_gate(true, spawned, pending),
+                Err(TeleportRefusal::TransitionActive),
+                "spawned {spawned}, pending {pending}"
+            );
+        }
     }
 }

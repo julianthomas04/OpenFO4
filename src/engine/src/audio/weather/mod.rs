@@ -32,7 +32,6 @@ pub use table::WeatherSoundTable;
 use levels::{LoopLevel, loop_levels};
 use thunder::{DueThunder, ThunderQueue};
 
-use super::conditions::{FreshWorldContext, GameTime, evaluate};
 use super::decibels::amplitude_to_db;
 use super::file_probe::probe_sounds;
 use super::loop_plan::LoopTarget;
@@ -40,6 +39,7 @@ use super::sound_resolve::{
     LayerPlay, lookup_descriptor, reachable_sounds, resolve_layers, resolve_loop,
 };
 use crate::assets::db::sound_catalog::SoundCatalog;
+use crate::conditions::{FreshWorldContext, GameTime, evaluate};
 use crate::random::SplitMix64;
 use crate::weather::SoundKind;
 

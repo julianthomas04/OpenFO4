@@ -528,6 +528,7 @@ namespace InstallerTests
                     Door = new FormLink<IPlacedObjectGetter>(plugin.FormKeyOf("ExteriorDoor")),
                     Position = new P3Float(10f, 20f, 30f),
                     Rotation = new P3Float(0f, 0f, 1.5f),
+                    Flags = TeleportDestination.Flag.NoLoadScreen,
                 });
             var exteriorDoor = (PlacedObject)plugin.Exterior.Temporary.Single(p => p.EditorID == "ExteriorDoor");
             exteriorDoor.TeleportDestination = new TeleportDestination

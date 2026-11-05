@@ -7,7 +7,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::Deserialize;
 
 use super::doors::{DoorFlagsError, flags_are_automatic};
-use super::schema::{DbSchema, door_trigger_bounds_select_list};
+use super::schema::{DbSchema, door_trigger_bounds_select_list, teleport_flags_select_list};
 
 /// A source load door and the cell/position/rotation it teleports to. Positions
 /// are Bethesda world units and `dest_rot_z` is radians, exactly as stored —
@@ -22,17 +22,32 @@ pub struct TeleportRecord {
     /// The destination cell's worldspace `form_key`; NULL for interior cells.
     pub worldspace: Option<String>,
     pub dest_cell: String,
+    /// The XTEL flags as stored; 0 for a database without the column.
+    pub flags: u32,
 }
 
-const SELECT_RESOLVED: &str = "SELECT t.source_ref,
+const FLAG_NO_LOAD_SCREEN: u32 = 1 << 1;
+
+fn select_resolved(schema: DbSchema) -> String {
+    format!(
+        "SELECT t.source_ref,
             t.dest_position_x, t.dest_position_y, t.dest_position_z,
             t.dest_rotation_z,
-            c.is_interior, c.worldspace, c.form_key
+            c.is_interior, c.worldspace, c.form_key,
+            {flags}
      FROM placed_teleports t
      JOIN placed_objects po ON po.form_key = t.destination_ref
-     JOIN cells c ON c.form_key = po.cell_form_key";
+     JOIN cells c ON c.form_key = po.cell_form_key",
+        flags = teleport_flags_select_list(schema, "t."),
+    )
+}
 
 impl TeleportRecord {
+    /// Whether the door goes through without a loading screen.
+    pub fn no_load_screen(&self) -> bool {
+        self.flags & FLAG_NO_LOAD_SCREEN != 0
+    }
+
     fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
         Ok(Self {
             source_ref: row.get(0)?,
@@ -43,6 +58,7 @@ impl TeleportRecord {
             is_interior: row.get(5)?,
             worldspace: row.get(6)?,
             dest_cell: row.get(7)?,
+            flags: row.get::<_, Option<u32>>(8)?.unwrap_or(0),
         })
     }
 }
@@ -57,8 +73,8 @@ impl TeleportRecord {
 /// living in that `TopCell`, and we still want its `is_interior` (0) and
 /// `worldspace` for classification. The `TopCell`'s spoofed grid is irrelevant
 /// here — the caller derives the arrival grid from the destination position.
-pub fn get_all(conn: &Connection) -> anyhow::Result<Vec<TeleportRecord>> {
-    let mut stmt = conn.prepare(SELECT_RESOLVED)?;
+pub fn get_all(conn: &Connection, schema: DbSchema) -> anyhow::Result<Vec<TeleportRecord>> {
+    let mut stmt = conn.prepare(&select_resolved(schema))?;
     let rows = stmt
         .query_map([], TeleportRecord::from_row)?
         .collect::<Result<Vec<_>, _>>()?;
@@ -71,9 +87,11 @@ pub fn get_all(conn: &Connection) -> anyhow::Result<Vec<TeleportRecord>> {
 pub fn get_into_cell(
     cell_form_key: &str,
     conn: &Connection,
+    schema: DbSchema,
 ) -> anyhow::Result<Option<TeleportRecord>> {
     let mut stmt = conn.prepare(&format!(
-        "{SELECT_RESOLVED} WHERE c.form_key = ? ORDER BY t.source_ref LIMIT 1"
+        "{} WHERE c.form_key = ? ORDER BY t.source_ref LIMIT 1",
+        select_resolved(schema)
     ))?;
     Ok(stmt
         .query_row(rusqlite::params![cell_form_key], TeleportRecord::from_row)

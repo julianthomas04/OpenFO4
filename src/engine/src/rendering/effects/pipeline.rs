@@ -56,7 +56,9 @@ impl EffectPipelineKey {
 
 /// The factors of a material's alpha property; a mode without stored factors uses the factors
 /// that mode is defined by.
-fn blend_factors(blend: &crate::assets::types::effect_material::Blend) -> Option<BlendFactors> {
+pub(crate) fn blend_factors(
+    blend: &crate::assets::types::effect_material::Blend,
+) -> Option<BlendFactors> {
     let (default_src, default_dst) = match blend.mode {
         BlendMode::None => return None,
         BlendMode::Add => (wgpu::BlendFactor::SrcAlpha, wgpu::BlendFactor::One),

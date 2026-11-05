@@ -101,6 +101,19 @@ where
         loader: impl Fn(&K) -> V + Sync,
         weigher: impl Fn(&V) -> u64,
     ) -> HashMap<K, V> {
+        self.resolve_keeping(keys, loader, weigher, |_| true)
+    }
+
+    /// [`resolve`](Self::resolve), caching a loaded value only when `keep` accepts it; a
+    /// rejected one, such as a failure that may not recur, is returned but loaded again next
+    /// time.
+    pub fn resolve_keeping(
+        &self,
+        keys: &[K],
+        loader: impl Fn(&K) -> V + Sync,
+        weigher: impl Fn(&V) -> u64,
+        keep: impl Fn(&V) -> bool,
+    ) -> HashMap<K, V> {
         let mut out: HashMap<K, V> = HashMap::with_capacity(keys.len());
         // Misses this call claimed (it must load them and set their cells)
         // vs. misses another thread is already loading (wait on its cell).
@@ -152,16 +165,18 @@ where
             let mut state = self.state.lock().unwrap();
             for (key, cell) in &owned {
                 let value = cell.get().expect("owner just set this cell").clone();
-                let weight = weigher(&value);
-                state.total_weight += weight;
-                state.map.insert(
-                    key.clone(),
-                    CacheEntry {
-                        value: value.clone(),
-                        weight,
-                        last_use: tick,
-                    },
-                );
+                if keep(&value) {
+                    let weight = weigher(&value);
+                    state.total_weight += weight;
+                    state.map.insert(
+                        key.clone(),
+                        CacheEntry {
+                            value: value.clone(),
+                            weight,
+                            last_use: tick,
+                        },
+                    );
+                }
                 state.inflight.remove(key);
                 out.insert(key.clone(), value);
             }
@@ -215,6 +230,17 @@ mod tests {
         let out = cache.resolve(&["a", "b"], counting_loader(&calls), |_| 1);
         assert_eq!(out["a"], "A");
         assert_eq!(out["b"], "B");
+    }
+
+    #[test]
+    fn a_value_not_kept_is_loaded_again() {
+        let cache = SharedCache::new(10);
+        let calls = AtomicUsize::new(0);
+        let keep_none = |_: &String| false;
+        let first = cache.resolve_keeping(&["a"], counting_loader(&calls), |_| 1, keep_none);
+        cache.resolve_keeping(&["a"], counting_loader(&calls), |_| 1, keep_none);
+        assert_eq!(first["a"], "A");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[test]

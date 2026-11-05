@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::residency::TextureResidency;
-use crate::assets::types::texture::TexturePayload;
+use crate::assets::types::texture::{TextureError, TexturePayload};
 use crate::rendering::gpu_driven::{
     BLACK_SLOT, FALLBACK_SLOT, FLAT_NORMAL_SLOT, TextureArray, TextureHandle, WHITE_SLOT,
 };
@@ -55,8 +55,8 @@ pub enum Admission {
     },
     /// The array is full; nothing was inserted.
     Exhausted,
-    /// The cause was logged once for the path.
-    Failed,
+    /// The upload failed; nothing was inserted.
+    Failed(TextureError),
 }
 
 /// Admits `path` into the bindless array, taking a reference. A texture that is
@@ -93,12 +93,7 @@ pub fn admit_texture(
             uploaded_bytes,
         },
         Ok(None) => Admission::Exhausted,
-        Err(error) => {
-            crate::utils::warn_once(&format!("texture-admit:{path}"), || {
-                format!("failed to upload texture '{path}': {error}; using fallback slot")
-            });
-            Admission::Failed
-        }
+        Err(error) => Admission::Failed(error),
     }
 }
 

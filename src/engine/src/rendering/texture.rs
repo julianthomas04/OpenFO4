@@ -204,6 +204,27 @@ pub fn load_texture_asset_srgb(
     asset_root: &str,
     key: &str,
 ) -> Result<wgpu::TextureView, TextureAssetError> {
+    load_texture_asset_as(device, queue, asset_root, key, true)
+}
+
+/// Like [`load_texture_asset_srgb`], but the view gives gamma-encoded colour as stored, for
+/// interface art that is blended in gamma space.
+pub fn load_texture_asset(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    asset_root: &str,
+    key: &str,
+) -> Result<wgpu::TextureView, TextureAssetError> {
+    load_texture_asset_as(device, queue, asset_root, key, false)
+}
+
+fn load_texture_asset_as(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    asset_root: &str,
+    key: &str,
+    srgb: bool,
+) -> Result<wgpu::TextureView, TextureAssetError> {
     let relative = resolve_below(Path::new(asset_root), key).map_err(|source| {
         let key = key.to_owned();
         if source.kind() == io::ErrorKind::NotFound {
@@ -212,7 +233,7 @@ pub fn load_texture_asset_srgb(
             TextureAssetError::Unreadable { key, source }
         }
     })?;
-    load_dds_view_srgb(device, queue, asset_root, &relative).map_err(|source| {
+    load_dds_view_as(device, queue, asset_root, &relative, srgb).map_err(|source| {
         TextureAssetError::Unusable {
             key: key.to_owned(),
             source,

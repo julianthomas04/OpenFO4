@@ -3,15 +3,11 @@ use std::path::Path;
 use std::time::Duration;
 
 use super::*;
+use crate::assets::db::conditions::{Comparand, CompareOp};
 use crate::assets::db::footsteps::FootstepCatalog;
-use crate::assets::db::music::{Comparand, CompareOp};
 use crate::assets::db::sound_catalog::{COMPOUND_DESCRIPTOR, STANDARD_DESCRIPTOR_TYPE};
-use crate::audio::conditions::{
-    ConditionContext, ConditionError, FreshWorldContext, IS_IN_INTERIOR,
-};
 use crate::audio::file_probe::ProbeError;
 use crate::audio::sound_resolve::SoundError;
-use crate::audio::test_support::condition::condition;
 use crate::audio::test_support::footsteps::{
     DIRT, DIRT_FIRST_PERSON_FILES, DIRT_QUIET_FILE, GRASS, ORPHAN, SILENT_RUNNING_FILE, SNEAK_FILE,
     SPRINT_FILE, STONE, STONE_FILE, THIRD_PERSON_FILE, UNKNOWN, all_files, catalog,
@@ -22,6 +18,8 @@ use crate::audio::test_support::{
     mock_manager_settings, render, render_buffer, sine_flac, undecodable_flac, write_audio_file,
 };
 use crate::audio::{AudioError, AudioFrame, AudioSystem, MenuMusicSettings};
+use crate::conditions::test_support::condition;
+use crate::conditions::{ConditionContext, ConditionError, FreshWorldContext, IS_IN_INTERIOR};
 use crate::footsteps::{FootTag, FootstepEvent, Gait, SurfaceMaterial};
 use crate::game_flow::Phase;
 

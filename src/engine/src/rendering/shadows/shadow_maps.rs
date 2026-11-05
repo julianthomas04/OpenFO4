@@ -10,6 +10,22 @@ pub struct ShadowMaps {
     comparison_sampler: wgpu::Sampler,
 }
 
+/// Shared by the sun maps, the lamp atlas and the loading art's lamp shadows. Reverse-Z: a
+/// receiver is lit when it is at least as close to the light as the stored caster depth.
+pub fn comparison_sampler(device: &wgpu::Device) -> wgpu::Sampler {
+    device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("shadow_comparison_sampler"),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        address_mode_w: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        compare: Some(wgpu::CompareFunction::GreaterEqual),
+        ..Default::default()
+    })
+}
+
 impl ShadowMaps {
     pub fn new(device: &wgpu::Device, config: &ShadowConfig) -> Self {
         let layers = config.cascade_count as u32;
@@ -46,20 +62,7 @@ impl ShadowMaps {
             ..Default::default()
         });
 
-        // Shared by the sun maps and the lamp atlas. Reverse-Z: a receiver is
-        // lit when it is at least as close to the light as the stored caster
-        // depth.
-        let comparison_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("shadow_comparison_sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            compare: Some(wgpu::CompareFunction::GreaterEqual),
-            ..Default::default()
-        });
+        let comparison_sampler = comparison_sampler(device);
 
         Self {
             layer_views,

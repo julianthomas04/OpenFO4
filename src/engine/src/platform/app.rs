@@ -268,6 +268,7 @@ impl ApplicationHandler for App {
                 button: MouseButton::Left,
                 ..
             } => state.handle_pointer_released(),
+            WindowEvent::Focused(false) => state.handle_focus_lost(),
             WindowEvent::MouseWheel { delta, .. } => {
                 let lines = match delta {
                     MouseScrollDelta::LineDelta(_, lines) => lines,

@@ -1,6 +1,8 @@
 //! Dev-only screenshot mode: `OPENFO4_SHOT=<file.png>` starts in the world with the camera parked
 //! at the spawn, waits until the world around it is ready, writes one frame without any
-//! interface and quits.
+//! interface and quits. With `OPENFO4_SHOT_LOADSCREEN=<editor id or form key>` as well, it then
+//! opens that loading screen over the world with its camera pinned, waits until its background,
+//! model and panel are shown, and photographs that instead.
 
 mod config;
 mod driver;
@@ -10,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use winit::dpi::PhysicalSize;
 
-pub use config::{SHOT_ENV, ShotConfig, ShotConfigError, shot_requested};
+pub use config::{SHOT_ENV, SHOT_LOADING_SCREEN_ENV, ShotConfig, ShotConfigError, shot_requested};
 pub use gate::Blocker;
 
 use crate::rendering::frame_capture::FrameCaptureError;
@@ -29,8 +31,33 @@ pub enum ShotError {
         expected: PhysicalSize<u32>,
         actual: PhysicalSize<u32>,
     },
+    #[error("cannot show the loading screen: {0}")]
+    LoadingScreen(String),
     #[error(transparent)]
     Capture(#[from] FrameCaptureError),
+}
+
+/// How far the shot is with the loading screen it was asked to photograph.
+#[derive(Debug, PartialEq, Eq)]
+enum LoadingScreenStage {
+    /// The world is photographed.
+    NotWanted,
+    /// To be opened once the world is ready.
+    Wanted(String),
+    Opened,
+}
+
+impl LoadingScreenStage {
+    /// The screen to open now, which moves the stage on to `Opened`.
+    fn take_wanted(&mut self) -> Option<String> {
+        match std::mem::replace(self, Self::Opened) {
+            Self::Wanted(name) => Some(name),
+            other => {
+                *self = other;
+                None
+            }
+        }
+    }
 }
 
 /// Where the shot stands.
@@ -49,14 +76,23 @@ enum Progress {
 pub struct ShotSession {
     config: ShotConfig,
     gate: ShotGate,
+    loading_screen: LoadingScreenStage,
+    /// When the loading screen was opened, which its own deadline counts from.
+    loading_screen_opened: Option<Instant>,
     started: Instant,
     progress: Progress,
 }
 
 impl ShotSession {
     pub fn new(config: ShotConfig) -> Self {
+        let loading_screen = config
+            .loading_screen
+            .clone()
+            .map_or(LoadingScreenStage::NotWanted, LoadingScreenStage::Wanted);
         Self {
             gate: ShotGate::new(config.settle_frames),
+            loading_screen,
+            loading_screen_opened: None,
             config,
             started: Instant::now(),
             progress: Progress::Waiting,
@@ -72,5 +108,26 @@ impl ShotSession {
                 None
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_wanted_screen_is_taken_once_and_leaves_the_stage_opened() {
+        let mut stage = LoadingScreenStage::Wanted("LSDog".to_owned());
+        assert_eq!(stage.take_wanted().as_deref(), Some("LSDog"));
+        assert_eq!(stage, LoadingScreenStage::Opened);
+        assert_eq!(stage.take_wanted(), None);
+        assert_eq!(stage, LoadingScreenStage::Opened);
+    }
+
+    #[test]
+    fn a_shot_of_the_world_wants_no_screen() {
+        let mut stage = LoadingScreenStage::NotWanted;
+        assert_eq!(stage.take_wanted(), None);
+        assert_eq!(stage, LoadingScreenStage::NotWanted);
     }
 }

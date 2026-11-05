@@ -50,6 +50,20 @@ pub struct TextItem {
     pub shrink: bool,
     pub colour: [u8; 4],
     pub shadow: Option<Shadow>,
+    /// The width in framebuffer pixels the text wraps at, or `None` for a single line.
+    pub wrap_width: Option<f32>,
+    /// The height in framebuffer pixels below which no line is drawn, or `None` for no limit.
+    pub max_height: Option<f32>,
+}
+
+/// The framebuffer rectangle a text item's lines cover: the left edge and top of its first
+/// line, the width of its longest line and the height of all its lines.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextExtent {
+    pub left: f32,
+    pub top: f32,
+    pub width: f32,
+    pub height: f32,
 }
 
 struct Placed {
@@ -69,6 +83,7 @@ pub struct FieldText {
     prepared: Vec<TextItem>,
     prepared_for: (u32, u32),
     stale: bool,
+    measured: Option<(TextItem, TextExtent)>,
 }
 
 impl FieldText {
@@ -94,7 +109,21 @@ impl FieldText {
             prepared: Vec::new(),
             prepared_for: (0, 0),
             stale: true,
+            measured: None,
         }
+    }
+
+    /// Where the lines of `item` land, as [`Self::prepare`] would place them. The last
+    /// measurement is kept while the item stays the same.
+    pub fn measure(&mut self, item: &TextItem) -> TextExtent {
+        if let Some((measured, extent)) = &self.measured
+            && measured == item
+        {
+            return *extent;
+        }
+        let extent = extent_of(&mut self.font_system, item);
+        self.measured = Some((item.clone(), extent));
+        extent
     }
 
     /// Shapes `items` and uploads their glyphs for a framebuffer of `fb` pixels. Nothing is redone
@@ -199,7 +228,7 @@ fn shape_at(
     let scale = item.map.scale;
     let size = geometry.size * scale;
     buffer.set_metrics(Metrics::new(size, geometry.line_pitch() * scale));
-    buffer.set_size(None, None);
+    buffer.set_size(item.wrap_width, item.max_height);
     // Stand-in S2: the face is chosen by family name only. The font configuration's style
     // (Normal / Bold) is not applied as a weight; the bold classes map to their own family.
     let attrs = Attrs::new()
@@ -239,9 +268,31 @@ fn shape(font_system: &mut FontSystem, buffer: &mut Buffer, item: &TextItem) -> 
     (left, baseline_y - baseline)
 }
 
+/// The rectangle the lines of `item` cover once shaped.
+fn extent_of(font_system: &mut FontSystem, item: &TextItem) -> TextExtent {
+    let mut buffer = Buffer::new(font_system, Metrics::new(1.0, 1.0));
+    let (left, top) = shape(font_system, &mut buffer, item);
+    let (width, height) = buffer
+        .layout_runs()
+        .fold((0.0_f32, 0.0_f32), |(width, height), run| {
+            (
+                width.max(run.line_w),
+                height.max(run.line_top + run.line_height),
+            )
+        });
+    TextExtent {
+        left,
+        top,
+        width,
+        height,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rendering::ui_fonts::test_support as fonts;
+    use crate::ui_layout::scaleform_text::FontMetrics;
 
     #[test]
     fn the_screen_map_scales_then_shifts() {
@@ -250,5 +301,95 @@ mod tests {
             scale: 2.0,
         };
         assert_eq!(map.point(3.0, 4.0), (16.0, 28.0));
+    }
+
+    const TIP: &str = "Wrapped text breaks into lines at the width of its column.";
+    const COLUMN: f32 = 120.0;
+
+    fn item(wrap_width: Option<f32>) -> TextItem {
+        let metrics = FontMetrics {
+            ascent: 0.9,
+            descent: 0.2,
+        };
+        TextItem {
+            text: TIP.to_owned(),
+            family: fonts::family(),
+            geometry: FieldGeometry::content_box(
+                (0.0, 0.0),
+                COLUMN,
+                100.0,
+                16.0,
+                Align::Left,
+                metrics,
+            ),
+            map: ScreenMap {
+                origin: (0.0, 0.0),
+                scale: 1.0,
+            },
+            shrink: false,
+            colour: [255; 4],
+            shadow: None,
+            wrap_width,
+            max_height: None,
+        }
+    }
+
+    fn line_widths(item: &TextItem) -> Vec<f32> {
+        let mut font_system = fonts::ui_fonts().font_system();
+        let mut buffer = Buffer::new(&mut font_system, Metrics::new(1.0, 1.0));
+        shape(&mut font_system, &mut buffer, item);
+        buffer.layout_runs().map(|run| run.line_w).collect()
+    }
+
+    #[test]
+    fn text_with_a_wrap_width_breaks_into_lines_that_fit_it() {
+        let widths = line_widths(&item(Some(COLUMN)));
+        assert!(widths.len() > 1, "{widths:?}");
+        assert!(widths.iter().all(|&width| width <= COLUMN), "{widths:?}");
+    }
+
+    fn extent(item: &TextItem) -> TextExtent {
+        extent_of(&mut fonts::ui_fonts().font_system(), item)
+    }
+
+    #[test]
+    fn the_extent_of_wrapped_text_is_its_column_wide_at_most_and_all_its_lines_tall() {
+        let wrapped = extent(&item(Some(COLUMN)));
+        let single = extent(&item(None));
+
+        assert!(
+            wrapped.width <= COLUMN && wrapped.width > COLUMN / 2.0,
+            "{wrapped:?}"
+        );
+        assert!(single.width > COLUMN, "{single:?}");
+        let line = single.height;
+        assert!(line > 0.0);
+        assert!(
+            wrapped.height >= line * 2.0 - 0.01,
+            "several lines of {line} px: {wrapped:?}"
+        );
+        assert!(
+            ((wrapped.height / line).round() * line - wrapped.height).abs() < 0.01,
+            "whole lines: {wrapped:?}"
+        );
+    }
+
+    #[test]
+    fn the_extent_starts_where_the_field_puts_the_text() {
+        let item = item(Some(COLUMN));
+        let extent = extent(&item);
+        assert!((extent.left - item.geometry.content_left()).abs() < 0.01);
+        let baseline = item.geometry.first_baseline();
+        assert!(
+            extent.top < baseline && baseline < extent.top + extent.height,
+            "the first baseline {baseline} lies in the first line of {extent:?}"
+        );
+    }
+
+    #[test]
+    fn text_without_a_wrap_width_stays_on_one_line() {
+        let widths = line_widths(&item(None));
+        assert_eq!(widths.len(), 1);
+        assert!(widths[0] > COLUMN, "{widths:?}");
     }
 }

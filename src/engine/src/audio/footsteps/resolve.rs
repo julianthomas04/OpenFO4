@@ -10,9 +10,9 @@
 use std::collections::HashSet;
 
 use crate::assets::db::footsteps::{FootstepCatalog, ImpactDataSet};
-use crate::audio::conditions::{ConditionContext, ConditionError};
 pub use crate::audio::sound_resolve::ReachableSound;
 use crate::audio::sound_resolve::{self, LayerPlay, LayersError, SoundError, resolve_layers};
+use crate::conditions::{ConditionContext, ConditionError};
 use crate::footsteps::{FootTag, FootstepEvent, Gait};
 use crate::random::RandomSource;
 

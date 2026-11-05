@@ -1,9 +1,7 @@
 //! Fixtures of the weather cycle tests.
 
-use std::collections::VecDeque;
-
 use super::{WeatherCycle, WeatherSnapshot, WeatherStep};
-use crate::random::RandomSource;
+use crate::random::test_support::ScriptedRandom;
 use crate::sim::commands::WeatherEdit;
 use crate::weather::{
     ClimateEntry, FadeRange, LightningParams, WeatherId, WeatherRollTable, WeatherRollTraits,
@@ -12,57 +10,6 @@ use crate::weather::{
 pub(crate) const A: WeatherId = WeatherId::new(0);
 pub(crate) const B: WeatherId = WeatherId::new(1);
 pub(crate) const C: WeatherId = WeatherId::new(2);
-
-/// Replays fixed answers, so a test steers every roll and strike. An answer that is missing or
-/// outside the asked range fails the test.
-#[derive(Debug, Default)]
-pub(super) struct ScriptedRandom {
-    below: VecDeque<usize>,
-    units: VecDeque<f32>,
-    asked_below: Vec<usize>,
-}
-
-impl ScriptedRandom {
-    pub fn new(below: &[usize], units: &[f32]) -> Self {
-        Self {
-            below: below.iter().copied().collect(),
-            units: units.iter().copied().collect(),
-            asked_below: Vec::new(),
-        }
-    }
-
-    /// A script that fails the test on any draw.
-    pub fn silent() -> Self {
-        Self::default()
-    }
-
-    pub fn is_spent(&self) -> bool {
-        self.below.is_empty() && self.units.is_empty()
-    }
-
-    /// The bound of every `below` draw so far.
-    pub fn asked_below(&self) -> &[usize] {
-        &self.asked_below
-    }
-}
-
-impl RandomSource for ScriptedRandom {
-    fn below(&mut self, n: usize) -> usize {
-        self.asked_below.push(n);
-        let answer = self
-            .below
-            .pop_front()
-            .expect("the script has no `below` answer left");
-        assert!(answer < n, "scripted {answer} is out of range 0..{n}");
-        answer
-    }
-
-    fn unit(&mut self) -> f32 {
-        self.units
-            .pop_front()
-            .expect("the script has no `unit` answer left")
-    }
-}
 
 /// A weather that takes 1 h to arrive (transition byte 100), has no volatility multiplier and
 /// no thunder.

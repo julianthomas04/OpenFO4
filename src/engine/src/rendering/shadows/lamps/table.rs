@@ -8,7 +8,7 @@ pub const MAX_SHADOW_SLOTS: usize = 2 * MAX_SHADOWED_LAMPS as usize;
 /// Mirrors `SHADOW_SLOT_NONE` in `light_data.wgsl`.
 pub const SHADOW_SLOT_NONE: u32 = u32::MAX;
 
-/// Mirrors `ShadowLamp` in `frame.wgsl`. A zeroed record (strength 0) is
+/// Mirrors `ShadowLamp` in `lamp_shadow_types.wgsl`. A zeroed record (strength 0) is
 /// never sampled.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -51,7 +51,7 @@ impl GpuShadowLamp {
     }
 }
 
-/// Mirrors `ShadowLampTable` in `frame.wgsl`; bound as the frame group's
+/// Mirrors `ShadowLampTable` in `lamp_shadow_types.wgsl`; bound as the frame group's
 /// lamp-shadow uniform.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]

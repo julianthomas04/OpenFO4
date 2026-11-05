@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use openfo4::assets::db::DbClient;
 use openfo4::assets::db::footsteps::FootstepCatalog;
 use openfo4::assets::layout::audio_dir;
-use openfo4::audio::conditions::FreshWorldContext;
 use openfo4::audio::footsteps::{Footsteps, Resolution, resolve};
+use openfo4::conditions::FreshWorldContext;
 use openfo4::footsteps::{FootTag, FootstepEvent, Gait, SurfaceMaterial};
 use openfo4::random::SplitMix64;
 

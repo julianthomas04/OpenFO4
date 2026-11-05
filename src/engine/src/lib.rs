@@ -10,10 +10,12 @@ pub mod anim;
 pub mod assets;
 pub mod audio;
 pub mod bethesda_space;
+pub mod conditions;
 pub mod footsteps;
 pub mod game_flow;
 #[cfg(test)]
 pub(crate) mod installer_source;
+pub mod loading_screen;
 pub mod navmesh;
 pub mod platform;
 pub mod random;

@@ -15,7 +15,7 @@
 
 use glam::{Vec2, Vec3};
 
-use crate::navmesh::geometry::{cross2, is_degenerate, signed_area2, xz};
+use crate::navmesh::geometry::{INSIDE_EPSILON, cross2, is_degenerate, signed_area2, xz};
 use crate::navmesh::portal::Span;
 use crate::navmesh::{NavRef, NavWorld};
 
@@ -130,12 +130,31 @@ fn turn(apex: Vec2, a: Vec2, b: Vec2) -> f32 {
     cross2(a - apex, b - apex)
 }
 
+/// True when `point` lies on the portal's segment, within the mesh's inside tolerance.
+///
+/// A funnel apex on a portal sees that portal's endpoints in opposite directions: the funnel
+/// opens to a half-plane, and which endpoint counts as left or right is decided by rounding.
+fn portal_contains(portal: Portal, point: Vec2) -> bool {
+    let (left, right) = (xz(portal.left), xz(portal.right));
+    let along = right - left;
+    let offset = point - left;
+    let length_squared = along.length_squared();
+    length_squared > 0.0
+        && signed_area2(left, right, point).abs() <= INSIDE_EPSILON
+        && (0.0..=length_squared).contains(&offset.dot(along))
+}
+
 fn pull_string(portals: &[Portal]) -> Vec<Vec3> {
     let mut apex = portals[0].left;
     let mut points = vec![apex];
     let (mut left, mut right) = (apex, apex);
     let (mut left_index, mut right_index) = (0, 0);
     let mut index = 1;
+    // The path leaves the apex through every portal the apex lies on, so they constrain nothing.
+    while index < portals.len() - 1 && portal_contains(portals[index], xz(apex)) {
+        (left_index, right_index) = (index, index);
+        index += 1;
+    }
     while index < portals.len() {
         let portal = portals[index];
         let (apex_2d, left_2d, right_2d) = (xz(apex), xz(left), xz(right));

@@ -33,6 +33,7 @@ use self::wind::GrassWind;
 pub use self::wind::commonwealth_clear_wind;
 use crate::assets::types::grass::{CellGrass, GrassFlags};
 use crate::rendering::frustum::Aabb;
+use crate::rendering::gpu_driven::TextureHandle;
 use crate::rendering::render_pipelines::world_pass_layout::WorldPassLayout;
 use crate::rendering::skinning::materials::{
     CharacterGpuContext, ResolvedMaterial, resolve_material,
@@ -238,7 +239,8 @@ impl GrassStage {
     }
 
     /// Takes over the grass of a freshly integrated cell, replacing any `key`
-    /// held. `models` are the parsed models the cell's worker prepared.
+    /// held. `models` are the parsed models the cell's worker prepared. The
+    /// grass is held hidden, its textures referenced, until `reveal_cell`.
     pub fn add_cell(
         &mut self,
         key: CellKey,
@@ -255,13 +257,28 @@ impl GrassStage {
             .filter_map(|grass| self.cell_draw(grass, models, gpu, &mut uploaded_bytes))
             .collect();
         let holds_grass = !draws.is_empty();
-        for replaced in self.cells.insert(key, draws).into_iter().flatten() {
+        for replaced in self.cells.insert(key, draws, true).into_iter().flatten() {
             self.release_draw(&replaced, gpu);
         }
         CellGrassAdded {
             holds_grass,
             uploaded_bytes,
         }
+    }
+
+    /// Draws the grass `add_cell` took over for `key`.
+    pub fn reveal_cell(&mut self, key: CellKey) {
+        self.cells.reveal(key);
+    }
+
+    /// The textures the grass of `key` is drawn with.
+    pub fn cell_textures(&self, key: CellKey) -> impl Iterator<Item = TextureHandle> + '_ {
+        self.cells
+            .cell(key)
+            .iter()
+            .filter_map(|draw| self.models.get(&draw.type_key.model_path))
+            .flat_map(|model| &model.submeshes)
+            .flat_map(|submesh| submesh.material.texture_refs.iter().copied())
     }
 
     /// Releases the grass of a retired cell; returns whether it held any.
@@ -306,7 +323,7 @@ impl GrassStage {
         }
         let mut visible: Vec<&CellDraw> = self
             .cells
-            .entries()
+            .visible_entries()
             .filter(|draw| view.sees(&draw.bounds, self.draw_distance))
             .collect();
         let mut stats = GrassStats::default();

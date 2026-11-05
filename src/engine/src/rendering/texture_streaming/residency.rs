@@ -8,8 +8,10 @@ use crossbeam_channel::{Receiver, Sender};
 
 use super::demand::NO_DEMAND;
 use super::policy::ResidencyPolicy;
+use super::read_failure::ReadFailure;
 use super::stats::TextureStats;
 use crate::assets::types::texture::{self, TextureError, TextureLayout, TexturePayload};
+use crate::rendering::broken_asset::BrokenAsset;
 use crate::rendering::gpu_driven::{
     MAX_TEXTURES, PLACEHOLDER_FIRST_MIP, TextureArray, TextureHandle,
 };
@@ -32,6 +34,10 @@ const READY_BYTE_CAP: u64 = 64 * 1024 * 1024;
 /// A failed upgrade read is retried after a backoff, this many times at most.
 const MAX_UPGRADE_FAILURES: u32 = 5;
 const UPGRADE_RETRY_BASE: Duration = Duration::from_secs(2);
+/// A first read that failed for a reason that may pass is retried after a backoff; failing this
+/// many times, about 8 s in all, the file counts as broken.
+const MAX_TRANSIENT_LOAD_FAILURES: u32 = 6;
+const TRANSIENT_RETRY_BASE: Duration = Duration::from_millis(250);
 /// Feedback requests older than this are dropped; reuses the downgrade hold so
 /// a texture the GPU asked for is not shrunk again before it is asked about.
 const FEEDBACK_HOLD: Duration = DOWNGRADE_HOLD;
@@ -58,6 +64,18 @@ pub struct TextureTrace {
     pub cpu_wanted: u32,
     pub feedback_wanted: Option<u32>,
     pub demand: f32,
+}
+
+/// How far the load of a texture has got.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextureLoad {
+    /// Its stand-in view is bound while the file is read.
+    Pending,
+    Resident,
+    /// The file does not exist; its stand-in view stays bound for good.
+    Missing,
+    /// The file exists but could not be used; reported through `take_broken`.
+    Broken,
 }
 
 /// A resident texture nothing has asked for, found by the stuck detector.
@@ -175,8 +193,10 @@ enum State {
     /// Bound to a stand-in view; no read requested yet.
     Placeholder,
     Resident(GpuTexture),
-    /// Reading the file failed; the slot shows its role's stand-in view for good.
-    Failed,
+    /// The file does not exist; the slot shows its role's stand-in view for good.
+    Missing,
+    /// The file exists but could not be read, parsed or uploaded; reported as broken.
+    Broken,
 }
 
 struct Entry {
@@ -192,6 +212,9 @@ struct Entry {
     downgrade_since: Option<Instant>,
     upgrade_failures: u32,
     upgrade_retry_at: Option<Instant>,
+    /// First reads that failed for a reason that may pass, and when to try again.
+    transient_load_failures: u32,
+    load_retry_at: Option<Instant>,
     /// Since when the texture has wanted a finer mip than it holds; only
     /// tracked by the stuck detector.
     behind_since: Option<Instant>,
@@ -205,13 +228,33 @@ impl Entry {
     fn resident_first_mip(&self) -> Option<u32> {
         match &self.state {
             State::Resident(gpu) => Some(gpu.first_mip),
-            State::Placeholder | State::Failed => None,
+            State::Placeholder | State::Missing | State::Broken => None,
         }
     }
 
     fn may_upgrade(&self, now: Instant) -> bool {
         self.upgrade_failures < MAX_UPGRADE_FAILURES
             && self.upgrade_retry_at.is_none_or(|retry_at| now >= retry_at)
+    }
+
+    fn may_retry_load(&self, now: Instant) -> bool {
+        self.load_retry_at.is_none_or(|retry_at| now >= retry_at)
+    }
+
+    /// A first read failed for a reason that may pass: try again after a backoff, or, after
+    /// `MAX_TRANSIENT_LOAD_FAILURES`, the reason the file counts as broken.
+    fn note_transient_load_failure(&mut self, reason: String, now: Instant) -> Option<String> {
+        self.transient_load_failures += 1;
+        if self.transient_load_failures >= MAX_TRANSIENT_LOAD_FAILURES {
+            return Some(format!(
+                "{reason} (still failing after {} attempts)",
+                self.transient_load_failures
+            ));
+        }
+        self.load_retry_at =
+            Some(now + TRANSIENT_RETRY_BASE * 2u32.pow(self.transient_load_failures - 1));
+        self.last_failure = Some(reason);
+        None
     }
 
     fn note_upgrade_failure(&mut self, reason: &str, now: Instant) {
@@ -241,19 +284,15 @@ impl Entry {
         self.upgrade_retry_at = None;
     }
 
-    /// A load that cannot succeed: bind the role's stand-in view for good.
-    fn fail_placeholder(&mut self, array: &mut TextureArray, reason: &str) {
+    /// The file does not exist: bind the role's stand-in view for good.
+    fn keep_stand_in(&mut self, array: &mut TextureArray, reason: &str) {
         tracing::warn!(
             "texture '{}' load given up for good, keeping its stand-in view: {reason}",
             self.path
         );
         self.last_failure = Some(reason.to_owned());
-        self.state = State::Failed;
-        array.replace_view(
-            self.handle,
-            array.reserved_view(self.placeholder_slot),
-            PLACEHOLDER_FIRST_MIP,
-        );
+        self.state = State::Missing;
+        array.settle_on_stand_in(self.handle, array.reserved_view(self.placeholder_slot));
     }
 }
 
@@ -394,6 +433,8 @@ pub struct TextureResidency {
     undemanded_found: Vec<UndemandedTexture>,
     last_stuck_check: Instant,
     resident_bytes: u64,
+    /// Textures found broken since the last `take_broken`.
+    broken: Vec<BrokenAsset>,
     pub stats: TextureStats,
 }
 
@@ -440,6 +481,7 @@ impl TextureResidency {
             undemanded_found: Vec::new(),
             last_stuck_check: Instant::now(),
             resident_bytes: 0,
+            broken: Vec::new(),
             stats: TextureStats::default(),
         }
     }
@@ -515,6 +557,8 @@ impl TextureResidency {
                 downgrade_since: None,
                 upgrade_failures: 0,
                 upgrade_retry_at: None,
+                transient_load_failures: 0,
+                load_retry_at: None,
                 behind_since: None,
                 undemanded_since: None,
                 last_failure: None,
@@ -632,7 +676,7 @@ impl TextureResidency {
                 State::Resident(gpu) => self
                     .feedback_mip(slot, now)
                     .map(|mip| feedback_first_mip(self.policy, &gpu.layout, mip)),
-                State::Placeholder | State::Failed => None,
+                State::Placeholder | State::Missing | State::Broken => None,
             };
             array.set_feedback_skip(slot, skip);
         }
@@ -720,16 +764,19 @@ impl TextureResidency {
         let payload = match result.outcome {
             Ok(payload) => payload,
             Err(error) => {
-                crate::utils::warn_once(&format!("texture-stream:{}", result.path), || {
-                    format!("texture '{}' could not be streamed: {error}", result.path)
-                });
-                Self::note_failed_read(entry, array, &error.to_string());
+                let broken = Self::note_failed_read(entry, array, ReadFailure::from(&error));
+                if broken.is_none() {
+                    crate::utils::warn_once(&format!("texture-stream:{}", result.path), || {
+                        format!("texture '{}' could not be streamed: {error}", result.path)
+                    });
+                }
+                self.broken.extend(broken);
                 return 0;
             }
         };
 
         match &entry.state {
-            State::Failed => return 0,
+            State::Missing | State::Broken => return 0,
             State::Resident(old) if payload.mip_end != old.first_mip => {
                 self.stats.stale_dropped += 1;
                 entry.last_failure = Some(format!(
@@ -753,10 +800,14 @@ impl TextureResidency {
         if let Err(error) =
             texture::write_payload(queue, &new_gpu.texture, new_gpu.first_mip, &payload)
         {
-            crate::utils::warn_once(&format!("texture-stream:{label}"), || {
-                format!("texture '{label}' upload rejected: {error}")
-            });
-            Self::note_failed_read(entry, array, &format!("upload rejected: {error}"));
+            let failure = ReadFailure::Broken(format!("upload rejected: {error}"));
+            let broken = Self::note_failed_read(entry, array, failure);
+            if broken.is_none() {
+                crate::utils::warn_once(&format!("texture-stream:{label}"), || {
+                    format!("texture '{label}' upload rejected: {error}")
+                });
+            }
+            self.broken.extend(broken);
             return 0;
         }
 
@@ -771,14 +822,85 @@ impl TextureResidency {
         bytes
     }
 
-    /// A read or upload failed: a placeholder is given up on, a resident
-    /// texture keeps its resolution and retries the upgrade after a backoff.
-    fn note_failed_read(entry: &mut Entry, array: &mut TextureArray, reason: &str) {
-        if matches!(entry.state, State::Placeholder) {
-            entry.fail_placeholder(array, reason);
-        } else {
-            entry.note_upgrade_failure(reason, Instant::now());
+    /// A read or upload failed. A placeholder whose file is missing keeps its stand-in, one whose
+    /// read may pass is read again after a backoff, and one whose file is broken, or whose read
+    /// kept failing, is returned for the caller to report; a resident texture keeps its
+    /// resolution and retries the upgrade after a backoff.
+    fn note_failed_read(
+        entry: &mut Entry,
+        array: &mut TextureArray,
+        failure: ReadFailure,
+    ) -> Option<BrokenAsset> {
+        let broken = |entry: &mut Entry, reason: String| {
+            entry.state = State::Broken;
+            entry.last_failure = Some(reason.clone());
+            Some(BrokenAsset::Texture {
+                path: entry.path.clone(),
+                reason,
+            })
+        };
+        match (&entry.state, failure) {
+            (State::Placeholder, ReadFailure::Missing) => {
+                entry.keep_stand_in(array, "the file does not exist");
+                None
+            }
+            (State::Placeholder, ReadFailure::Transient(reason)) => {
+                let reason = entry.note_transient_load_failure(reason, Instant::now())?;
+                broken(entry, reason)
+            }
+            (State::Placeholder, ReadFailure::Broken(reason)) => broken(entry, reason),
+            (_, ReadFailure::Missing) => {
+                entry.note_upgrade_failure("the file does not exist", Instant::now());
+                None
+            }
+            (_, ReadFailure::Transient(reason) | ReadFailure::Broken(reason)) => {
+                entry.note_upgrade_failure(&reason, Instant::now());
+                None
+            }
         }
+    }
+
+    /// The textures found broken since the last call.
+    pub fn take_broken(&mut self) -> Vec<BrokenAsset> {
+        std::mem::take(&mut self.broken)
+    }
+
+    /// The texture `handle` names and how far its load has got, for a report of a load that
+    /// never finished.
+    pub fn describe(&self, handle: TextureHandle) -> String {
+        let Some(entry) = self
+            .entries
+            .get(&handle.slot)
+            .filter(|entry| entry.handle == handle)
+        else {
+            return format!("slot {} (no longer tracked)", handle.slot);
+        };
+        let state = match &entry.state {
+            State::Placeholder if entry.in_flight => "read in flight",
+            State::Placeholder => "waiting for its read to start",
+            State::Resident(_) => "resident",
+            State::Missing => "missing",
+            State::Broken => "broken",
+        };
+        match &entry.last_failure {
+            Some(failure) => format!("'{}' ({state}, last failure: {failure})", entry.path),
+            None => format!("'{}' ({state})", entry.path),
+        }
+    }
+
+    /// How far the load of the texture `handle` names has got; `None` for a handle whose slot
+    /// has since been given to another texture.
+    pub fn load_of(&self, handle: TextureHandle) -> Option<TextureLoad> {
+        let entry = self
+            .entries
+            .get(&handle.slot)
+            .filter(|entry| entry.handle == handle)?;
+        Some(match entry.state {
+            State::Placeholder => TextureLoad::Pending,
+            State::Resident(_) => TextureLoad::Resident,
+            State::Missing => TextureLoad::Missing,
+            State::Broken => TextureLoad::Broken,
+        })
     }
 
     /// Make `gpu` the slot's texture and rebind its view.
@@ -821,7 +943,9 @@ impl TextureResidency {
                 continue;
             }
             match &entry.state {
-                State::Placeholder if has_demand => loads.push((demand, slot)),
+                State::Placeholder if has_demand && entry.may_retry_load(now) => {
+                    loads.push((demand, slot));
+                }
                 State::Resident(gpu) => {
                     let target =
                         target_first_mip(policy, &gpu.layout, demand, feedback, gpu.first_mip);
@@ -855,7 +979,7 @@ impl TextureResidency {
                         }
                     }
                 }
-                State::Placeholder | State::Failed => {}
+                State::Placeholder | State::Missing | State::Broken => {}
             }
         }
 
@@ -1050,7 +1174,7 @@ impl TextureResidency {
                 ),
                 resident_first: gpu.first_mip,
             }),
-            State::Failed => None,
+            State::Missing | State::Broken => None,
         }
     }
 
@@ -1124,10 +1248,159 @@ mod tests {
             downgrade_since: None,
             upgrade_failures: 0,
             upgrade_retry_at: None,
+            transient_load_failures: 0,
+            load_retry_at: None,
             behind_since: None,
             undemanded_since: None,
             last_failure: None,
         }
+    }
+
+    struct GpuFixture {
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        array: TextureArray,
+        residency: TextureResidency,
+        _root: tempfile::TempDir,
+    }
+
+    impl GpuFixture {
+        /// A residency reading from a directory that holds `files`.
+        fn new(test: &str, files: &[(&str, &[u8])]) -> Self {
+            let (device, queue) =
+                crate::rendering::gpu_test::test_device(test).expect("a GPU adapter");
+            let root = tempfile::tempdir().expect("a temporary directory");
+            for (name, bytes) in files {
+                std::fs::write(root.path().join(name), bytes).expect("a writable fixture file");
+            }
+            let root_path = root.path().to_str().expect("a UTF-8 temporary path");
+            Self {
+                array: TextureArray::new(&device, &queue),
+                residency: TextureResidency::new(policy(), root_path),
+                device,
+                queue,
+                _root: root,
+            }
+        }
+
+        fn admit_wanted(&mut self, path: &str) -> TextureHandle {
+            let (handle, _) = self
+                .residency
+                .admit(
+                    &mut self.array,
+                    &self.device,
+                    &self.queue,
+                    path,
+                    true,
+                    None,
+                    false,
+                    crate::rendering::gpu_driven::WHITE_SLOT,
+                )
+                .expect("a placeholder admission uploads nothing")
+                .expect("room in the array");
+            self.residency.note_demand(handle.slot, 1.0);
+            handle
+        }
+
+        /// Pumps until the load of `handle` is no longer pending.
+        fn settle(&mut self, handle: TextureHandle) -> TextureLoad {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                self.residency
+                    .pump(&self.device, &self.queue, &mut self.array, u64::MAX);
+                let load = self.residency.load_of(handle).expect("a tracked texture");
+                if load != TextureLoad::Pending {
+                    return load;
+                }
+                assert!(Instant::now() < deadline, "the read never finished");
+                std::thread::yield_now();
+            }
+        }
+    }
+
+    #[test]
+    fn a_transient_read_failure_is_retried_after_a_growing_backoff() {
+        let mut entry = placeholder_entry();
+        let now = Instant::now();
+
+        assert_eq!(
+            entry.note_transient_load_failure("busy".to_owned(), now),
+            None
+        );
+        assert!(!entry.may_retry_load(now));
+        assert!(entry.may_retry_load(now + TRANSIENT_RETRY_BASE));
+
+        assert_eq!(
+            entry.note_transient_load_failure("busy".to_owned(), now),
+            None
+        );
+        assert!(!entry.may_retry_load(now + TRANSIENT_RETRY_BASE));
+        assert!(entry.may_retry_load(now + TRANSIENT_RETRY_BASE * 2));
+    }
+
+    #[test]
+    fn a_read_that_keeps_failing_transiently_counts_as_broken() {
+        let mut entry = placeholder_entry();
+        let now = Instant::now();
+        for _ in 1..MAX_TRANSIENT_LOAD_FAILURES {
+            assert_eq!(
+                entry.note_transient_load_failure("busy".to_owned(), now),
+                None
+            );
+        }
+
+        let reason = entry.note_transient_load_failure("busy".to_owned(), now);
+
+        assert_eq!(
+            reason,
+            Some(format!(
+                "busy (still failing after {MAX_TRANSIENT_LOAD_FAILURES} attempts)"
+            ))
+        );
+    }
+
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_missing_file_keeps_its_stand_in_without_being_reported() {
+        let mut gpu = GpuFixture::new("missing texture file", &[]);
+        let handle = gpu.admit_wanted("missing.dds");
+
+        assert_eq!(gpu.settle(handle), TextureLoad::Missing);
+        assert_eq!(gpu.residency.take_broken(), Vec::new());
+    }
+
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_file_that_is_no_dds_is_reported_broken() {
+        let mut gpu = GpuFixture::new("broken texture file", &[("broken.dds", b"not a dds")]);
+        let handle = gpu.admit_wanted("broken.dds");
+
+        assert_eq!(gpu.settle(handle), TextureLoad::Broken);
+        let broken = gpu.residency.take_broken();
+        assert!(
+            matches!(
+                broken.as_slice(),
+                [BrokenAsset::Texture { path, reason }]
+                    if path == "broken.dds" && reason.contains("is not a DDS file")
+            ),
+            "{broken:?}"
+        );
+        assert_eq!(gpu.residency.take_broken(), Vec::new(), "reported once");
+    }
+
+    #[test]
+    fn a_stale_handle_has_no_load() {
+        let mut residency = residency();
+        let entry = placeholder_entry();
+        let handle = entry.handle;
+        residency.entries.insert(handle.slot, entry);
+
+        assert_eq!(residency.load_of(handle), Some(TextureLoad::Pending));
+        let recycled = TextureHandle {
+            generation: handle.generation + 1,
+            ..handle
+        };
+        assert_eq!(residency.load_of(recycled), None);
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use super::broken_asset::BrokenAssets;
 use super::world_streamer::InteriorRequestError;
 use crate::audio::AudioError;
 use crate::rendering::device_loss::DeviceLost;
@@ -14,4 +15,6 @@ pub enum FatalRuntimeError {
     CellWorkersStopped(#[from] InteriorRequestError),
     #[error("screenshot failed: {0}")]
     Shot(#[from] ShotError),
+    #[error(transparent)]
+    BrokenAssets(#[from] BrokenAssets),
 }

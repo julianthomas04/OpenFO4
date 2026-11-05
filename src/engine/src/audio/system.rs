@@ -6,7 +6,6 @@ use kira::{AudioManager, AudioManagerSettings, DefaultBackend};
 
 use super::backend::AudioBackend;
 use super::backend_errors::BackendErrorReporter;
-use super::conditions::GameTime;
 use super::error::AudioError;
 use super::footsteps::Footsteps;
 use super::music::{MusicCommand, MusicDirector};
@@ -19,6 +18,7 @@ use super::weather_output::WeatherOutput;
 use super::world_music::WorldMusic;
 use super::world_playback::WorldPlayback;
 use crate::assets::layout;
+use crate::conditions::GameTime;
 use crate::footsteps::FootstepEvent;
 use crate::game_flow::Phase;
 
