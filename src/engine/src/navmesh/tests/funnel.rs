@@ -219,3 +219,22 @@ fn zero_area_triangle_in_the_corridor_is_an_error() {
         Err(FunnelError::DegenerateTriangle(a))
     );
 }
+
+#[test]
+fn a_start_on_a_shared_edge_pulls_straight_in_both_directions() {
+    // The goal sits a hair beyond the cell diagonal, inside the mesh's inside tolerance, so the
+    // first portal of the reversed corridor passes through the funnel apex.
+    let world = single_world(MeshBuilder::new(1).flat_grid((0.0, 0.0), 1, 2));
+    let (a, b) = (
+        Vec3::new(0.03, 0.0, 1.03),
+        Vec3::new(0.556_951_4, 0.0, 0.556_952_36),
+    );
+    let (refs, start, goal) = corridor(&world, a, b);
+    let reversed: Vec<NavRef> = refs.iter().rev().copied().collect();
+
+    let forward = string_pull(&world, &refs, start, goal, 0.0).unwrap();
+    let backward = string_pull(&world, &reversed, goal, start, 0.0).unwrap();
+
+    assert_close(path_length(&forward), start.distance(goal));
+    assert_close(path_length(&backward), start.distance(goal));
+}
