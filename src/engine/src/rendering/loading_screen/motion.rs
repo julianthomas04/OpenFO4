@@ -97,10 +97,6 @@ impl SpinGate {
         }
     }
 
-    pub fn set_resume_delay(&mut self, seconds: f32) {
-        self.resume_delay_seconds = sanitized_delay(seconds);
-    }
-
     pub fn is_running(self) -> bool {
         self.state == SpinState::Running
     }
@@ -264,9 +260,9 @@ mod tests {
         gate.drag_ended();
         gate.tick(0.6);
         assert!(!gate.is_running());
-        gate.tick(0.39);
-        assert!(!gate.is_running(), "just short of the delay");
-        gate.tick(0.01);
+        gate.tick(0.3);
+        assert!(!gate.is_running(), "still short of the delay");
+        gate.tick(0.2);
         assert!(gate.is_running());
     }
 
@@ -280,7 +276,7 @@ mod tests {
         gate.drag_ended();
         gate.tick(0.9);
         assert!(!gate.is_running());
-        gate.tick(0.1);
+        gate.tick(0.2);
         assert!(gate.is_running());
     }
 

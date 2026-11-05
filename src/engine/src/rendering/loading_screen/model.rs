@@ -11,6 +11,7 @@ use wgpu::util::DeviceExt;
 
 use super::art::LoadingArt;
 use super::camera::ArtCamera;
+use super::controls::ModelControls;
 use super::pan_window::{bounding_sphere_radius, pan_limit};
 use crate::assets::types::material_name::MaterialName;
 use crate::assets::types::mesh::{CpuMesh, Topology};
@@ -63,7 +64,7 @@ pub struct CpuArt {
 
 impl CpuArt {
     /// Reads the art's model. Only triangle parts that a viewer sees are kept.
-    pub fn load(art: &LoadingArt) -> Result<Self, LoadingArtError> {
+    pub fn load(art: &LoadingArt, controls: ModelControls) -> Result<Self, LoadingArtError> {
         let path = &art.model_path;
         match std::fs::metadata(path) {
             Ok(_) => {}
@@ -97,7 +98,11 @@ impl CpuArt {
                 .iter()
                 .flat_map(|part| part.vertices.iter().map(|vertex| vertex.position)),
         );
-        let mut camera = ArtCamera::new(art, pan_limit(radius, art.transform.scale));
+        let mut camera = ArtCamera::new(
+            art,
+            pan_limit(radius, art.transform.scale),
+            controls.spin_resume_delay_seconds,
+        );
         camera.set_local_centre(bounds_centre(
             submeshes
                 .iter()
@@ -397,7 +402,7 @@ mod tests {
         art.transform.rotation_radians = [0.0; 3];
         art.transform.scale = 1.0;
 
-        let cpu = CpuArt::load(&art).expect("the synthetic cube loads");
+        let cpu = CpuArt::load(&art, ModelControls::VANILLA).expect("the synthetic cube loads");
 
         let at_placement = cpu.camera.model_matrix().transform_point3(glam::Vec3::ZERO);
         let aim = cpu.camera.spot_aim();
@@ -413,7 +418,9 @@ mod tests {
         let mut art = cube_art(dir.path(), "");
         art.model_path = dir.path().join("absent.glb");
 
-        let error = CpuArt::load(&art).err().expect("there is no file");
+        let error = CpuArt::load(&art, ModelControls::VANILLA)
+            .err()
+            .expect("there is no file");
 
         assert!(
             matches!(&error, LoadingArtError::ModelMissing { path } if *path == art.model_path),
@@ -428,7 +435,9 @@ mod tests {
         art.model_path = dir.path().join("junk.glb");
         std::fs::write(&art.model_path, b"not a glb").unwrap();
 
-        let error = CpuArt::load(&art).err().expect("the file is junk");
+        let error = CpuArt::load(&art, ModelControls::VANILLA)
+            .err()
+            .expect("the file is junk");
 
         assert!(
             matches!(error, LoadingArtError::ModelInvalid { .. }),
@@ -441,7 +450,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let art = cube_art(dir.path(), "props\\crate_d.dds");
 
-        let cpu = CpuArt::load(&art).unwrap();
+        let cpu = CpuArt::load(&art, ModelControls::VANILLA).unwrap();
 
         assert_eq!(cpu.submeshes.len(), 1);
         assert_eq!(cpu.submeshes[0].vertices.len(), 24);
@@ -458,7 +467,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let art = cube_art(dir.path(), "props\\leaf_d.dds|test:51");
 
-        let cpu = CpuArt::load(&art).unwrap();
+        let cpu = CpuArt::load(&art, ModelControls::VANILLA).unwrap();
 
         assert!((cpu.submeshes[0].alpha_cutoff - 0.2).abs() < 1e-6);
     }
@@ -471,7 +480,9 @@ mod tests {
             "props\\armor_d.dds|props\\armor_n.dds|spec:props\\armor_s.dds|sm:1.5|sg:0.4|fp:5",
         );
 
-        let part = &CpuArt::load(&art).unwrap().submeshes[0];
+        let part = &CpuArt::load(&art, ModelControls::VANILLA)
+            .unwrap()
+            .submeshes[0];
 
         assert_eq!(
             part.normal_key.as_deref(),
@@ -490,7 +501,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let art = cube_art(dir.path(), "props\\crate_d.dds|spec:props\\crate_s.dds");
 
-        let part = &CpuArt::load(&art).unwrap().submeshes[0];
+        let part = &CpuArt::load(&art, ModelControls::VANILLA)
+            .unwrap()
+            .submeshes[0];
 
         assert!(part.specular_scale.abs() < 1e-6);
     }

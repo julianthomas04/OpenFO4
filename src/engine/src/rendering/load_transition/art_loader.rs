@@ -4,7 +4,9 @@
 use std::io;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
-use crate::rendering::loading_screen::{CpuArt, LoadingArt, LoadingArtError, StageError};
+use crate::rendering::loading_screen::{
+    CpuArt, LoadingArt, LoadingArtError, ModelControls, StageError,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub(in crate::rendering) enum ArtLoadError {
@@ -32,12 +34,12 @@ pub(super) struct ArtLoader {
 
 impl ArtLoader {
     /// Starts reading `art`'s model; a load still running is forgotten, its result discarded.
-    pub fn start(&mut self, art: LoadingArt) -> Result<(), ArtLoadError> {
+    pub fn start(&mut self, art: LoadingArt, controls: ModelControls) -> Result<(), ArtLoadError> {
         let (sender, receiver) = mpsc::channel();
         std::thread::Builder::new()
             .name("loading-art".into())
             .spawn(move || {
-                if sender.send(CpuArt::load(&art)).is_err() {
+                if sender.send(CpuArt::load(&art, controls)).is_err() {
                     tracing::debug!(
                         "a loading screen model finished after it was no longer wanted"
                     );
@@ -105,7 +107,9 @@ mod tests {
     fn a_model_that_exists_arrives_once() {
         let dir = tempfile::tempdir().unwrap();
         let mut loader = ArtLoader::default();
-        loader.start(cube_art(dir.path(), "")).unwrap();
+        loader
+            .start(cube_art(dir.path(), ""), ModelControls::VANILLA)
+            .unwrap();
         assert!(finished(&mut loader).is_ok());
         assert!(matches!(loader.poll(), LoaderPoll::Idle), "delivered once");
     }
@@ -114,7 +118,9 @@ mod tests {
     fn a_missing_model_arrives_as_the_error_that_names_it() {
         let dir = tempfile::tempdir().unwrap();
         let mut loader = ArtLoader::default();
-        loader.start(missing_model(dir.path())).unwrap();
+        loader
+            .start(missing_model(dir.path()), ModelControls::VANILLA)
+            .unwrap();
         let error = finished(&mut loader).err().expect("the load fails");
         assert!(
             matches!(
@@ -130,8 +136,12 @@ mod tests {
     fn starting_again_discards_the_load_before() {
         let dir = tempfile::tempdir().unwrap();
         let mut loader = ArtLoader::default();
-        loader.start(missing_model(dir.path())).unwrap();
-        loader.start(cube_art(dir.path(), "")).unwrap();
+        loader
+            .start(missing_model(dir.path()), ModelControls::VANILLA)
+            .unwrap();
+        loader
+            .start(cube_art(dir.path(), ""), ModelControls::VANILLA)
+            .unwrap();
         assert!(finished(&mut loader).is_ok());
     }
 
@@ -139,7 +149,9 @@ mod tests {
     fn a_cancelled_load_is_idle_again() {
         let dir = tempfile::tempdir().unwrap();
         let mut loader = ArtLoader::default();
-        loader.start(cube_art(dir.path(), "")).unwrap();
+        loader
+            .start(cube_art(dir.path(), ""), ModelControls::VANILLA)
+            .unwrap();
         loader.cancel();
         assert!(matches!(loader.poll(), LoaderPoll::Idle));
     }

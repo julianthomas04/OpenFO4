@@ -139,30 +139,6 @@ impl GradeParams {
     }
 }
 
-/// The colour the pass writes, encoded, for a linear `picture` colour, `lut` grading an encoded
-/// colour: the reference the shader is tested against. Brightness, contrast and tint are left
-/// out; the loading screens' image space leaves them neutral.
-#[cfg(test)]
-pub fn graded(
-    picture: glam::Vec3,
-    look: &GradeLook,
-    lut: impl Fn(glam::Vec3) -> glam::Vec3,
-) -> glam::Vec3 {
-    use glam::Vec3;
-    const LUMA: Vec3 = Vec3::new(0.2126, 0.7152, 0.0722);
-    let luma = Vec3::splat(picture.dot(LUMA));
-    let saturated = luma + (picture - luma) * look.cinematic.saturation;
-    let encode = |linear: f32| {
-        let linear = linear.clamp(0.0, 1.0);
-        if linear <= 0.003_130_8 {
-            linear * 12.92
-        } else {
-            1.055 * linear.powf(1.0 / 2.4) - 0.055
-        }
-    };
-    lut(Vec3::from(saturated.to_array().map(encode)))
-}
-
 #[cfg(test)]
 #[allow(
     clippy::float_cmp,
@@ -173,6 +149,7 @@ mod tests {
 
     use super::*;
     use crate::rendering::lighting::cell_lighting::srgb_unit_to_linear;
+    use crate::rendering::loading_screen::test_support::graded;
 
     fn ini(text: &str) -> GameIni {
         GameIni::from_texts([text])

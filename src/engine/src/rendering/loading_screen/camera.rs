@@ -11,7 +11,6 @@
 use glam::{Mat4, Quat, Vec3};
 
 use super::art::{LoadingArt, ModelTransform};
-use super::controls::ModelControls;
 use super::motion::{PanKey, PanKeys, SpinGate, is_full_turn, spun_yaw, wrap_half_turns};
 use super::tuning::{
     DEGREES_PER_PIXEL, MAX_STEP_SECONDS, PAN_HALF_WINDOWS_PER_SECOND, SPIN_DEGREES_PER_SECOND,
@@ -58,8 +57,9 @@ pub struct ArtCamera {
 
 impl ArtCamera {
     /// A camera for `art`, which the pan keys may move `pan_limit` engine units from its
-    /// placement along each axis.
-    pub fn new(art: &LoadingArt, pan_limit: f32) -> Self {
+    /// placement along each axis and which spins again `spin_resume_delay_seconds` after a
+    /// drag ends.
+    pub fn new(art: &LoadingArt, pan_limit: f32, spin_resume_delay_seconds: f32) -> Self {
         let (rotation_min, rotation_max) = art.rotation_limits_deg;
         let rotation_limits_deg = ordered(f32::from(rotation_min), f32::from(rotation_max));
         let (zoom_min, zoom_max) = ordered(art.zoom_limits.0, art.zoom_limits.1);
@@ -85,13 +85,8 @@ impl ArtCamera {
                 start_deg,
                 travelled_deg: 0.0,
             }),
-            spin_gate: SpinGate::new(ModelControls::VANILLA.spin_resume_delay_seconds),
+            spin_gate: SpinGate::new(spin_resume_delay_seconds),
         }
-    }
-
-    /// Lets the spin run again `seconds` after a drag ends.
-    pub fn set_spin_resume_delay(&mut self, seconds: f32) {
-        self.spin_gate.set_resume_delay(seconds);
     }
 
     /// The viewer's turn from the transform's rotation, in degrees.
@@ -290,10 +285,16 @@ mod tests {
             .vertical_fov_radians
     }
 
+    const SPIN_RESUME_DELAY: f32 = 1.0;
+
     fn camera(edit: impl FnOnce(&mut LoadingArt)) -> ArtCamera {
+        camera_resuming_after(SPIN_RESUME_DELAY, edit)
+    }
+
+    fn camera_resuming_after(delay: f32, edit: impl FnOnce(&mut LoadingArt)) -> ArtCamera {
         let mut art = art();
         edit(&mut art);
-        ArtCamera::new(&art, PAN_LIMIT)
+        ArtCamera::new(&art, PAN_LIMIT, delay)
     }
 
     /// A camera that has been dragged a little, so its spin is over.
@@ -655,7 +656,6 @@ mod tests {
     #[test]
     fn the_spin_resumes_from_where_the_drag_left_the_model_after_the_resume_delay() {
         let mut camera = camera(|art| art.rotation_limits_deg = (-180, 180));
-        camera.set_spin_resume_delay(1.0);
         camera.drag(100.0, 0.0);
         let dragged_to = camera.yaw_degrees();
         camera.drag_ended();
@@ -664,11 +664,11 @@ mod tests {
         assert!(!camera.is_spinning());
         assert_eq!(camera.yaw_degrees(), dragged_to);
 
-        camera.tick(0.1);
+        camera.tick(0.2);
         assert!(camera.is_spinning());
         let after = camera.yaw_degrees();
         assert!(
-            (after - (dragged_to + SPIN_DEGREES_PER_SECOND * 0.1)).abs() < 1e-3,
+            (after - (dragged_to + SPIN_DEGREES_PER_SECOND * 0.2)).abs() < 1e-3,
             "{dragged_to} -> {after}"
         );
         camera.tick(0.1);
@@ -677,8 +677,7 @@ mod tests {
 
     #[test]
     fn a_pinned_camera_does_not_spin_again_after_a_drag_ends() {
-        let mut camera = camera(|_| {});
-        camera.set_spin_resume_delay(0.0);
+        let mut camera = camera_resuming_after(0.0, |_| {});
         camera.pin();
         camera.drag(10.0, 0.0);
         camera.drag_ended();
@@ -688,8 +687,7 @@ mod tests {
 
     #[test]
     fn a_model_that_may_not_rotate_does_not_spin_after_a_drag_either() {
-        let mut camera = camera(|art| art.no_rotation = true);
-        camera.set_spin_resume_delay(0.0);
+        let mut camera = camera_resuming_after(0.0, |art| art.no_rotation = true);
         camera.drag(0.0, 10.0);
         camera.drag_ended();
         camera.tick(5.0);
@@ -698,11 +696,11 @@ mod tests {
     }
 
     #[test]
-    fn a_drag_turns_the_model_nine_tenths_as_far_as_before_the_playtest() {
+    fn a_drag_of_500_pixels_turns_the_model_157_and_a_half_degrees() {
         let mut camera = camera(|art| art.rotation_limits_deg = (-180, 180));
-        camera.drag(100.0, 0.0);
+        camera.drag(500.0, 0.0);
         assert!(
-            (camera.yaw_degrees() - 31.5).abs() < 1e-4,
+            (camera.yaw_degrees() - 157.5).abs() < 1e-3,
             "{}",
             camera.yaw_degrees()
         );
@@ -798,11 +796,11 @@ mod tests {
 
     #[test]
     fn a_model_with_no_pan_window_cannot_be_moved() {
-        let mut camera = ArtCamera::new(&art(), 0.0);
+        let mut camera = ArtCamera::new(&art(), 0.0, SPIN_RESUME_DELAY);
         camera.set_pan_key(PanKey::Right, true);
         camera.tick(1.0);
         assert_eq!(camera.pan(), (0.0, 0.0));
-        let mut camera = ArtCamera::new(&art(), f32::NAN);
+        let mut camera = ArtCamera::new(&art(), f32::NAN, SPIN_RESUME_DELAY);
         camera.set_pan_key(PanKey::Up, true);
         camera.tick(1.0);
         assert_eq!(camera.pan(), (0.0, 0.0));

@@ -8,7 +8,8 @@ use super::test_support::{
     write_texture,
 };
 use super::{
-    CpuArt, LoadedArt, LoadingArt, LoadingArtRenderer, PICTURE_FORMAT, PanKey, SceneLights,
+    CpuArt, LoadedArt, LoadingArt, LoadingArtRenderer, ModelControls, PICTURE_FORMAT, PanKey,
+    SceneLights,
 };
 use crate::bethesda_space::{UNITS_TO_ENGINE, position_to_engine};
 use crate::rendering::gpu_test::{f16_bits_to_f32, linear_to_srgb_byte, read_mip, test_device};
@@ -201,7 +202,7 @@ impl Scene {
     }
 
     fn show(&mut self, art: &LoadingArt) {
-        let cpu = CpuArt::load(art).expect("the synthetic cube loads");
+        let cpu = CpuArt::load(art, ModelControls::VANILLA).expect("the synthetic cube loads");
         let loaded = LoadedArt::upload(&self.device, &self.queue, cpu).expect("the cube uploads");
         self.renderer.set_art(Some(loaded));
     }

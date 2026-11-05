@@ -5,11 +5,12 @@ use std::path::Path;
 
 use glam::{UVec2, Vec3};
 
-use super::grade::{GradeLook, INFERRED_LIFT, LoadScreenLut, graded};
+use super::grade::{GradeLook, INFERRED_LIFT, LoadScreenLut};
 use super::grade_pass::GradePass;
-use super::test_support::{cube_art, install_stage, lamp_shadow_config};
+use super::test_support::{cube_art, graded, install_stage, lamp_shadow_config};
 use super::{
-    CpuArt, GradeSource, LoadedArt, LoadingArtRenderer, LoadingScene, PICTURE_FORMAT, SceneLights,
+    CpuArt, GradeSource, LoadedArt, LoadingArtRenderer, LoadingScene, ModelControls,
+    PICTURE_FORMAT, SceneLights,
 };
 use crate::assets::ini::GameIni;
 use crate::rendering::gpu_test::{read_mip, test_device};
@@ -311,7 +312,8 @@ fn the_model_is_drawn_in_front_of_the_stage() {
     );
     let mut scene = scene(&device, &queue, root.path());
     let mut art = empty_art_renderer(&device, &queue);
-    let cpu = CpuArt::load(&cube_art(root.path(), "")).expect("the synthetic cube loads");
+    let cpu = CpuArt::load(&cube_art(root.path(), ""), ModelControls::VANILLA)
+        .expect("the synthetic cube loads");
     art.set_art(Some(
         LoadedArt::upload(&device, &queue, cpu).expect("the cube uploads"),
     ));

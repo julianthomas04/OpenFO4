@@ -63,7 +63,6 @@ pub struct LoadingArtRenderer {
     scene_group: wgpu::BindGroup,
     depth: Option<DepthTarget>,
     active: Option<Active>,
-    model_controls: ModelControls,
 }
 
 impl LoadingArtRenderer {
@@ -119,16 +118,13 @@ impl LoadingArtRenderer {
             scene_group,
             depth: None,
             active: None,
-            model_controls: ModelControls::VANILLA,
         }
     }
 
     /// Shows `art` from the next render on, with a camera back at its placement as stored;
     /// `None` shows nothing.
     pub fn set_art(&mut self, art: Option<LoadedArt>) {
-        self.active = art.map(|mut art| {
-            art.camera
-                .set_spin_resume_delay(self.model_controls.spin_resume_delay_seconds);
+        self.active = art.map(|art| {
             let texture_groups = art
                 .draws
                 .iter()
@@ -195,11 +191,6 @@ impl LoadingArtRenderer {
         if let Some(active) = &mut self.active {
             active.art.camera.drag_ended();
         }
-    }
-
-    /// How the settings shape the control of the models shown from now on.
-    pub fn set_model_controls(&mut self, controls: ModelControls) {
-        self.model_controls = controls;
     }
 
     /// Puts the model's camera back at its start and stops the spin.

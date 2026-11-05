@@ -13,7 +13,7 @@ use crate::rendering::gpu_test::test_device;
 use crate::rendering::hud::field_text::TextItem;
 use crate::rendering::loading_screen::test_support::{cube_art, lamp_shadow_config};
 use crate::rendering::loading_screen::{
-    CpuArt, LoadedArt, LoadingArtRenderer, SceneLights,
+    CpuArt, LoadedArt, LoadingArtRenderer, ModelControls, SceneLights,
     stage_framing::test_support::vanilla_framing,
 };
 use crate::rendering::post::tonemap::ui_gamma_format;
@@ -1025,7 +1025,7 @@ fn the_loading_art_sits_above_the_backdrop_and_below_the_logo() {
     let mut art = cube_art(dir.path(), "");
     // The cube stands over the logo's corner of the screen.
     art.transform.position = [218.0, 660.0, -122.0];
-    let cpu = CpuArt::load(&art).expect("the synthetic cube loads");
+    let cpu = CpuArt::load(&art, ModelControls::VANILLA).expect("the synthetic cube loads");
     art_renderer.set_art(Some(
         LoadedArt::upload(&device, &queue, cpu).expect("the cube uploads"),
     ));

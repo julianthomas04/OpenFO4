@@ -16,9 +16,6 @@ use crate::rendering::loading_screen::{
 };
 use crate::rendering::shadows::lamps::LampShadowConfig;
 
-/// Names the editor id of the loading screen to show on every large screen, to tune its camera.
-pub(super) const FORCED_SCREEN_VAR: &str = "OPENFO4_LOADSCREEN";
-
 /// The viewer may turn a screen that states no limits all the way around, like 442 of the 448
 /// screens of the game do.
 const DEFAULT_ROTATION_LIMITS_DEG: (i16, i16) = (-180, 180);
@@ -59,7 +56,7 @@ pub(in crate::rendering) struct LoadScreenHost {
     asset_root: PathBuf,
     catalog: Option<CatalogState>,
     rng: SplitMix64,
-    forced: Option<String>,
+    model_controls: ModelControls,
     loader: ArtLoader,
     renderer: LoadingArtRenderer,
     scene: LoadingScene,
@@ -86,7 +83,7 @@ impl LoadScreenHost {
             asset_root: asset_root.to_path_buf(),
             catalog: None,
             rng: SplitMix64::new(seed),
-            forced: forced_screen_from_env(),
+            model_controls: ModelControls::VANILLA,
             loader: ArtLoader::default(),
             renderer: LoadingArtRenderer::new(device, queue, PICTURE_FORMAT, lights, lamp_shadows),
             scene,
@@ -118,13 +115,7 @@ impl LoadScreenHost {
                 return None;
             }
         };
-        let Some(screen) = pick(
-            catalog,
-            self.forced.as_deref(),
-            destination,
-            cell,
-            &mut self.rng,
-        ) else {
+        let Some(screen) = pick(catalog, destination, cell, &mut self.rng) else {
             tracing::warn!(
                 "no loading screen is eligible for {destination:?}; showing the small one"
             );
@@ -159,7 +150,7 @@ impl LoadScreenHost {
     pub fn show(&mut self, chosen: ChosenScreen) -> Result<(), ArtLoadError> {
         self.clear();
         self.scene.prepare()?;
-        self.loader.start(chosen.art)?;
+        self.loader.start(chosen.art, self.model_controls)?;
         self.pending = Some(Showing {
             label: chosen.label,
             tip: chosen.tip,
@@ -219,7 +210,7 @@ impl LoadScreenHost {
 
     /// Shapes the control of the models shown from now on by `controls`.
     pub fn with_model_controls(mut self, controls: ModelControls) -> Self {
-        self.renderer.set_model_controls(controls);
+        self.model_controls = controls;
         self
     }
 
@@ -274,40 +265,13 @@ fn load_catalog(db_path: &str) -> CatalogState {
     }
 }
 
-fn forced_screen_from_env() -> Option<String> {
-    match std::env::var(FORCED_SCREEN_VAR) {
-        Ok(editor_id) if !editor_id.is_empty() => Some(editor_id),
-        Ok(_) | Err(std::env::VarError::NotPresent) => None,
-        Err(error @ std::env::VarError::NotUnicode(_)) => {
-            tracing::error!("{FORCED_SCREEN_VAR} is ignored: {error}");
-            None
-        }
-    }
-}
-
-/// The screen to show at `destination`: the forced one where it exists, else the selection
-/// rule's. Each draws from a generator of its own, forked from `rng`.
+/// The screen to show at `destination`, drawn from a generator forked from `rng`.
 fn pick<'a>(
     catalog: &'a LoadScreenCatalog,
-    forced: Option<&str>,
     destination: &Place,
     cell: &str,
     rng: &mut SplitMix64,
 ) -> Option<&'a LoadScreen> {
-    if let Some(editor_id) = forced {
-        let found = catalog.screens.iter().find(|screen| {
-            screen
-                .editor_id
-                .as_deref()
-                .is_some_and(|own| own.eq_ignore_ascii_case(editor_id))
-        });
-        if found.is_some() {
-            return found;
-        }
-        tracing::error!(
-            "{FORCED_SCREEN_VAR}={editor_id} names no loading screen; choosing as usual"
-        );
-    }
     let context = LoadScreenContext::new(catalog, destination, cell, rng.fork());
     select(catalog, &context, &mut rng.fork())
 }
@@ -442,31 +406,13 @@ mod tests {
     }
 
     #[test]
-    fn a_forced_screen_is_found_without_regard_to_case() {
-        let catalog = catalog(&["Alpha", "Bravo"]);
-        let mut rng = SplitMix64::new(1);
-        for _ in 0..20 {
-            let picked = pick(&catalog, Some("bRaVo"), &commonwealth(), "", &mut rng);
-            assert_eq!(picked.map(LoadScreen::label), Some("Bravo"));
-        }
-    }
-
-    #[test]
-    fn an_unknown_forced_screen_falls_back_to_the_selection_rule() {
-        let catalog = catalog(&["Alpha"]);
-        let mut rng = SplitMix64::new(1);
-        let picked = pick(&catalog, Some("Nope"), &commonwealth(), "", &mut rng);
-        assert_eq!(picked.map(LoadScreen::label), Some("Alpha"));
-    }
-
-    #[test]
     fn selection_draws_from_the_catalog_and_is_deterministic_for_a_seed() {
         let catalog = catalog(&["Alpha", "Bravo", "Charlie", "Delta"]);
         let draw = |seed| {
             let mut rng = SplitMix64::new(seed);
             (0..16)
                 .map(|_| {
-                    pick(&catalog, None, &commonwealth(), "", &mut rng)
+                    pick(&catalog, &commonwealth(), "", &mut rng)
                         .expect("every screen is eligible")
                         .label()
                         .to_string()
@@ -484,7 +430,7 @@ mod tests {
     #[test]
     fn an_empty_catalog_has_nothing_to_pick() {
         let mut rng = SplitMix64::new(1);
-        assert!(pick(&catalog(&[]), None, &Place::Interior, "", &mut rng).is_none());
+        assert!(pick(&catalog(&[]), &Place::Interior, "", &mut rng).is_none());
     }
 
     mod on_the_gpu {
@@ -741,7 +687,7 @@ mod tests {
             screens.pointer_released();
             screens.host.tick(0.9);
             assert!(!camera(&screens).is_spinning(), "within the delay");
-            screens.host.tick(0.1);
+            screens.host.tick(0.2);
             assert!(camera(&screens).is_spinning());
         }
 
