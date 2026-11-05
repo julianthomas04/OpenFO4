@@ -11,8 +11,8 @@ use crate::assets::types::glb_key::glb_key;
 use crate::loading_screen::{LoadScreenContext, Place, select};
 use crate::random::SplitMix64;
 use crate::rendering::loading_screen::{
-    LoadedArt, LoadingArt, LoadingArtRenderer, LoadingScene, ModelTransform, PICTURE_FORMAT,
-    PanKey, SceneLights,
+    LoadedArt, LoadingArt, LoadingArtRenderer, LoadingScene, ModelControls, ModelTransform,
+    PICTURE_FORMAT, PanKey, SceneLights,
 };
 use crate::rendering::shadows::lamps::LampShadowConfig;
 
@@ -185,7 +185,7 @@ impl LoadScreenHost {
         let result = match self.loader.poll() {
             LoaderPoll::Idle => return ArtStatus::Idle,
             LoaderPoll::Pending => return ArtStatus::Pending,
-            LoaderPoll::Done(result) => result,
+            LoaderPoll::Done(result) => *result,
         };
         let Some(showing) = self.pending.take() else {
             return ArtStatus::Idle;
@@ -215,6 +215,17 @@ impl LoadScreenHost {
         self.shown_tip
             .as_deref()
             .filter(|_| self.renderer.has_art())
+    }
+
+    /// Shapes the control of the models shown from now on by `controls`.
+    pub fn with_model_controls(mut self, controls: ModelControls) -> Self {
+        self.renderer.set_model_controls(controls);
+        self
+    }
+
+    /// The viewer let go of the model.
+    pub fn end_drag(&mut self) {
+        self.renderer.drag_ended();
     }
 
     /// A drag of `dx_px` pixels to the right and `dy_px` down.
@@ -710,7 +721,28 @@ mod tests {
 
             screens.pointer_released();
             screens.pointer_moved(400.0, 300.0);
-            assert_eq!(camera(&screens), &held);
+            let released = camera(&screens);
+            assert_eq!(
+                (released.yaw_degrees(), released.zoom(), released.pan()),
+                (held.yaw_degrees(), held.zoom(), held.pan())
+            );
+        }
+
+        #[test]
+        fn the_model_spins_again_a_second_after_the_button_is_released() {
+            let Some(mut screens) = screens("load screen spin resume") else {
+                return;
+            };
+            screens.pointer_pressed(100.0, 100.0, true);
+            screens.pointer_moved(140.0, 100.0);
+            screens.host.tick(0.1);
+            assert!(!camera(&screens).is_spinning(), "held by the drag");
+
+            screens.pointer_released();
+            screens.host.tick(0.9);
+            assert!(!camera(&screens).is_spinning(), "within the delay");
+            screens.host.tick(0.1);
+            assert!(camera(&screens).is_spinning());
         }
 
         #[test]

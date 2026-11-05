@@ -1,5 +1,5 @@
-//! The pure rules of how a loading screen's model moves: which way the held pan keys push it
-//! and where the slow spin it starts with has turned it to.
+//! The pure rules of how a loading screen's model moves: which way the held pan keys push it,
+//! where the slow spin has turned it to and when the spin runs.
 
 const HALF_TURN_DEGREES: f32 = 180.0;
 
@@ -68,6 +68,85 @@ pub fn spun_yaw(start: f32, travelled: f32, limits: (f32, f32)) -> f32 {
         along
     } else {
         2.0 * span - along
+    }
+}
+
+/// Whether the model's own spin runs: it does from the start, stops while the viewer drags and
+/// runs again once a delay has passed after the drag ended. A pinned model never spins again.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpinGate {
+    resume_delay_seconds: f32,
+    state: SpinState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum SpinState {
+    Running,
+    Dragged,
+    Resting { seconds: f32 },
+    Pinned,
+}
+
+impl SpinGate {
+    /// A gate that lets the spin run `resume_delay_seconds` after a drag ends; a delay that is
+    /// not a finite number of seconds, 0 or more, counts as none.
+    pub fn new(resume_delay_seconds: f32) -> Self {
+        Self {
+            resume_delay_seconds: sanitized_delay(resume_delay_seconds),
+            state: SpinState::Running,
+        }
+    }
+
+    pub fn set_resume_delay(&mut self, seconds: f32) {
+        self.resume_delay_seconds = sanitized_delay(seconds);
+    }
+
+    pub fn is_running(self) -> bool {
+        self.state == SpinState::Running
+    }
+
+    /// The viewer moved the model by hand.
+    pub fn drag_moved(&mut self) {
+        if self.state != SpinState::Pinned {
+            self.state = SpinState::Dragged;
+        }
+    }
+
+    /// The viewer let go of the model; the delay counts from here. Without a drag, it does nothing.
+    pub fn drag_ended(&mut self) {
+        if self.state == SpinState::Dragged {
+            self.state = SpinState::Resting { seconds: 0.0 };
+            self.settle();
+        }
+    }
+
+    /// Lets `seconds` of the delay pass.
+    pub fn tick(&mut self, seconds: f32) {
+        if let SpinState::Resting { seconds: rested } = &mut self.state {
+            *rested += seconds;
+            self.settle();
+        }
+    }
+
+    /// Stops the spin for good.
+    pub fn pin(&mut self) {
+        self.state = SpinState::Pinned;
+    }
+
+    fn settle(&mut self) {
+        if let SpinState::Resting { seconds } = self.state
+            && seconds >= self.resume_delay_seconds
+        {
+            self.state = SpinState::Running;
+        }
+    }
+}
+
+fn sanitized_delay(seconds: f32) -> f32 {
+    if seconds.is_finite() {
+        seconds.max(0.0)
+    } else {
+        0.0
     }
 }
 
@@ -166,5 +245,77 @@ mod tests {
         let limits = (-30.0, 45.0);
         close(spun_yaw(0.0, -10.0, limits), -10.0);
         close(spun_yaw(0.0, -40.0, limits), -20.0);
+    }
+
+    #[test]
+    fn a_fresh_gate_runs_and_a_drag_stops_it() {
+        let mut gate = SpinGate::new(1.0);
+        assert!(gate.is_running());
+        gate.drag_moved();
+        assert!(!gate.is_running());
+        gate.tick(100.0);
+        assert!(!gate.is_running(), "time alone does not resume a held drag");
+    }
+
+    #[test]
+    fn the_spin_resumes_once_the_delay_has_passed_after_the_drag_ends() {
+        let mut gate = SpinGate::new(1.0);
+        gate.drag_moved();
+        gate.drag_ended();
+        gate.tick(0.6);
+        assert!(!gate.is_running());
+        gate.tick(0.39);
+        assert!(!gate.is_running(), "just short of the delay");
+        gate.tick(0.01);
+        assert!(gate.is_running());
+    }
+
+    #[test]
+    fn a_new_drag_during_the_delay_starts_the_delay_over() {
+        let mut gate = SpinGate::new(1.0);
+        gate.drag_moved();
+        gate.drag_ended();
+        gate.tick(0.9);
+        gate.drag_moved();
+        gate.drag_ended();
+        gate.tick(0.9);
+        assert!(!gate.is_running());
+        gate.tick(0.1);
+        assert!(gate.is_running());
+    }
+
+    #[test]
+    fn without_a_delay_the_spin_resumes_as_the_drag_ends() {
+        let mut gate = SpinGate::new(0.0);
+        gate.drag_moved();
+        gate.drag_ended();
+        assert!(gate.is_running());
+    }
+
+    #[test]
+    fn a_delay_that_is_not_a_usable_number_counts_as_none() {
+        for delay in [f32::NAN, f32::INFINITY, -3.0] {
+            let mut gate = SpinGate::new(delay);
+            gate.drag_moved();
+            gate.drag_ended();
+            assert!(gate.is_running(), "{delay}");
+        }
+    }
+
+    #[test]
+    fn a_release_without_a_drag_changes_nothing() {
+        let mut gate = SpinGate::new(1.0);
+        gate.drag_ended();
+        assert!(gate.is_running());
+    }
+
+    #[test]
+    fn a_pinned_gate_never_runs_again() {
+        let mut gate = SpinGate::new(0.0);
+        gate.pin();
+        gate.drag_moved();
+        gate.drag_ended();
+        gate.tick(10.0);
+        assert!(!gate.is_running());
     }
 }

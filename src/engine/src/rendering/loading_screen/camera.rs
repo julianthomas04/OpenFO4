@@ -1,5 +1,5 @@
 //! The viewer's camera on a loading screen's model: where the model stands and how dragging, the
-//! pan keys and the slow spin it starts with move it. Pure, so every rule is unit-tested.
+//! pan keys and the slow spin move it. Pure, so every rule is unit-tested.
 //!
 //! The scene is in engine space (Y-up, one unit = 10 game units, see [`crate::bethesda_space`]).
 //! The camera sits at the origin and looks along Bethesda north (+Y), which is engine -Z. The
@@ -11,7 +11,8 @@
 use glam::{Mat4, Quat, Vec3};
 
 use super::art::{LoadingArt, ModelTransform};
-use super::motion::{PanKey, PanKeys, is_full_turn, spun_yaw, wrap_half_turns};
+use super::controls::ModelControls;
+use super::motion::{PanKey, PanKeys, SpinGate, is_full_turn, spun_yaw, wrap_half_turns};
 use super::tuning::{
     DEGREES_PER_PIXEL, MAX_STEP_SECONDS, PAN_HALF_WINDOWS_PER_SECOND, SPIN_DEGREES_PER_SECOND,
     ZOOM_PER_PIXEL,
@@ -49,8 +50,10 @@ pub struct ArtCamera {
     /// The model may be moved this far from its placement along each axis, in engine units.
     pan_limit: f32,
     pan_keys: PanKeys,
-    /// Turning by itself until the viewer first drags; `None` once they have.
+    /// The turn the model makes by itself; `None` for a model that may not rotate.
     spin: Option<Spin>,
+    /// Whether that spin runs now: not while the viewer drags or soon after.
+    spin_gate: SpinGate,
 }
 
 impl ArtCamera {
@@ -82,7 +85,13 @@ impl ArtCamera {
                 start_deg,
                 travelled_deg: 0.0,
             }),
+            spin_gate: SpinGate::new(ModelControls::VANILLA.spin_resume_delay_seconds),
         }
+    }
+
+    /// Lets the spin run again `seconds` after a drag ends.
+    pub fn set_spin_resume_delay(&mut self, seconds: f32) {
+        self.spin_gate.set_resume_delay(seconds);
     }
 
     /// The viewer's turn from the transform's rotation, in degrees.
@@ -99,25 +108,30 @@ impl ArtCamera {
         self.pan
     }
 
-    /// Whether the model is still turning by itself.
+    /// Whether the model is turning by itself now.
     pub fn is_spinning(&self) -> bool {
-        self.spin.is_some()
+        self.spin.is_some() && self.spin_gate.is_running()
     }
 
     /// A drag of `dx_px` pixels to the right and `dy_px` down. The horizontal part turns the
     /// model's near side to the right, wrapping round when its limits span a full turn and
-    /// stopping at them otherwise; the vertical part zooms in when it goes up. A drag ends the
-    /// model's spin for good.
+    /// stopping at them otherwise; the vertical part zooms in when it goes up. A drag holds the
+    /// model's spin back until [`Self::drag_ended`] and the resume delay after it.
     pub fn drag(&mut self, dx_px: f32, dy_px: f32) {
         if !dx_px.is_finite() || !dy_px.is_finite() {
             return;
         }
         if dx_px.abs() > 0.0 || dy_px.abs() > 0.0 {
-            self.spin = None;
+            self.spin_gate.drag_moved();
         }
         self.turn(dx_px * DEGREES_PER_PIXEL);
         let (min, max) = self.zoom_limits;
         self.zoom = (self.zoom - dy_px * ZOOM_PER_PIXEL).clamp(min, max);
+    }
+
+    /// The viewer let go of the model; it spins again once the resume delay has passed.
+    pub fn drag_ended(&mut self) {
+        self.spin_gate.drag_ended();
     }
 
     fn turn(&mut self, degrees: f32) {
@@ -137,7 +151,7 @@ impl ArtCamera {
     /// Two cameras of the same art look the same after this, whatever came before.
     pub fn pin(&mut self) {
         let (zoom_min, zoom_max) = self.zoom_limits;
-        self.spin = None;
+        self.spin_gate.pin();
         self.yaw_deg = self.start_yaw_deg;
         self.zoom = 0.0_f32.clamp(zoom_min, zoom_max);
         self.pan = (0.0, 0.0);
@@ -162,7 +176,17 @@ impl ArtCamera {
             return;
         }
         let step = seconds.min(MAX_STEP_SECONDS);
-        if let Some(spin) = &mut self.spin {
+        let was_running = self.spin_gate.is_running();
+        self.spin_gate.tick(seconds);
+        if let Some(spin) = &mut self.spin
+            && self.spin_gate.is_running()
+        {
+            if !was_running {
+                *spin = Spin {
+                    start_deg: self.yaw_deg,
+                    travelled_deg: 0.0,
+                };
+            }
             spin.travelled_deg += SPIN_DEGREES_PER_SECOND * step;
             self.yaw_deg = spun_yaw(spin.start_deg, spin.travelled_deg, self.rotation_limits_deg);
         }
@@ -614,14 +638,74 @@ mod tests {
     }
 
     #[test]
-    fn dragging_ends_the_spin_for_good() {
+    fn dragging_holds_the_spin_back_for_as_long_as_the_drag_lasts() {
         let mut camera = camera(|art| art.rotation_limits_deg = (-180, 180));
         camera.tick(1.0);
         camera.drag(10.0, 0.0);
         let yaw = camera.yaw_degrees();
         assert!(!camera.is_spinning());
-        camera.tick(1.0);
-        assert_eq!(camera.yaw_degrees(), yaw, "it no longer turns by itself");
+        camera.tick(MAX_STEP_SECONDS);
+        camera.tick(MAX_STEP_SECONDS);
+        camera.tick(MAX_STEP_SECONDS);
+        camera.tick(MAX_STEP_SECONDS);
+        camera.tick(MAX_STEP_SECONDS);
+        assert_eq!(camera.yaw_degrees(), yaw, "it does not turn by itself");
+    }
+
+    #[test]
+    fn the_spin_resumes_from_where_the_drag_left_the_model_after_the_resume_delay() {
+        let mut camera = camera(|art| art.rotation_limits_deg = (-180, 180));
+        camera.set_spin_resume_delay(1.0);
+        camera.drag(100.0, 0.0);
+        let dragged_to = camera.yaw_degrees();
+        camera.drag_ended();
+
+        camera.tick(0.9);
+        assert!(!camera.is_spinning());
+        assert_eq!(camera.yaw_degrees(), dragged_to);
+
+        camera.tick(0.1);
+        assert!(camera.is_spinning());
+        let after = camera.yaw_degrees();
+        assert!(
+            (after - (dragged_to + SPIN_DEGREES_PER_SECOND * 0.1)).abs() < 1e-3,
+            "{dragged_to} -> {after}"
+        );
+        camera.tick(0.1);
+        assert!(camera.yaw_degrees() > after);
+    }
+
+    #[test]
+    fn a_pinned_camera_does_not_spin_again_after_a_drag_ends() {
+        let mut camera = camera(|_| {});
+        camera.set_spin_resume_delay(0.0);
+        camera.pin();
+        camera.drag(10.0, 0.0);
+        camera.drag_ended();
+        camera.tick(5.0);
+        assert!(!camera.is_spinning());
+    }
+
+    #[test]
+    fn a_model_that_may_not_rotate_does_not_spin_after_a_drag_either() {
+        let mut camera = camera(|art| art.no_rotation = true);
+        camera.set_spin_resume_delay(0.0);
+        camera.drag(0.0, 10.0);
+        camera.drag_ended();
+        camera.tick(5.0);
+        assert!(!camera.is_spinning());
+        assert_eq!(camera.yaw_degrees(), 0.0);
+    }
+
+    #[test]
+    fn a_drag_turns_the_model_nine_tenths_as_far_as_before_the_playtest() {
+        let mut camera = camera(|art| art.rotation_limits_deg = (-180, 180));
+        camera.drag(100.0, 0.0);
+        assert!(
+            (camera.yaw_degrees() - 31.5).abs() < 1e-4,
+            "{}",
+            camera.yaw_degrees()
+        );
     }
 
     #[test]

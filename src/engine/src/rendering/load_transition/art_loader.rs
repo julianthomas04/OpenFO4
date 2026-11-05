@@ -22,7 +22,7 @@ pub(super) enum LoaderPoll {
     /// Nothing is being loaded.
     Idle,
     Pending,
-    Done(Result<CpuArt, ArtLoadError>),
+    Done(Box<Result<CpuArt, ArtLoadError>>),
 }
 
 #[derive(Default)]
@@ -58,7 +58,7 @@ impl ArtLoader {
             Err(TryRecvError::Disconnected) => Err(ArtLoadError::WorkerLost),
         };
         self.receiver = None;
-        LoaderPoll::Done(result)
+        LoaderPoll::Done(Box::new(result))
     }
 
     /// Forgets the load in progress.
@@ -80,7 +80,7 @@ mod tests {
         let deadline = Instant::now() + WAIT;
         loop {
             match loader.poll() {
-                LoaderPoll::Done(result) => return result,
+                LoaderPoll::Done(result) => return *result,
                 LoaderPoll::Idle => panic!("nothing is being loaded"),
                 LoaderPoll::Pending => {
                     assert!(Instant::now() < deadline, "the load did not finish");

@@ -1795,7 +1795,8 @@ impl State {
                 Path::new(asset_server.asset_location()),
                 db_path.clone(),
                 seed_from_clock(),
-            ),
+            )
+            .with_model_controls(settings.loading_model),
             drag: DragTracker::default(),
             history: LoadHistory::default(),
             preview: LoadScreenPreview::default(),
