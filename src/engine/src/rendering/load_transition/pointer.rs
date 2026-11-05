@@ -18,14 +18,18 @@ impl LoadScreens {
     }
 
     pub fn pointer_released(&mut self) {
+        self.end_drag();
+    }
+
+    /// Lets go of the model: no drag is on and the model's spin counts down to resume.
+    pub(super) fn end_drag(&mut self) {
         self.drag.release();
         self.host.end_drag();
     }
 
     /// The window lost the focus, and with it the releases of whatever was held.
     pub fn focus_lost(&mut self) {
-        self.drag.release();
-        self.host.end_drag();
+        self.end_drag();
         self.host.release_keys();
     }
 }

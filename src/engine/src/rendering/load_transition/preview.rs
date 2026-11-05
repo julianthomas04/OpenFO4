@@ -283,7 +283,7 @@ impl State {
             return;
         };
         self.load_screens.host.clear();
-        self.load_screens.drag.release();
+        self.load_screens.end_drag();
         self.mouse_capture.set_locked(was_locked);
         self.mouse_capture.apply(&self.window);
     }

@@ -184,7 +184,7 @@ impl State {
 
     /// Lets go of everything the player holds: the model drag and the movement keys.
     pub(super) fn release_held_input(&mut self) {
-        self.load_screens.drag.release();
+        self.load_screens.end_drag();
         self.release_held_movement();
     }
 
@@ -228,14 +228,14 @@ impl State {
             if self.load_screens.host.is_active() {
                 self.load_screens.host.clear();
             }
-            self.load_screens.drag.release();
+            self.load_screens.end_drag();
             return;
         }
         self.load_screens.host.tick(seconds);
         if let ArtStatus::Failed { label, error } = self.load_screens.host.poll() {
             tracing::error!("loading screen {label} falls back to the small screen: {error}");
             self.flow.fall_back_to_small();
-            self.load_screens.drag.release();
+            self.load_screens.end_drag();
         }
     }
 
