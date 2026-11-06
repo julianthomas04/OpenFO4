@@ -5,6 +5,8 @@
 //! (not from the swept remainder, which is nil once the cast stops short), and
 //! it stands on one only when it lands on top of it, loading it with its weight
 //! as a bounded force (Jolt's `mMass`), never with an impulse from fall speed.
+//! The body the player carries is invisible to all of it: it never blocks,
+//! never gets shoved and never carries the player.
 
 use std::sync::OnceLock;
 
@@ -13,7 +15,6 @@ use rapier3d::parry::query::details::ShapeCastOptions;
 use rapier3d::parry::query::{Contact, contact};
 use rapier3d::prelude::*;
 
-use super::mirror::dynamic_scene_query_filter;
 use super::physics::PhysicsContext;
 use crate::utils::warn_once;
 
@@ -145,7 +146,7 @@ fn contacts_around(
     let aabb = character.capsule.compute_aabb(&pose).loosened(prediction);
     let queries = physics
         .world
-        .query_pipeline_with_filter(dynamic_scene_query_filter());
+        .query_pipeline_with_filter(physics.player_dynamic_filter());
     queries
         .intersect_aabb_conservative(aabb)
         .filter_map(|(_, collider)| {
@@ -254,7 +255,7 @@ fn sweep_and_slide(
     let origin = start + Vec3::Y * FOOT_BAND_SKINS * character.skin;
     let hit = physics
         .world
-        .query_pipeline_with_filter(dynamic_scene_query_filter())
+        .query_pipeline_with_filter(physics.player_dynamic_filter())
         .cast_shape(
             &Pose::from_translation(origin),
             direction,
@@ -316,7 +317,7 @@ pub(super) fn support_below(
 ) -> Option<Support> {
     let (collider, hit) = physics
         .world
-        .query_pipeline_with_filter(dynamic_scene_query_filter())
+        .query_pipeline_with_filter(physics.player_dynamic_filter())
         .cast_shape(
             &Pose::from_translation(start),
             -Vec3::Y,

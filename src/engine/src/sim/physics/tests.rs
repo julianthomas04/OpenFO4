@@ -156,7 +156,10 @@ fn a_shove_cannot_exceed_the_push_speed_cap() {
     let handle = crate_handle(&context);
     context.shove_body(handle, Vec3::new(1.0e9, 0.0, 0.0), None);
     let speed = context.world.bodies[handle].linvel().length();
-    assert!((speed - PUSH_MAX_LINVEL).abs() < 1e-2, "speed {speed}");
+    assert!(
+        (speed - PLAYER_DRIVEN_MAX_LINVEL).abs() < 1e-2,
+        "speed {speed}"
+    );
 }
 
 #[test]

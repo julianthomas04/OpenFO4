@@ -16,7 +16,7 @@ use rapier3d::prelude::*;
 
 use super::commands::PlayerInput;
 use super::dynamic_contact::{self, Character};
-use super::mirror::{scene_query_filter, static_scene_query_filter};
+use super::mirror::static_scene_query_filter;
 use super::physics::PhysicsContext;
 use super::world_to_grid;
 
@@ -55,7 +55,8 @@ const MAX_FALL_SPEED: f32 = 200.0;
 /// (`movement_types.data`, converted Beth u/s -> engine u/s at the load
 /// site). FO4's default gait is Run; Sprint is forward-only in the record
 /// but applied to the whole input direction here, matching the old
-/// constants' behavior. These are *top* speeds — FO4 ramps up to them via
+/// constants' behavior. Walk is only forced by carrying a heavy body
+/// (`carry::forces_walk`). These are *top* speeds — FO4 ramps up to them via
 /// the race acceleration rate, which we don't model, so a timed course runs
 /// slightly faster than vanilla footage (the old footage-calibrated course
 /// *average* was 34.43 for run, 48 for sprint).
@@ -64,6 +65,7 @@ const MAX_FALL_SPEED: f32 = 200.0;
 /// (pre-`installer movt-only` extraction) still get sane movement.
 #[derive(Copy, Clone, Debug)]
 pub struct PlayerMovement {
+    pub walk_speed: f32,
     pub run_speed: f32,
     pub sprint_speed: f32,
 }
@@ -71,8 +73,23 @@ pub struct PlayerMovement {
 impl Default for PlayerMovement {
     fn default() -> Self {
         Self {
+            walk_speed: 9.255,
             run_speed: 37.298,
             sprint_speed: 50.0,
+        }
+    }
+}
+
+impl PlayerMovement {
+    /// Top ground speed: walking while forced to, else sprinting when asked and not crouched,
+    /// else running.
+    fn ground_speed(&self, sprint: bool, crouching: bool, forced_walk: bool) -> f32 {
+        if forced_walk {
+            self.walk_speed
+        } else if sprint && !crouching {
+            self.sprint_speed
+        } else {
+            self.run_speed
         }
     }
 }
@@ -252,6 +269,20 @@ impl PlayerState {
         self.half_height() - EYE_BELOW_TOP
     }
 
+    /// Eye position at the last fixed step.
+    pub(super) fn eye(&self) -> Vec3 {
+        self.pos + Vec3::Y * self.eye_above_center()
+    }
+
+    /// Where the eye will be after a fixed step of `dt` if the player keeps moving: the last
+    /// step's horizontal travel, which a wall already cut short, and the vertical velocity, which
+    /// stays zero on the ground so contact jitter is not echoed. The physics step runs before
+    /// the player step, so what follows the eye in it aims here rather than one step behind.
+    pub(super) fn eye_after_next_step(&self, dt: f32) -> Vec3 {
+        let travelled = self.pos - self.prev_pos;
+        self.eye() + Vec3::new(travelled.x, self.vertical_vel * dt, travelled.z)
+    }
+
     /// Current/max hit points, for the HUD HP bar.
     pub fn health(&self) -> (f32, f32) {
         (self.hp, self.hp_max)
@@ -352,7 +383,7 @@ pub(crate) fn step_player(
             let center = Vec3::new(state.pos.x, feet + STAND_HEIGHT * 0.5 + 0.15, state.pos.z);
             let queries = physics
                 .world
-                .query_pipeline_with_filter(scene_query_filter());
+                .query_pipeline_with_filter(physics.player_scene_filter());
             let blocked = queries
                 .intersect_shape(Pose::from_translation(center), &probe)
                 .next()
@@ -404,11 +435,10 @@ pub(crate) fn step_player(
         }
     }
 
-    let speed = if input.sprint && !state.crouching {
-        state.movement.sprint_speed
-    } else {
-        state.movement.run_speed
-    };
+    let speed =
+        state
+            .movement
+            .ground_speed(input.sprint, state.crouching, physics.carry_forces_walk());
     let target = if input.move_dir.length_squared() > 0.0 {
         // XZ-plane basis from the camera yaw (see PlayerInput::yaw docs).
         let fwd = Vec2::new(input.yaw.cos(), input.yaw.sin());
@@ -573,66 +603,21 @@ mod tests {
     use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
     use std::sync::Arc;
 
-    use glam::{Quat, Vec3Swizzles};
+    use glam::Vec3Swizzles;
 
     use super::*;
     use crate::sim::FIXED_DT;
-    use crate::sim::collision::{CellColliderBatch, ColShape, PartShape, TerrainCollision};
+    use crate::sim::collision::{CellColliderBatch, TerrainCollision};
     use crate::sim::commands::SimCommand;
-    use crate::sim::physics::test_support::{
-        bake, box_shape, ground_batch, object_group, placement,
+    use crate::sim::physics::test_support::{bake, ground_batch, object_group, placement};
+    use crate::sim::test_world::{
+        SPAWN_AT, crate_prop, flat_world, hold, position, prop_box, spawned_at, tick, walking,
+        world_in, world_with,
     };
     use crate::sim::{SimWorld, WorldClock};
 
-    const SPAWN_AT: Vec3 = Vec3::new(200.0, 3.0, -100.0);
     const STANDING_CENTER_HEIGHT: f32 = STANDING_CENTER_ABOVE_FEET;
     const CROUCHING_CENTER_HEIGHT: f32 = CROUCH_HEIGHT / 2.0 + OFFSET;
-
-    struct Prop {
-        path: &'static str,
-        at: Vec3,
-        shape: PartShape,
-        dynamic: bool,
-        mass: Option<f32>,
-    }
-
-    fn prop_box(path: &'static str, at: Vec3, half: Vec3) -> Prop {
-        Prop {
-            path,
-            at,
-            shape: PartShape {
-                shape: ColShape::Box {
-                    center: Vec3::ZERO,
-                    rotation: Quat::IDENTITY,
-                    half_extents: half,
-                },
-                node: None,
-                joint: None,
-                material: 0,
-            },
-            dynamic: false,
-            mass: None,
-        }
-    }
-
-    fn crate_prop(at: Vec3, mass: f32) -> Prop {
-        Prop {
-            dynamic: true,
-            mass: Some(mass),
-            ..Prop {
-                path: "meshes\\crate.glb",
-                at,
-                shape: box_shape(0.5),
-                dynamic: false,
-                mass: None,
-            }
-        }
-    }
-
-    /// A flat world with `props` registered in cell (0, 0).
-    fn world_with(props: &[Prop]) -> SimWorld {
-        world_in(ground_batch(), props)
-    }
 
     /// A world whose cell (0, 0) has no terrain: its floor is an object.
     fn landless_world() -> SimWorld {
@@ -642,62 +627,6 @@ mod tests {
             Vec3::new(150.0, 0.5, 150.0),
         );
         world_in(CellColliderBatch::default(), &[floor])
-    }
-
-    fn world_in(mut batch: CellColliderBatch, props: &[Prop]) -> SimWorld {
-        for (index, prop) in props.iter().enumerate() {
-            let ref_key = format!("{:06X}:Fallout4.esm", 0x0A_0000 + index);
-            batch.objects.push(object_group(
-                prop.path,
-                vec![placement(&ref_key, prop.at)],
-                prop.dynamic,
-                prop.mass,
-            ));
-        }
-        let shapes: Vec<(&str, Vec<PartShape>)> = props
-            .iter()
-            .map(|prop| (prop.path, vec![prop.shape.clone()]))
-            .collect();
-        let baked = bake(&batch, &shapes);
-        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
-        sim.apply(SimCommand::AddCellColliders {
-            grid: (0, 0),
-            batch: Arc::new(batch),
-            baked: Some(baked),
-        });
-        sim.apply(SimCommand::SetPhysicsCenter {
-            grid: (0, 0),
-            radius: 2,
-        });
-        sim
-    }
-
-    fn flat_world() -> SimWorld {
-        world_with(&[])
-    }
-
-    fn tick(sim: &mut SimWorld, ticks: u32) {
-        for _ in 0..ticks {
-            sim.tick(FIXED_DT);
-        }
-    }
-
-    fn spawned_at(mut sim: SimWorld, at: Vec3) -> SimWorld {
-        sim.apply(SimCommand::SpawnPlayer { pos: at });
-        tick(&mut sim, 2);
-        sim
-    }
-
-    fn hold(sim: &mut SimWorld, input: PlayerInput) {
-        sim.apply(SimCommand::SetPlayerInput(input));
-    }
-
-    fn walking(yaw: f32) -> PlayerInput {
-        PlayerInput {
-            move_dir: Vec2::new(0.0, 1.0),
-            yaw,
-            ..PlayerInput::default()
-        }
     }
 
     /// Ticks after a jump input (frame 0 already ticked) until the player is grounded
@@ -717,10 +646,6 @@ mod tests {
             }
         }
         (frame, apex)
-    }
-
-    fn position(sim: &SimWorld) -> Vec3 {
-        sim.player_debug().pos
     }
 
     #[test]

@@ -6,6 +6,7 @@
 
 pub mod bake;
 mod cache_purge;
+mod carry;
 mod collider_user_data;
 pub mod collision;
 mod command_budget;
@@ -42,7 +43,8 @@ use command_budget::{Deferred, DeferredQueue};
 use footstep_clock::{FootstepClock, TickObservation};
 use weather::{WeatherCycle, WeatherStep};
 
-pub use commands::{KinematicPose, PlayerInput, SimCommand};
+pub use carry::{CarriedInfo, GrabRefusal, ReleaseReason};
+pub use commands::{KinematicPose, PlayerInput, SimCommand, look_direction};
 pub use footstep_clock::{JumpWindupMismatch, jump_windup_mismatch};
 pub use hud::{CrosshairState, HudSnapshot, MeterFill};
 pub use player::{PlayerMovement, STANDING_CENTER_ABOVE_FEET};
@@ -198,6 +200,8 @@ pub struct SimWorld {
     pending_colliders: DeferredQueue<CellPayload>,
     footstep_clock: FootstepClock,
     footsteps: Vec<FootstepEvent>,
+    /// Why the latest refused grab was refused, until taken.
+    grab_refusal: Option<GrabRefusal>,
 }
 
 impl SimWorld {
@@ -218,6 +222,7 @@ impl SimWorld {
             pending_colliders: DeferredQueue::new(),
             footstep_clock: FootstepClock::default(),
             footsteps: Vec::new(),
+            grab_refusal: None,
         }
     }
 
@@ -402,9 +407,11 @@ impl SimWorld {
                 } else {
                     player::SpawnSnap::Down
                 };
+                self.physics.release(ReleaseReason::Teleported);
                 self.player.request_spawn(pos, snap);
             }
             SimCommand::TeleportPlayer { pos } => {
+                self.physics.release(ReleaseReason::Teleported);
                 self.player.request_spawn(pos, player::SpawnSnap::Down);
             }
             SimCommand::SetPlayerInput(input) => {
@@ -423,7 +430,61 @@ impl SimWorld {
             SimCommand::PipBoy(action) => self.apply_pipboy(action),
             SimCommand::SetWorldClock(edit) => self.apply_clock_edit(edit),
             SimCommand::SetWeather(edit) => self.apply_weather_edit(edit),
+            SimCommand::GrabBody { entity } => self.grab_body(entity),
+            SimCommand::DropCarried => {
+                if !self.physics.release(ReleaseReason::Dropped) {
+                    tracing::debug!("sim: drop ignored, nothing is carried");
+                }
+            }
+            SimCommand::ThrowCarried { charge_secs } => {
+                let velocity = self.view().forward() * carry::throw_speed(charge_secs);
+                if !self.physics.throw_carried(velocity) {
+                    tracing::debug!("sim: throw ignored, nothing is carried");
+                }
+            }
         }
+    }
+
+    fn grab_body(&mut self, entity: EntityId) {
+        let placed = self.player.spawned && self.player.pending_spawn.is_none();
+        let grabbed = if self.pipboy.open || self.fold_hold {
+            Err(GrabRefusal::SimulationPaused)
+        } else if placed {
+            self.physics.grab(entity, self.player.eye(), self.view())
+        } else {
+            Err(GrabRefusal::PlayerNotPlaced)
+        };
+        if let Err(refusal) = grabbed {
+            self.grab_refusal = Some(refusal);
+        }
+    }
+
+    /// The camera view of the latest player input.
+    fn view(&self) -> carry::View {
+        carry::View {
+            yaw: self.input.yaw,
+            pitch: self.input.pitch,
+        }
+    }
+
+    /// The body the player carries, if any.
+    pub fn carried(&self) -> Option<CarriedInfo> {
+        self.physics.carried()
+    }
+
+    /// Why the body carried last was let go, once per release.
+    pub fn take_release(&mut self) -> Option<ReleaseReason> {
+        self.physics.take_release()
+    }
+
+    /// Why the latest refused [`SimCommand::GrabBody`] was refused, once per refusal.
+    pub fn take_grab_refusal(&mut self) -> Option<GrabRefusal> {
+        self.grab_refusal.take()
+    }
+
+    /// Whether `entity` is a loose body that [`SimCommand::GrabBody`] may pick up, mass aside.
+    pub fn is_grabbable(&self, entity: EntityId) -> bool {
+        self.physics.is_grabbable(entity)
     }
 
     fn apply_clock_edit(&mut self, edit: commands::ClockEdit) {
@@ -455,6 +516,7 @@ impl SimWorld {
         self.player.heal(effects.heal_hp);
         if self.pipboy.open {
             self.input = self.input.without_movement();
+            self.physics.release(ReleaseReason::MenuOpened);
         }
     }
 
@@ -499,6 +561,12 @@ impl SimWorld {
             // simulate, and stepping 200k+ static colliders per tick was a
             // frame killer (the broad phase re-optimizes its tree per step).
             self.physics.update_water(self.player.pos);
+            self.physics.drive_carried(
+                self.player.eye_after_next_step(FIXED_DT),
+                self.view(),
+                self.input.spin,
+                FIXED_DT,
+            );
             let needs_step = {
                 let _span = tracing::trace_span!("sim_needs_step").entered();
                 self.physics.needs_step()
@@ -524,7 +592,7 @@ impl SimWorld {
             completed: player.step_completed,
             grounded: player.grounded,
             crouching: player.crouching,
-            sprint: self.input.sprint,
+            sprint: self.input.sprint && !self.physics.carry_forces_walk(),
             horizontal_displacement: displacement.length(),
             launched: player.launched,
         };
@@ -788,6 +856,11 @@ fn apply_collider_work(physics: &mut physics::PhysicsContext, work: Deferred<Cel
         }
     }
 }
+
+#[cfg(test)]
+mod carry_tests;
+#[cfg(test)]
+pub(crate) mod test_world;
 
 #[cfg(test)]
 #[allow(

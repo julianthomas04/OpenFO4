@@ -1,8 +1,10 @@
 //! The player-facing flow's glue on [`State`]: window input to menu events, flow actions to
 //! engine effects, and the load readiness feed.
 
+use winit::event::MouseButton;
 use winit::keyboard::KeyCode;
 
+use super::grab_input::SpinButton;
 use super::load_transition::routed_art_key;
 use super::stream_settle::{self, ColliderSettle, StreamReport};
 use super::{ResolvedTarget, State};
@@ -23,6 +25,15 @@ fn menu_event_for_key(code: KeyCode, is_repeat: bool) -> Option<FlowEvent> {
     (!is_repeat || repeats_harmlessly).then_some(event)
 }
 
+/// The spin button a mouse button stands for, if any.
+fn spin_button(button: MouseButton) -> Option<SpinButton> {
+    match button {
+        MouseButton::Left => Some(SpinButton::Left),
+        MouseButton::Right => Some(SpinButton::Right),
+        _ => None,
+    }
+}
+
 impl State {
     pub fn handle_mouse_motion(&mut self, dx: f64, dy: f64) {
         if self.flow.gameplay_input_enabled() && !self.loading_screen_preview_open() {
@@ -37,6 +48,14 @@ impl State {
             .pointer_moved(self.pointer_px.0, self.pointer_px.1);
         if let Some(row) = self.row_under_pointer() {
             self.handle_flow_event(FlowEvent::RowHovered(row));
+        }
+    }
+
+    /// Follows a mouse button's physical state, whoever consumes the event: the spin it
+    /// produces is gated, the state is not.
+    pub fn track_mouse_button(&mut self, button: MouseButton, pressed: bool) {
+        if let Some(spin) = spin_button(button) {
+            self.grab_input.spin_button(spin, pressed);
         }
     }
 
@@ -55,9 +74,11 @@ impl State {
         self.handle_flow_event(FlowEvent::RowReleased(row));
     }
 
-    /// The window lost the focus: a held drag or pan key never sees its release.
+    /// The window lost the focus: a held drag, pan, carry key or spin button never sees its
+    /// release.
     pub fn handle_focus_lost(&mut self) {
         self.load_screens.focus_lost();
+        self.grab_input.reset();
     }
 
     /// `lines` is the wheel's travel in lines, positive away from the user.
@@ -154,6 +175,25 @@ impl State {
         }
         if let Some(event) = menu_event_for_key(code, is_repeat) {
             self.handle_flow_event(event);
+        }
+    }
+}
+
+#[cfg(test)]
+mod mouse_button_tests {
+    use super::*;
+
+    #[test]
+    fn the_left_and_right_buttons_are_the_spin_buttons_and_others_are_not() {
+        assert_eq!(spin_button(MouseButton::Left), Some(SpinButton::Left));
+        assert_eq!(spin_button(MouseButton::Right), Some(SpinButton::Right));
+        for button in [
+            MouseButton::Middle,
+            MouseButton::Back,
+            MouseButton::Forward,
+            MouseButton::Other(7),
+        ] {
+            assert_eq!(spin_button(button), None, "{button:?}");
         }
     }
 }

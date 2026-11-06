@@ -68,6 +68,13 @@ pub enum SimCommand {
     /// A change to the weather cycle; the sim rejects an invalid one with a warning and leaves
     /// the cycle as it was.
     SetWeather(WeatherEdit),
+    /// Start carrying this loose body in front of the camera. A refusal is kept for
+    /// `SimWorld::take_grab_refusal`.
+    GrabBody { entity: EntityId },
+    /// Let go of the carried body, keeping its velocity.
+    DropCarried,
+    /// Throw the carried body along the view, at the speed of a throw charged this long.
+    ThrowCarried { charge_secs: f32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -101,6 +108,16 @@ pub struct KinematicPose {
     pub rotation: Quat,
 }
 
+/// Unit look direction of a camera at `yaw` and `pitch` in radians, the convention of
+/// [`PlayerInput::yaw`] and [`PlayerInput::pitch`].
+pub fn look_direction(yaw: f32, pitch: f32) -> Vec3 {
+    Vec3::new(
+        yaw.cos() * pitch.cos(),
+        pitch.sin(),
+        yaw.sin() * pitch.cos(),
+    )
+}
+
 #[derive(Clone, Copy, Default, Debug)]
 pub struct PlayerInput {
     /// x = strafe right, y = forward; unit length or zero, player-local.
@@ -108,6 +125,11 @@ pub struct PlayerInput {
     /// Camera yaw in radians, `CameraController` convention: yaw of -PI/2
     /// faces -Z, forward on the XZ plane = (cos yaw, sin yaw).
     pub yaw: f32,
+    /// Camera pitch in radians, `CameraController` convention: positive looks
+    /// up (see [`look_direction`]).
+    pub pitch: f32,
+    /// Held spin of the carried body: +1 left mouse button, -1 right, 0 none.
+    pub spin: i8,
     /// Held (Godot semantics: held while grounded triggers the jump).
     pub jump: bool,
     /// Desired states, NOT raw key holds: the input layer resolves the FO4
@@ -121,13 +143,14 @@ pub struct PlayerInput {
 }
 
 impl PlayerInput {
-    /// The same camera heading and stance, with every movement intent released.
+    /// The same camera view and stance, with every movement and spin intent released.
     #[must_use]
     pub fn without_movement(self) -> Self {
         Self {
             move_dir: Vec2::ZERO,
             jump: false,
             sprint: false,
+            spin: 0,
             ..self
         }
     }
