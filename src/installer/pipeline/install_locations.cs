@@ -53,11 +53,27 @@ namespace AssetConverter.Pipeline
         public string OwnershipMarker => Path.Combine(InstallRoot, InstallLayout.OwnershipMarkerFileName);
 
         /// <summary>
-        /// Records that every asset of the install was converted by the installer of <paramref name="assetVersion"/>; the install fails when
-        /// this cannot be written, since the marker is what lets a game use the assets.
+        /// Records that every asset group of the install was converted at its current revision by the installer of <paramref name="installerVersion"/>; the install fails when
+        /// this cannot be written, since the marker is what lets a later install keep the assets.
         /// </summary>
         /// <exception cref="IOException">The marker could not be written.</exception>
-        public void MarkAssetsComplete(string assetVersion) => AssetVersionMarker.Write(OwnershipMarker, assetVersion);
+        public void MarkAssetsComplete(string installerVersion) =>
+            AssetVersionMarker.Update(OwnershipMarker, _ => new InstalledAssets(installerVersion, AssetGroups.CurrentRevisions));
+
+        /// <summary>Rewrites the marker to vouch only for the groups <paramref name="plan"/> keeps, as they were installed, since the others are about to change.</summary>
+        /// <exception cref="IOException">The marker could not be written.</exception>
+        public void WithdrawReconverted(ReconversionPlan plan, string installerVersion) =>
+            AssetVersionMarker.Update(OwnershipMarker, installed =>
+            {
+                var kept = installed?.Keeping(plan.Kept);
+                return kept is { Revisions.Count: > 0 } ? kept with { Version = installerVersion } : null;
+            });
+
+        /// <summary>Adds <paramref name="group"/> at its current revision to the marker, since its converted output is complete.</summary>
+        /// <exception cref="IOException">The marker could not be written.</exception>
+        public void MarkGroupComplete(AssetGroup group, string installerVersion) =>
+            AssetVersionMarker.Update(OwnershipMarker, installed =>
+                (installed ?? new InstalledAssets(installerVersion, new Dictionary<AssetGroup, int>())).Recording(group, AssetGroups.Revision(group)) with { Version = installerVersion });
 
         /// <summary>
         /// Whether the install root is, or has been, an OpenFO4 install: it carries the ownership marker, or (installs from before the
@@ -65,11 +81,12 @@ namespace AssetConverter.Pipeline
         /// </summary>
         public bool HoldsInstall() => File.Exists(OwnershipMarker) || (File.Exists(LogFile) && File.Exists(DatabasePath));
 
-        /// <summary>Creates the install root, claims it with the ownership marker, which stops vouching for any earlier asset version, and creates the output folders.</summary>
+        /// <summary>Creates the install root, claims it with an empty ownership marker unless it has one (an earlier install's record stays until the pipeline withdraws what it converts again), and creates the output folders.</summary>
         public void CreateOutputDirectories()
         {
             Directory.CreateDirectory(InstallRoot);
-            AssetVersionMarker.WritePending(OwnershipMarker);
+            if (!File.Exists(OwnershipMarker))
+                AssetVersionMarker.WritePending(OwnershipMarker);
             foreach (string directory in new[] { StagingRoot, MeshesOut, TexturesOut, DataOut })
                 Directory.CreateDirectory(directory);
         }
