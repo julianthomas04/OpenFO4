@@ -39,11 +39,13 @@ namespace AssetConverter.Pipeline
         /// of the 160k GLBs takes about 40 s). A file a virus scanner, the search indexer or an Explorer preview briefly holds is retried
         /// with a growing delay; files that stay undeletable are collected and thrown as one <see cref="IOException"/> once the others are gone.
         /// </summary>
+        /// <param name="scope">Whether files in subfolders of <paramref name="dir"/> match too.</param>
         /// <param name="wait">Pauses between delete attempts; defaults to sleeping, replaceable so tests need not.</param>
-        public static void PurgeByExtension(string dir, string pattern, string description, Action<TimeSpan>? wait = null, CancellationToken ct = default)
+        public static void PurgeByExtension(string dir, string pattern, string description, SearchOption scope = SearchOption.AllDirectories,
+            Action<TimeSpan>? wait = null, CancellationToken ct = default)
         {
             if (!Directory.Exists(dir)) return;
-            var files = Directory.GetFiles(dir, pattern, SearchOption.AllDirectories);
+            var files = Directory.GetFiles(dir, pattern, scope);
             if (files.Length == 0) return;
             Console.WriteLine($"Purging {files.Length:N0} existing {description} under {dir}...");
 

@@ -99,6 +99,31 @@ namespace InstallerTests.Pipeline
         }
 
         [Fact]
+        public void AskedToIncludeExtractedArchivesTheSetOpensThoseWithADoneMarkerToo()
+        {
+            WriteArchive("a.ba2", Diffuse);
+            WriteArchive("done.ba2", Normal);
+            File.WriteAllText(Path.Combine(_staging.Path, ".done.ba2.extracted-direct"), "");
+
+            using var set = TextureArchiveSet.Open(_game.Path, _staging.Path, ["a.ba2", "done.ba2"], includeExtracted: true);
+
+            Assert.Equal(["a.ba2", "done.ba2"], set.Pending.Select(entry => entry.Name));
+            Assert.Equal([Native(Diffuse.Name), Native(Normal.Name)], set.ArchiveEntryNames());
+        }
+
+        [Fact]
+        public void TheArchiveEntryNamesLeaveOutWhatIsDeployed()
+        {
+            WriteArchive("a.ba2", Diffuse);
+            string texturesOut = Path.Combine(_staging.Path, "textures");
+            Directory.CreateDirectory(texturesOut);
+            File.WriteAllBytes(Path.Combine(texturesOut, "clouds.dds"), [0]);
+            using var set = Open("a.ba2");
+
+            Assert.Equal([Native(Diffuse.Name)], set.ArchiveEntryNames());
+        }
+
+        [Fact]
         public void TheIndexOfAnInstallWithoutDeployedTexturesHoldsOnlyTheArchiveEntries()
         {
             WriteArchive("a.ba2", Diffuse);

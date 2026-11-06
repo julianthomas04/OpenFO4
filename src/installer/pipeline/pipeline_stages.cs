@@ -192,6 +192,17 @@ namespace AssetConverter.Pipeline
         }
 
         /// <summary>
+        /// Seeds the texture-existence index from the name tables of every texture archive, extracted or not, and nothing else: for a run
+        /// that converts the meshes but keeps the deployed textures, whose files (palette bakes among them) must not decide which textures
+        /// the meshes find.
+        /// </summary>
+        public void IndexTextureNames()
+        {
+            using var textures = TextureArchiveSet.Open(_paths.GameDataDirectory, _paths.StagingRoot, TextureArchives, includeExtracted: true);
+            NifConverter.PreloadTextureIndex(textures.ArchiveEntryNames());
+        }
+
+        /// <summary>
         /// One local ESM copy (the load reads the file three times: Mutagen overlay + two raw scans, never pay network latency three
         /// times), the string tables the localized ESM resolves its names from, then the INI cascade.
         /// </summary>

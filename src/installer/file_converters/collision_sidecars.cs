@@ -11,8 +11,8 @@ namespace AssetConverter
         /// <summary>Raised whenever the collision worker (or the staged input it reads) changes what it writes for the same game files.</summary>
         internal const int ExtractorVersion = 2;
 
-        private const string SidecarPattern = "*.col.json";
-        private const string StampFileName = ".collision.stamp";
+        internal const string SidecarPattern = "*.col.json";
+        internal const string StampFileName = ".collision.stamp";
 
         public static ConversionStamp Stamp { get; } = new(ExtractorVersion, null, []);
 
