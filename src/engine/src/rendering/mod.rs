@@ -32,6 +32,7 @@ pub mod gpu_profiler;
 pub mod gpu_slab;
 #[cfg(test)]
 pub(crate) mod gpu_test;
+mod grab_input;
 pub mod grass;
 pub mod grass_streaming;
 pub mod hiz;
@@ -199,7 +200,7 @@ use crate::sim::commands::{ClockEdit, WeatherEdit};
 use crate::sim::pipboy::PipBoyAction;
 use crate::sim::{
     ClockFrame, DynamicPose, MaterialBuoyancy, PlayerInput, PlayerMovement, SimCommand, SimWorld,
-    water_physics,
+    refr_entity_id, water_physics,
 };
 use crate::spawn_cell::SpawnCellTarget;
 use crate::startup::{StartupError, StartupTimer};
@@ -214,6 +215,9 @@ use auto_character::AutoCharacters;
 use boot::{BootParts, GpuContext, StartupInputs, StateInputs};
 use cube_array::CubeArray;
 use effects::stage::{EffectFrameInputs, EffectStage};
+use grab_input::{
+    AimTarget, CarryContext, GrabAction, GrabInput, carry_key_counts, spin_gate_open,
+};
 use light_anim::LightAnimator;
 use lighting::frame_uniform::FrameUniform;
 use load_transition::{
@@ -708,6 +712,7 @@ pub struct State {
     input_mode: InputMode,
     freeze_camera: bool,
     walk_keys: WalkKeys,
+    grab_input: GrabInput,
     /// Base world FOV in Bethesda convention (horizontal at a 16:9 base),
     /// from the INI cascade (`fDefaultWorldFOV`).
     world_fov_beth: f32,
@@ -1137,12 +1142,19 @@ impl State {
         line
     }
 
-    /// What the player is currently aiming at within activation reach, if it can
-    /// be activated: a load door or an animated object. Shared by the E-press
-    /// activation and (via a precomputed bool) the crosshair and the debug
-    /// `is_interactible` readout, so all agree exactly.
-    fn aimed_activation(&self) -> Option<Activation> {
-        activation::resolve(&self.aimed_ref()?, &self.teleports, &self.animated_objects)
+    /// What the player is currently aiming at within activation reach, as the E key sees it: a
+    /// load door or an animated object, a loose body, or nothing to act on. Shared by the E key
+    /// and (via a precomputed bool) the crosshair and the debug `is_interactible` readout, so all
+    /// agree exactly.
+    fn aim_target(&self) -> AimTarget {
+        let Some(ref_id) = self.aimed_ref() else {
+            return AimTarget::Nothing;
+        };
+        AimTarget::resolve(
+            activation::resolve(&ref_id, &self.teleports, &self.animated_objects).is_some(),
+            refr_entity_id(&ref_id),
+            |entity| self.sim.is_grabbable(entity),
+        )
     }
 
     /// The ref id of the object under the crosshair within activation reach.
@@ -1191,6 +1203,90 @@ impl State {
                 }
             }
             None => {}
+        }
+    }
+
+    fn carry_context(&self) -> CarryContext {
+        CarryContext {
+            walk_mode: self.input_mode == InputMode::Walk,
+            gameplay_input: self.flow.gameplay_input_enabled(),
+            preview_open: self.loading_screen_preview_open(),
+            pipboy_open: self.pipboy_open(),
+        }
+    }
+
+    fn carry_controls_live(&self) -> bool {
+        self.carry_context().controls_live()
+    }
+
+    /// E went down or up in walk mode: activates the aimed door, or grabs or drops a body.
+    fn handle_activate_key(&mut self, is_pressed: bool, is_repeat: bool, is_synthetic: bool) {
+        if !carry_key_counts(self.carry_controls_live(), is_repeat, is_synthetic) {
+            return;
+        }
+        let carrying = self.sim.carried().is_some();
+        let now = Instant::now();
+        let action = if is_pressed {
+            let aim = self.aim_target();
+            self.grab_input.activate_pressed(aim, carrying, now)
+        } else {
+            self.grab_input.activate_released(carrying, now)
+        };
+        self.apply_grab_action(action);
+    }
+
+    /// R went down or up in walk mode: charges and throws the carried body.
+    fn handle_throw_key(&mut self, is_pressed: bool, is_repeat: bool, is_synthetic: bool) {
+        if !carry_key_counts(self.carry_controls_live(), is_repeat, is_synthetic) {
+            return;
+        }
+        let carrying = self.sim.carried().is_some();
+        let now = Instant::now();
+        if is_pressed {
+            self.grab_input.throw_pressed(carrying, now);
+        } else {
+            let action = self.grab_input.throw_released(carrying, now);
+            self.apply_grab_action(action);
+        }
+    }
+
+    /// Fires a grab whose hold E has reached by `now`.
+    fn advance_carry_input(&mut self, now: Instant) {
+        if self.carry_controls_live() {
+            let action = self.grab_input.advance(now);
+            self.apply_grab_action(action);
+        }
+    }
+
+    fn apply_grab_action(&mut self, action: Option<GrabAction>) {
+        match action {
+            None => {}
+            Some(GrabAction::Activate) => self.activate_aimed(),
+            Some(GrabAction::Carry(command)) => {
+                self.sim.apply(command.into_sim_command());
+                self.follow_carry_outcome();
+            }
+        }
+    }
+
+    /// Reports how the sim answered: a release of the carried body lets go of E and R, and a
+    /// refused grab is logged.
+    fn follow_carry_outcome(&mut self) {
+        if let Some(reason) = self.sim.take_release() {
+            tracing::debug!("carried body let go: {reason:?}");
+            self.grab_input.release_keys();
+        }
+        if let Some(refusal) = self.sim.take_grab_refusal() {
+            tracing::debug!("grab refused: {refusal:?}");
+        }
+    }
+
+    /// Lets go of E and R and drops the carried body, if any.
+    fn release_carry_input(&mut self) {
+        self.grab_input.release_keys();
+        if self.sim.carried().is_some() {
+            self.sim.apply(SimCommand::DropCarried);
+            self.follow_carry_outcome();
         }
     }
 
@@ -1923,6 +2019,7 @@ impl State {
             input_mode: InputMode::Walk,
             freeze_camera,
             walk_keys: WalkKeys::default(),
+            grab_input: GrabInput::default(),
             world_fov_beth,
             fov_adjust: 0.0,
             collision_wireframe: false,
@@ -3661,6 +3758,7 @@ impl State {
     #[tracing::instrument(skip_all, name = "update")]
     pub fn update(&mut self, asset_server: &mut AssetServer) -> Result<(), FatalRuntimeError> {
         self.device_loss.check()?;
+        let frame_start = Instant::now();
         self.fps_utils.tick();
         let dt = self.fps_utils.dt().unwrap_or(0.0);
         self.flow.tick(dt);
@@ -3832,6 +3930,9 @@ impl State {
         if self.freeze_camera {
             self.input_mode = InputMode::Fly;
         }
+        if !self.carry_controls_live() {
+            self.release_carry_input();
+        }
         match self.input_mode {
             InputMode::Fly => {
                 if self.freeze_camera {
@@ -3849,6 +3950,9 @@ impl State {
             InputMode::Walk => {
                 self.sim
                     .apply(SimCommand::SetPlayerInput(self.player_input()));
+                // Before the tick, with this frame's view: the grab hold is measured to the
+                // start of the frame, not to after a streaming hitch inside it.
+                self.advance_carry_input(frame_start);
                 self.sim.tick(dt);
                 self.sample_walk_in(pipboy_open, dt);
                 // Until the player has spawned onto the ground the camera
@@ -3861,6 +3965,7 @@ impl State {
         }
 
         drop(sim_tick_span);
+        self.follow_carry_outcome();
         // After the camera follows the player: placement needs this frame's eye and look direction.
         self.auto_characters.tick(
             || self.sim.player_eye().is_some(),
@@ -3872,7 +3977,7 @@ impl State {
         // Build the HUD overlay for this frame. The crosshair state is selected
         // here (render-side): door-aim depends on the camera, which the sim does
         // not own — the sim only supplies the Standard spread radius.
-        self.aimed_door = self.aimed_activation().is_some();
+        self.aimed_door = self.aim_target() == AimTarget::Activatable;
         let hud_activate = self.aimed_door;
         let mut hud_snapshot = self.sim.hud_snapshot();
         hud_snapshot.visible &= self.flow.hud_visible();
@@ -4444,9 +4549,11 @@ impl State {
         }
     }
 
-    /// Drops the movement keys the player holds, as if they were let go, in both camera modes.
+    /// Drops the movement and carry keys the player holds, as if they were let go, in both camera
+    /// modes, and with them the carried body. The spin buttons keep their physical state.
     fn release_held_movement(&mut self) {
         self.walk_keys.release_held();
+        self.release_carry_input();
         for code in FLY_CAMERA_KEYS {
             self.camera_controller.handle_key(code, false);
         }
@@ -4471,7 +4578,14 @@ impl State {
         self.mouse_capture.apply(&self.window);
     }
 
-    pub fn handle_key(&mut self, code: KeyCode, is_pressed: bool, is_repeat: bool) {
+    /// `is_synthetic`: the platform made the event up across a focus change.
+    pub fn handle_key(
+        &mut self,
+        code: KeyCode,
+        is_pressed: bool,
+        is_repeat: bool,
+        is_synthetic: bool,
+    ) {
         if self.loading_screen_preview_open() {
             self.handle_preview_key(code, is_pressed, is_repeat);
             return;
@@ -4503,11 +4617,13 @@ impl State {
         } else if code == KeyCode::KeyV && is_pressed {
             // Hotkey twin of the debug-UI "Free-fly camera" checkbox.
             self.toggle_input_mode();
-        } else if code == KeyCode::KeyE && is_pressed && self.input_mode == InputMode::Walk {
-            // Activate the load door under the crosshair. Record intent only; the
-            // teleport (streamer teardown + player move) needs `asset_server` and
-            // runs in `update`, like the debug pickers.
-            self.activate_aimed();
+        } else if code == KeyCode::KeyE && self.input_mode == InputMode::Walk {
+            // Activate the load door under the crosshair, or grab the loose body. Record intent
+            // only; the teleport (streamer teardown + player move) needs `asset_server` and runs
+            // in `update`, like the debug pickers.
+            self.handle_activate_key(is_pressed, is_repeat, is_synthetic);
+        } else if code == KeyCode::KeyR && self.input_mode == InputMode::Walk {
+            self.handle_throw_key(is_pressed, is_repeat, is_synthetic);
         } else {
             // Both key maps stay fresh regardless of mode (same physical
             // keys, different meanings), so neither holds stale pressed
@@ -4629,7 +4745,7 @@ impl State {
             .upload(&self.device, &self.queue, &vertices);
     }
 
-    /// Snapshot the walk keys + camera yaw into the sim's input format.
+    /// Snapshot the walk keys, the camera look and the carry spin into the sim's input format.
     fn player_input(&self) -> PlayerInput {
         let move_dir = glam::Vec2::new(
             (i32::from(self.walk_keys.right) - i32::from(self.walk_keys.left)) as f32,
@@ -4638,6 +4754,12 @@ impl State {
         PlayerInput {
             move_dir: move_dir.normalize_or_zero(),
             yaw: self.camera_controller.yaw(),
+            pitch: self.camera_controller.pitch(),
+            spin: self.grab_input.spin(spin_gate_open(
+                self.carry_controls_live(),
+                self.mouse_capture.is_locked(),
+                self.sim.carried().is_some(),
+            )),
             jump: self.walk_keys.jump,
             sprint: self.walk_keys.sprint_active,
             crouch: self.walk_keys.crouch_active,

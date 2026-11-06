@@ -134,15 +134,14 @@ impl CameraController {
         self.yaw
     }
 
+    pub fn pitch(&self) -> f32 {
+        self.pitch
+    }
+
     /// Unit look direction from yaw/pitch — shared by fly-mode movement and
     /// the walk-mode camera target.
     pub fn forward(&self) -> Vec3 {
-        Vec3::new(
-            self.yaw.cos() * self.pitch.cos(),
-            self.pitch.sin(),
-            self.yaw.sin() * self.pitch.cos(),
-        )
-        .normalize()
+        crate::sim::look_direction(self.yaw, self.pitch)
     }
 
     pub fn update_camera(&self, camera: &mut super::Camera, dt: f32) {

@@ -137,6 +137,13 @@ pub(super) fn clamp_linvel(rb: &mut RigidBody, max: f32, wake: bool) {
     }
 }
 
+/// Rescale a body's angular velocity to `max` if it exceeds it (no-op otherwise).
+pub(super) fn clamp_angvel(rb: &mut RigidBody, max: f32, wake: bool) {
+    if let Some(v) = clamp_to_max(rb.angvel(), max) {
+        rb.set_angvel(v, wake);
+    }
+}
+
 /// Bound a dynamic body's post-step state so a single instability can't
 /// compound into an explosion or poison the render readback, and return the
 /// pose to record for interpolation. A non-finite pose/velocity is recovered
@@ -156,9 +163,7 @@ pub(super) fn sanitize_body(rb: &mut RigidBody, last_good: Pose) -> Pose {
         return last_good;
     }
     clamp_linvel(rb, MAX_DYN_LINVEL, false);
-    if let Some(ang) = clamp_to_max(rb.angvel(), MAX_DYN_ANGVEL) {
-        rb.set_angvel(ang, false);
-    }
+    clamp_angvel(rb, MAX_DYN_ANGVEL, false);
     pos
 }
 

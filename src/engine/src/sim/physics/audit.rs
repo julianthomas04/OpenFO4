@@ -5,6 +5,7 @@
 //! REFR can never take the pipeline down.
 
 use super::{PhysicsContext, unpack_path, unpack_ref};
+use crate::sim::carry::ReleaseReason;
 use crate::sim::collider_user_data::unpack_grid;
 use crate::sim::sound_pose::{aabb_is_sound, pose_is_sound};
 use glam::Vec3;
@@ -222,6 +223,9 @@ impl PhysicsContext {
         match kind {
             BodyKind::Ragdoll if self.ragdolls.quarantine_body(&mut self.world, body) => {}
             BodyKind::Dynamic => {
+                if self.carried_handle() == Some(body) {
+                    self.release(ReleaseReason::BodyLost);
+                }
                 self.dyn_bodies.retain(|_, db| db.handle != body);
                 self.world.remove_body(body);
             }

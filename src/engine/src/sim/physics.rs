@@ -8,14 +8,15 @@ use glam::Vec3;
 use rapier3d::prelude::*;
 
 use super::bake::{BakedCellColliders, CachedShape, RagdollBake, ShapeKey, build_terrain_shape};
+use super::carry::{ReleaseReason, THROW_MAX_SPEED};
 use super::collider_user_data::{
     ColliderTag, pack_grid, pack_path, pack_ref, unpack_path, unpack_ref,
 };
 use super::collision::{CellColliderBatch, ObjectColliderGroup, Placement, TerrainCollision};
 use super::commands::KinematicPose;
 use super::dynamic_body::{
-    DYN_ANGULAR_DAMPING, DYN_LINEAR_DAMPING, GRAVITY_DYN, body_builder, clamp_linvel,
-    density_for_mass, sanitize_body, state_is_bounded, within_radius,
+    DYN_ANGULAR_DAMPING, DYN_LINEAR_DAMPING, DYN_SOFT_CCD_PREDICTION, GRAVITY_DYN, body_builder,
+    clamp_linvel, density_for_mass, sanitize_body, state_is_bounded, within_radius,
 };
 use super::kinematic::KinematicBodies;
 use super::mirror::{KinematicMirror, scene_query_filter};
@@ -30,13 +31,15 @@ use crate::bethesda_space::ENGINE_UNITS_PER_METER;
 use crate::footsteps::events::SurfaceMaterial;
 use crate::utils::warn_once;
 
-/// Max speed a player shove may leave on a pushed body. A hard impulse onto a
-/// light prop can impart enough velocity that, in a single 1/60 s step, the
+/// Max speed the player may leave on a body it drives: a shove, the carry servo or a throw. It
+/// is the measured throw plateau, so the fastest throw and the push share one cap. A hard
+/// impulse onto a light prop can impart enough velocity that, in a single 1/60 s step, the
 /// prop travels farther than soft-CCD's prediction window — punching it clean
 /// through a wall before any contact is generated. Capping the push at the
-/// source keeps per-step motion (`PUSH_MAX_LINVEL * FIXED_DT` ≈ 2.5 u) inside
+/// source keeps per-step motion (`PLAYER_DRIVEN_MAX_LINVEL * FIXED_DT` ≈ 2.5 u) inside
 /// `DYN_SOFT_CCD_PREDICTION`, so soft-CCD reliably catches the prop instead.
-const PUSH_MAX_LINVEL: f32 = 150.0;
+const PLAYER_DRIVEN_MAX_LINVEL: f32 = THROW_MAX_SPEED;
+const _: () = assert!(PLAYER_DRIVEN_MAX_LINVEL * FIXED_DT < DYN_SOFT_CCD_PREDICTION);
 /// Fixed steps the world keeps stepping after the player mirror last moved
 /// next to dynamic bodies: one for the kinematic body to reach its target, one
 /// for the narrow phase to see the contact start there and wake the island.
@@ -254,6 +257,8 @@ pub(crate) struct PhysicsContext {
     ragdolls: RagdollManager,
     /// FO4 water physics for clutter; `None` (the default) costs nothing.
     water: WaterPhysics,
+    /// The body the player carries, if any.
+    carry: carried::Carry,
 }
 
 impl PhysicsContext {
@@ -306,6 +311,7 @@ impl PhysicsContext {
             kinematic: KinematicBodies::default(),
             ragdolls,
             water: WaterPhysics::new(),
+            carry: carried::Carry::default(),
         }
     }
 
@@ -340,7 +346,7 @@ impl PhysicsContext {
     /// What the ray from `origin` along `dir` hits first: mesh path (or
     /// "terrain"), REFR form key when known, and distance.
     pub fn ray_attribution(&self, origin: Vec3, dir: Vec3, max_dist: f32) -> Option<RayHit> {
-        let probe = self.probe(origin, dir, max_dist)?;
+        let probe = self.probe(origin, dir, max_dist, scene_query_filter())?;
         Some(RayHit {
             mesh_path: probe.mesh_path,
             ref_id: probe.ref_id,
@@ -350,9 +356,10 @@ impl PhysicsContext {
 
     /// Surface under `origin` along a straight-down ray. Dynamic bodies are
     /// hit like static colliders (a crate under the foot reports its own
-    /// material); the player's mirror capsule is excluded by the scene filter.
+    /// material); the player's mirror capsule and the carried body are excluded.
     pub(crate) fn ground_surface(&self, origin: Vec3, max_dist: f32) -> SurfaceMaterial {
-        let Some(probe) = self.probe(origin, Vec3::NEG_Y, max_dist) else {
+        let filter = self.player_scene_filter();
+        let Some(probe) = self.probe(origin, Vec3::NEG_Y, max_dist, filter) else {
             return SurfaceMaterial::None;
         };
         if probe.terrain {
@@ -367,11 +374,15 @@ impl PhysicsContext {
         }
     }
 
-    fn probe(&self, origin: Vec3, dir: Vec3, max_dist: f32) -> Option<RayProbe> {
+    fn probe(
+        &self,
+        origin: Vec3,
+        dir: Vec3,
+        max_dist: f32,
+        filter: QueryFilter,
+    ) -> Option<RayProbe> {
         let ray = Ray::new(origin, dir);
-        let (handle, dist) = self
-            .world
-            .cast_ray(&ray, max_dist, true, scene_query_filter())?;
+        let (handle, dist) = self.world.cast_ray(&ray, max_dist, true, filter)?;
         let collider = self.world.colliders.get(handle)?;
         let terrain = self.terrain_colliders.contains(&handle);
         let (mesh_path, material) = if terrain {
@@ -1004,6 +1015,7 @@ impl PhysicsContext {
         // demotion, worldspace switch and interior entry all reach it through
         // RemoveCellColliders.
         if let Some(entities) = self.cell_dyn.remove(&grid) {
+            self.release_if_carried(&entities, ReleaseReason::CellUnloaded);
             for entity in entities {
                 if let Some(db) = self.dyn_bodies.remove(&entity) {
                     self.world.remove_body(db.handle);
@@ -1049,7 +1061,7 @@ impl PhysicsContext {
             Some(point) => rb.apply_impulse_at_point(impulse, point, true),
             None => rb.apply_impulse(impulse, true),
         }
-        clamp_linvel(rb, PUSH_MAX_LINVEL, true);
+        clamp_linvel(rb, PLAYER_DRIVEN_MAX_LINVEL, true);
     }
 
     /// Mirror the player capsule into the rapier world so contact-start wakes
@@ -1132,16 +1144,18 @@ impl PhysicsContext {
 
     /// Flip each body `Dynamic`↔`Fixed` to match the current region. Only bodies
     /// whose membership actually changed are touched; steady state is a cheap
-    /// scan over the (radius-bounded) dynamic set.
+    /// scan over the (radius-bounded) dynamic set. The carried body stays
+    /// `Dynamic` wherever its spawn cell lies.
     fn reconcile_dynamic_radius(&mut self) {
         let r = self.dyn_radius;
         let wake = self.activation == ActivationMode::Wake;
         if self.ragdolls.reconcile(&mut self.world, self.dyn_center, r) {
             self.dirty = true;
         }
-        for db in self.dyn_bodies.values_mut() {
+        let carried = self.carried_entity();
+        for (entity, db) in &mut self.dyn_bodies {
             let in_radius = within_radius(db.grid, self.dyn_center, r);
-            if in_radius == db.active {
+            if in_radius == db.active || carried == Some(*entity) {
                 continue;
             }
             let Some(rb) = self.world.bodies.get_mut(db.handle) else {
@@ -1361,6 +1375,7 @@ fn ragdoll_placement(
 }
 
 mod audit;
+mod carried;
 
 #[cfg(test)]
 pub(super) mod test_support;

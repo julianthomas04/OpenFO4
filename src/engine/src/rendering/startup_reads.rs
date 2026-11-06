@@ -76,12 +76,14 @@ impl StartupDbReads {
                     PlayerMovement::default()
                 },
                 |mt| PlayerMovement {
+                    walk_speed: mt.forward_walk * world_streamer::SCALE,
                     run_speed: mt.forward_run * world_streamer::SCALE,
                     sprint_speed: mt.forward_sprint * world_streamer::SCALE,
                 },
             );
         tracing::info!(
-            "player movement: run {:.2} u/s, sprint {:.2} u/s",
+            "player movement: walk {:.2} u/s, run {:.2} u/s, sprint {:.2} u/s",
+            movement.walk_speed,
             movement.run_speed,
             movement.sprint_speed
         );

@@ -218,6 +218,15 @@ impl ApplicationHandler for App {
         let Some(BootState::Running(state)) = self.phase.as_mut() else {
             return;
         };
+        // Before anything can consume it: the gameplay buttons follow the physical button.
+        if let WindowEvent::MouseInput {
+            state: button_state,
+            button,
+            ..
+        } = event
+        {
+            state.track_mouse_button(button, button_state.is_pressed());
+        }
         // Let the debug ui consume the event first if applicable, else handle it ourselves.
         if debug_ui_takes(&event, state.developer_window_visible()) {
             let response = state.debug_ui.handle_event(&state.window, &event);
@@ -285,10 +294,11 @@ impl ApplicationHandler for App {
                         repeat,
                         ..
                     },
+                is_synthetic,
                 ..
             } => {
                 if let Some(code) = resolve_key_code(physical_key, logical_key) {
-                    state.handle_key(code, key_state.is_pressed(), repeat);
+                    state.handle_key(code, key_state.is_pressed(), repeat, is_synthetic);
                 }
             }
             _ => {}
