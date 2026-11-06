@@ -88,8 +88,7 @@ namespace InstallerTests
             string? error = InstallFolderPreparation.Prepare(locations);
 
             Assert.Equal($"Close OpenFO4 before reinstalling: '{locations.GameExecutable}' is in use.", error);
-            Assert.True(AssetVersionMarker.TryRead(locations.OwnershipMarker, out var version));
-            Assert.Equal("1.0.0", version);
+            Assert.Equal("1.0.0", AssetVersionMarker.Read(locations.OwnershipMarker)?.Version);
         }
 
         [Fact]

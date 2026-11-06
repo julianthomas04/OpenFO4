@@ -129,7 +129,7 @@ namespace InstallerTests.Pipeline
             Assert.Matches(@"Raw staging\s+1 files", _output.ToString());
         }
 
-        private string? MarkerVersion() => AssetVersionMarker.TryRead(Locations.OwnershipMarker, out var version) ? version : null;
+        private string? MarkerVersion() => AssetVersionMarker.Read(Locations.OwnershipMarker)?.Version;
 
         [Fact]
         public async Task ASuccessfulInstallRecordsTheAssetVersionInTheMarker()
