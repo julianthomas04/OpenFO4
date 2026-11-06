@@ -451,8 +451,8 @@ static bool TryResolveLocations(string[] commandLine, [NotNullWhen(true)] out In
 // options before the session starts, since the session plans its progress steps from it, and the decision is logged once the log is captured.
 static (InstallOptions Options, ReconversionDecision Decision) DecideReconversion(InstallOptions options, InstallLocations locations)
 {
-    var decision = ReconversionDecision.Read(locations.OwnershipMarker, AssetGroups.CurrentRevisions);
-    return (options with { Reconversion = decision.Plan }, decision);
+    var decision = ReconversionDecision.ForInstall(locations, AssetGroups.CurrentRevisions);
+    return (options with { Reconversion = decision.Plan, GameInputs = decision.Inputs }, decision);
 }
 
 static void PrepareInstallFolderOrExit(InstallLocations locations)

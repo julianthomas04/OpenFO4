@@ -35,8 +35,8 @@ namespace InstallerTests.Pipeline
         {
             Assert.True(AssetGroups.TryFromId(groupId, out var group));
             Assert.True(
-                version == pinnedVersion && AssetGroups.Revision(group) == pinnedRevision,
-                $"{converter} is at version {version} (pinned {pinnedVersion}) and the '{AssetGroups.Id(group)}' group at revision {AssetGroups.Revision(group)} (pinned {pinnedRevision}). " +
+                version == pinnedVersion && AssetGroups.CurrentRevisions[group] == pinnedRevision,
+                $"{converter} is at version {version} (pinned {pinnedVersion}) and the '{AssetGroups.Id(group)}' group at revision {AssetGroups.CurrentRevisions[group]} (pinned {pinnedRevision}). " +
                 $"A converter version change alters the converted output: bump the '{AssetGroups.Id(group)}' revision in AssetGroups and update this pin to the new version and revision.");
         }
     }

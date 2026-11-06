@@ -133,7 +133,7 @@ namespace InstallerTests.Pipeline
         public async Task TheCompletionLeavesTheMarkerToTheGroupsThatRecordedThemselvesAndVouchesForNoOther()
         {
             var pipeline = Pipeline(new InstallOptions(AssetVersion: "3.1.4-alpha"));
-            Locations.MarkGroupComplete(AssetGroup.Audio, "3.1.4-alpha");
+            Locations.MarkGroupComplete(AssetGroup.Audio, "3.1.4-alpha", null);
 
             await pipeline.CompleteAsync([Task.CompletedTask]);
 

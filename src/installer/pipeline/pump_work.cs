@@ -13,6 +13,10 @@ namespace AssetConverter.Pipeline
     {
         private static readonly AssetGroup[] ReadingStagedMeshes = [AssetGroup.Meshes, AssetGroup.Collision, AssetGroup.Animations, AssetGroup.TexturesDatabase];
 
+        /// <summary>The groups, among those converted, that read what the mesh archive extraction stages; a failure of that extraction leaves them all unfinished.</summary>
+        public static IReadOnlyList<AssetGroup> MeshExtractionConsumers(IReadOnlySet<AssetGroup> reconverted) =>
+            [.. ReadingStagedMeshes.Where(reconverted.Contains)];
+
         public static PumpWork For(IReadOnlySet<AssetGroup> reconverted) => new(
             CopyGameData: reconverted.Contains(AssetGroup.TexturesDatabase),
             ExtractMeshArchives: ReadingStagedMeshes.Any(reconverted.Contains),

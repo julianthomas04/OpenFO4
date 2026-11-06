@@ -52,20 +52,20 @@ namespace AssetConverter.Pipeline
 
         public string OwnershipMarker => Path.Combine(InstallRoot, InstallLayout.OwnershipMarkerFileName);
 
-        /// <summary>Rewrites the marker to vouch only for the groups <paramref name="plan"/> keeps, as they were installed, since the others are about to change.</summary>
+        /// <summary>Rewrites the marker to vouch only for the groups <paramref name="plan"/> keeps, as they were installed, since the others are about to change; the marker names <paramref name="inputs"/> from now on.</summary>
         /// <exception cref="IOException">The marker could not be written.</exception>
-        public void WithdrawReconverted(ReconversionPlan plan, string installerVersion) =>
+        public void WithdrawReconverted(ReconversionPlan plan, string installerVersion, GameInputs? inputs) =>
             AssetVersionMarker.Update(OwnershipMarker, installed =>
             {
                 var kept = installed?.Keeping(plan.Kept);
-                return kept is { Revisions.Count: > 0 } ? kept with { Version = installerVersion } : null;
+                return kept is { Revisions.Count: > 0 } ? kept with { Version = installerVersion, Inputs = inputs } : null;
             });
 
         /// <summary>Adds <paramref name="group"/> at its current revision to the marker, since its converted output is complete.</summary>
         /// <exception cref="IOException">The marker could not be written.</exception>
-        public void MarkGroupComplete(AssetGroup group, string installerVersion) =>
+        public void MarkGroupComplete(AssetGroup group, string installerVersion, GameInputs? inputs) =>
             AssetVersionMarker.Update(OwnershipMarker, installed =>
-                (installed ?? new InstalledAssets(installerVersion, new Dictionary<AssetGroup, int>())).Recording(group, AssetGroups.Revision(group)) with { Version = installerVersion });
+                (installed ?? new InstalledAssets(installerVersion, new Dictionary<AssetGroup, int>())).Recording(group, AssetGroups.CurrentRevisions[group]) with { Version = installerVersion, Inputs = inputs });
 
         /// <summary>
         /// Whether the install root is, or has been, an OpenFO4 install: it carries the ownership marker, or (installs from before the

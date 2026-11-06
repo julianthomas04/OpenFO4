@@ -1,3 +1,4 @@
+using AssetConverter;
 using AssetConverter.Pipeline;
 using Xunit;
 
@@ -203,6 +204,104 @@ namespace InstallerTests.Pipeline
             Assert.Empty(File.ReadAllBytes(MarkerPath));
         }
 
+        private static readonly GameInputs Inputs = new("en", new string('a', 64));
+
+        [Fact]
+        public void TheGameInputsFollowTheVersionLineAndComeBeforeTheGroups()
+        {
+            AssetVersionMarker.Write(MarkerPath, Assets("1.0.0", (AssetGroup.Shaders, 3)) with { Inputs = Inputs });
+
+            Assert.Equal(System.Text.Encoding.UTF8.GetBytes($"Asset Version 1.0.0\nGame Language en\nGame Files {Inputs.Files}\nshaders=3\n"), File.ReadAllBytes(MarkerPath));
+        }
+
+        [Fact]
+        public void TheGameInputsRoundTripAndAMarkerWithoutThemReadsAsNone()
+        {
+            AssetVersionMarker.Write(MarkerPath, Assets("1.0.0", (AssetGroup.Audio, 1)) with { Inputs = Inputs });
+            Assert.Equal(Inputs, AssetVersionMarker.Read(MarkerPath)!.Inputs);
+
+            AssetVersionMarker.Write(MarkerPath, Assets("1.0.0", (AssetGroup.Audio, 1)));
+            Assert.Null(AssetVersionMarker.Read(MarkerPath)!.Inputs);
+        }
+
+        [Theory]
+        [InlineData("Asset Version 1.0.0\nGame Language en\n")]
+        [InlineData("Asset Version 1.0.0\nGame Files {F}\n")]
+        [InlineData("Asset Version 1.0.0\nGame Files {F}\nGame Language en\n")]
+        [InlineData("Asset Version 1.0.0\nshaders=1\nGame Language en\nGame Files {F}\n")]
+        [InlineData("Asset Version 1.0.0\nGame Language en\nGame Files {F}\nGame Language en\nGame Files {F}\n")]
+        [InlineData("Asset Version 1.0.0\nGame Language e1\nGame Files {F}\n")]
+        [InlineData("Asset Version 1.0.0\nGame Language en US\nGame Files {F}\n")]
+        [InlineData("Asset Version 1.0.0\nGame Language en\nGame Files {FU}\n")]
+        [InlineData("Asset Version 1.0.0\nGame Language en\nGame Files {F63}\n")]
+        public void MalformedOrMisplacedInputLinesMakeTheWholeMarkerUnreadable(string template)
+        {
+            string content = template.Replace("{FU}", new string('A', 64), StringComparison.Ordinal).Replace("{F63}", new string('a', 63), StringComparison.Ordinal)
+                .Replace("{F}", Inputs.Files, StringComparison.Ordinal);
+
+            Assert.Null(AssetVersionMarker.Parse(content));
+        }
+
+        [Theory]
+        [InlineData("")]
+        [InlineData("en US")]
+        [InlineData("e1")]
+        public void FormattingRefusesALanguageThatIsNotLetters(string language) =>
+            Assert.Throws<ArgumentException>(() => AssetVersionMarker.Format(Assets("1.0.0") with { Inputs = new GameInputs(language, Inputs.Files) }));
+
+        [Fact]
+        public void FormattingRefusesAFingerprintThatIsNotSixtyFourHexDigits() =>
+            Assert.Throws<ArgumentException>(() => AssetVersionMarker.Format(Assets("1.0.0") with { Inputs = new GameInputs("en", "abc") }));
+
+        [Fact]
+        public void AMarkerHeldBrieflyByAnotherProcessIsReplacedOnceItIsReleased()
+        {
+            AssetVersionMarker.Write(MarkerPath, Assets("1.0.0", (AssetGroup.Audio, 1)));
+            var holder = new FileStream(MarkerPath, FileMode.Open, FileAccess.Read, FileShare.None);
+            var delays = new List<TimeSpan>();
+
+            AssetVersionMarker.Write(MarkerPath, Assets("2.0.0", (AssetGroup.Video, 1)), wait: delay =>
+            {
+                delays.Add(delay);
+                holder.Dispose();
+            });
+
+            Assert.Single(delays);
+            Assert.Equal("2.0.0", AssetVersionMarker.Read(MarkerPath)!.Version);
+            Assert.Equal([MarkerPath], Directory.GetFiles(_root.Path));
+        }
+
+        [Fact]
+        public void AMarkerThatStaysHeldFailsTheWriteAfterTheRetriesWithoutLeavingATemporaryFile()
+        {
+            AssetVersionMarker.Write(MarkerPath, Assets("1.0.0", (AssetGroup.Audio, 1)));
+            using var holder = new FileStream(MarkerPath, FileMode.Open, FileAccess.Read, FileShare.None);
+            var delays = new List<TimeSpan>();
+
+            var failure = Assert.Throws<IOException>(() => AssetVersionMarker.Write(MarkerPath, Assets("2.0.0"), wait: delays.Add));
+
+            Assert.Equal(IoRetry.DefaultDelays, delays);
+            Assert.Contains("Cannot write the install marker", failure.Message, StringComparison.Ordinal);
+            Assert.Equal([MarkerPath], Directory.GetFiles(_root.Path));
+        }
+
+        [Fact]
+        public void UpdatingAMarkerThatCannotBeReadFailsWithAMessageSayingSo()
+        {
+            AssetVersionMarker.Write(MarkerPath, Assets("1.0.0", (AssetGroup.Audio, 1)));
+            using var holder = new FileStream(MarkerPath, FileMode.Open, FileAccess.Read, FileShare.None);
+            bool changed = false;
+
+            var failure = Assert.Throws<IOException>(() => AssetVersionMarker.Update(MarkerPath, current =>
+            {
+                changed = true;
+                return current;
+            }));
+
+            Assert.Contains("Cannot read the install marker", failure.Message, StringComparison.Ordinal);
+            Assert.False(changed);
+        }
+
         [Fact]
         public void UpdatesFromSeveralThreadsAllSurvive()
         {
@@ -266,7 +365,7 @@ namespace InstallerTests.Pipeline
                 [AssetGroup.TexturesDatabase] = 1,
             }));
 
-            Locations.WithdrawReconverted(PlanReconverting(AssetGroup.Meshes), "2.0.0");
+            Locations.WithdrawReconverted(PlanReconverting(AssetGroup.Meshes), "2.0.0", null);
 
             Assert.Equal("2.0.0", Marker()?.Version);
             Assert.Equal([AssetGroup.Shaders, AssetGroup.Audio], Marker()!.Revisions.Keys.Order());
@@ -278,7 +377,7 @@ namespace InstallerTests.Pipeline
             Locations.CreateOutputDirectories();
             AssetVersionMarker.Write(Locations.OwnershipMarker, new InstalledAssets("1.0.0", AssetGroups.CurrentRevisions));
 
-            Locations.WithdrawReconverted(ReconversionPlan.ReconvertAll, "2.0.0");
+            Locations.WithdrawReconverted(ReconversionPlan.ReconvertAll, "2.0.0", null);
 
             Assert.Empty(File.ReadAllBytes(Locations.OwnershipMarker));
         }
@@ -289,7 +388,7 @@ namespace InstallerTests.Pipeline
             Locations.CreateOutputDirectories();
             File.WriteAllText(Locations.OwnershipMarker, "something else");
 
-            Locations.WithdrawReconverted(PlanReconverting(), "2.0.0");
+            Locations.WithdrawReconverted(PlanReconverting(), "2.0.0", null);
 
             Assert.Empty(File.ReadAllBytes(Locations.OwnershipMarker));
         }
@@ -299,12 +398,12 @@ namespace InstallerTests.Pipeline
         {
             Locations.CreateOutputDirectories();
 
-            Locations.MarkGroupComplete(AssetGroup.Audio, "2.0.0");
-            Locations.MarkGroupComplete(AssetGroup.Meshes, "2.0.0");
+            Locations.MarkGroupComplete(AssetGroup.Audio, "2.0.0", null);
+            Locations.MarkGroupComplete(AssetGroup.Meshes, "2.0.0", null);
 
             Assert.Equal("2.0.0", Marker()?.Version);
             Assert.Equal([AssetGroup.Audio, AssetGroup.Meshes], Marker()!.Revisions.Keys.Order());
-            Assert.Equal(AssetGroups.Revision(AssetGroup.Meshes), Marker()!.Revisions[AssetGroup.Meshes]);
+            Assert.Equal(AssetGroups.CurrentRevisions[AssetGroup.Meshes], Marker()!.Revisions[AssetGroup.Meshes]);
         }
 
         [Fact]
@@ -312,9 +411,9 @@ namespace InstallerTests.Pipeline
         {
             Locations.CreateOutputDirectories();
             AssetVersionMarker.Write(Locations.OwnershipMarker, new InstalledAssets("1.0.0", AssetGroups.CurrentRevisions));
-            Locations.WithdrawReconverted(PlanReconverting(AssetGroup.Collision), "2.0.0");
+            Locations.WithdrawReconverted(PlanReconverting(AssetGroup.Collision), "2.0.0", null);
 
-            Locations.MarkGroupComplete(AssetGroup.Collision, "2.0.0");
+            Locations.MarkGroupComplete(AssetGroup.Collision, "2.0.0", null);
 
             Assert.Equal(AssetGroups.All.Order(), Marker()!.Revisions.Keys.Order());
         }

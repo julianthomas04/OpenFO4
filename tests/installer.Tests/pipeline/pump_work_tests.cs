@@ -44,5 +44,17 @@ namespace InstallerTests.Pipeline
 
             Assert.Equal(new PumpWork(true, true, true), PumpWork.For(plan.Reconverted));
         }
+
+        [Fact]
+        public void AFailedMeshArchiveExtractionLeavesEveryConvertedGroupThatReadItUnfinished()
+        {
+            var reconverted = new HashSet<AssetGroup> { AssetGroup.Audio, AssetGroup.Meshes, AssetGroup.Animations, AssetGroup.TexturesDatabase };
+
+            Assert.Equal([AssetGroup.Meshes, AssetGroup.Animations, AssetGroup.TexturesDatabase], PumpWork.MeshExtractionConsumers(reconverted));
+        }
+
+        [Fact]
+        public void GroupsThatDoNotReadTheStagedMeshesAreNotConsumersOfTheExtraction() =>
+            Assert.Empty(PumpWork.MeshExtractionConsumers(new HashSet<AssetGroup> { AssetGroup.Shaders, AssetGroup.Interface, AssetGroup.Audio, AssetGroup.Video }));
     }
 }

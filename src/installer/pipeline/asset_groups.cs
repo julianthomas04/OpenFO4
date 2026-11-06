@@ -44,8 +44,6 @@ namespace AssetConverter.Pipeline
 
         public static string Id(AssetGroup group) => ByGroup[group].Id;
 
-        public static int Revision(AssetGroup group) => ByGroup[group].Revision;
-
         public static bool TryFromId(string id, out AssetGroup group) => ByPersistedId.TryGetValue(id, out group);
 
         /// <summary>The given groups plus every group built from them, directly or through others.</summary>

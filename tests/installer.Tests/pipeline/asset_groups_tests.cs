@@ -38,14 +38,10 @@ namespace InstallerTests.Pipeline
         }
 
         [Fact]
-        public void EveryRevisionIsPositiveAndTheCurrentRevisionsAreTheTables()
+        public void EveryGroupHasAPositiveCurrentRevision()
         {
-            Assert.All(AssetGroups.All, group =>
-            {
-                Assert.True(AssetGroups.Revision(group) >= 1);
-                Assert.Equal(AssetGroups.Revision(group), AssetGroups.CurrentRevisions[group]);
-            });
-            Assert.Equal(AssetGroups.All.Count, AssetGroups.CurrentRevisions.Count);
+            Assert.All(AssetGroups.All, group => Assert.True(AssetGroups.CurrentRevisions[group] >= 1));
+            Assert.Equal(AssetGroups.All.Order(), AssetGroups.CurrentRevisions.Keys.Order());
         }
 
         [Fact]
