@@ -35,9 +35,20 @@ against that file and fail when the two sides disagree.
 
 ## Install marker
 
-The installer writes `.openfo4-install` empty when an install starts. Only after
-every part of the install has succeeded does it write the asset version into the
-file. An empty marker therefore means an incomplete install.
+`.openfo4-install` records which asset groups of the install are complete. The
+installer writes it empty when an install starts. Its content is a first line
+`Asset Version <installer version>`, naming the installer that last wrote the
+file, and then one `<group id>=<revision>` line per asset group whose converted
+output is complete, at the revision it was converted at. The installer adds a
+group's line when that group finishes, so a failed or cancelled update leaves
+the finished groups listed and the unfinished ones absent. An empty marker means
+an install started and no group has finished.
+
+The installer decides from the revisions alone which groups to keep and which to
+convert again. A marker from before groups were recorded, an unreadable one (a
+malformed line, a repeated id, a revision that is not a positive number) and an
+empty one all count as no record, and every group is rebuilt. The engine does
+not read the marker.
 
 ## Finding the install
 
