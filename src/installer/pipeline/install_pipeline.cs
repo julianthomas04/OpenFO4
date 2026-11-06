@@ -35,7 +35,7 @@ namespace AssetConverter.Pipeline
         private readonly Gate _skeletonGlbsReady = new("render skeleton GLBs converted");
 
         public InstallPipeline(InstallLocations paths, InstallOptions options, MemoryBudget memory, CancellationToken ct)
-            : this(paths, options, memory, new PipelineStages(paths, memory, ct), ct)
+            : this(paths, options, memory, new PipelineStages(paths, memory, ct, options.GameInputs?.Language), ct)
         {
         }
 

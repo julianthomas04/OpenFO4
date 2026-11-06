@@ -38,12 +38,12 @@ namespace AssetConverter.Pipeline
         private Func<Task, int>? _drainLateBakes;
         private LodWaterHeights? _lodWater;
 
-        public PipelineStages(InstallLocations paths, MemoryBudget memory, CancellationToken ct)
+        public PipelineStages(InstallLocations paths, MemoryBudget memory, CancellationToken ct, string? language = null)
         {
             _paths = paths;
             _memory = memory;
             _ct = ct;
-            _language = new Lazy<string>(() => GameLanguage.Resolve(paths.Fo4Location, paths.SettingsDirectory));
+            _language = new Lazy<string>(() => language ?? GameLanguage.Resolve(paths.Fo4Location, paths.SettingsDirectory));
         }
 
         /// <summary>The installed language (<c>sLanguage</c> of the game's INIs) the localized files are taken in.</summary>
@@ -320,8 +320,6 @@ namespace AssetConverter.Pipeline
             int phase = InstallProgress.BeginPhase(InstallSteps.ExtractTextures, extraction.FileCount);
             bool allSucceeded = extraction.Run(_paths.TexturesOut, phase, BA2ParallelUnpacker.DefaultMaxInFlightBytes, _ct);
             InstallProgress.EndPhase(phase);
-            if (!allSucceeded)
-                Console.Error.WriteLine("WARNING: some texture archives had extraction failures; markers withheld, re-run to repair.");
             return allSucceeded;
         }
 
