@@ -11,11 +11,11 @@ namespace InstallerTests.Pipeline
 
         [Fact]
         public void ConvertingEverythingRunsEveryStepOfTheReaderAsAFullInstallAlwaysDid() =>
-            Assert.Equal(new PumpWork(true, true, true, true), PumpWork.For(ReconversionPlan.ReconvertAll.Reconverted));
+            Assert.Equal(new PumpWork(true, true, true), PumpWork.For(ReconversionPlan.ReconvertAll.Reconverted));
 
         [Fact]
         public void ConvertingNothingReadsNothing() =>
-            Assert.Equal(new PumpWork(false, false, false, false), Reconverting());
+            Assert.Equal(new PumpWork(false, false, false), Reconverting());
 
         [Theory]
         [InlineData("shaders")]
@@ -23,21 +23,17 @@ namespace InstallerTests.Pipeline
         [InlineData("audio")]
         [InlineData("video")]
         public void GroupsThatReadOnlyTheirOwnArchivesNeedNothingFromTheReader(string id) =>
-            Assert.Equal(new PumpWork(false, false, false, false), Reconverting(Group(id)));
+            Assert.Equal(new PumpWork(false, false, false), Reconverting(Group(id)));
 
         [Theory]
         [InlineData("collision")]
         [InlineData("animations")]
         public void GroupsThatReadStagedFilesNeedTheMeshArchivesButNeitherTheTextureIndexNorTheTextures(string id) =>
-            Assert.Equal(new PumpWork(false, false, true, false), Reconverting(Group(id)));
-
-        [Fact]
-        public void ConvertedMeshesNeedTheTextureNamesAndTheMeshArchivesButNotTheTexturePixelsOrTheEsm() =>
-            Assert.Equal(new PumpWork(true, false, true, false), Reconverting(AssetGroup.Meshes));
+            Assert.Equal(new PumpWork(false, true, false), Reconverting(Group(id)));
 
         [Fact]
         public void ConvertedTexturesAndDatabaseNeedEverything() =>
-            Assert.Equal(new PumpWork(true, true, true, true), Reconverting(AssetGroup.TexturesDatabase));
+            Assert.Equal(new PumpWork(true, true, true), Reconverting(AssetGroup.TexturesDatabase));
 
         [Fact]
         public void AMeshesChangeCarriesThroughItsDependentsToEverythingTheReaderDoes()
@@ -46,7 +42,7 @@ namespace InstallerTests.Pipeline
                 new InstalledAssets("1.0.0", AssetGroups.All.ToDictionary(group => group, group => 1)),
                 new Dictionary<AssetGroup, int>(AssetGroups.CurrentRevisions) { [AssetGroup.Meshes] = 2 });
 
-            Assert.Equal(new PumpWork(true, true, true, true), PumpWork.For(plan.Reconverted));
+            Assert.Equal(new PumpWork(true, true, true), PumpWork.For(plan.Reconverted));
         }
     }
 }

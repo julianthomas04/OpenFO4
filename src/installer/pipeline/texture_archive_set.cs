@@ -25,8 +25,7 @@ namespace AssetConverter.Pipeline
 
         public IReadOnlyList<Entry> Pending => _pending;
 
-        /// <param name="includeExtracted">Opens the archives that carry a done-marker as well, for a caller that wants their names and does not extract.</param>
-        public static TextureArchiveSet Open(string gameDataDirectory, string stagingRoot, IEnumerable<string> archiveNames, bool includeExtracted = false)
+        public static TextureArchiveSet Open(string gameDataDirectory, string stagingRoot, IEnumerable<string> archiveNames)
         {
             var pending = new List<Entry>();
             try
@@ -34,7 +33,7 @@ namespace AssetConverter.Pipeline
                 foreach (var name in archiveNames)
                 {
                     string archivePath = Path.Combine(gameDataDirectory, name);
-                    if (!includeExtracted && File.Exists(MarkerPath(stagingRoot, name))) continue;
+                    if (File.Exists(MarkerPath(stagingRoot, name))) continue;
                     if (!File.Exists(archivePath))
                     {
                         Console.WriteLine($"WARNING: {archivePath} not found. Skipping.");
@@ -57,15 +56,13 @@ namespace AssetConverter.Pipeline
         /// </summary>
         public IEnumerable<string> IndexNames(string texturesOut)
         {
-            foreach (string name in ArchiveEntryNames())
-                yield return name;
+            foreach (var entry in _pending)
+                foreach (var file in entry.Archive.Files)
+                    yield return file.FullPath;
             if (Directory.Exists(texturesOut))
                 foreach (var file in Directory.EnumerateFiles(texturesOut, "*.dds", SearchOption.AllDirectories))
                     yield return Path.GetRelativePath(texturesOut, file);
         }
-
-        /// <summary>The entries of the opened archives alone, for an index that must not depend on what an earlier install left in the output.</summary>
-        public IEnumerable<string> ArchiveEntryNames() => _pending.SelectMany(entry => entry.Archive.Files.Select(file => file.FullPath));
 
         /// <summary>Records that every entry of the archive was extracted, so the next run skips it.</summary>
         public void MarkExtracted(Entry entry) => File.WriteAllText(MarkerPath(_stagingRoot, entry.Name), "");

@@ -46,7 +46,7 @@ namespace InstallerTests.Progress
 
             Assert.Equal(new Dictionary<string, long?>
             {
-                [InstallSteps.CopyGameData] = 3,
+                [InstallSteps.CopyGameData] = 2,
                 [InstallSteps.BakePalettes] = 1,
                 [InstallSteps.ScanLodWater] = 1,
                 [InstallSteps.FinalizeDatabase] = 6,

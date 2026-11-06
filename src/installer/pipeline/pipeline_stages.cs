@@ -192,21 +192,10 @@ namespace AssetConverter.Pipeline
         }
 
         /// <summary>
-        /// Seeds the texture-existence index from the name tables of every texture archive, extracted or not, and nothing else: for a run
-        /// that converts the meshes but keeps the deployed textures, whose files (palette bakes among them) must not decide which textures
-        /// the meshes find.
-        /// </summary>
-        public void IndexTextureNames()
-        {
-            using var textures = TextureArchiveSet.Open(_paths.GameDataDirectory, _paths.StagingRoot, TextureArchives, includeExtracted: true);
-            NifConverter.PreloadTextureIndex(textures.ArchiveEntryNames());
-        }
-
-        /// <summary>
         /// One local ESM copy (the load reads the file three times: Mutagen overlay + two raw scans, never pay network latency three
-        /// times), the string tables the localized ESM resolves its names from, then the INI cascade.
+        /// times), then the string tables the localized ESM resolves its names from.
         /// </summary>
-        /// <param name="onEsmCopied">Called as soon as the local ESM is complete, while the INIs are still copied.</param>
+        /// <param name="onEsmCopied">Called as soon as the local ESM is complete, while the string tables are still extracted.</param>
         public void CopyGameData(Action onEsmCopied)
         {
             int phase = InstallProgress.BeginPhase(InstallSteps.CopyGameData, InstallSteps.CopyGameDataTotal);
@@ -217,9 +206,17 @@ namespace AssetConverter.Pipeline
 
             RunGameDataStep(phase, "string tables", () => StringTables.Extract(_paths.Fo4Location, _paths.StagingRoot, Language));
             onEsmCopied();
-
-            RunGameDataStep(phase, "game INIs", () => InstallOperations.CopyGameInis(_paths.Fo4Location, _paths.DataOut, _paths.SettingsDirectory));
             InstallProgress.EndPhase(phase);
+        }
+
+        /// <summary>
+        /// The INI cascade of the game into the install. Every install does this, whichever asset groups it converts, so it belongs to no progress
+        /// step: it is quick, and an INI edited since the last install must be picked up.
+        /// </summary>
+        public void CopyGameInis()
+        {
+            _ct.ThrowIfCancellationRequested();
+            InstallOperations.CopyGameInis(_paths.Fo4Location, _paths.DataOut, _paths.SettingsDirectory);
         }
 
         /// <summary>

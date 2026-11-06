@@ -113,6 +113,23 @@ namespace InstallerTests.Pipeline
             Assert.Equal(0, Step().Completed);
         }
 
+        [Fact]
+        public void CopyGameInis_CopiesTheCascadeWithoutTouchingAnyProgressStep()
+        {
+            InstallProgress.Stop();
+            InstallProgress.Start([new StepDefinition(InstallSteps.CopyGameData, KnownTotal: InstallSteps.CopyGameDataTotal)]);
+            Directory.CreateDirectory(Locations.Fo4Location);
+            File.WriteAllText(Path.Combine(Locations.Fo4Location, "Fallout4_Default.ini"), "[General]");
+            Directory.CreateDirectory(Locations.SettingsDirectory);
+            File.WriteAllText(Path.Combine(Locations.SettingsDirectory, "Fallout4Prefs.ini"), "[Display]");
+
+            new PipelineStages(Locations, MemoryBudget.Unlimited(), TestContext.Current.CancellationToken).CopyGameInis();
+
+            Assert.Equal(["Fallout4_Default.ini", "Fallout4Prefs.ini"], Directory.GetFiles(Locations.DataOut).Select(Path.GetFileName).Order());
+            var step = InstallProgress.Model!.GetSnapshot().Steps.Single(step => step.Name == InstallSteps.CopyGameData);
+            Assert.Equal((StepStatus.Pending, 0L), (step.Status, step.Completed));
+        }
+
         private PipelineStages Stages() => new(Locations, MemoryBudget.Unlimited(), TestContext.Current.CancellationToken);
 
         private static PendingExtraction Pending(string detail, Action run) => new(detail, run);

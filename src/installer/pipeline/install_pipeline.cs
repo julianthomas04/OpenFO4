@@ -232,12 +232,13 @@ namespace AssetConverter.Pipeline
             if (_plan.Reconverts(AssetGroup.TexturesDatabase))
                 GroupPurge.Purge(AssetGroup.TexturesDatabase, _paths, ct: _ct);
 
-            using var textures = IndexTextures(work);
+            using var textures = work.ExtractTextures ? _phases.Measure("texture index (BA2 name tables)", _stages.OpenAndIndexTextureArchives) : null;
             _textureIndexReady.Open();
 
             if (work.CopyGameData)
                 _phases.Measure("copy ESM + INIs", () => _stages.CopyGameData(_esmCopied.Open));
             _esmCopied.Open();
+            _stages.CopyGameInis();
 
             if (work.ExtractMeshArchives)
                 _phases.Measure("extract meshes+materials BA2s", () => _stages.ExtractMeshArchives(_meshWork, _skeletons, _meshInputsReady.Open));
@@ -248,16 +249,6 @@ namespace AssetConverter.Pipeline
             if (textures is not null)
                 ExtractTextures(textures);
             _texturesExtracted.Open();
-        }
-
-        /// <returns>The texture archives to extract, opened, with the index seeded from them; null when the textures are kept, in which case at most the names are indexed.</returns>
-        private TextureArchiveSet? IndexTextures(PumpWork work)
-        {
-            if (work.ExtractTextures)
-                return _phases.Measure("texture index (BA2 name tables)", _stages.OpenAndIndexTextureArchives);
-            if (work.IndexTextureNames)
-                _phases.Measure("texture index (BA2 name tables)", _stages.IndexTextureNames);
-            return null;
         }
 
         private void ExtractTextures(TextureArchiveSet textures)

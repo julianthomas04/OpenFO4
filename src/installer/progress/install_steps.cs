@@ -32,7 +32,7 @@ namespace AssetConverter.Progress
         public const string FinalizeDatabase = "Finalizing database";
         public const string RemoveStaging = "Cleaning up";
 
-        public const long CopyGameDataTotal = 3;
+        public const long CopyGameDataTotal = 2;
         public const long BakePalettesTotal = 1;
         public const long ScanLodWaterTotal = 1;
         public const long FinalizeDatabaseTotal = 6;
