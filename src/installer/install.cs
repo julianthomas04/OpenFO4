@@ -346,6 +346,7 @@ catch (LaunchArgumentException ex)
 }
 InstallSession session;
 InstallOptions options;
+ReconversionDecision reconversion;
 if (launch.Headless)
 {
     try
@@ -366,6 +367,7 @@ if (launch.Headless)
         return;
     }
     PrepareInstallFolderOrExit(locations);
+    (options, reconversion) = DecideReconversion(options, locations);
     session = InstallSession.StartOrExit(headless: true, locations.LogFile, options);
 }
 else
@@ -385,6 +387,7 @@ else
     }
     locations = new InstallLocations(choice.GameFolder, choice.InstallFolder, choice.SettingsFolder);
     options = new InstallOptions(choice.KeepStaging, UnpacksPayload: InstallerPaths.IsPackaged);
+    (options, reconversion) = DecideReconversion(options, locations);
     if (!InstallSession.TryStartInOpenWindow(viewModel, window, locations.LogFile, options, out var startedSession))
     {
         await window.Closed;
@@ -394,6 +397,8 @@ else
     session = startedSession;
 }
 using var activeSession = session;
+foreach (string line in reconversion.Describe(AssetGroups.CurrentRevisions))
+    Console.WriteLine(line);
 
 Exception? ended = null;
 try
@@ -440,6 +445,14 @@ static bool TryResolveLocations(string[] commandLine, [NotNullWhen(true)] out In
         locations = null;
         return false;
     }
+}
+
+// The install folder's record of what an earlier install converted decides which asset groups this install keeps; the plan goes into the
+// options before the session starts, since the session plans its progress steps from it, and the decision is logged once the log is captured.
+static (InstallOptions Options, ReconversionDecision Decision) DecideReconversion(InstallOptions options, InstallLocations locations)
+{
+    var decision = ReconversionDecision.Read(locations.OwnershipMarker, AssetGroups.CurrentRevisions);
+    return (options with { Reconversion = decision.Plan }, decision);
 }
 
 static void PrepareInstallFolderOrExit(InstallLocations locations)
