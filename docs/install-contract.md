@@ -36,7 +36,9 @@ against that file and fail when the two sides disagree.
 ## Install marker
 
 `.openfo4-install` records which asset groups of the install are complete. The
-installer writes it empty when an install starts. Its content is a first line
+installer writes it empty when an install starts in a folder without one; when
+it updates an existing install, it first rewrites the marker to list only the
+groups it keeps. Its content is a first line
 `Asset Version <installer version>`, naming the installer that last wrote the
 file, and then one `<group id>=<revision>` line per asset group whose converted
 output is complete, at the revision it was converted at. The installer adds a

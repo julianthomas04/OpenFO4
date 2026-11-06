@@ -92,13 +92,9 @@ Each group's revision is recorded in the
 At the start of an install, a group whose recorded revision is missing or
 differs from the installer's is converted again, together with every group built
 from it. All other groups are kept, and the decision is logged. A marker with no
-readable record converts every group. A group that is converted again first
-deletes its own output, so its conversion stamps cannot keep stale files. A kept
+readable record converts every group. A group that is converted again starts
+from none of its previous output, so its conversion stamps cannot keep stale files. A kept
 group's work is skipped.
-
-Stamps and revisions work at different levels. A stamp skips unchanged files
-inside a group that is being converted. A revision forces a whole group to be
-converted again.
 
 A change to a group's converted output requires bumping that group's revision in
 `asset_groups.cs`, so installs made by an earlier installer convert it again.
