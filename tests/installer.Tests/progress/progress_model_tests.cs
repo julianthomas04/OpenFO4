@@ -721,5 +721,20 @@ namespace InstallerTests.Progress
             Assert.NotNull(Find(snapshot, "Cached").StartedAt);
             Assert.False(Find(snapshot, "Worked").WasSkipped);
         }
+
+        [Fact]
+        public void FailingOrCancellingStepsThatAreNotDeclaredChangesNothingAndDoesNotAddThem()
+        {
+            var model = Model(Step("A"), Step("B"));
+            model.BeginPhase("A", 1, null);
+
+            model.Fail(["Not planned"]);
+            model.Cancel(["Also not planned"]);
+
+            var snapshot = model.GetSnapshot();
+            Assert.Equal(["A", "B"], snapshot.Steps.Select(s => s.Name));
+            Assert.Equal(StepStatus.Running, Find(snapshot, "A").Status);
+            Assert.Equal(StepStatus.Pending, Find(snapshot, "B").Status);
+        }
     }
 }

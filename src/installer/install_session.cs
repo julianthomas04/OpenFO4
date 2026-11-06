@@ -76,7 +76,7 @@ namespace AssetConverter
         private static void ShowStartupFailure(InstallerViewModel viewModel, IInstallerWindow window, string logFilePath, InstallOptions options, InstallStartupException ex)
         {
             var buffer = new LogBuffer(InstallerViewModel.LogCapacity);
-            var model = new ProgressModel(InstallSteps.Planned(options.KeepStaging, options.UnpacksPayload));
+            var model = new ProgressModel(InstallSteps.Planned(options.KeepStaging, options.UnpacksPayload, options.EffectiveReconversion));
             model.Finish(RunState.Failed);
             string line = $"ERROR: {ex.Message}";
             buffer.WriteLine(line, isError: true);
@@ -146,7 +146,7 @@ namespace AssetConverter
             try
             {
                 capture = ConsoleCapture.Start(new CompositeLineSink(buffer, logFile));
-                var model = InstallProgress.Start(InstallSteps.Planned(options.KeepStaging, options.UnpacksPayload));
+                var model = InstallProgress.Start(InstallSteps.Planned(options.KeepStaging, options.UnpacksPayload, options.EffectiveReconversion));
                 window = attachWindow(model, buffer);
                 reporter = new StepReporter(model, Console.Out);
                 reporter.Start();
