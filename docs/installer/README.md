@@ -88,11 +88,14 @@ overwrite the extracted pixels in place, the originals exist only in `staging/`,
 and the database reads the bakes back.
 
 Each group's revision is recorded in the
-[install marker](../install-contract.md#install-marker) as the group finishes.
+[install marker](../install-contract.md#install-marker) as the group finishes; a group is left out when an archive it reads failed to
+extract in a way a rerun can repair, so the next install converts it again.
 At the start of an install, a group whose recorded revision is missing or
 differs from the installer's is converted again, together with every group built
 from it. All other groups are kept, and the decision is logged. A marker with no
-readable record converts every group. A group that is converted again starts
+readable record, or whose recorded game language or game files differ from the
+current ones, converts every group, since a revision only vouches for the
+installer's side of a group's output. A group that is converted again starts
 from none of its previous output, so its conversion stamps cannot keep stale files. A kept
 group's work is skipped.
 
