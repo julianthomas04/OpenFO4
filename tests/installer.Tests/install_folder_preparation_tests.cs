@@ -81,7 +81,7 @@ namespace InstallerTests
         {
             var locations = Locations();
             Assert.Null(InstallFolderPreparation.Prepare(locations));
-            locations.MarkAssetsComplete("1.0.0");
+            AssetVersionMarker.Write(locations.OwnershipMarker, new InstalledAssets("1.0.0", AssetGroups.CurrentRevisions));
             File.WriteAllText(locations.GameExecutable, "exe");
             using var running = new FileStream(locations.GameExecutable, FileMode.Open, FileAccess.Read, FileShare.Read);
 

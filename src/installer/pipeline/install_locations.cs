@@ -52,14 +52,6 @@ namespace AssetConverter.Pipeline
 
         public string OwnershipMarker => Path.Combine(InstallRoot, InstallLayout.OwnershipMarkerFileName);
 
-        /// <summary>
-        /// Records that every asset group of the install was converted at its current revision by the installer of <paramref name="installerVersion"/>; the install fails when
-        /// this cannot be written, since the marker is what lets a later install keep the assets.
-        /// </summary>
-        /// <exception cref="IOException">The marker could not be written.</exception>
-        public void MarkAssetsComplete(string installerVersion) =>
-            AssetVersionMarker.Update(OwnershipMarker, _ => new InstalledAssets(installerVersion, AssetGroups.CurrentRevisions));
-
         /// <summary>Rewrites the marker to vouch only for the groups <paramref name="plan"/> keeps, as they were installed, since the others are about to change.</summary>
         /// <exception cref="IOException">The marker could not be written.</exception>
         public void WithdrawReconverted(ReconversionPlan plan, string installerVersion) =>

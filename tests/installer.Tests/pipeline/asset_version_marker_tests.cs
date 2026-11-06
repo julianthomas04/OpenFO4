@@ -245,7 +245,7 @@ namespace InstallerTests.Pipeline
         public void StartingAgainOverACompleteInstallKeepsItsRecord()
         {
             Locations.CreateOutputDirectories();
-            Locations.MarkAssetsComplete("1.0.0");
+            AssetVersionMarker.Write(Locations.OwnershipMarker, new InstalledAssets("1.0.0", AssetGroups.CurrentRevisions));
 
             Locations.CreateOutputDirectories();
 
@@ -254,23 +254,16 @@ namespace InstallerTests.Pipeline
         }
 
         [Fact]
-        public void CompletingTheAssetsRecordsEveryGroupAtItsCurrentRevisionWithTheVersion()
-        {
-            Locations.CreateOutputDirectories();
-
-            Locations.MarkAssetsComplete("2.3.4");
-
-            Assert.Equal("2.3.4", Marker()?.Version);
-            Assert.Equal(AssetGroups.CurrentRevisions.OrderBy(r => r.Key), Marker()!.Revisions.OrderBy(r => r.Key));
-        }
-
-        [Fact]
         public void WithdrawingListsOnlyTheKeptGroupsAtTheirInstalledRevisionsUnderTheNewVersion()
         {
             Locations.CreateOutputDirectories();
             AssetVersionMarker.Write(Locations.OwnershipMarker, new InstalledAssets("1.0.0", new Dictionary<AssetGroup, int>
             {
-                [AssetGroup.Shaders] = 1, [AssetGroup.Audio] = 1, [AssetGroup.Meshes] = 1, [AssetGroup.Animations] = 1, [AssetGroup.TexturesDatabase] = 1,
+                [AssetGroup.Shaders] = 1,
+                [AssetGroup.Audio] = 1,
+                [AssetGroup.Meshes] = 1,
+                [AssetGroup.Animations] = 1,
+                [AssetGroup.TexturesDatabase] = 1,
             }));
 
             Locations.WithdrawReconverted(PlanReconverting(AssetGroup.Meshes), "2.0.0");
@@ -283,7 +276,7 @@ namespace InstallerTests.Pipeline
         public void WithdrawingEverythingEmptiesTheMarker()
         {
             Locations.CreateOutputDirectories();
-            Locations.MarkAssetsComplete("1.0.0");
+            AssetVersionMarker.Write(Locations.OwnershipMarker, new InstalledAssets("1.0.0", AssetGroups.CurrentRevisions));
 
             Locations.WithdrawReconverted(ReconversionPlan.ReconvertAll, "2.0.0");
 
@@ -318,7 +311,7 @@ namespace InstallerTests.Pipeline
         public void AFinishedGroupIsAddedToTheKeptOnesAfterAWithdrawal()
         {
             Locations.CreateOutputDirectories();
-            Locations.MarkAssetsComplete("1.0.0");
+            AssetVersionMarker.Write(Locations.OwnershipMarker, new InstalledAssets("1.0.0", AssetGroups.CurrentRevisions));
             Locations.WithdrawReconverted(PlanReconverting(AssetGroup.Collision), "2.0.0");
 
             Locations.MarkGroupComplete(AssetGroup.Collision, "2.0.0");
