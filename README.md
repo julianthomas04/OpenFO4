@@ -1,11 +1,11 @@
 # OpenFO4
-Version 0.1.0-alpha
+Version 0.2.0-alpha
 
 ## About
 OpenFO4 aims to rewrite the engine of Fallout 4 to achieve greater performance, higher stability, fewer bugs, and improved modability. It uses the Fallout 4 assets but apart from that, everything else is new.
 
 ## What to expect
-As of version 0.1.0-alpha you can spawn into the Commonwealth at one of multiple pre-selected locations (note that load times are high when you spawn in a new location for the first time. On subsequent spawns there, the load times drastically reduce). You can walk around the map, as well as enter interiors (Diamond City and Goodneighbor cannot be entered the normal way yet) and interact with physics objects. The game also features an extensive developer menu with which you can freely play around (any changes you make are discarded after a restart).
+As of version 0.2.0-alpha you can spawn into the Commonwealth at one of multiple pre-selected locations (note that load times are high when you spawn in a new location for the first time. On subsequent spawns there, the load times drastically reduce). You can walk around the map, as well as enter interiors and interact with physics objects. The game also features an extensive developer menu with which you can freely play around (any changes you make are discarded after a restart).
 
 ## How to play
 ### Prerequisites:
