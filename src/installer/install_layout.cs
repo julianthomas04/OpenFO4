@@ -34,7 +34,7 @@ namespace AssetConverter
         /// <summary>The WGSL translated from the game's shaders.</summary>
         public const string ShadersFolder = "shaders";
 
-        /// <summary>The file by which the installer claims a folder as an OpenFO4 install, below the install root; it holds the asset version, see <see cref="Pipeline.AssetVersionMarker"/>.</summary>
+        /// <summary>The file by which the installer claims a folder as an OpenFO4 install, below the install root; it records the version and the asset groups converted, see <see cref="Pipeline.AssetVersionMarker"/>.</summary>
         public const string OwnershipMarkerFileName = ".openfo4-install";
 
         /// <summary>The installer's log, below the install root.</summary>

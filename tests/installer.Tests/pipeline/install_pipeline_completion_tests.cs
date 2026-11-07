@@ -129,62 +129,16 @@ namespace InstallerTests.Pipeline
             Assert.Matches(@"Raw staging\s+1 files", _output.ToString());
         }
 
-        private string? MarkerVersion() => AssetVersionMarker.TryRead(Locations.OwnershipMarker, out var version) ? version : null;
-
         [Fact]
-        public async Task ASuccessfulInstallRecordsTheAssetVersionInTheMarker()
+        public async Task TheCompletionLeavesTheMarkerToTheGroupsThatRecordedThemselvesAndVouchesForNoOther()
         {
             var pipeline = Pipeline(new InstallOptions(AssetVersion: "3.1.4-alpha"));
-            Assert.Null(MarkerVersion());
+            Locations.MarkGroupComplete(AssetGroup.Audio, "3.1.4-alpha", null);
 
             await pipeline.CompleteAsync([Task.CompletedTask]);
 
-            Assert.Equal("3.1.4-alpha", MarkerVersion());
-        }
-
-        [Fact]
-        public async Task ACancelledInstallLeavesTheMarkerEmpty()
-        {
-            var pipeline = Pipeline(new InstallOptions(AssetVersion: "3.1.4-alpha"));
-            await _cancel.CancelAsync();
-
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pipeline.CompleteAsync([Task.FromCanceled(_cancel.Token)]));
-
-            Assert.Null(MarkerVersion());
-        }
-
-        [Fact]
-        public async Task AFailedLaneLeavesTheMarkerEmpty()
-        {
-            var pipeline = Pipeline(new InstallOptions(AssetVersion: "3.1.4-alpha"));
-
-            await Assert.ThrowsAsync<InvalidOperationException>(() => pipeline.CompleteAsync([Task.FromException(new InvalidOperationException("lane failed"))]));
-
-            Assert.Null(MarkerVersion());
-        }
-
-        [Fact]
-        public async Task TheMarkerIsWrittenBeforeTheRunCanEndAsSucceeded()
-        {
-            var pipeline = Pipeline(new InstallOptions(AssetVersion: "3.1.4-alpha"));
-
-            await pipeline.CompleteAsync([Task.CompletedTask]);
-
-            Assert.Equal(RunState.Running, InstallProgress.Model!.State);
-            Assert.Equal("3.1.4-alpha", MarkerVersion());
-        }
-
-        [Fact]
-        public async Task AnInstallWhoseMarkerCannotBeWrittenFailsInsteadOfSucceeding()
-        {
-            var pipeline = Pipeline(new InstallOptions(KeepStaging: true, AssetVersion: "3.1.4-alpha"));
-            File.Delete(Locations.OwnershipMarker);
-            Directory.CreateDirectory(Locations.OwnershipMarker);
-
-            var failure = await Assert.ThrowsAsync<IOException>(() => pipeline.CompleteAsync([Task.CompletedTask]));
-
-            Assert.Contains(Locations.OwnershipMarker, failure.Message, StringComparison.Ordinal);
-            Assert.Equal(RunState.Failed, InstallProgress.Conclude(failure));
+            var recorded = AssetVersionMarker.Read(Locations.OwnershipMarker)!;
+            Assert.Equal([AssetGroup.Audio], recorded.Revisions.Keys);
         }
     }
 }

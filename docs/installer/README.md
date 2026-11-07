@@ -64,6 +64,46 @@ converter version are unchanged. Outputs are built next to their final place
 and then renamed into it, so the next run sees either the complete new output
 or the previous one. Each extracted archive gets a done-marker.
 
+### Asset groups
+
+An install over an existing one keeps or converts again whole asset groups,
+never single assets. `pipeline/asset_groups.cs` defines the groups, each with an
+id, a revision and the groups built from its output:
+
+| Group | Covers |
+|---|---|
+| `shaders` | translated shaders |
+| `interface` | fonts, UI layout documents, Pip-Boy art |
+| `audio` | converted audio |
+| `video` | converted video |
+| `meshes` | GLB models, including the skeleton GLBs |
+| `collision` | collision sidecars next to the GLBs |
+| `animations` | clip packs and their index |
+| `textures-database` | textures and `data.db` |
+
+`animations` and `textures-database` are built from the output of `meshes`:
+converting the meshes again converts them again as well. Textures and the
+database are one group because neither can run without the other. Texture bakes
+overwrite the extracted pixels in place, the originals exist only in `staging/`,
+and the database reads the bakes back.
+
+Each group's revision is recorded in the
+[install marker](../install-contract.md#install-marker) as the group finishes; a group is left out when an archive it reads failed to
+extract in a way a rerun can repair, so the next install converts it again.
+At the start of an install, a group whose recorded revision is missing or
+differs from the installer's is converted again, together with every group built
+from it. All other groups are kept, and the decision is logged. A marker with no
+readable record, or whose recorded game language or game files differ from the
+current ones, converts every group, since a revision only vouches for the
+installer's side of a group's output. A group that is converted again starts
+from none of its previous output, so its conversion stamps cannot keep stale files. A kept
+group's work is skipped.
+
+A change to a group's converted output requires bumping that group's revision in
+`asset_groups.cs`, so installs made by an earlier installer convert it again.
+`ConverterRevisionPinsTests` ties the existing converter version constants to
+their group's revision and fails when one changes without the other.
+
 ## Packaging
 
 `build-release.ps1` builds a single executable that embeds a payload of the

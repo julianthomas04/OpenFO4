@@ -1,3 +1,5 @@
+using AssetConverter.Pipeline;
+
 namespace AssetConverter.Progress
 {
     /// <summary>
@@ -30,7 +32,7 @@ namespace AssetConverter.Progress
         public const string FinalizeDatabase = "Finalizing database";
         public const string RemoveStaging = "Cleaning up";
 
-        public const long CopyGameDataTotal = 3;
+        public const long CopyGameDataTotal = 2;
         public const long BakePalettesTotal = 1;
         public const long ScanLodWaterTotal = 1;
         public const long FinalizeDatabaseTotal = 6;
@@ -38,20 +40,20 @@ namespace AssetConverter.Progress
         public static IReadOnlyList<StepDefinition> All { get; } =
         [
             new(InstallGame, "files", Weight: 1, Group: Initializing),
-            new(CopyGameData, "items", Weight: 7, Group: Initializing, KnownTotal: CopyGameDataTotal),
-            new(ExtractMeshes, "files", Weight: 89),
-            new(ExtractInterface, "items", Weight: 7),
-            new(ConvertShaders, "shaders", Weight: 10),
-            new(ConvertAudio, "files", Weight: 60),
-            new(ConvertVideo, "videos", Weight: 600),
-            new(ExtractTextures, "files", Weight: 195),
-            new(ConvertMeshes, "meshes", Weight: 165),
-            new(ExtractCollision, "meshes", Weight: 50),
-            new(ConvertAnimations, "creatures", Weight: 96),
-            new(BuildDatabase, "records", Weight: 55),
-            new(BakePalettes, "tasks", Weight: 9, Group: Finalizing, KnownTotal: BakePalettesTotal),
-            new(ScanLodWater, "tasks", Weight: 2, Group: Finalizing, KnownTotal: ScanLodWaterTotal),
-            new(FinalizeDatabase, "tasks", Weight: 13, Group: Finalizing, KnownTotal: FinalizeDatabaseTotal),
+            new(CopyGameData, "items", Weight: 7, Group: Initializing, KnownTotal: CopyGameDataTotal) { Groups = [AssetGroup.TexturesDatabase] },
+            new(ExtractMeshes, "files", Weight: 89) { Groups = [AssetGroup.Meshes, AssetGroup.Collision, AssetGroup.Animations, AssetGroup.TexturesDatabase] },
+            new(ExtractInterface, "items", Weight: 7) { Groups = [AssetGroup.Interface] },
+            new(ConvertShaders, "shaders", Weight: 10) { Groups = [AssetGroup.Shaders] },
+            new(ConvertAudio, "files", Weight: 60) { Groups = [AssetGroup.Audio] },
+            new(ConvertVideo, "videos", Weight: 600) { Groups = [AssetGroup.Video] },
+            new(ExtractTextures, "files", Weight: 195) { Groups = [AssetGroup.TexturesDatabase] },
+            new(ConvertMeshes, "meshes", Weight: 165) { Groups = [AssetGroup.Meshes] },
+            new(ExtractCollision, "meshes", Weight: 50) { Groups = [AssetGroup.Collision] },
+            new(ConvertAnimations, "creatures", Weight: 96) { Groups = [AssetGroup.Animations] },
+            new(BuildDatabase, "records", Weight: 55) { Groups = [AssetGroup.TexturesDatabase] },
+            new(BakePalettes, "tasks", Weight: 9, Group: Finalizing, KnownTotal: BakePalettesTotal) { Groups = [AssetGroup.TexturesDatabase] },
+            new(ScanLodWater, "tasks", Weight: 2, Group: Finalizing, KnownTotal: ScanLodWaterTotal) { Groups = [AssetGroup.TexturesDatabase] },
+            new(FinalizeDatabase, "tasks", Weight: 13, Group: Finalizing, KnownTotal: FinalizeDatabaseTotal) { Groups = [AssetGroup.TexturesDatabase] },
             new(RemoveStaging, "items", Weight: 15),
         ];
 
@@ -62,10 +64,15 @@ namespace AssetConverter.Progress
         public static IReadOnlyList<string> VisibleNames(IEnumerable<StepDefinition> work) =>
             [.. work.Select(unit => unit.VisibleName).Distinct(StringComparer.OrdinalIgnoreCase)];
 
-        /// <summary>The work of one install: all of it, except the removal of the temporary files when they are kept, preceded by the unpacking of the payload when the installer has one.</summary>
-        public static IReadOnlyList<StepDefinition> Planned(bool keepStaging, bool unpacksPayload = false)
+        /// <summary>
+        /// The work of one install: all of it, except the removal of the temporary files when they are kept and the steps of the asset groups
+        /// the install keeps (none when <paramref name="reconversion"/> is null), preceded by the unpacking of the payload when the installer has one.
+        /// </summary>
+        internal static IReadOnlyList<StepDefinition> Planned(bool keepStaging, bool unpacksPayload = false, ReconversionPlan? reconversion = null)
         {
-            IEnumerable<StepDefinition> steps = keepStaging ? All.Where(step => step.Name != RemoveStaging) : All;
+            var plan = reconversion ?? ReconversionPlan.ReconvertAll;
+            IEnumerable<StepDefinition> steps = All.Where(step => step.RunsFor(plan));
+            if (keepStaging) steps = steps.Where(step => step.Name != RemoveStaging);
             return [.. unpacksPayload ? steps.Prepend(UnpackPayloadStep) : steps];
         }
 

@@ -9,6 +9,9 @@ namespace AssetConverter.Pipeline
     /// </summary>
     internal sealed class TextureArchiveSet : IDisposable
     {
+        /// <summary>The end of the name of the file in the staging folder that records an archive as extracted.</summary>
+        internal const string MarkerSuffix = ".extracted-direct";
+
         public readonly record struct Entry(string Name, BA2 Archive);
 
         private readonly List<Entry> _pending;
@@ -69,6 +72,6 @@ namespace AssetConverter.Pipeline
             foreach (var entry in _pending) entry.Archive.Close();
         }
 
-        private static string MarkerPath(string stagingRoot, string archiveName) => Path.Combine(stagingRoot, $".{archiveName}.extracted-direct");
+        private static string MarkerPath(string stagingRoot, string archiveName) => Path.Combine(stagingRoot, $".{archiveName}{MarkerSuffix}");
     }
 }

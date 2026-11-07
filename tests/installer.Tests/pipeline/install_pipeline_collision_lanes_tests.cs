@@ -37,7 +37,7 @@ namespace InstallerTests.Pipeline
             var backlogStarted = new SemaphoreSlim(0);
             var releaseBacklog = new ManualResetEventSlim();
 
-            var (collision, backlog) = InstallPipeline.StartCollisionLanes(Lanes(), meshesExtracted.Task,
+            var (collision, backlog) = InstallPipeline.StartCollisionLanes(Lanes(), reconverts: true, meshesExtracted.Task,
                 () =>
                 {
                     Record("backlog starts");
@@ -62,7 +62,7 @@ namespace InstallerTests.Pipeline
         {
             var failure = new InvalidOperationException("queuing failed");
 
-            var (collision, backlog) = InstallPipeline.StartCollisionLanes(Lanes(), Task.CompletedTask,
+            var (collision, backlog) = InstallPipeline.StartCollisionLanes(Lanes(), reconverts: true, Task.CompletedTask,
                 () => throw failure,
                 () => Record("collision starts"));
 
