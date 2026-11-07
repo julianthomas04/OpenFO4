@@ -1,31 +1,12 @@
 //! The engine side of the capture mode: drives the Pip-Boy and reads the frame back.
 
-use std::path::{Path, PathBuf};
-
-use super::readback::{FrameReadback, ReadbackError};
 use super::states::{CaptureAction, Scene};
 use super::{CaptureStep, PipBoyCapture};
 use crate::game_flow::Phase;
 use crate::rendering::State;
+use crate::rendering::frame_capture::{FrameCaptureError, PendingFrame};
 use crate::sim::SimCommand;
 use crate::sim::pipboy::PipBoyAction;
-
-#[derive(Debug, thiserror::Error)]
-enum CaptureError {
-    #[error(transparent)]
-    Readback(#[from] ReadbackError),
-    #[error("cannot write {path}: {source}")]
-    Save {
-        path: PathBuf,
-        source: image::ImageError,
-    },
-}
-
-/// A frame whose copy is recorded and whose file is yet to be written.
-pub struct PendingFrame {
-    readback: FrameReadback,
-    path: PathBuf,
-}
 
 impl State {
     pub(in crate::rendering) fn capture_active(&self) -> bool {
@@ -111,42 +92,29 @@ impl State {
         frame: &wgpu::Texture,
     ) -> Option<PendingFrame> {
         let path = self.capture.as_mut()?.pending.take()?;
-        match FrameReadback::encode(&self.device, encoder, frame) {
-            Ok(readback) => Some(PendingFrame { readback, path }),
-            Err(error) => {
-                self.abort_capture(&path, &error.into());
-                None
-            }
-        }
+        PendingFrame::record(&self.device, encoder, frame, path)
+            .inspect_err(|error| self.abort_capture(error))
+            .ok()
     }
 
     /// Writes the photographed frame once its copy has been submitted.
     pub(in crate::rendering) fn finish_frame_capture(&mut self, pending: Option<PendingFrame>) {
-        let Some(PendingFrame { readback, path }) = pending else {
+        let Some(pending) = pending else {
             return;
         };
-        let written = readback
-            .finish(&self.device)
-            .map_err(CaptureError::from)
-            .and_then(|image| {
-                image.save(&path).map_err(|source| CaptureError::Save {
-                    path: path.clone(),
-                    source,
-                })
-            });
-        match written {
-            Ok(()) => {
+        match pending.write(&self.device) {
+            Ok(path) => {
                 if let Some(capture) = self.capture.as_mut() {
                     capture.written += 1;
                 }
                 tracing::info!("pipboy capture: wrote {}", path.display());
             }
-            Err(error) => self.abort_capture(&path, &error),
+            Err(error) => self.abort_capture(&error),
         }
     }
 
-    fn abort_capture(&mut self, path: &Path, error: &CaptureError) {
-        tracing::error!("pipboy capture of {} failed: {error}", path.display());
+    fn abort_capture(&mut self, error: &FrameCaptureError) {
+        tracing::error!("pipboy capture failed: {error}");
         self.quit_requested = true;
     }
 }

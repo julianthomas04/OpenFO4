@@ -22,11 +22,14 @@ namespace AssetConverter
     // One unit of ESM import work: the processor(s) filling Tables, plus the
     // records-table rows (RecordTypes) it owns. Run writes through the given
     // connection; a null transaction lets the processor manage its own.
+    // CountWork counts the progress units Run will tick, reading the file without keeping anything;
+    // null for a job that ticks nothing.
     internal sealed record RecordJob(
         string[] Tables,
         string[] RecordTypes,
         Func<ESMLoader, ImportContext, SqliteConnection, SqliteTransaction?, Task> Run,
-        bool NeedsRawScans = false)
+        bool NeedsRawScans = false,
+        Func<ESMLoader, IFallout4ModGetter, CancellationToken, long>? CountWork = null)
     {
         // The name a job goes by in timing reports: its record types, or its tables when it owns no records rows.
         internal string Label => string.Join('+', RecordTypes.Length > 0 ? RecordTypes : Tables);
@@ -92,7 +95,7 @@ namespace AssetConverter
             where T : IMajorRecordGetter =>
             new(tables, [recordType], (loader, context, conn, transaction) =>
                 loader.ProcessGroupAsync(records(context.File), recordType, conn, processor(loader), transaction),
-                needsRawScans);
+                needsRawScans, CountWork: (_, file, _) => CountGroup(records(file)));
 
         private static RecordJob JobWithScans<T>(string recordType, string[] tables,
             Func<IFallout4ModGetter, IEnumerable<T>> records, Func<RawScans, IRecordProcessor<T>> processor)
@@ -102,7 +105,7 @@ namespace AssetConverter
                 var scans = await (context.RawScans
                     ?? throw new InvalidOperationException("Job requires raw ESM scans but the import plan did not schedule them."));
                 await loader.ProcessGroupAsync(records(context.File), recordType, conn, processor(scans), transaction);
-            }, NeedsRawScans: true);
+            }, NeedsRawScans: true, CountWork: (_, file, _) => CountGroup(records(file)));
 
         private static RecordJob Simple<T>(string recordType, string table,
             Func<IFallout4ModGetter, IEnumerable<T>> records)
@@ -110,10 +113,12 @@ namespace AssetConverter
             Job<T>(recordType, [table], records, _ => new SimpleRecordProcessor<T>(table));
 
         internal static readonly RecordJob PerkJob = new(["perks", "perk_chart"], ["PERK"],
-            (loader, context, conn, transaction) => loader.ProcessPerksAsync(context.File, conn, transaction));
+            (loader, context, conn, transaction) => loader.ProcessPerksAsync(context.File, conn, transaction),
+            CountWork: (_, file, _) => CountGroup(file.Perks));
 
         internal static readonly RecordJob ActorValueJob = new(["actor_value_informations", "special_attributes"], ["AVIF"],
-            (loader, context, conn, transaction) => loader.ProcessActorValuesAsync(context.File, conn, transaction));
+            (loader, context, conn, transaction) => loader.ProcessActorValuesAsync(context.File, conn, transaction),
+            CountWork: (_, file, _) => CountGroup(ActorValues(file)));
 
         // Record groups with no dependencies on each other: the full import
         // runs them concurrently, a partial reload runs the selected ones in turn.
@@ -149,6 +154,7 @@ namespace AssetConverter
         Job<ISpellGetter>("SPEL", ["spells"], f => f.Spells, _ => new SpellProcessor()),
         PerkJob,
         Job<IWeatherGetter>("WTHR", ["weather"], f => f.EnumerateMajorRecords<IWeatherGetter>(), _ => new WeatherProcessor()),
+        Job<IGodRaysGetter>("GDRY", ["god_rayses"], f => f.EnumerateMajorRecords<IGodRaysGetter>(), _ => new GodRaysProcessor()),
         Job<ISoundDescriptorGetter>("SNDR", ["sound_descriptors", "sound_descriptor_children", "sound_descriptor_conditions"], f => f.SoundDescriptors, _ => new SoundDescriptorProcessor()),
         Job<IMusicTrackGetter>("MUST", ["music_tracks", "music_track_layers", "music_track_conditions"], f => f.MusicTracks, _ => new MusicTrackProcessor()),
         Job<IMaterialObjectGetter>("MATO", ["material_objects"], f => f.EnumerateMajorRecords<IMaterialObjectGetter>(), _ => new MaterialObjectProcessor()),
@@ -204,7 +210,7 @@ namespace AssetConverter
         Simple<IBodyPartDataGetter>("BPTD", "body_part_datas", f => f.EnumerateMajorRecords<IBodyPartDataGetter>()),
         Simple<ICameraPathGetter>("CPTH", "camera_paths", f => f.CameraPaths),
         Simple<ICameraShotGetter>("CAMS", "camera_shots", f => f.CameraShots),
-        Simple<ICollisionLayerGetter>("COLL", "collision_layers", f => f.CollisionLayers),
+        Job<ICollisionLayerGetter>("COLL", ["collision_layers"], f => f.CollisionLayers, _ => new CollisionLayerProcessor()),
         Simple<IColorRecordGetter>("CLFM", "color_records", f => f.EnumerateMajorRecords<IColorRecordGetter>()),
         Simple<IDebrisGetter>("DEBR", "debrises", f => f.EnumerateMajorRecords<IDebrisGetter>()),
         Job<IDefaultObjectManagerGetter>("DOMD", ["default_object_managers", "default_object_slots"], f => f.DefaultObjectManagers, _ => new DefaultObjectManagerProcessor()),
@@ -217,7 +223,6 @@ namespace AssetConverter
         Simple<IEffectShaderGetter>("EFSH", "effect_shaders", f => f.EffectShaders),
         Job<IFootstepSetGetter>("FSTS", ["footstep_sets", "footstep_set_entries"], f => f.FootstepSets, _ => new FootstepSetProcessor()),
         Job<IFootstepGetter>("FSTP", ["footsteps"], f => f.Footsteps, _ => new FootstepProcessor()),
-        Simple<IGodRaysGetter>("GDRY", "god_rayses", f => f.EnumerateMajorRecords<IGodRaysGetter>()),
         Simple<IIdleAnimationGetter>("IDLE", "idle_animations", f => f.IdleAnimations),
         Simple<IIdleMarkerGetter>("IDLM", "idle_markers", f => f.IdleMarkers),
         Simple<IImageSpaceAdapterGetter>("IMAD", "image_space_adapters", f => f.ImageSpaceAdapters),
@@ -226,7 +231,7 @@ namespace AssetConverter
         Simple<IInstanceNamingRulesGetter>("INNR", "instance_naming_ruleses", f => f.EnumerateMajorRecords<IInstanceNamingRulesGetter>()),
         Simple<ILayerGetter>("LAYR", "layers", f => f.Layers),
         Simple<ILensFlareGetter>("LNSF", "lens_flares", f => f.LensFlares),
-        Simple<ILoadScreenGetter>("LSCR", "load_screens", f => f.LoadScreens),
+        Job<ILoadScreenGetter>("LSCR", ["load_screens", "load_screen_conditions"], f => f.LoadScreens, _ => new LoadScreenProcessor()),
         Simple<ILocationReferenceTypeGetter>("LCRT", "location_reference_types", f => f.LocationReferenceTypes),
         Job<IMaterialSwapGetter>("MSWP", ["material_swaps", "material_swap_entries", "base_material_swaps"], f => f.MaterialSwaps, l => new MaterialSwapProcessor(l._materialsRoot, l._texturesOut), needsRawScans: true),
         Job<IMaterialTypeGetter>("MATT", ["material_types"], f => f.MaterialTypes, _ => new MaterialTypeProcessor()),
@@ -239,10 +244,10 @@ namespace AssetConverter
         Simple<IReverbParametersGetter>("REVB", "reverb_parameterses", f => f.EnumerateMajorRecords<IReverbParametersGetter>()),
         Simple<ISceneCollectionGetter>("STSC", "scene_collections", f => f.SceneCollections),
         Simple<ISceneGetter>("SCEN", "scenes", f => f.EnumerateMajorRecords<ISceneGetter>()),
-        Simple<IShaderParticleGeometryGetter>("SPGD", "shader_particle_geometries", f => f.ShaderParticleGeometries),
+        Job<IShaderParticleGeometryGetter>("SPGD", ["shader_particle_geometries"], f => f.ShaderParticleGeometries, l => new ShaderParticleGeometryProcessor(l._materialsRoot)),
         Simple<ISoundKeywordMappingGetter>("SKMA", "sound_keyword_mappings", f => f.SoundKeywordMappings),
         Simple<ISoundMarkerGetter>("SOUN", "sound_markers", f => f.SoundMarkers),
-        Simple<ITransformGetter>("TRNS", "transforms", f => f.Transforms),
+        Job<ITransformGetter>("TRNS", ["transforms"], f => f.Transforms, _ => new TransformProcessor()),
         Simple<IZoomGetter>("ZOOM", "zooms", f => f.Zooms),
         Simple<IADamageTypeGetter>("DMGT", "damage_types", f => f.EnumerateMajorRecords<IADamageTypeGetter>()),
         Simple<IAStoryManagerNodeGetter>("SMBN", "story_manager_nodes", f => f.EnumerateMajorRecords<IAStoryManagerNodeGetter>()),
@@ -255,7 +260,8 @@ namespace AssetConverter
 
         internal static readonly RecordJob WorldspaceJob = new(["worldspaces", "map_markers"], ["WRLD"],
             (loader, context, conn, transaction) =>
-                loader.ProcessWorldspaceRecordsAsync(context.File.Worldspaces, conn, transaction));
+                loader.ProcessWorldspaceRecordsAsync(context.File.Worldspaces, conn, transaction),
+            CountWork: (_, file, _) => CountGroup(file.Worldspaces));
 
         internal static readonly RecordJob CellsJob = new(
             ["cells", "placed_objects", "placed_teleports", "landscapes"], ["CELL", "REFR", "LAND"],
@@ -265,7 +271,7 @@ namespace AssetConverter
                     ?? throw new InvalidOperationException("Job requires raw ESM scans but the import plan did not schedule them."));
                 await loader.ProcessCellsAsync(context.File, conn, transaction, scans.Precombined, scans.RefrSwaps, scans.WaterCurrents);
             },
-            NeedsRawScans: true);
+            NeedsRawScans: true, CountWork: (_, file, ct) => CountCells(file, ct).Units);
 
         internal static readonly IReadOnlyList<RecordJob> AllJobs = [.. RecordJobs, WorldspaceJob, CellsJob];
     }

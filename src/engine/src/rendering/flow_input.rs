@@ -1,8 +1,11 @@
 //! The player-facing flow's glue on [`State`]: window input to menu events, flow actions to
 //! engine effects, and the load readiness feed.
 
+use winit::event::MouseButton;
 use winit::keyboard::KeyCode;
 
+use super::grab_input::SpinButton;
+use super::load_transition::routed_art_key;
 use super::stream_settle::{self, ColliderSettle, StreamReport};
 use super::{ResolvedTarget, State};
 use crate::game_flow::{FlowAction, FlowEvent, Phase, SpawnLocation, StreamCounts};
@@ -22,9 +25,18 @@ fn menu_event_for_key(code: KeyCode, is_repeat: bool) -> Option<FlowEvent> {
     (!is_repeat || repeats_harmlessly).then_some(event)
 }
 
+/// The spin button a mouse button stands for, if any.
+fn spin_button(button: MouseButton) -> Option<SpinButton> {
+    match button {
+        MouseButton::Left => Some(SpinButton::Left),
+        MouseButton::Right => Some(SpinButton::Right),
+        _ => None,
+    }
+}
+
 impl State {
     pub fn handle_mouse_motion(&mut self, dx: f64, dy: f64) {
-        if self.flow.gameplay_input_enabled() {
+        if self.flow.gameplay_input_enabled() && !self.loading_screen_preview_open() {
             self.mouse_capture
                 .steer(&mut self.camera_controller, dx, dy);
         }
@@ -32,20 +44,41 @@ impl State {
 
     pub fn handle_pointer_moved(&mut self, x: f64, y: f64) {
         self.pointer_px = (x as f32, y as f32);
+        self.load_screens
+            .pointer_moved(self.pointer_px.0, self.pointer_px.1);
         if let Some(row) = self.row_under_pointer() {
             self.handle_flow_event(FlowEvent::RowHovered(row));
         }
     }
 
+    /// Follows a mouse button's physical state, whoever consumes the event: the spin it
+    /// produces is gated, the state is not.
+    pub fn track_mouse_button(&mut self, button: MouseButton, pressed: bool) {
+        if let Some(spin) = spin_button(button) {
+            self.grab_input.spin_button(spin, pressed);
+        }
+    }
+
     pub fn handle_pointer_pressed(&mut self) {
+        let art_shown = self.art_shown();
+        self.load_screens
+            .pointer_pressed(self.pointer_px.0, self.pointer_px.1, art_shown);
         if let Some(row) = self.row_under_pointer() {
             self.handle_flow_event(FlowEvent::RowPressed(row));
         }
     }
 
     pub fn handle_pointer_released(&mut self) {
+        self.load_screens.pointer_released();
         let row = self.row_under_pointer();
         self.handle_flow_event(FlowEvent::RowReleased(row));
+    }
+
+    /// The window lost the focus: a held drag, pan, carry key or spin button never sees its
+    /// release.
+    pub fn handle_focus_lost(&mut self) {
+        self.load_screens.focus_lost();
+        self.grab_input.reset();
     }
 
     /// `lines` is the wheel's travel in lines, positive away from the user.
@@ -55,7 +88,7 @@ impl State {
 
     /// Whether the developer window is shown and so takes pointer and keyboard input.
     pub fn developer_window_visible(&self) -> bool {
-        self.flow.developer_window_visible()
+        self.flow.developer_window_visible() && !self.loading_screen_preview_open()
     }
 
     /// Whether the player asked to quit from the main menu.
@@ -83,12 +116,14 @@ impl State {
         &mut self,
         settled: ColliderSettle,
         full_ring_complete: bool,
+        world_complete: bool,
     ) {
         if self.flow.phase() != Phase::Loading {
             return;
         }
         let report = StreamReport {
             full_ring_complete,
+            world_complete,
             counts: StreamCounts {
                 pending_cells: self.streamer.pending_cell_count(),
                 pending_lod_cells: self.streamer.lod_pending_cell_count(),
@@ -102,13 +137,17 @@ impl State {
         self.dispatch(action);
     }
 
-    fn dispatch(&mut self, action: FlowAction) {
+    pub(super) fn dispatch(&mut self, action: FlowAction) {
         match action {
             FlowAction::None => {}
             FlowAction::BeginPlay(location) => self.begin_play(&location),
             FlowAction::ReleaseFoldHold => self.sim.set_fold_hold(false),
             FlowAction::LockCursor => {
                 self.mouse_capture.set_locked(!self.freeze_camera);
+                self.mouse_capture.apply(&self.window);
+            }
+            FlowAction::UnlockCursor => {
+                self.mouse_capture.set_locked(false);
                 self.mouse_capture.apply(&self.window);
             }
             FlowAction::Quit => self.quit_requested = true,
@@ -124,13 +163,37 @@ impl State {
         self.pending_teleport = Some(target);
     }
 
-    /// Keys outside gameplay drive the menu list.
+    /// Keys outside gameplay drive the menu list, or, while a large loading screen shows its
+    /// model, move the model.
     pub(super) fn handle_menu_key(&mut self, code: KeyCode, is_pressed: bool, is_repeat: bool) {
+        if let Some(key) = routed_art_key(code, self.art_shown()) {
+            self.load_screens.host.key(key, is_pressed, is_repeat);
+            return;
+        }
         if !is_pressed {
             return;
         }
         if let Some(event) = menu_event_for_key(code, is_repeat) {
             self.handle_flow_event(event);
+        }
+    }
+}
+
+#[cfg(test)]
+mod mouse_button_tests {
+    use super::*;
+
+    #[test]
+    fn the_left_and_right_buttons_are_the_spin_buttons_and_others_are_not() {
+        assert_eq!(spin_button(MouseButton::Left), Some(SpinButton::Left));
+        assert_eq!(spin_button(MouseButton::Right), Some(SpinButton::Right));
+        for button in [
+            MouseButton::Middle,
+            MouseButton::Back,
+            MouseButton::Forward,
+            MouseButton::Other(7),
+        ] {
+            assert_eq!(spin_button(button), None, "{button:?}");
         }
     }
 }

@@ -42,15 +42,6 @@ namespace AssetConverter
             Console.WriteLine($"Database path: {_dbPath}");
         }
 
-        public ESMLoader()
-        {
-            string installRoot = InstallerPaths.DevInstallFolder
-                ?? throw new InvalidOperationException("A packaged installer has no development install folder; give the database path.");
-            string dataDirectory = Path.Combine(installRoot, InstallLayout.AssetsFolder, InstallLayout.DataFolder);
-            _dbPath = Path.Combine(dataDirectory, "data.db");
-            Console.WriteLine($"Database path: {_dbPath}");
-        }
-
         public void LoadESM(string path, int progressPhase = -1, CancellationToken ct = default)
         {
             LoadESMAsync(path, progressPhase, ct).GetAwaiter().GetResult();
@@ -63,6 +54,19 @@ namespace AssetConverter
             Console.WriteLine($"Loading ESM from: {path}");
             using var memory = await Memory.ReserveAsync(MemoryEstimates.EsmImportBytes, ct).ConfigureAwait(false);
             await EsmTiming.RunReportedAsync(() => ImportAsync(path)).ConfigureAwait(false);
+        }
+
+        // The raw scans are not awaited by anything once the discovery has failed; a failure of their own is reported, not lost.
+        private static async Task ReportRawScanOutcomeAsync(Task<RawScans> rawScansTask)
+        {
+            try
+            {
+                await rawScansTask;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Raw ESM scans also failed: {ex.GetType().Name}: {ex.Message}");
+            }
         }
 
         private async Task ImportAsync(string path)
@@ -81,6 +85,16 @@ namespace AssetConverter
             // links) need only the file bytes — start them now so they run
             // under Wave 1 instead of serializing after it.
             var rawScansTask = Task.Run(() => ScanRawEsm(path));
+
+            try
+            {
+                await DiscoverAndSealTotalAsync(file);
+            }
+            catch
+            {
+                await ReportRawScanOutcomeAsync(rawScansTask);
+                throw;
+            }
 
             await dbManager.Connection.ExecuteAsync("PRAGMA foreign_keys = OFF");
             Console.WriteLine("Wave 1: processing all independent record groups in parallel...");
@@ -243,17 +257,13 @@ namespace AssetConverter
         private async Task ProcessGroupAsync<T>(IEnumerable<T> records, string recordType, SqliteConnection conn, IRecordProcessor<T> processor, SqliteTransaction? transaction = null)
             where T : IMajorRecordGetter
         {
-            List<T> list;
-            try { list = records.ToList(); }
-            catch (Exception ex) when (
-                ex.Message.Contains("Unknown major record type") ||
-                (ex.InnerException?.Message.Contains("Unknown major record type") ?? false))
+            var list = ReadGroup(records, group => group.ToList(), skipped: null);
+            if (list == null)
             {
                 Console.WriteLine($"Skipping {typeof(T).Name} — not a Fallout 4 record type.");
                 return;
             }
             if (list.Count == 0) return;
-            InstallProgress.AddTotal(_progressPhase, list.Count);
             InstallProgress.SetDetail(_progressPhase, recordType);
             Console.WriteLine($"Processing {typeof(T).Name} ({list.Count} records)...");
             await processor.ProcessRecordsAsync(list, recordType, conn, transaction, progressPhase: _progressPhase, ct: _ct);
@@ -263,7 +273,6 @@ namespace AssetConverter
         {
             var list = worldspaces.ToList();
             if (list.Count == 0) return;
-            InstallProgress.AddTotal(_progressPhase, list.Count);
             InstallProgress.SetDetail(_progressPhase, "WRLD");
             Console.WriteLine($"Processing Worldspaces ({list.Count} records)...");
 
@@ -289,11 +298,9 @@ namespace AssetConverter
             HashSet<string> precombinedSet, Dictionary<string, string> refrSwaps, Dictionary<string, string> waterCurrents)
         {
             _ct.ThrowIfCancellationRequested();
-            var topCells = new List<ICellGetter>();
-            if (file.Cells != null) ExtractCellsRecursive(file.Cells, topCells);
+            var topCells = TopLevelCells(file);
             if (topCells.Count == 0) return;
 
-            InstallProgress.AddTotal(_progressPhase, topCells.Count);
             InstallProgress.SetDetail(_progressPhase, "CELL (interiors)");
             Console.WriteLine($"Processing Top-Level Cells ({topCells.Count})...");
             var cellProcessor = new CellProcessor(null, precombinedSet, refrSwaps, waterCurrents);
@@ -309,16 +316,10 @@ namespace AssetConverter
             foreach (var wrld in worldspaces)
             {
                 _ct.ThrowIfCancellationRequested();
-                var cells = new List<ICellGetter>();
-                if (wrld.TopCell != null)
-                {
-                    cells.Add(wrld.TopCell);
-                    topCellKeys.Add(wrld.TopCell.FormKey.ToString());
-                }
-                if (wrld.SubCells != null) ExtractCellsRecursive(wrld.SubCells, cells);
+                var cells = WorldspaceCells(wrld);
+                if (wrld.TopCell != null) topCellKeys.Add(wrld.TopCell.FormKey.ToString());
                 if (cells.Count == 0) continue;
 
-                InstallProgress.AddTotal(_progressPhase, cells.Count);
                 InstallProgress.SetDetail(_progressPhase, $"CELL ({wrld.EditorID ?? wrld.FormKey.ToString()})");
                 Console.WriteLine($"  Processing {cells.Count} cells in worldspace {wrld.FormKey}...");
                 var cellProcessor = new CellProcessor(wrld.FormKey.ToString(), precombinedSet, refrSwaps, waterCurrents);
@@ -471,6 +472,7 @@ namespace AssetConverter
             "CREATE INDEX IF NOT EXISTS idx_navmesh_ws_grid ON navigation_meshes(worldspace, grid_x, grid_y)",
             "CREATE INDEX IF NOT EXISTS idx_navmesh_cell ON navigation_meshes(cell)",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_navmesh_form_id ON navigation_meshes(form_id)",
+            "CREATE INDEX IF NOT EXISTS idx_collision_layers_index ON collision_layers(layer_index)",
         };
 
         // grasses.flags was TEXT (enum rendered as a string); the column is now the raw INTEGER bitfield. SQLite cannot
@@ -552,6 +554,15 @@ namespace AssetConverter
             ("lights", "god_rays_near_clip", "REAL"),
             ("material_swap_entries", "material_name", "TEXT"),
             ("weather", "directional_ambient", "TEXT"),
+            ("weather", "clouds", "TEXT"),
+            ("weather", "data", "TEXT"),
+            ("weather", "fog_scales", "TEXT"),
+            ("god_rayses", "data", "TEXT"),
+            ("climates", "volatility", "INTEGER"),
+            ("shader_particle_geometries", "data", "TEXT"),
+            ("shader_particle_geometries", "particle_material", "TEXT"),
+            ("shader_particle_geometries", "particle_texture", "TEXT"),
+            ("shader_particle_geometries", "particle_material_data", "TEXT"),
             ("worldspaces", "climate", "TEXT"),
             ("worldspaces", "water_type", "TEXT"),
             ("worldspaces", "lod_water_type", "TEXT"),
@@ -638,6 +649,31 @@ namespace AssetConverter
             ("footsteps", "impact_data_set", "TEXT"),
             ("impacts", "player_sound", "TEXT"),
             ("impacts", "npc_sound", "TEXT"),
+            ("collision_layers", "layer_index", "INTEGER"),
+            ("collision_layers", "flags", "INTEGER"),
+            ("collision_layers", "collides_with", "TEXT"),
+            ("doors", "bounds", "TEXT"),
+            ("doors", "trigger_bounds", "TEXT"),
+            ("load_screens", "tip", "TEXT"),
+            ("load_screens", "model", "TEXT NOT NULL DEFAULT ''"),
+            ("load_screens", "flags", "INTEGER NOT NULL DEFAULT 0"),
+            ("load_screens", "transform", "TEXT"),
+            ("load_screens", "rotation_min", "INTEGER"),
+            ("load_screens", "rotation_max", "INTEGER"),
+            ("load_screens", "zoom_min", "REAL"),
+            ("load_screens", "zoom_max", "REAL"),
+            ("transforms", "pos_x", "REAL"),
+            ("transforms", "pos_y", "REAL"),
+            ("transforms", "pos_z", "REAL"),
+            ("transforms", "rot_x", "REAL"),
+            ("transforms", "rot_y", "REAL"),
+            ("transforms", "rot_z", "REAL"),
+            ("transforms", "scale", "REAL"),
+            ("transforms", "flags", "INTEGER"),
+            ("transforms", "zoom_min", "REAL"),
+            ("transforms", "zoom_max", "REAL"),
+            ("placed_teleports", "flags", "INTEGER NOT NULL DEFAULT 0"),
+            ("worldspaces", "location", "TEXT"),
         };
 
         private async Task AddColumnIfMissingAsync(string table, string column, string type)
@@ -743,7 +779,7 @@ namespace AssetConverter
         {
             "source_ref", "destination_ref",
             "dest_position_x", "dest_position_y", "dest_position_z",
-            "dest_rotation_x", "dest_rotation_y", "dest_rotation_z",
+            "dest_rotation_x", "dest_rotation_y", "dest_rotation_z", "flags",
         };
     }
 
@@ -885,6 +921,9 @@ namespace AssetConverter
                 return null;
             }
         }
+
+        protected string? SerializeObjectBounds(IObjectBoundsGetter? bounds) =>
+            SafeSerialize(bounds == null ? null : ObjectBoundsJson.From(bounds), "ObjectBounds");
 
         protected int TotalProcessed { get; set; }
 
@@ -1551,15 +1590,13 @@ namespace AssetConverter
 
     public class WorldspaceProcessor : BaseRecordProcessor<IWorldspaceGetter>
     {
-        private const int DeletedRecordFlag = 0x20;
-
         protected override async Task ProcessSpecificRecordAsync(IWorldspaceGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
         {
             const string sql = @"
                 INSERT OR REPLACE INTO worldspaces (form_key, editor_id, name, parent_worldspace, flags, world_map_data, climate,
-                    water_type, lod_water_type, lod_water_height, default_land_height, default_water_height, water_environment_map, parent_flags, map_image)
+                    water_type, lod_water_type, lod_water_height, default_land_height, default_water_height, water_environment_map, parent_flags, map_image, location)
                 VALUES (@FormKey, @EditorId, @Name, @Parent, @Flags, @MapData, @Climate,
-                    @WaterType, @LodWaterType, @LodWaterHeight, @DefaultLandHeight, @DefaultWaterHeight, @WaterEnvironmentMap, @ParentFlags, @MapImage)";
+                    @WaterType, @LodWaterType, @LodWaterHeight, @DefaultLandHeight, @DefaultWaterHeight, @WaterEnvironmentMap, @ParentFlags, @MapImage, @Location)";
 
             string? parent = record.Parent?.Worldspace?.FormKey.ToString();
             string? mapData = SafeSerialize(record.MapData);
@@ -1580,7 +1617,8 @@ namespace AssetConverter
                 DefaultLandHeight = record.LandDefaults?.DefaultLandHeight,
                 DefaultWaterHeight = record.LandDefaults?.DefaultWaterHeight,
                 WaterEnvironmentMap = record.WaterEnvironmentMap,
-                MapImage = record.MapImage
+                MapImage = record.MapImage,
+                Location = LinkKey.Text(record.Location)
             }, transaction);
 
             await InsertMapMarkersAsync(record, formKey, conn, transaction);
@@ -1595,7 +1633,7 @@ namespace AssetConverter
             foreach (var reference in worldspace.TopCell?.Persistent ?? [])
             {
                 if (reference is not IPlacedObjectGetter { MapMarker: { } marker } placed) continue;
-                if ((placed.MajorRecordFlagsRaw & DeletedRecordFlag) != 0) continue;
+                if ((placed.MajorRecordFlagsRaw & RecordFlags.Deleted) != 0) continue;
 
                 await conn.ExecuteAsync(sql, new
                 {
@@ -2089,15 +2127,17 @@ namespace AssetConverter
             public readonly string DestinationRef;
             public readonly float DestPosX, DestPosY, DestPosZ;
             public readonly float DestRotX, DestRotY, DestRotZ;
+            public readonly int Flags;
 
             public TeleportRow(string sourceRef, string destinationRef,
                 float destPosX, float destPosY, float destPosZ,
-                float destRotX, float destRotY, float destRotZ)
+                float destRotX, float destRotY, float destRotZ, int flags)
             {
                 SourceRef = sourceRef;
                 DestinationRef = destinationRef;
                 DestPosX = destPosX; DestPosY = destPosY; DestPosZ = destPosZ;
                 DestRotX = destRotX; DestRotY = destRotY; DestRotZ = destRotZ;
+                Flags = flags;
             }
         }
 
@@ -2220,8 +2260,7 @@ namespace AssetConverter
                     {
                         poRows[i] = allPlaced[i].ToPlacedObjectValues();
                     }
-                    // Every row is inserted into placed_objects and records (REFR), plus one teleport row per door destination.
-                    InstallProgress.AddTotal(progressPhase, 2L * poCount + allTeleports.Count);
+                    // Every row is ticked for placed_objects and records (REFR), plus one teleport row per door destination (see CellWorkCounts.Units).
                     Action<int> rowsInserted = count => InstallProgress.Tick(progressPhase, count);
                     BatchInsert.Execute(conn, transaction, "placed_objects",
                         EsmColumns.PlacedObjects,
@@ -2248,7 +2287,7 @@ namespace AssetConverter
                             teleRows[i] = new object?[] {
                                 t.SourceRef, t.DestinationRef,
                                 t.DestPosX, t.DestPosY, t.DestPosZ,
-                                t.DestRotX, t.DestRotY, t.DestRotZ
+                                t.DestRotX, t.DestRotY, t.DestRotZ, t.Flags
                             };
                         }
                         BatchInsert.Execute(conn, transaction, "placed_teleports",
@@ -2264,7 +2303,6 @@ namespace AssetConverter
                     .Select(ci => (CellFormKey: cellFormKeys[ci], Landscape: list[ci].Landscape))
                     .Where(cell => cell.Landscape != null)
                     .ToList();
-                InstallProgress.AddTotal(progressPhase, landscapes.Count);
                 foreach (var (cellFormKey, landscape) in landscapes)
                 {
                     var landProcessor = new LandscapeProcessor();
@@ -2296,9 +2334,7 @@ namespace AssetConverter
         {
             foreach (var obj in objects)
             {
-                // Deleted refs (record flag 0x20) never spawn in-game. Vanilla
-                // Fallout4.esm contains none; DLC/mod plugins can.
-                if ((obj.MajorRecordFlagsRaw & 0x20) != 0) continue;
+                if (!PlacedReferences.TryGetBase(obj, out string baseObj)) continue;
 
                 // No `dynamic` anywhere below: Mutagen binary overlays implement
                 // getters the runtime binder cannot bind (and float? -> float
@@ -2307,11 +2343,6 @@ namespace AssetConverter
                 // non-1.0 refs flattened to 1.0) and every XESP enable parent.
                 // IPlacedObjectGetter / IPlacedNpcGetter are sibling interfaces;
                 // each field needs explicit `is` branches.
-                string baseObj = "";
-                if (obj is IPlacedObjectGetter bPo && !bPo.Base.IsNull) baseObj = bPo.Base.FormKey.ToString();
-                else if (obj is IPlacedNpcGetter bNpc && !bNpc.Base.IsNull) baseObj = bNpc.Base.FormKey.ToString();
-                if (string.IsNullOrEmpty(baseObj)) continue;
-
                 float px = 0, py = 0, pz = 0, rx = 0, ry = 0, rz = 0, scale = 1;
                 if (obj is IPlacedObjectGetter pPo)
                 {
@@ -2327,7 +2358,7 @@ namespace AssetConverter
                 if (obj is IPlacedObjectGetter sPo && sPo.Scale.HasValue) scale = sPo.Scale.Value;
                 else if (obj is IPlacedNpcGetter sNpc && sNpc.Scale.HasValue) scale = sNpc.Scale.Value;
 
-                int disabled = (obj.MajorRecordFlagsRaw & 0x800) != 0 ? 1 : 0;
+                int disabled = (obj.MajorRecordFlagsRaw & RecordFlags.InitiallyDisabled) != 0 ? 1 : 0;
 
                 // XESP: the ref's visibility mirrors the parent's enable state
                 // (inverted when the opposite-of-parent flag is set). The final
@@ -2365,18 +2396,12 @@ namespace AssetConverter
 
                 string? materialSwap = refrSwaps.TryGetValue(obj.FormKey.ToString(), out var swapKey) ? swapKey : null;
 
-                // XTEL: load-door teleport. Only IPlacedObjectGetter carries it (ACHR/PlacedNpc
-                // cannot). The filter is "has a non-null destination door link" — NOT base==DOOR,
-                // so modded teleport activators are kept. Resolution of the destination cell is
-                // left to the runtime (via destination_ref -> placed_objects.cell_form_key).
-                if (obj is IPlacedObjectGetter teleObj
-                    && teleObj.TeleportDestination is { } dest
-                    && !dest.Door.IsNull)
+                if (PlacedReferences.TryGetTeleport(obj, out var dest))
                 {
                     teleports.Add(new TeleportRow(
                         obj.FormKey.ToString(), dest.Door.FormKey.ToString(),
                         dest.Position.X, dest.Position.Y, dest.Position.Z,
-                        dest.Rotation.X, dest.Rotation.Y, dest.Rotation.Z));
+                        dest.Rotation.X, dest.Rotation.Y, dest.Rotation.Z, (int)dest.Flags));
                 }
 
                 results.Add(new PlacedObjectRow(obj, cellFk, isPersistent,
@@ -2396,6 +2421,48 @@ namespace AssetConverter
         }
     }
 
+    internal static class ObjectBoundsJson
+    {
+        internal readonly record struct Point(short X, short Y, short Z);
+        internal readonly record struct Box(Point Min, Point Max);
+
+        internal readonly record struct FloatPoint(float X, float Y, float Z);
+        internal readonly record struct FloatBox(FloatPoint Min, FloatPoint Max);
+
+        internal static Box From(IObjectBoundsGetter bounds) => new(
+            new Point(bounds.First.X, bounds.First.Y, bounds.First.Z),
+            new Point(bounds.Second.X, bounds.Second.Y, bounds.Second.Z));
+    }
+
+    public class CollisionLayerProcessor : BaseRecordProcessor<ICollisionLayerGetter>
+    {
+        protected override async Task ProcessSpecificRecordAsync(ICollisionLayerGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
+        {
+            const string sql = @"
+                INSERT OR REPLACE INTO collision_layers (form_key, editor_id, layer_index, flags, collides_with)
+                VALUES (@FormKey, @EditorId, @LayerIndex, @Flags, @CollidesWith)";
+
+            var tally = ReadFailureTally.Shared;
+            long? layerIndex = tally.Read("COLL Index", record.EditorID, () => (long?)record.Index, (long?)null);
+            long? flags = tally.Read("COLL Flags", record.EditorID, () => (long?)(uint)record.Flags, (long?)null);
+            string? collidesWith = tally.Read("COLL CollidesWith", record.EditorID, () => SafeSerialize(CollidesWithKeys(record), "CollidesWith"), (string?)null);
+
+            await conn.ExecuteAsync(sql, new
+            {
+                FormKey = formKey,
+                EditorId = record.EditorID,
+                LayerIndex = layerIndex,
+                Flags = flags,
+                CollidesWith = collidesWith
+            }, transaction);
+        }
+
+        internal static List<string>? CollidesWithKeys(ICollisionLayerGetter record) =>
+            record.CollidesWith?.Select(link => link.IsNull
+                ? throw new InvalidDataException("CNAM contains a null collision layer link")
+                : link.FormKey.ToString()).ToList();
+    }
+
     public class StaticProcessor : BaseRecordProcessor<IStaticGetter>
     {
         protected override async Task ProcessSpecificRecordAsync(IStaticGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
@@ -2404,11 +2471,7 @@ namespace AssetConverter
                 INSERT OR REPLACE INTO statics (form_key, editor_id, model_path, material_object, has_distant_lod, bounds, alternate_textures, is_marker)
                 VALUES (@FormKey, @EditorId, @ModelPath, @MaterialObject, @HasDistantLOD, @Bounds, @AlternateTextures, @IsMarker)";
 
-            string? bounds = SafeSerialize(record.ObjectBounds == null ? null : new
-            {
-                Min = new { record.ObjectBounds.First.X, record.ObjectBounds.First.Y, record.ObjectBounds.First.Z },
-                Max = new { record.ObjectBounds.Second.X, record.ObjectBounds.Second.Y, record.ObjectBounds.Second.Z }
-            });
+            string? bounds = SerializeObjectBounds(record.ObjectBounds);
 
             string? material = record.Material.IsNull ? null : record.Material.FormKey.ToString();
             int hasDistantLod = (record.DistantLods?.Count > 0) ? 1 : 0;
@@ -2434,16 +2497,13 @@ namespace AssetConverter
 
     public class TextureSetProcessor : BaseRecordProcessor<ITextureSetGetter>
     {
-        private readonly record struct MaterialTextures(string? Diffuse, string? Normal, string? Specular);
-
-        private readonly string? _materialsRoot; // null disables MNAM resolution
-        private readonly ConcurrentDictionary<string, MaterialTextures?> _matCache = new(); // null value = known miss
+        private readonly MaterialTextureResolver _materials; // no materials root disables MNAM resolution
         private int _resolvedFromMaterial;
         private int _materialMisses;
 
         public TextureSetProcessor(string? materialsRoot = null)
         {
-            _materialsRoot = materialsRoot;
+            _materials = new MaterialTextureResolver(materialsRoot);
         }
 
         protected override async Task ProcessSpecificRecordAsync(ITextureSetGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
@@ -2459,9 +2519,9 @@ namespace AssetConverter
 
             // MNAM-only texture sets (common for landscape debris/rubble) carry their
             // texture paths inside a BGSM/BGEM material instead of TX00-TX02.
-            if (string.IsNullOrWhiteSpace(diffuse) && !string.IsNullOrWhiteSpace(materialPath) && _materialsRoot != null)
+            if (string.IsNullOrWhiteSpace(diffuse) && !string.IsNullOrWhiteSpace(materialPath) && _materials.Enabled)
             {
-                var mat = ResolveMaterial(materialPath);
+                var mat = _materials.Resolve(materialPath);
                 if (mat is { } m)
                 {
                     if (string.IsNullOrWhiteSpace(diffuse)) diffuse = m.Diffuse;
@@ -2487,70 +2547,6 @@ namespace AssetConverter
                 Material = materialPath,
                 Flags = SafeSerialize(record.Flags)
             }, transaction);
-        }
-
-        private MaterialTextures? ResolveMaterial(string mnamPath)
-        {
-            string rel = mnamPath.Trim().Replace('/', '\\').TrimStart('\\');
-            if (rel.StartsWith("materials\\", StringComparison.OrdinalIgnoreCase))
-                rel = rel.Substring("materials\\".Length);
-
-            return _matCache.GetOrAdd(rel.ToLowerInvariant(), _ => ParseMaterialFile(rel));
-        }
-
-        private MaterialTextures? ParseMaterialFile(string rel)
-        {
-            if (_materialsRoot == null) return null;
-            string path = Path.Combine(_materialsRoot, "Materials", rel);
-            if (!File.Exists(path))
-            {
-                path = Path.Combine(_materialsRoot, rel);
-                if (!File.Exists(path)) return null;
-            }
-
-            try
-            {
-                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read);
-                using var reader = new BinaryReader(stream);
-                uint signature = reader.ReadUInt32();
-                stream.Position = 0;
-
-                if (signature == BGSM.Signature)
-                {
-                    var bgsm = new BGSM();
-                    bgsm.Open(stream);
-                    return new MaterialTextures(
-                        NormalizeTexturePath(bgsm.DiffuseTexture),
-                        NormalizeTexturePath(bgsm.NormalTexture),
-                        NormalizeTexturePath(bgsm.SmoothSpecTexture));
-                }
-                if (signature == BGEM.Signature)
-                {
-                    var bgem = new BGEM();
-                    bgem.Open(stream);
-                    return new MaterialTextures(
-                        NormalizeTexturePath(bgem.BaseTexture),
-                        NormalizeTexturePath(bgem.NormalTexture),
-                        NormalizeTexturePath(bgem.SpecularTexture));
-                }
-                return null;
-            }
-            catch (Exception e) when (BaseMaterialFile.IsReadFailure(e))
-            {
-                Console.WriteLine($"[WARN] Unreadable material '{path}': {e.Message}");
-                return null;
-            }
-        }
-
-        // Match the TX00-derived row convention: backslashes, relative to the textures folder
-        // (the engine prepends "textures/" when loading).
-        private static string? NormalizeTexturePath(string? p)
-        {
-            if (string.IsNullOrWhiteSpace(p)) return null;
-            var clean = p.Replace('/', '\\').TrimStart('\\');
-            if (clean.StartsWith("textures\\", StringComparison.OrdinalIgnoreCase))
-                clean = clean.Substring("textures\\".Length);
-            return clean;
         }
 
         protected override void PrintSummary()
@@ -2741,8 +2737,8 @@ namespace AssetConverter
     {
         protected override async Task ProcessSpecificRecordAsync(IDoorGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
         {
-            const string sql = @"INSERT OR REPLACE INTO doors (form_key, editor_id, name, model_path, open_sound, close_sound, flags, is_marker)
-                VALUES (@FormKey, @EditorId, @Name, @ModelPath, @OpenSound, @CloseSound, @Flags, @IsMarker)";
+            const string sql = @"INSERT OR REPLACE INTO doors (form_key, editor_id, name, model_path, open_sound, close_sound, flags, is_marker, bounds)
+                VALUES (@FormKey, @EditorId, @Name, @ModelPath, @OpenSound, @CloseSound, @Flags, @IsMarker, @Bounds)";
             await conn.ExecuteAsync(sql, new
             {
                 FormKey = formKey,
@@ -2752,7 +2748,8 @@ namespace AssetConverter
                 OpenSound = record.OpenSound.IsNull ? (string?)null : record.OpenSound.FormKey.ToString(),
                 CloseSound = record.CloseSound.IsNull ? (string?)null : record.CloseSound.FormKey.ToString(),
                 Flags = SafeSerialize(record.Flags),
-                IsMarker = (record.MajorRecordFlagsRaw & 0x800000) != 0 ? 1 : 0
+                IsMarker = (record.MajorRecordFlagsRaw & 0x800000) != 0 ? 1 : 0,
+                Bounds = SerializeObjectBounds(record.ObjectBounds)
             }, transaction);
         }
     }
@@ -3079,7 +3076,7 @@ namespace AssetConverter
 
     public class WeatherProcessor : BaseRecordProcessor<IWeatherGetter>
     {
-        private static readonly string[] TimesOfDay =
+        internal static readonly string[] TimesOfDay =
             { "Sunrise", "Day", "Sunset", "Night", "EarlySunrise", "LateSunrise", "EarlySunset", "LateSunset" };
 
         internal static object Rgb(System.Drawing.Color c) => new { c.R, c.G, c.B };
@@ -3087,7 +3084,7 @@ namespace AssetConverter
         private static Dictionary<string, T> ByTimeOfDay<T>(Func<string, T> select) =>
             TimesOfDay.ToDictionary(t => t, select);
 
-        private static System.Drawing.Color Slot(IWeatherColorGetter group, string time) => time switch
+        internal static System.Drawing.Color Slot(IWeatherColorGetter group, string time) => time switch
         {
             "Sunrise" => group.Sunrise,
             "Day" => group.Day,
@@ -3184,22 +3181,99 @@ namespace AssetConverter
 
         protected override async Task ProcessSpecificRecordAsync(IWeatherGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
         {
-            const string sql = @"INSERT OR REPLACE INTO weather (form_key, editor_id, precipitation, fog, colors, image_spaces, sounds, god_rays, directional_ambient)
-                VALUES (@FormKey, @EditorId, @Precipitation, @Fog, @Colors, @ImageSpaces, @Sounds, @GodRays, @DirectionalAmbient)";
+            const string sql = @"INSERT OR REPLACE INTO weather (form_key, editor_id, precipitation, fog, fog_scales, colors, image_spaces, sounds, god_rays, directional_ambient, clouds, data)
+                VALUES (@FormKey, @EditorId, @Precipitation, @Fog, @FogScales, @Colors, @ImageSpaces, @Sounds, @GodRays, @DirectionalAmbient, @Clouds, @Data)";
             await conn.ExecuteAsync(sql, new
             {
                 FormKey = formKey,
                 EditorId = record.EditorID,
                 Precipitation = record.Precipitation.IsNull ? (string?)null : record.Precipitation.FormKey.ToString(),
                 Fog = SafeSerialize(Fog(record)),
+                FogScales = SafeSerialize(WeatherJson.FogScales(record)),
                 Colors = SafeSerialize(ColorGroups(record)),
                 ImageSpaces = SafeSerialize(ByTimeOfDay(t => Slot(record, t) is { IsNull: false } link ? link.FormKey.ToString() : null)),
-                Sounds = SafeSerialize(record.Sounds?.ToList()),
-                GodRays = (string?)null,
+                Sounds = SafeSerialize(WeatherJson.Sounds(record)),
+                GodRays = SafeSerialize(WeatherJson.GodRays(record)),
                 DirectionalAmbient = record.DirectionalAmbientLightingColors is { } ambientColors
                     ? SafeSerialize(ByTimeOfDay(t => DirectionalAmbient(Slot(ambientColors, t))))
-                    : null
+                    : null,
+                Clouds = SafeSerialize(WeatherJson.Clouds(record)),
+                Data = SafeSerialize(WeatherJson.Data(record))
             }, transaction);
+        }
+    }
+
+    public class ShaderParticleGeometryProcessor : BaseRecordProcessor<IShaderParticleGeometryGetter>
+    {
+        private readonly MaterialTextureResolver _materials; // no materials root disables resolving the particle material
+        private int _resolvedFromMaterial;
+        private int _materialMisses;
+        private int _materialDataMisses;
+
+        public ShaderParticleGeometryProcessor(string? materialsRoot = null)
+        {
+            _materials = new MaterialTextureResolver(materialsRoot);
+        }
+
+        protected override async Task ProcessSpecificRecordAsync(IShaderParticleGeometryGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
+        {
+            string? material = string.IsNullOrEmpty(record.ParticleTexture) ? null : record.ParticleTexture;
+            string? texture = null;
+            EffectMaterialParams? materialData = null;
+            if (material != null && _materials.Enabled)
+            {
+                texture = _materials.Resolve(material)?.Diffuse;
+                if (texture != null)
+                {
+                    _resolvedFromMaterial++;
+                }
+                else
+                {
+                    _materialMisses++;
+                    Console.Error.WriteLine(
+                        $"  CONVERSION ERROR SPGD {formKey} ({record.EditorID}): could not resolve particle material `{material}` to a texture");
+                }
+
+                materialData = _materials.ResolveEffect(material);
+                if (materialData == null)
+                {
+                    _materialDataMisses++;
+                    Console.Error.WriteLine(
+                        $"  CONVERSION ERROR SPGD {formKey} ({record.EditorID}): could not read particle material `{material}` as an effect material");
+                }
+            }
+
+            await conn.ExecuteAsync(@"INSERT OR REPLACE INTO shader_particle_geometries (form_key, editor_id, data, particle_material, particle_texture, particle_material_data)
+                VALUES (@FormKey, @EditorId, @Data, @ParticleMaterial, @ParticleTexture, @ParticleMaterialData)",
+                new
+                {
+                    FormKey = formKey,
+                    EditorId = record.EditorID,
+                    Data = SafeSerialize(ShaderParticleGeometryJson.Data(record)),
+                    ParticleMaterial = material,
+                    ParticleTexture = texture,
+                    ParticleMaterialData = materialData == null ? null : SafeSerialize(ShaderParticleGeometryJson.MaterialData(materialData))
+                }, transaction);
+        }
+
+        protected override void PrintSummary()
+        {
+            Console.WriteLine($"  Particle geometries resolved via BGEM material: {_resolvedFromMaterial}");
+            if (_materialMisses > 0)
+                Console.WriteLine($"  Particle geometries with unresolvable material: {_materialMisses}");
+            if (_materialDataMisses > 0)
+                Console.WriteLine($"  Particle geometries without readable effect material data: {_materialDataMisses}");
+        }
+    }
+
+    // A DATA block Mutagen cannot read (too short) is tallied as a read failure and stored as NULL.
+    public class GodRaysProcessor : BaseRecordProcessor<IGodRaysGetter>
+    {
+        protected override async Task ProcessSpecificRecordAsync(IGodRaysGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
+        {
+            var data = ReadFailureTally.Shared.Read("GDRY DATA", record.EditorID, () => GodRaysJson.Data(record), null);
+            await conn.ExecuteAsync("INSERT OR REPLACE INTO god_rayses (form_key, editor_id, data) VALUES (@FormKey, @EditorId, @Data)",
+                new { FormKey = formKey, EditorId = record.EditorID, Data = SafeSerialize(data) }, transaction);
         }
     }
 
@@ -3663,6 +3737,8 @@ namespace AssetConverter
                     Amount = record.TintAmount,
                     Color = WeatherProcessor.Rgb(record.TintColor)
                 },
+                // Empty, not null, for an image space without a LUT: null fields are left out, which would read as a database from before the export.
+                Lut = record.Lut ?? "",
                 DepthOfField = new
                 {
                     Strength = record.DepthOfFieldStrength,
@@ -3718,10 +3794,18 @@ namespace AssetConverter
                 record.SunriseBegin,
                 record.SunriseEnd,
                 record.SunsetBegin,
-                record.SunsetEnd
+                record.SunsetEnd,
+                MoonPhaseLength = record.PhaseLength,
+                Moons = new
+                {
+                    Masser = record.Moons.HasFlag(Climate.Moon.Masser),
+                    Secunda = record.Moons.HasFlag(Climate.Moon.Secunda)
+                },
+                // Lowercased like model_path columns, which ModelPathNormalizer cannot reach inside JSON.
+                ModelPath = record.Model?.File?.ToLowerInvariant()
             };
-            await conn.ExecuteAsync(@"INSERT OR REPLACE INTO climates (form_key, editor_id, sun_texture, sun_glare_texture, data) VALUES (@FormKey, @EditorId, @SunTex, @SunGlareTex, @Data)",
-                new { FormKey = formKey, EditorId = record.EditorID, SunTex = record.SunTexture, SunGlareTex = record.SunGlareTexture, Data = SafeSerialize(data) }, transaction);
+            await conn.ExecuteAsync(@"INSERT OR REPLACE INTO climates (form_key, editor_id, sun_texture, sun_glare_texture, data, volatility) VALUES (@FormKey, @EditorId, @SunTex, @SunGlareTex, @Data, @Volatility)",
+                new { FormKey = formKey, EditorId = record.EditorID, SunTex = record.SunTexture, SunGlareTex = record.SunGlareTexture, Data = SafeSerialize(data), Volatility = (int)record.Volatility }, transaction);
         }
     }
 

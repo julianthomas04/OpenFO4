@@ -3,7 +3,6 @@
 
 mod config;
 mod driver;
-mod readback;
 mod sequencer;
 mod states;
 

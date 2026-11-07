@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS worldspaces (
     default_water_height REAL,          -- DNAM: water plane height of cells without an XCLW override
     water_environment_map TEXT,         -- XWEM: water cubemap path
     parent_flags INTEGER,               -- PNAM raw u16: which data the worldspace inherits from parent_worldspace (0x01 land, 0x02 LOD, 0x04 map, 0x08 water, 0x10 climate, 0x40 sky cell)
-    map_image TEXT                      -- ICON: world map texture path relative to Textures, NULL when the worldspace has none
+    map_image TEXT,                     -- ICON: world map texture path relative to Textures, NULL when the worldspace has none
+    location TEXT                       -- XLCN: LCTN form_key of the worldspace's location, NULL when it names none
 );
 
 -- Map-marker references of a worldspace's persistent cell (Pip-Boy MAP).
@@ -145,7 +146,8 @@ CREATE TABLE IF NOT EXISTS placed_teleports (
     dest_position_z REAL NOT NULL,
     dest_rotation_x REAL NOT NULL,
     dest_rotation_y REAL NOT NULL,
-    dest_rotation_z REAL NOT NULL
+    dest_rotation_z REAL NOT NULL,
+    flags           INTEGER NOT NULL DEFAULT 0   -- XTEL flags: 1 no alarm, 2 no load screen, 4 relative position
 );
 
 CREATE INDEX IF NOT EXISTS idx_teleports_dest ON placed_teleports(destination_ref);
@@ -550,11 +552,14 @@ CREATE TABLE IF NOT EXISTS weather (
     editor_id TEXT,
     precipitation TEXT,
     fog TEXT,                           -- JSON
+    fog_scales TEXT,                    -- JSON: NAM4 floats, 4 banks of the 8 times of day
     colors TEXT,                        -- JSON
     image_spaces TEXT,                  -- JSON
-    sounds TEXT,                        -- JSON
-    god_rays TEXT,
-    directional_ambient TEXT            -- JSON
+    sounds TEXT,                        -- JSON: [{kind, sound}]
+    god_rays TEXT,                      -- JSON: GDRY form_key per time of day
+    directional_ambient TEXT,           -- JSON
+    clouds TEXT,                        -- JSON: textures, layers
+    data TEXT                           -- JSON: DATA block
 );
 
 -- ============================================
@@ -688,7 +693,9 @@ CREATE TABLE IF NOT EXISTS doors (
     open_sound TEXT,
     close_sound TEXT,
     flags TEXT,                         -- JSON
-    is_marker INTEGER DEFAULT 0         -- ESM major record flag 0x800000
+    is_marker INTEGER DEFAULT 0,        -- ESM major record flag 0x800000
+    bounds TEXT,                        -- JSON: min/max coordinates (OBND)
+    trigger_bounds TEXT                 -- JSON: min/max coordinates of the model's editor-marker geometry, automatic doors only
 );
 
 CREATE TABLE IF NOT EXISTS lights (
@@ -1002,7 +1009,8 @@ CREATE TABLE IF NOT EXISTS climates (
     editor_id TEXT,
     sun_texture TEXT,
     sun_glare_texture TEXT,
-    data TEXT                           -- JSON: WLST, FNAM, GNAM, TNAM
+    data TEXT,                          -- JSON: Weathers, SunriseBegin/End, SunsetBegin/End, MoonPhaseLength, Moons, ModelPath
+    volatility INTEGER                  -- CLMT TNAM volatility, raw byte
 );
 
 -- ============================================
@@ -1131,7 +1139,13 @@ CREATE TABLE IF NOT EXISTS bendable_splines          (form_key TEXT PRIMARY KEY,
 CREATE TABLE IF NOT EXISTS body_part_datas           (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS camera_paths              (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS camera_shots              (form_key TEXT PRIMARY KEY, editor_id TEXT);
-CREATE TABLE IF NOT EXISTS collision_layers          (form_key TEXT PRIMARY KEY, editor_id TEXT);
+CREATE TABLE IF NOT EXISTS collision_layers (
+    form_key TEXT PRIMARY KEY REFERENCES records(form_key),
+    editor_id TEXT,
+    layer_index INTEGER,                -- COLL BNAM layer index (matches the layer id Havok bodies carry)
+    flags INTEGER,                      -- COLL FNAM raw flags
+    collides_with TEXT                  -- JSON: Array of collision layer form keys (CNAM)
+);
 CREATE TABLE IF NOT EXISTS color_records             (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS debrises                  (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS default_object_managers   (form_key TEXT PRIMARY KEY, editor_id TEXT);
@@ -1143,14 +1157,48 @@ CREATE TABLE IF NOT EXISTS dialog_views              (form_key TEXT PRIMARY KEY,
 CREATE TABLE IF NOT EXISTS dual_cast_datas           (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS effect_shaders            (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS footstep_sets             (form_key TEXT PRIMARY KEY, editor_id TEXT);
-CREATE TABLE IF NOT EXISTS god_rayses                (form_key TEXT PRIMARY KEY, editor_id TEXT);
+CREATE TABLE IF NOT EXISTS god_rayses                (form_key TEXT PRIMARY KEY, editor_id TEXT, data TEXT); -- data: JSON, DATA block
 CREATE TABLE IF NOT EXISTS idle_animations           (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS idle_markers              (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS image_space_adapters      (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS instance_naming_ruleses   (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS layers                    (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS lens_flares               (form_key TEXT PRIMARY KEY, editor_id TEXT);
-CREATE TABLE IF NOT EXISTS load_screens              (form_key TEXT PRIMARY KEY, editor_id TEXT);
+-- LSCR. model is the NNAM form key (a STAT or SCOL); transform the TNAM form key (a TRNS). flags are the record's major
+-- flags (bit 10 DisplaysInMainMenu, bit 15 NoRotation). rotation_* is ONAM in degrees; zoom_* is ZNAM, absent on some records.
+CREATE TABLE IF NOT EXISTS load_screens (
+    form_key TEXT PRIMARY KEY,
+    editor_id TEXT,
+    tip TEXT,
+    model TEXT NOT NULL,
+    flags INTEGER NOT NULL,
+    transform TEXT,
+    rotation_min INTEGER,
+    rotation_max INTEGER,
+    zoom_min REAL,
+    zoom_max REAL
+);
+
+CREATE TABLE IF NOT EXISTS load_screen_conditions (
+    screen TEXT NOT NULL REFERENCES load_screens(form_key),
+    ord INTEGER NOT NULL,
+    function INTEGER NOT NULL,          -- condition function index
+    compare_op INTEGER NOT NULL,        -- 0 ==, 1 !=, 2 >, 3 >=, 4 <, 5 <=
+    or_flag INTEGER NOT NULL,           -- 1 when this condition is OR-ed with the next
+    flags INTEGER NOT NULL DEFAULT 0,   -- other CTDA type bits: 2 parameters use aliases, 8 use pack data, 16 swap subject and target
+    compare_value REAL,                 -- set for a literal comparison
+    compare_global TEXT,                -- set instead when the comparison value is a global form key
+    run_on INTEGER NOT NULL,            -- 0 Subject, 1 Target, 2 Reference, ...
+    reference TEXT,
+    param1_num INTEGER,
+    param1_record TEXT,
+    param1_string TEXT,
+    param2_num INTEGER,
+    param2_record TEXT,
+    param2_string TEXT,
+    param3 INTEGER,
+    PRIMARY KEY (screen, ord)
+);
 CREATE TABLE IF NOT EXISTS location_reference_types  (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS material_swaps            (form_key TEXT PRIMARY KEY, editor_id TEXT);
 
@@ -1210,10 +1258,31 @@ CREATE TABLE IF NOT EXISTS reference_groups          (form_key TEXT PRIMARY KEY,
 CREATE TABLE IF NOT EXISTS reverb_parameterses       (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS scene_collections         (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS scenes                    (form_key TEXT PRIMARY KEY, editor_id TEXT);
-CREATE TABLE IF NOT EXISTS shader_particle_geometries (form_key TEXT PRIMARY KEY, editor_id TEXT);
+CREATE TABLE IF NOT EXISTS shader_particle_geometries (
+    form_key TEXT PRIMARY KEY,
+    editor_id TEXT,
+    data TEXT,                          -- JSON
+    particle_material TEXT,             -- authored BGEM path
+    particle_texture TEXT,              -- the material's base texture
+    particle_material_data TEXT         -- JSON: blend, base colour, depth write, effect lighting
+);
 CREATE TABLE IF NOT EXISTS sound_keyword_mappings    (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS sound_markers             (form_key TEXT PRIMARY KEY, editor_id TEXT);
-CREATE TABLE IF NOT EXISTS transforms                (form_key TEXT PRIMARY KEY, editor_id TEXT);
+-- TRNS. Rotation is in radians as the record stores it; flags 65536 is AroundOrigin.
+CREATE TABLE IF NOT EXISTS transforms (
+    form_key TEXT PRIMARY KEY,
+    editor_id TEXT,
+    pos_x REAL,
+    pos_y REAL,
+    pos_z REAL,
+    rot_x REAL,
+    rot_y REAL,
+    rot_z REAL,
+    scale REAL,
+    flags INTEGER,
+    zoom_min REAL,
+    zoom_max REAL
+);
 CREATE TABLE IF NOT EXISTS zooms                     (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS damage_types              (form_key TEXT PRIMARY KEY, editor_id TEXT);
 CREATE TABLE IF NOT EXISTS story_manager_nodes       (form_key TEXT PRIMARY KEY, editor_id TEXT);

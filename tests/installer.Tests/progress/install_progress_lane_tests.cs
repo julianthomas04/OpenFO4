@@ -35,7 +35,7 @@ namespace InstallerTests.Progress
             var failure = new InvalidOperationException("disk full");
             var other = InstallProgress.RunLane(["Database"], async () =>
             {
-                InstallProgress.BeginPhase("Database", 0);
+                InstallProgress.BeginPhase("Database", null);
                 await Task.Delay(Timeout.Infinite, InstallProgress.CancelToken);
             });
 
@@ -276,15 +276,48 @@ namespace InstallerTests.Progress
         [Fact]
         public void PhasesReportedThroughTheFacadeAreCountedAndCallsWithoutAPhaseAreIgnored()
         {
-            int phase = InstallProgress.BeginPhase("Meshes", 10, "meshes");
-            InstallProgress.Tick(phase, 4);
+            int phase = InstallProgress.BeginPhase("Meshes", null, "meshes");
+            InstallProgress.AddTotal(phase, 10);
             InstallProgress.AddTotal(phase, 5);
+            InstallProgress.SealTotal(phase);
+            InstallProgress.Tick(phase, 4);
             InstallProgress.SetDetail(phase, "a.nif");
             InstallProgress.Tick(-1);
+            InstallProgress.AddTotal(-1, 3);
+            InstallProgress.SealTotal(-1);
             InstallProgress.EndPhase(-1);
 
             var step = InstallProgress.Model!.GetSnapshot().Steps.Single(s => s.Name == "Meshes");
             Assert.Equal((4L, 15L, "a.nif"), (step.Completed, step.Total, step.Detail));
+        }
+
+        [Fact]
+        public async Task ALaneWhoseStepsWerePlannedOutStillRethrowsAndLeavesTheDeclaredStepsAlone()
+        {
+            var failure = new InvalidOperationException("boom");
+
+            var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => InstallProgress.RunLane(["Kept group step"], () => throw failure));
+
+            var steps = InstallProgress.Model!.GetSnapshot().Steps;
+            Assert.Same(failure, thrown);
+            Assert.Equal(["Pump", "Meshes", "Database"], steps.Select(s => s.Name));
+            Assert.All(steps, step => Assert.Equal(StepStatus.Pending, step.Status));
+            Assert.Same(failure, InstallProgress.Failure);
+        }
+
+        [Fact]
+        public async Task ACancelledLaneWhoseStepsWerePlannedOutIsStillACancellation()
+        {
+            InstallProgress.RequestCancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => InstallProgress.RunLane(["Kept group step"], () =>
+            {
+                InstallProgress.CancelToken.ThrowIfCancellationRequested();
+                return Task.CompletedTask;
+            }));
+
+            Assert.Null(InstallProgress.Failure);
+            Assert.Equal(3, InstallProgress.Model!.GetSnapshot().Steps.Count);
         }
     }
 }

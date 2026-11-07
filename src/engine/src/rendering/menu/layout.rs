@@ -6,6 +6,7 @@
 //! anchoring has nothing to apply to.
 
 use super::loading_icon::{self, IconPlacement};
+use super::loading_panel::{self, PanelLayout};
 use crate::rendering::hud::field_text::ScreenMap;
 use crate::rendering::hud::layout::Layout;
 use crate::rendering::hud::quad::PxRect;
@@ -83,6 +84,7 @@ pub static LAYOUT_KEYS: ModuleKeys = ModuleKeys {
         &loading_icon::STAGE,
         &loading_icon::LOGO_ORIGIN,
         &loading_icon::LOGO_PLACEMENT,
+        &loading_panel::KEYS,
     ],
     resolve: validate,
 };
@@ -137,6 +139,8 @@ pub struct MenuLayout {
     pub set_text: SetTextRules,
     /// Where the loading screen's logo sits on the stage the menu shares with it.
     pub loading_icon: IconPlacement,
+    /// The tip, level, experience meter and catalogue number of a large loading screen.
+    pub loading_panel: PanelLayout,
 }
 
 /// One visible list row: its index in the whole list, its rectangle in framebuffer pixels and
@@ -264,6 +268,7 @@ impl MenuLayout {
             },
             set_text: SET_TEXT.resolve(layout)?,
             loading_icon: IconPlacement::resolve(layout, (xmax, ymax))?,
+            loading_panel: PanelLayout::resolve(layout)?,
         })
     }
 
@@ -350,12 +355,28 @@ pub(super) mod test_support {
     pub const FIXTURE_CLASS: &str = "$TEST_Font";
     pub const ROWS: usize = 4;
 
-    fn translate() -> String {
+    fn translate_with(panel_labels: &Value) -> String {
+        let mut entries = json!({
+            "$TEST_LABEL": "Translated label", "$PLAY": "PLAY", "$QUIT": "QUIT", "$BACK": "BACK",
+        });
+        entries
+            .as_object_mut()
+            .expect("the entries are an object")
+            .extend(
+                panel_labels
+                    .as_object()
+                    .expect("the labels are an object")
+                    .clone(),
+            );
         json!({
             "format": 1, "extractor": 1, "kind": "translate", "language": "en",
-            "entries": {"$TEST_LABEL": "Translated label", "$PLAY": "PLAY", "$QUIT": "QUIT", "$BACK": "BACK"}, "unresolved": {},
+            "entries": entries, "unresolved": {},
         })
         .to_string()
+    }
+
+    fn translate() -> String {
+        translate_with(&json!({"$LEVEL": "LEVEL", "$VDSGPrepend": "VDSG No."}))
     }
 
     fn font_config(family: &str) -> String {
@@ -446,18 +467,38 @@ pub(super) mod test_support {
         build(parts, family, &[(loading_icon::MOVIE, &loading)])
     }
 
+    /// The fixture menu whose translations lack the loading panel's labels.
+    pub fn ui_layout_without_panel_labels(family: &str) -> Arc<UiLayout> {
+        let loading = movie_json(loading_icon::MOVIE, &loading_icon::test_support::parts());
+        build_with(
+            &translate_with(&json!({})),
+            &parts(),
+            family,
+            &[(loading_icon::MOVIE, &loading)],
+        )
+    }
+
     /// The fixture menu with no loading screen movie installed.
     pub fn ui_layout_without_loading_screen(family: &str) -> Arc<UiLayout> {
         build(&parts(), family, &[])
     }
 
     fn build(parts: &Value, family: &str, others: &[(&str, &str)]) -> Arc<UiLayout> {
+        build_with(&translate(), parts, family, others)
+    }
+
+    fn build_with(
+        translations: &str,
+        parts: &Value,
+        family: &str,
+        others: &[(&str, &str)],
+    ) -> Arc<UiLayout> {
         let menu = movie_json(MOVIE, parts);
         let movies: Vec<(&str, &str)> = std::iter::once((MOVIE, menu.as_str()))
             .chain(others.iter().copied())
             .collect();
         Arc::new(
-            UiLayout::from_documents(&translate(), &font_config(family), &movies)
+            UiLayout::from_documents(translations, &font_config(family), &movies)
                 .expect("the fixture documents are valid"),
         )
     }
@@ -479,9 +520,11 @@ pub(super) mod test_support {
 mod tests {
     use super::test_support::{
         ROWS, parts, standard, ui_layout, ui_layout_with, ui_layout_without_loading_screen,
+        ui_layout_without_panel_labels,
     };
     use super::*;
     use crate::rendering::game_settings::SafeZone;
+    use crate::rendering::ui_colour::UiTint;
 
     #[test]
     fn the_fixture_menu_resolves_into_typed_values() {
@@ -567,6 +610,24 @@ mod tests {
             SafeZone { x: 64.0, y: 36.0 },
         );
         assert_eq!((rect.x, rect.y), (598.0, 332.0));
+    }
+
+    #[test]
+    fn missing_panel_labels_leave_those_lines_out_and_the_menu_working() {
+        let layout = ui_layout_without_panel_labels("Test Family");
+        layout.validate(&[&LAYOUT_KEYS]).unwrap();
+        let menu = MenuLayout::resolve(&layout).unwrap();
+        let text = menu.loading_panel.text(
+            &menu.fit(1280, 720),
+            SafeZone { x: 64.0, y: 36.0 },
+            &UiTint {
+                color: [0.0, 1.0, 0.0],
+                opacity: 1.0,
+            },
+            &loading_panel::PanelContent::placeholder(Some("tip")),
+        );
+        assert!(text.tip.is_some());
+        assert!(text.level.is_none() && text.catalogue.is_none());
     }
 
     #[test]

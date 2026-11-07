@@ -7,8 +7,9 @@ music in the menus, nothing while loading, and world music from the reveal on.
 If no audio device is available, the game runs silent and is otherwise
 unaffected.
 
-World music depends on where the player is and the in-game hour, and crossfades
-when the kind of music changes.
+World music depends on where the player is and the in-game hour from the
+[world clock](simulation.md#world-clock), and crossfades when the kind of music
+changes.
 
 Footsteps start in the [simulation](simulation.md), which reports each step. The
 engine looks up the surface under the foot and plays a matching sound. Footsteps

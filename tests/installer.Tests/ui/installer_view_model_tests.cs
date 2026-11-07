@@ -59,6 +59,23 @@ namespace InstallerTests.Ui
         }
 
         [Fact]
+        public void AStepThatIsStillDiscoveringItsTotalShowsPreparingAndNoFillUntilItIsSealed()
+        {
+            int extracting = _model.BeginPhase("Extracting", null, null);
+            _model.AddTotal(extracting, 500);
+
+            _viewModel.Refresh();
+            var preparing = _viewModel.Steps[0];
+            Assert.Equal((true, ProgressText.Preparing, 0.0), (preparing.IsPreparing, preparing.CountText, preparing.Fraction));
+
+            _model.SealTotal(extracting);
+            _model.Tick(extracting, 250);
+            _viewModel.Refresh();
+
+            Assert.Equal((false, "250 / 500", 0.5), (preparing.IsPreparing, preparing.CountText, preparing.Fraction));
+        }
+
+        [Fact]
         public void AStepWithoutATotalHasAnEmptyFractionWhileRunning()
         {
             int extracting = _model.BeginPhase("Extracting", 0, null);

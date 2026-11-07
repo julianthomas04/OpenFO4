@@ -12,16 +12,17 @@ use std::time::Duration;
 use kira::Decibels;
 use kira::sound::FromFileError;
 
-use super::conditions::{self, ConditionError, FreshWorldContext, global_entries};
+use super::decibels::amplitude_to_db;
 use super::file_probe::{ProbeError, probe_files};
-use super::music_output::open_music_stream;
+use super::music_output::open_stream;
 use super::music_stack::pick;
 use super::place::{Candidate, PlaceError, PlaceIndex, PlaceSnapshot};
-use super::rng::SplitMix64;
 use super::scheduler::{LOG_TARGET, PlayPlan, SchedulerError, TrackScheduler};
 use crate::assets::db::music::{
     MusicCatalog, MusicTrack, MusicTrackKind, MusicType, SoundCategory,
 };
+use crate::conditions::{self, ConditionError, FreshWorldContext, GameTime, global_entries};
+use crate::random::SplitMix64;
 
 pub const MUSIC_CATEGORY_EDITOR_ID: &str = "AudioCategoryMUS";
 
@@ -72,7 +73,7 @@ impl From<ProbeError> for WorldMusicError {
         match error {
             ProbeError::DirectoryMissing(path) => Self::AudioDirectoryMissing(path),
             ProbeError::Check { path, source } => Self::FileCheck { path, source },
-            ProbeError::Open { path, source } => Self::MusicFile { path, source },
+            ProbeError::Open { path, source, .. } => Self::MusicFile { path, source },
         }
     }
 }
@@ -121,7 +122,10 @@ impl WorldMusic {
     ) -> Result<Self, WorldMusicError> {
         let gain = music_category_gain(&catalog.sound_categories)?;
         let index = PlaceIndex::from_catalog(&catalog)?;
-        let context = FreshWorldContext::new(0.0, global_entries(&catalog));
+        let context = FreshWorldContext::new(
+            0.0,
+            global_entries(&catalog.globals, &catalog.global_form_keys),
+        );
         let reachable_types = reachable_type_keys(&catalog);
         let music_types = keyed(catalog.music_types, |music_type| {
             music_type.form_key.clone()
@@ -139,7 +143,7 @@ impl WorldMusic {
             "music file",
             single_file_keys(&reachable),
             audio_dir,
-            |path| open_music_stream(path, false).map(|_| ()),
+            |path| open_stream(path, false).map(|_| ()),
         )?;
         Ok(Self {
             index,
@@ -157,7 +161,7 @@ impl WorldMusic {
 
     /// The music volume from the sound category chain, as a level for every world music sound.
     pub fn volume(&self) -> Decibels {
-        Decibels(20.0 * self.gain.log10())
+        Decibels(amplitude_to_db(self.gain))
     }
 
     pub fn missing_files(&self) -> &HashSet<String> {
@@ -219,7 +223,7 @@ impl WorldMusic {
     pub fn update_place(
         &mut self,
         place: &PlaceSnapshot,
-        hour: f32,
+        time: GameTime,
     ) -> Result<Option<MusicChange>, WorldMusicError> {
         if self.last_place.as_ref() == Some(place) {
             return Ok(None);
@@ -258,7 +262,7 @@ impl WorldMusic {
                 plan: None,
             }));
         };
-        self.context.set_hour(hour);
+        self.context.set_time(time);
         let music_type = lookup_type(&self.music_types, key)?;
         let fade = fade_of(music_type)?;
         self.plan =
@@ -273,7 +277,7 @@ impl WorldMusic {
 
     /// The plan after the previous one ended. `None` is silence: the type does not cycle, or
     /// nothing is eligible.
-    pub fn next_plan(&mut self, hour: f32) -> Result<Option<PlayPlan>, WorldMusicError> {
+    pub fn next_plan(&mut self, time: GameTime) -> Result<Option<PlayPlan>, WorldMusicError> {
         self.plan = None;
         let Selection::Type(key) = &self.selection else {
             return Ok(None);
@@ -287,7 +291,7 @@ impl WorldMusic {
             );
             return Ok(None);
         }
-        self.context.set_hour(hour);
+        self.context.set_time(time);
         self.plan =
             self.scheduler
                 .next_plan(music_type, &self.tracks, &self.context, &mut self.rng)?;
@@ -455,17 +459,18 @@ fn single_file_keys<'a>(reachable: &[&'a MusicTrack]) -> Vec<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::db::music::{CellPlace, Comparand, CompareOp};
-    use crate::audio::conditions::GET_STAGE;
+    use crate::assets::db::conditions::{Comparand, CompareOp};
+    use crate::assets::db::music::CellPlace;
     use crate::audio::scheduler::{FLAG_CYCLE_TRACKS, LayerStep};
     use crate::audio::test_support::catalog::{
         MASTER_CATEGORY_MULTIPLIER, MUSIC_CATEGORY_MULTIPLIER, exterior_place, palette, silent,
         single, timed_music_type as typed, world_catalog,
     };
-    use crate::audio::test_support::condition::{condition, day, night};
     use crate::audio::test_support::{
         HALF_SECOND_SAMPLES, SAMPLE_RATE, SEED, SharedBuffer, sine_flac, undecodable_flac,
     };
+    use crate::conditions::test_support::{condition, day, night};
+    use crate::conditions::{GET_STAGE, IS_IN_INTERIOR};
 
     const CYCLES: u32 = FLAG_CYCLE_TRACKS;
 
@@ -520,7 +525,7 @@ mod tests {
 
     fn update(music: &mut WorldMusic, worldspace: &str) -> Option<MusicChange> {
         music
-            .update_place(&exterior_place(worldspace), 9.0)
+            .update_place(&exterior_place(worldspace), GameTime::at_hour(9.0))
             .unwrap()
     }
 
@@ -565,7 +570,10 @@ mod tests {
         let mut moved = exterior_place("ws1");
         moved.point_beth = (10.0, 20.0);
 
-        assert_eq!(music.update_place(&moved, 9.0).unwrap(), None);
+        assert_eq!(
+            music.update_place(&moved, GameTime::at_hour(9.0)).unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -618,10 +626,10 @@ mod tests {
     fn only_a_cycling_type_asks_for_a_next_plan() {
         let mut music = world(two_types());
         update(&mut music, "ws1");
-        assert!(music.next_plan(9.0).unwrap().is_some());
+        assert!(music.next_plan(GameTime::at_hour(9.0)).unwrap().is_some());
 
         update(&mut music, "ws2");
-        assert_eq!(music.next_plan(9.0).unwrap(), None);
+        assert_eq!(music.next_plan(GameTime::at_hour(9.0)).unwrap(), None);
         assert_eq!(music.current_plan(), None);
     }
 
@@ -646,7 +654,7 @@ mod tests {
 
         assert_eq!(single_file(music.current_plan()), "music/day.flac");
         assert_eq!(
-            single_file(music.next_plan(23.0).unwrap().as_ref()),
+            single_file(music.next_plan(GameTime::at_hour(23.0)).unwrap().as_ref()),
             "music/night.flac"
         );
     }
@@ -711,6 +719,30 @@ mod tests {
         assert!(
             message.contains("MUSTrackA") && message.contains("47"),
             "{message}"
+        );
+    }
+
+    #[test]
+    fn a_track_that_asks_for_the_interior_is_fatal_as_nothing_tells_the_music_where_the_player_is()
+    {
+        let mut catalog = two_types();
+        catalog.tracks[0].conditions = vec![condition(
+            IS_IN_INTERIOR,
+            CompareOp::Equal,
+            Comparand::Value(0.0),
+        )];
+
+        let error = build_error(catalog);
+
+        assert!(
+            matches!(
+                &error,
+                WorldMusicError::Condition {
+                    source: ConditionError::UnsupportedFunction(IS_IN_INTERIOR),
+                    ..
+                }
+            ),
+            "{error:?}"
         );
     }
 
@@ -816,7 +848,7 @@ mod tests {
         );
         for _ in 0..50 {
             assert_eq!(
-                single_file(music.next_plan(9.0).unwrap().as_ref()),
+                single_file(music.next_plan(GameTime::at_hour(9.0)).unwrap().as_ref()),
                 "music/here.flac"
             );
         }

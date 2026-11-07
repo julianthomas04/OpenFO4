@@ -1,11 +1,19 @@
 /// Reports an error that stops the program before any window or UI exists.
 /// Debug builds have stderr; release builds use the GUI subsystem and have no
-/// console, so the message goes into a native message box instead.
+/// console, so the message goes into a native message box instead, unless the
+/// run is unattended (`OPENFO4_SHOT`), where a box would wait for nobody.
 pub fn report(title: &str, message: &str) {
     eprintln!("fatal: {message}");
-    if !cfg!(debug_assertions) {
+    if shows_message_box(
+        cfg!(debug_assertions),
+        crate::rendering::shot::shot_requested(),
+    ) {
         show_message_box(title, message);
     }
+}
+
+fn shows_message_box(debug_build: bool, unattended: bool) -> bool {
+    !debug_build && !unattended
 }
 
 #[cfg(windows)]
@@ -34,4 +42,17 @@ fn show_message_box(title: &str, message: &str) {
 #[cfg(not(windows))]
 fn show_message_box(title: &str, message: &str) {
     eprintln!("{title}: {message}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_an_attended_release_build_shows_a_message_box() {
+        assert!(shows_message_box(false, false));
+        assert!(!shows_message_box(true, false));
+        assert!(!shows_message_box(false, true));
+        assert!(!shows_message_box(true, true));
+    }
 }

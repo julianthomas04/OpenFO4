@@ -55,5 +55,13 @@ struct TerrainInstance {
     vertex_offset: u32,
     splat_layer: u32,
     layer_indices: vec4<u32>,
+    // The splatmap weighing layer_indices_hi; NO_SPLAT_LAYER for a cell of 4 layers or fewer.
+    splat_layer_hi: u32,
+    _pad2: u32,
+    _pad3: u32,
+    _pad4: u32,
+    layer_indices_hi: vec4<u32>,
     flags: vec4<u32>,
 };
+
+const NO_SPLAT_LAYER = 0xffffffffu;

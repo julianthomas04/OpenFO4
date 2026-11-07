@@ -331,6 +331,7 @@ mod tests {
         let page = page();
         let snapshot = PipBoySnapshot {
             model: &model,
+            clock: crate::sim::WorldClock::fixture().date(),
             vitals: crate::rendering::pipboy::pages::test_harness::vitals(),
         };
         assert_eq!(page.hints(&snapshot), []);

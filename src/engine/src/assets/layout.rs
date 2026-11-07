@@ -92,6 +92,12 @@ pub fn texture_key(path_below_textures: &str) -> String {
     format!("{TEXTURES_DIR}\\{path_below_textures}")
 }
 
+/// The [`texture_key`] of a texture a record names by its path below the textures folder
+/// (`Sky\Sun_d.dds`), as the installer stores the file: lowercase, with backslashes.
+pub fn named_texture_key(path_below_textures: &str) -> String {
+    texture_key(&path_below_textures.to_ascii_lowercase().replace('/', "\\"))
+}
+
 /// An audio path that cannot be placed below the audio folder.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("audio path {path:?} has an empty, \".\" or \"..\" segment")]
@@ -262,6 +268,18 @@ mod tests {
     fn keys_start_with_the_layout_folder_and_a_backslash() {
         assert_eq!(mesh_key("props\\crate.glb"), "meshes\\props\\crate.glb");
         assert_eq!(texture_key("wall_d.dds"), "textures\\wall_d.dds");
+    }
+
+    #[test]
+    fn a_named_texture_key_names_the_file_below_the_textures_in_lower_case() {
+        assert_eq!(
+            named_texture_key("Sky\\Sun_d.dds"),
+            "textures\\sky\\sun_d.dds"
+        );
+        assert_eq!(
+            named_texture_key("Sky/SunGlare.DDS"),
+            "textures\\sky\\sunglare.dds"
+        );
     }
 
     #[test]

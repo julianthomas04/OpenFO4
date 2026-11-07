@@ -35,6 +35,9 @@
         <SolidColorBrush Color="{DynamicResource SystemAccentColor}" Opacity="0.38" />
       </Setter>
     </Style>
+    <Style Selector="ProgressBar.rowFill.preparing">
+      <Setter Property="Opacity" Value="0" />
+    </Style>
     <Style Selector="ProgressBar.rowFill.done">
       <Setter Property="Foreground">
         <SolidColorBrush Color="#2E9E5B" Opacity="0.26" />
@@ -112,6 +115,7 @@
                       <ProgressBar x:Name="StepFill" Classes="rowFill" Minimum="0" Maximum="1" Value="{Binding Fraction}"
                                    IsHitTestVisible="False"
                                    Classes.running="{Binding IsRunning}"
+                                   Classes.preparing="{Binding IsPreparing}"
                                    Classes.done="{Binding IsDone}"
                                    Classes.failed="{Binding IsFailed}"
                                    Classes.cancelled="{Binding IsCancelled}" />

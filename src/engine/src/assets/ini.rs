@@ -331,6 +331,29 @@ impl GameIni {
         })
     }
 
+    /// Like [`Self::require_positive`], and `None` when no INI sets the key. Only for the few
+    /// settings the game's own INIs omit, whose value the game takes from its built-in default
+    /// (the caller says which); a value that is present must still be valid.
+    pub fn optional_positive(&self, key: IniKey) -> Result<Option<f32>, IniError> {
+        self.optional_valid(key, "a finite number above 0", |v: &f32| {
+            v.is_finite() && *v > 0.0
+        })
+    }
+
+    /// Like [`Self::require_valid`], and `None` when no INI sets the key; the same rule as
+    /// [`Self::optional_positive`] for a setting with any other validity.
+    pub fn optional_valid<T: IniValue>(
+        &self,
+        key: IniKey,
+        requirement: &str,
+        is_valid: impl Fn(&T) -> bool,
+    ) -> Result<Option<T>, IniError> {
+        match self.require_valid(key, requirement, is_valid) {
+            Err(IniError::MissingKey { .. }) => Ok(None),
+            other => other.map(Some),
+        }
+    }
+
     fn entry(&self, key: IniKey) -> Result<&Entry, IniError> {
         self.entries
             .get(&key.name.to_ascii_lowercase())
@@ -404,9 +427,8 @@ fn read_text(entries: &mut HashMap<String, Entry>, file: &str, text: &str) {
     reason = "expected values are exact literals parsed or copied, not computed"
 )]
 mod tests {
-    use std::sync::{Arc, Mutex};
-
     use super::*;
+    use crate::audio::test_support::SharedBuffer;
     use proptest::prelude::*;
 
     const KEY: IniKey = IniKey::new("Display", "iKey");
@@ -419,38 +441,13 @@ mod tests {
         GameIni::from_texts([text])
     }
 
-    #[derive(Clone, Default)]
-    struct LogBuffer(Arc<Mutex<Vec<u8>>>);
-
-    impl std::io::Write for LogBuffer {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBuffer {
-        type Writer = Self;
-
-        fn make_writer(&'a self) -> Self::Writer {
-            self.clone()
-        }
-    }
-
     /// Everything `action` logs at warning level or above on this thread.
     fn capture_warnings<R>(action: impl FnOnce() -> R) -> String {
-        let buffer = LogBuffer::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(buffer.clone())
-            .with_max_level(tracing::Level::WARN)
-            .with_ansi(false)
-            .finish();
-        tracing::subscriber::with_default(subscriber, action);
-        String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap()
+        let log = SharedBuffer::default();
+        let guard = log.capture("warn");
+        action();
+        drop(guard);
+        log.drain()
     }
 
     fn write(dir: &Path, file: &str, text: &str) {
@@ -737,10 +734,40 @@ mod tests {
     }
 
     #[test]
+    fn an_optional_valid_setting_is_none_when_absent_and_still_validated_when_present() {
+        let ini = ini("fNegative=-3.5\nfBig=900\nfWord=big\n");
+        let at_most_100 = |value: &f32| *value <= 100.0;
+        let read = |name| ini.optional_valid(key(name), "100 or less", at_most_100);
+
+        assert_eq!(read("fNegative").unwrap(), Some(-3.5));
+        assert_eq!(read("fAbsent").unwrap(), None);
+        assert!(matches!(read("fBig"), Err(IniError::Invalid { .. })));
+        assert!(matches!(read("fWord"), Err(IniError::Unparsable { .. })));
+    }
+
+    #[test]
     fn missing_key_is_reported_before_any_validation() {
         assert!(matches!(
             ini("").require_valid::<i32>(KEY, "never", |_| false),
             Err(IniError::MissingKey { .. })
+        ));
+    }
+
+    #[test]
+    fn an_optional_setting_is_none_when_absent_and_still_validated_when_present() {
+        let ini = ini("fSet=2.5
+fBad=-1
+fWord=big
+");
+        assert_eq!(ini.optional_positive(key("fSet")).unwrap(), Some(2.5));
+        assert_eq!(ini.optional_positive(key("fAbsent")).unwrap(), None);
+        assert!(matches!(
+            ini.optional_positive(key("fBad")),
+            Err(IniError::Invalid { .. })
+        ));
+        assert!(matches!(
+            ini.optional_positive(key("fWord")),
+            Err(IniError::Unparsable { .. })
         ));
     }
 

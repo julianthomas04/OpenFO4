@@ -1,3 +1,9 @@
+pub mod colour_lut;
+pub mod lut_library;
+pub mod lut_table;
+
+use colour_lut::ColourLut;
+
 use crate::rendering::{
     gpu_profiler::{GpuPass, GpuProfiler, SpanPart},
     lighting::FrameBinding,
@@ -35,11 +41,13 @@ pub struct TonemapPass {
     source_layout: wgpu::BindGroupLayout,
     source_bind_group: wgpu::BindGroup,
     target_format: wgpu::TextureFormat,
+    colour_lut: ColourLut,
 }
 
 impl TonemapPass {
     pub fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
         frame_layout: &wgpu::BindGroupLayout,
         hdr_view: &wgpu::TextureView,
@@ -69,6 +77,22 @@ impl TonemapPass {
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
             ],
@@ -106,15 +130,28 @@ impl TonemapPass {
             cache: None,
         });
 
-        let source_bind_group =
-            Self::create_source_bind_group(device, &source_layout, hdr_view, exposure_state);
+        let colour_lut = ColourLut::new(device, queue, "tonemap_colour_lut");
+        let source_bind_group = Self::create_source_bind_group(
+            device,
+            &source_layout,
+            hdr_view,
+            exposure_state,
+            &colour_lut,
+        );
 
         Self {
             pipeline,
             source_layout,
             source_bind_group,
             target_format,
+            colour_lut,
         }
+    }
+
+    /// The table the picture is graded with from now on: `texels` as [`blended_texels`] lays
+    /// them out.
+    pub fn write_colour_lut(&self, queue: &wgpu::Queue, texels: &[[u8; 4]]) {
+        self.colour_lut.write(queue, texels);
     }
 
     pub fn target_format(&self) -> wgpu::TextureFormat {
@@ -127,8 +164,13 @@ impl TonemapPass {
         hdr_view: &wgpu::TextureView,
         exposure_state: &wgpu::Buffer,
     ) {
-        self.source_bind_group =
-            Self::create_source_bind_group(device, &self.source_layout, hdr_view, exposure_state);
+        self.source_bind_group = Self::create_source_bind_group(
+            device,
+            &self.source_layout,
+            hdr_view,
+            exposure_state,
+            &self.colour_lut,
+        );
     }
 
     pub fn encode(
@@ -165,6 +207,7 @@ impl TonemapPass {
         layout: &wgpu::BindGroupLayout,
         hdr_view: &wgpu::TextureView,
         exposure_state: &wgpu::Buffer,
+        colour_lut: &ColourLut,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("tonemap_source_bind_group"),
@@ -178,10 +221,21 @@ impl TonemapPass {
                     binding: 1,
                     resource: exposure_state.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&colour_lut.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&colour_lut.sampler),
+                },
             ],
         })
     }
 }
+
+#[cfg(test)]
+mod gpu_tests;
 
 #[cfg(test)]
 mod tests {

@@ -5,7 +5,6 @@
 pub mod actions;
 pub mod catalog;
 pub mod character;
-pub mod clock;
 pub mod inventory;
 pub mod map;
 pub mod perks;
@@ -22,10 +21,11 @@ use std::sync::Arc;
 
 use glam::Vec3;
 
+use super::world_clock::GameClock;
+
 pub use actions::{ActionEffects, PipBoyAction, PipBoyActionError};
 pub use catalog::{ItemDefinition, PipBoyCatalog};
 pub use character::{Character, Limb, Sex, Special};
-pub use clock::GameClock;
 pub use inventory::{DamageType, Inventory, InventoryCategory, InventoryItem, ItemId};
 pub use map::{MapMarker, MapMarkerId, WorldMap, WorldMapProjection};
 pub use perks::{OwnedPerks, PerkDefinition, PerkId};
@@ -45,7 +45,6 @@ pub struct PipBoyModel {
     pub settlements: Vec<Settlement>,
     pub stats: Vec<StatCategory>,
     pub radio: Radio,
-    pub clock: GameClock,
     pub current_location: Option<String>,
     /// Engine-space position of the player-placed map marker.
     pub custom_marker: Option<Vec3>,
@@ -60,12 +59,6 @@ pub struct PipBoyModel {
 
 const STARTING_CARRY_CAPACITY: f32 = 200.0;
 const STARTING_XP_FOR_NEXT_LEVEL: u32 = 200;
-const STARTING_CLOCK: GameClock = GameClock {
-    year: 2287,
-    month: 10,
-    day: 23,
-    minute_of_day: 9 * 60 + 47,
-};
 
 impl PipBoyModel {
     /// An empty model over `catalog`: nothing owned, nothing known.
@@ -91,7 +84,6 @@ impl PipBoyModel {
             settlements: Vec::new(),
             stats: Vec::new(),
             radio: Radio::default(),
-            clock: STARTING_CLOCK,
             current_location: None,
             custom_marker: None,
             discovered_markers: HashSet::new(),
@@ -122,6 +114,8 @@ pub struct PlayerVitals {
 #[derive(Clone, Copy, Debug)]
 pub struct PipBoySnapshot<'a> {
     pub model: &'a PipBoyModel,
+    /// The world clock's date and time, owned by the sim rather than the model.
+    pub clock: GameClock,
     pub vitals: PlayerVitals,
 }
 
@@ -158,12 +152,5 @@ mod tests {
                 .iter()
                 .all(|&limb| (model.character.limbs.get(limb) - 1.0).abs() < f32::EPSILON)
         );
-    }
-
-    #[test]
-    fn a_new_model_starts_on_the_authored_date() {
-        let clock = empty_model().clock;
-        assert_eq!((clock.year, clock.month, clock.day), (2287, 10, 23));
-        assert_eq!(clock.minute_of_day, 9 * 60 + 47);
     }
 }

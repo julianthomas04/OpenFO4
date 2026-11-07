@@ -59,6 +59,15 @@ namespace InstallerTests
         {
             var record = _mod.Doors.AddNew(editorId);
             record.Model = new Model { File = model };
+            record.ObjectBounds = new ObjectBounds { First = new P3Int16(-40, -6, 0), Second = new P3Int16(40, 6, 200) };
+            Register(editorId, record.FormKey);
+            return record;
+        }
+
+        public CollisionLayer AddCollisionLayer(string editorId, Action<CollisionLayer>? configure = null)
+        {
+            var record = _mod.CollisionLayers.AddNew(editorId);
+            configure?.Invoke(record);
             Register(editorId, record.FormKey);
             return record;
         }
@@ -181,9 +190,26 @@ namespace InstallerTests
                 data.ParameterOneNumber = (int)((ownIndex << 24) | FormKeyOf(editorId).ID);
         }
 
-        public Climate AddClimate(string editorId)
+        public Climate AddClimate(string editorId, Action<Climate>? configure = null)
         {
             var record = _mod.Climates.AddNew(editorId);
+            configure?.Invoke(record);
+            Register(editorId, record.FormKey);
+            return record;
+        }
+
+        public GodRays AddGodRays(string editorId, Action<GodRays> configure)
+        {
+            var record = _mod.GodRays.AddNew(editorId);
+            configure(record);
+            Register(editorId, record.FormKey);
+            return record;
+        }
+
+        public ShaderParticleGeometry AddShaderParticleGeometry(string editorId, Action<ShaderParticleGeometry> configure)
+        {
+            var record = _mod.ShaderParticleGeometries.AddNew(editorId);
+            configure(record);
             Register(editorId, record.FormKey);
             return record;
         }
@@ -278,6 +304,22 @@ namespace InstallerTests
         public MusicTrack AddMusicTrack(string editorId, Action<MusicTrack> configure)
         {
             var record = _mod.MusicTracks.AddNew(editorId);
+            configure(record);
+            Register(editorId, record.FormKey);
+            return record;
+        }
+
+        public LoadScreen AddLoadScreen(string editorId, Action<LoadScreen> configure)
+        {
+            var record = _mod.LoadScreens.AddNew(editorId);
+            configure(record);
+            Register(editorId, record.FormKey);
+            return record;
+        }
+
+        public Transform AddTransform(string editorId, Action<Transform> configure)
+        {
+            var record = _mod.Transforms.AddNew(editorId);
             configure(record);
             Register(editorId, record.FormKey);
             return record;

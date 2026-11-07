@@ -34,11 +34,13 @@ pub struct CascadeSet {
 impl CascadeSet {
     /// Cascades from `eye_centered_from` on are centred on the eye and cover
     /// the whole circle around it, so turning the camera does not move them.
+    /// `anchors` pin each cascade's texel grid and follow the camera across fits.
     pub fn fit(
         camera: &Camera,
         to_sun: Vec3,
         config: &ShadowConfig,
         eye_centered_from: usize,
+        anchors: &mut GridAnchors,
     ) -> Self {
         let light_rotation = light_rotation(to_sun);
         let corner_slope_sq = corner_slope_squared(camera);
@@ -58,7 +60,9 @@ impl CascadeSet {
                     (camera.eye + forward * center_depth, radius)
                 };
                 let radius = (radius / RADIUS_QUANTUM).ceil() * RADIUS_QUANTUM;
-                let mut cascade = fit_cascade(center, radius, light_rotation, config);
+                let texel_world = texel_world(radius, config);
+                let anchor = anchors.follow(i, center, radius, texel_world, light_rotation);
+                let mut cascade = fit_cascade(center, radius, light_rotation, anchor, config);
                 cascade.min_texels = config.cascade_min_texels[i];
                 cascade.skip_alpha = i == last && config.skip_alpha_in_last_cascade;
                 cascade
@@ -86,6 +90,60 @@ impl CascadeSet {
             })
             .collect()
     }
+}
+
+/// Where each cascade's light-space texel grid is pinned. Snapping to the grid keeps shadows still
+/// while the camera moves, but a turning sun swings every point about the pin, by its distance
+/// from the pin times the angle: pinned at the world origin, a point thousands of units away
+/// crosses many texels per frame and every shadow edge shimmers. So each pin stays within a
+/// cascade radius of its cascade centre, and moves only by whole texels across the light, which
+/// leaves the grid where it was.
+#[derive(Debug, Clone, Default)]
+pub struct GridAnchors {
+    anchors: Vec<Option<Vec3>>,
+}
+
+impl GridAnchors {
+    /// Forgets every pin; the next fit pins each grid on its cascade centre.
+    pub fn reset(&mut self) {
+        self.anchors.clear();
+    }
+
+    fn follow(
+        &mut self,
+        cascade: usize,
+        center: Vec3,
+        radius: f32,
+        texel_world: f32,
+        light_rotation: Mat4,
+    ) -> Vec3 {
+        if self.anchors.len() <= cascade {
+            self.anchors.resize(cascade + 1, None);
+        }
+        let anchor = match self.anchors[cascade] {
+            Some(anchor) if anchor.distance(center) <= radius => anchor,
+            Some(anchor) => {
+                let offset = light_rotation.transform_vector3(center - anchor);
+                let whole_texels = Vec3::new(
+                    snap_to_texel(offset.x, texel_world),
+                    snap_to_texel(offset.y, texel_world),
+                    offset.z,
+                );
+                anchor + light_rotation.inverse().transform_vector3(whole_texels)
+            }
+            None => center,
+        };
+        self.anchors[cascade] = Some(anchor);
+        anchor
+    }
+}
+
+fn snap_to_texel(light_space: f32, texel_world: f32) -> f32 {
+    (light_space / texel_world).round() * texel_world
+}
+
+fn texel_world(radius: f32, config: &ShadowConfig) -> f32 {
+    2.0 * radius / config.resolution as f32
 }
 
 /// Rotation into a light space looking along -`to_sun`; depends on the sun only,
@@ -134,17 +192,23 @@ fn slice_bounding_sphere(near: f32, far: f32, corner_slope_sq: f32) -> (f32, f32
     }
 }
 
-/// Reverse-Z orthographic cascade around a texel-snapped sphere centre, its
-/// depth range extended towards the sun by the caster reach.
-fn fit_cascade(center: Vec3, radius: f32, light_rotation: Mat4, config: &ShadowConfig) -> Cascade {
-    let texel_world = 2.0 * radius / config.resolution as f32;
-    let light_center = light_rotation.transform_point3(center);
+/// Reverse-Z orthographic cascade around a sphere centre snapped to the texel grid pinned at
+/// `anchor`, its depth range extended towards the sun by the caster reach.
+fn fit_cascade(
+    center: Vec3,
+    radius: f32,
+    light_rotation: Mat4,
+    anchor: Vec3,
+    config: &ShadowConfig,
+) -> Cascade {
+    let texel_world = texel_world(radius, config);
+    let light_center = light_rotation.transform_vector3(center - anchor);
     let snapped = Vec3::new(
-        (light_center.x / texel_world).round() * texel_world,
-        (light_center.y / texel_world).round() * texel_world,
+        snap_to_texel(light_center.x, texel_world),
+        snap_to_texel(light_center.y, texel_world),
         light_center.z,
     );
-    let view = Mat4::from_translation(-snapped) * light_rotation;
+    let view = Mat4::from_translation(-snapped) * light_rotation * Mat4::from_translation(-anchor);
     let caster_reach = config.distance;
     // Near and far are swapped for reverse-Z: the side facing the sun maps to 1.
     let projection = Mat4::orthographic_rh(
@@ -155,7 +219,7 @@ fn fit_cascade(center: Vec3, radius: f32, light_rotation: Mat4, config: &ShadowC
         radius,
         -(radius + caster_reach),
     );
-    let snapped_center = light_rotation.inverse().transform_point3(snapped);
+    let snapped_center = anchor + light_rotation.inverse().transform_vector3(snapped);
 
     Cascade {
         view_proj: projection * view,
@@ -188,7 +252,10 @@ mod tests {
     }
 
     fn camera_looking(direction: Vec3) -> Camera {
-        let eye = Vec3::new(100.0, 50.0, -20.0);
+        camera_at(Vec3::new(100.0, 50.0, -20.0), direction)
+    }
+
+    fn camera_at(eye: Vec3, direction: Vec3) -> Camera {
         Camera {
             eye,
             target: eye + direction,
@@ -203,6 +270,80 @@ mod tests {
     fn tan_half_fov(fovy_degrees: f32, aspect: f32) -> (f32, f32) {
         let tan_y = (fovy_degrees.to_radians() / 2.0).tan();
         (tan_y * aspect, tan_y)
+    }
+
+    /// Where `point` falls on the cascade's shadow map, in texels.
+    fn texel_position(cascade: &Cascade, point: Vec3, resolution: u32) -> glam::Vec2 {
+        let clip = cascade.view_proj.project_point3(point);
+        (clip.truncate() * 0.5 + 0.5) * resolution as f32
+    }
+
+    /// How far `to` lies from `from` within a texel, ignoring whole-texel shifts of the map.
+    fn sub_texel_change(from: glam::Vec2, to: glam::Vec2) -> f32 {
+        let change = to - from;
+        (change - change.round()).abs().max_element()
+    }
+
+    /// One frame of the sun at the vanilla timescale: about 0.0014 degrees at 60 frames a second.
+    const SUN_DEGREES_PER_FRAME: f32 = 0.0014;
+
+    #[test]
+    fn a_turning_sun_moves_shadows_far_from_the_world_origin_by_a_fraction_of_a_texel() {
+        let config = config(3);
+        let camera = camera_at(Vec3::new(2_000.0, 50.0, -1_500.0), -Vec3::Z);
+        let point = camera.eye - Vec3::Z * 3.0;
+        let axis = Vec3::new(0.2, 0.3, 0.9).normalize();
+        let mut anchors = GridAnchors::default();
+        let mut to_sun = TO_SUN.normalize();
+        let mut previous = None;
+        for frame in 0..60 {
+            let set = CascadeSet::fit(&camera, to_sun, &config, 3, &mut anchors);
+            let position = texel_position(&set.cascades[0], point, config.resolution);
+            if let Some(previous) = previous {
+                let change = sub_texel_change(previous, position);
+                assert!(change < 0.1, "frame {frame}: {change} texels");
+            }
+            previous = Some(position);
+            to_sun = glam::Quat::from_axis_angle(axis, SUN_DEGREES_PER_FRAME.to_radians()) * to_sun;
+        }
+    }
+
+    #[test]
+    fn walking_under_a_still_sun_keeps_every_point_on_the_same_spot_of_the_texel_grid() {
+        let config = config(3);
+        let start = camera_looking(-Vec3::Z);
+        let point = start.eye - Vec3::Z * 3.0;
+        let mut anchors = GridAnchors::default();
+        let first = CascadeSet::fit(&start, TO_SUN, &config, 3, &mut anchors);
+        let origin = texel_position(&first.cascades[0], point, config.resolution);
+        let mut eye = start.eye;
+        for step in 0..2000 {
+            eye += Vec3::new(0.37, 0.0, -0.11);
+            let set = CascadeSet::fit(&camera_at(eye, -Vec3::Z), TO_SUN, &config, 3, &mut anchors);
+            let position = texel_position(&set.cascades[0], point, config.resolution);
+            let change = sub_texel_change(origin, position);
+            assert!(change < 0.01, "step {step}: {change} texels");
+        }
+        let walked = first.cascades[0].sphere.truncate().distance(eye);
+        assert!(
+            walked > 3.0 * first.cascades[0].sphere.w,
+            "the walk crosses many anchor moves"
+        );
+    }
+
+    #[test]
+    fn a_reset_pins_the_grids_on_the_next_cascade_centres() {
+        let config = config(3);
+        let mut anchors = GridAnchors::default();
+        CascadeSet::fit(&camera_looking(-Vec3::Z), TO_SUN, &config, 3, &mut anchors);
+        anchors.reset();
+        let far = camera_at(Vec3::new(5_000.0, 50.0, 3_000.0), -Vec3::Z);
+        let mut fresh = GridAnchors::default();
+        let after_reset = CascadeSet::fit(&far, TO_SUN, &config, 3, &mut anchors);
+        let from_scratch = CascadeSet::fit(&far, TO_SUN, &config, 3, &mut fresh);
+        for (reset, scratch) in after_reset.cascades.iter().zip(&from_scratch.cascades) {
+            assert!(reset.view_proj.abs_diff_eq(scratch.view_proj, 1e-6));
+        }
     }
 
     #[test]
@@ -260,7 +401,13 @@ mod tests {
 
     #[test]
     fn fit_produces_the_configured_cascades_in_order_of_distance() {
-        let set = CascadeSet::fit(&camera_looking(-Vec3::Z), TO_SUN, &config(3), 3);
+        let set = CascadeSet::fit(
+            &camera_looking(-Vec3::Z),
+            TO_SUN,
+            &config(3),
+            3,
+            &mut GridAnchors::default(),
+        );
         assert_eq!(set.cascades.len(), 3);
         let radii: Vec<f32> = set.cascades.iter().map(|c| c.sphere.w).collect();
         assert!(radii.windows(2).all(|pair| pair[0] < pair[1]), "{radii:?}");
@@ -270,7 +417,7 @@ mod tests {
     fn fit_cascades_enclose_their_frustum_slices() {
         let camera = camera_looking(-Vec3::Z);
         let config = config(3);
-        let set = CascadeSet::fit(&camera, TO_SUN, &config, 3);
+        let set = CascadeSet::fit(&camera, TO_SUN, &config, 3, &mut GridAnchors::default());
         let splits = practical_splits(camera.znear, config.distance, 3);
         let (tan_x, tan_y) = tan_half_fov(camera.fovy, camera.aspect);
         for (i, cascade) in set.cascades.iter().enumerate() {
@@ -293,7 +440,13 @@ mod tests {
 
     #[test]
     fn fit_applies_the_per_cascade_minimum_texels_and_skips_alpha_only_in_the_last() {
-        let set = CascadeSet::fit(&camera_looking(-Vec3::Z), TO_SUN, &config(3), 3);
+        let set = CascadeSet::fit(
+            &camera_looking(-Vec3::Z),
+            TO_SUN,
+            &config(3),
+            3,
+            &mut GridAnchors::default(),
+        );
         let min_texels: Vec<f32> = set.cascades.iter().map(|c| c.min_texels).collect();
         let skip_alpha: Vec<bool> = set.cascades.iter().map(|c| c.skip_alpha).collect();
         assert_eq!(min_texels, vec![1.5, 3.0, 8.0]);
@@ -304,15 +457,33 @@ mod tests {
     fn fit_keeps_alpha_casters_when_the_config_says_so() {
         let mut config = config(2);
         config.skip_alpha_in_last_cascade = false;
-        let set = CascadeSet::fit(&camera_looking(-Vec3::Z), TO_SUN, &config, 2);
+        let set = CascadeSet::fit(
+            &camera_looking(-Vec3::Z),
+            TO_SUN,
+            &config,
+            2,
+            &mut GridAnchors::default(),
+        );
         assert!(set.cascades.iter().all(|c| !c.skip_alpha));
     }
 
     #[test]
     fn eye_centered_cascade_does_not_move_when_the_camera_turns() {
         let config = config(3);
-        let ahead = CascadeSet::fit(&camera_looking(-Vec3::Z), TO_SUN, &config, 2);
-        let turned = CascadeSet::fit(&camera_looking(Vec3::X), TO_SUN, &config, 2);
+        let ahead = CascadeSet::fit(
+            &camera_looking(-Vec3::Z),
+            TO_SUN,
+            &config,
+            2,
+            &mut GridAnchors::default(),
+        );
+        let turned = CascadeSet::fit(
+            &camera_looking(Vec3::X),
+            TO_SUN,
+            &config,
+            2,
+            &mut GridAnchors::default(),
+        );
         assert!(
             ahead.cascades[2]
                 .view_proj
@@ -328,7 +499,7 @@ mod tests {
     #[test]
     fn eye_centered_cascades_are_centred_on_the_eye() {
         let camera = camera_looking(-Vec3::Z);
-        let set = CascadeSet::fit(&camera, TO_SUN, &config(3), 2);
+        let set = CascadeSet::fit(&camera, TO_SUN, &config(3), 2, &mut GridAnchors::default());
         let last = set.cascades[2];
         assert!(last.sphere.truncate().distance(camera.eye) <= last.texel_world);
         assert!(set.cascades[1].sphere.truncate().distance(camera.eye) > last.texel_world);
@@ -336,7 +507,13 @@ mod tests {
 
     #[test]
     fn views_leave_out_cascades_that_keep_their_map() {
-        let mut set = CascadeSet::fit(&camera_looking(-Vec3::Z), TO_SUN, &config(3), 3);
+        let mut set = CascadeSet::fit(
+            &camera_looking(-Vec3::Z),
+            TO_SUN,
+            &config(3),
+            3,
+            &mut GridAnchors::default(),
+        );
         set.cascades[1].refresh = false;
         let views = set.views();
         assert_eq!(
@@ -370,7 +547,7 @@ mod tests {
         let center = rotation
             .inverse()
             .transform_point3(Vec3::new(light_x, light_y, -30.0));
-        fit_cascade(center, radius, rotation, &config(3))
+        fit_cascade(center, radius, rotation, Vec3::ZERO, &config(3))
     }
 
     #[test]

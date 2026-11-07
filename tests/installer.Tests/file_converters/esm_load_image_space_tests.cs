@@ -4,7 +4,7 @@ using Xunit;
 namespace InstallerTests
 {
     // Image space extraction contract: the water renderer reads the depth of field of a WATR's image space
-    // (underwater fog).
+    // (underwater fog); the tonemap pass reads the colour LUT path.
     [Collection(FixtureEsm.Name)]
     public class EsmLoadImageSpaceTests(LoadedFixtureDatabase db)
     {
@@ -40,10 +40,24 @@ namespace InstallerTests
             Assert.Equal(0f, depthOfField.GetProperty("VignetteStrength").GetSingle());
         }
 
-        JsonElement DepthOfField(string editorId)
+        [Fact]
+        public void ImageSpace_Lut_KeepsThePathBelowTheTexturesFolder()
+        {
+            Assert.Equal(LoadedFixtureDatabase.FixtureImageSpaceLut, Data("FixtureImageSpace").GetProperty("Lut").GetString());
+        }
+
+        [Fact]
+        public void ImageSpace_WithoutLut_ExportsAnEmptyLut()
+        {
+            Assert.Equal("", Data("FixtureImageSpaceWithoutVignette").GetProperty("Lut").GetString());
+        }
+
+        JsonElement DepthOfField(string editorId) => Data(editorId).GetProperty("DepthOfField");
+
+        JsonElement Data(string editorId)
         {
             var json = db.QuerySingle<string>("SELECT data FROM image_spaces WHERE form_key = @key", new { key = db.KeyOf(editorId) });
-            return JsonDocument.Parse(json).RootElement.GetProperty("DepthOfField");
+            return JsonDocument.Parse(json).RootElement;
         }
     }
 }

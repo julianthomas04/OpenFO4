@@ -8,7 +8,8 @@ use super::lifetime::material_id;
 use super::shader::bindings;
 use crate::assets::layout::{TEXTURES_DIR, texture_key};
 use crate::assets::types::effect_material::{ClampMode, EffectMaterial, EffectTextures};
-use crate::assets::types::texture::{self, TextureError};
+use crate::assets::types::texture::TextureError;
+use crate::rendering::texture::load_dds_view_as;
 
 const WHITE_TEXEL: [u8; 4] = [255; 4];
 const MATERIAL_SAMPLER_ANISOTROPY: u16 = 4;
@@ -190,7 +191,8 @@ impl TextureCache {
         if let Some(view) = self.lock().get(&key).and_then(Weak::upgrade) {
             return Ok(view);
         }
-        let view = load_texture(&self.device, &self.queue, &self.asset_root, path, space)
+        let srgb = space == ColourSpace::Srgb;
+        let view = load_dds_view_as(&self.device, &self.queue, &self.asset_root, path, srgb)
             .map(Arc::new)
             .map_err(|source| EffectTextureError {
                 path: path.to_owned(),
@@ -435,21 +437,6 @@ impl MaterialBindings {
     pub fn cached_texture_count(&self) -> usize {
         self.loader.textures.count()
     }
-}
-
-pub(crate) fn load_texture(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    asset_root: &str,
-    path: &str,
-    space: ColourSpace,
-) -> Result<wgpu::TextureView, TextureError> {
-    let full_path = format!("{asset_root}/{path}");
-    let layout = Arc::new(texture::read_layout(&full_path)?);
-    let payload = texture::read_mips(&full_path, &layout, 0..layout.mip_count)?;
-    let gpu = texture::create_texture(device, &layout, 0, space == ColourSpace::Srgb, path);
-    texture::write_payload(queue, &gpu, 0, &payload)?;
-    Ok(gpu.create_view(&wgpu::TextureViewDescriptor::default()))
 }
 
 #[cfg(test)]

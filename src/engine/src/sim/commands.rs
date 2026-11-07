@@ -15,6 +15,7 @@ use super::collision::CellColliderBatch;
 use super::pipboy::PipBoyAction;
 use super::ragdoll_tuning::RagdollSettings;
 use super::{CellGrid, EntityId};
+use crate::weather::WeatherId;
 
 pub enum SimCommand {
     /// Register a streamed cell's static colliders (terrain + objects). The
@@ -47,7 +48,7 @@ pub enum SimCommand {
     SetPlayerInput(PlayerInput),
     /// Enter/leave interior mode. Interiors have no LAND terrain — only object-
     /// mesh floors — so while enabled the spawn readiness gate is "the
-    /// interior's colliders are resident" instead of the per-grid terrain-ready
+    /// interior's collision is installed" instead of the per-grid ground-ready
     /// gate (the whole interior loads as one resident cell), and entry places
     /// the player without a ground-snap (gravity settles them onto the floor).
     /// Set by the debug interior view around its teleport; cleared on any
@@ -61,6 +62,40 @@ pub enum SimCommand {
     SetRagdollSettings(RagdollSettings),
     /// An action from the Pip-Boy screen; a rejection is recorded on the model, never dropped.
     PipBoy(PipBoyAction),
+    /// A change to the world clock; the sim rejects an invalid value with a warning and leaves
+    /// the clock as it was.
+    SetWorldClock(ClockEdit),
+    /// A change to the weather cycle; the sim rejects an invalid one with a warning and leaves
+    /// the cycle as it was.
+    SetWeather(WeatherEdit),
+    /// Start carrying this loose body in front of the camera. A refusal is kept for
+    /// `SimWorld::take_grab_refusal`.
+    GrabBody { entity: EntityId },
+    /// Let go of the carried body, keeping its velocity.
+    DropCarried,
+    /// Throw the carried body along the view, at the speed of a throw charged this long.
+    ThrowCarried { charge_secs: f32 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ClockEdit {
+    /// The hour of the day, `0..=24`; the date and the days passed stay.
+    SetHour(f32),
+    SetPaused(bool),
+    /// Game minutes per real minute.
+    SetTimeScale(f32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WeatherEdit {
+    /// Switches to the weather at once, ending any transition.
+    Force(WeatherId),
+    /// Starts the transition to the weather, as a roll would.
+    Transition(WeatherId),
+    /// How far the running transition has come, `0..=1`.
+    SetProgress(f32),
+    /// A strike of the current weather on the next frame, whether or not it has thunder.
+    TriggerLightning,
 }
 
 /// World pose for the kinematic body of one animated joint of a placed
@@ -73,6 +108,16 @@ pub struct KinematicPose {
     pub rotation: Quat,
 }
 
+/// Unit look direction of a camera at `yaw` and `pitch` in radians, the convention of
+/// [`PlayerInput::yaw`] and [`PlayerInput::pitch`].
+pub fn look_direction(yaw: f32, pitch: f32) -> Vec3 {
+    Vec3::new(
+        yaw.cos() * pitch.cos(),
+        pitch.sin(),
+        yaw.sin() * pitch.cos(),
+    )
+}
+
 #[derive(Clone, Copy, Default, Debug)]
 pub struct PlayerInput {
     /// x = strafe right, y = forward; unit length or zero, player-local.
@@ -80,6 +125,11 @@ pub struct PlayerInput {
     /// Camera yaw in radians, `CameraController` convention: yaw of -PI/2
     /// faces -Z, forward on the XZ plane = (cos yaw, sin yaw).
     pub yaw: f32,
+    /// Camera pitch in radians, `CameraController` convention: positive looks
+    /// up (see [`look_direction`]).
+    pub pitch: f32,
+    /// Held spin of the carried body: +1 left mouse button, -1 right, 0 none.
+    pub spin: i8,
     /// Held (Godot semantics: held while grounded triggers the jump).
     pub jump: bool,
     /// Desired states, NOT raw key holds: the input layer resolves the FO4
@@ -93,13 +143,14 @@ pub struct PlayerInput {
 }
 
 impl PlayerInput {
-    /// The same camera heading and stance, with every movement intent released.
+    /// The same camera view and stance, with every movement and spin intent released.
     #[must_use]
     pub fn without_movement(self) -> Self {
         Self {
             move_dir: Vec2::ZERO,
             jump: false,
             sprint: false,
+            spin: 0,
             ..self
         }
     }

@@ -35,9 +35,29 @@ against that file and fail when the two sides disagree.
 
 ## Install marker
 
-The installer writes `.openfo4-install` empty when an install starts. Only after
-every part of the install has succeeded does it write the asset version into the
-file. An empty marker therefore means an incomplete install.
+`.openfo4-install` records which asset groups of the install are complete. The
+installer writes it empty when an install starts in a folder without one; when
+it updates an existing install, it first rewrites the marker to list only the
+groups it keeps. Its content is a first line
+`Asset Version <installer version>`, naming the installer that last wrote the
+file, then a line `Game Language <code>` and a line `Game Files <hash>`, naming the
+language the game is installed in and a SHA-256 fingerprint of the game files
+the installer reads, and then one `<group id>=<revision>` line per asset group
+whose converted output is complete, at the revision it was converted at. The
+installer adds a group's line when that group finishes, unless an archive of its
+input failed to extract in a way a rerun can repair, in which case the group
+stays unlisted and the next install converts it again, so a failed or cancelled update leaves
+the finished groups listed and the unfinished ones absent. An empty marker means
+an install started and no group has finished.
+
+The installer keeps a group when the marker's language and game files match the
+current ones and the group's revision matches the installer's. Otherwise it
+converts the group again, together with every group built from it. A different or
+missing language or fingerprint converts every group. A marker from before
+groups or game inputs were recorded, an unreadable one (a malformed line, a
+repeated id, a revision that is not a positive number, only one of the two game
+lines) and an empty one all count as no record, and every group is rebuilt. The engine does
+not read the marker.
 
 ## Finding the install
 

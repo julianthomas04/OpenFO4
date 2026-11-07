@@ -2,25 +2,30 @@ using AssetConverter.Pipeline;
 
 namespace AssetConverter
 {
-    /// <summary>The game and install folders of a headless install: the ones it is told, else the development defaults, which only a repository checkout has.</summary>
+    /// <summary>The game and install folders of a headless install: the game folder from <c>--game-dir</c> or <c>OPENFO4_FO4_DIR</c>, the install folder from <c>--install-dir</c> only.</summary>
     internal static class HeadlessLocations
     {
-        /// <param name="gameFolderFromEnvironment">The game folder named by <c>OPENFO4_FO4_DIR</c>, if any.</param>
-        /// <param name="devGameFolder">The game folder to assume when none is named; null where there is none.</param>
-        /// <param name="devInstallFolder">The install folder to assume when none is named; null where there is none.</param>
-        /// <exception cref="LaunchArgumentException">A folder is named nowhere and has no default.</exception>
-        public static InstallLocations Resolve(LaunchArguments launch, string? gameFolderFromEnvironment, string? devGameFolder, string? devInstallFolder)
+        public const string GameFolderVariable = "OPENFO4_FO4_DIR";
+        public const string InstallFolderVariable = "OPENFO4_INSTALL_DIR";
+
+        /// <summary>
+        /// A headless install: the game folder is the <c>--game-dir</c> flag, else <see cref="GameFolderVariable"/>; the install folder is the
+        /// <c>--install-dir</c> flag only (<see cref="InstallFolderVariable"/> is the engine's and must not redirect an install).
+        /// </summary>
+        /// <exception cref="LaunchArgumentException">A folder is named nowhere, or is not a valid path.</exception>
+        public static InstallLocations ForHeadlessInstall(LaunchArguments launch, Func<string, string?> environment)
         {
-            string? game = launch.GameDirectory ?? gameFolderFromEnvironment ?? devGameFolder;
-            string? install = launch.InstallDirectory ?? devInstallFolder;
-            if (game == null)
-                throw new LaunchArgumentException($"A headless install needs the Fallout 4 folder: pass {LaunchArguments.GameDirectoryFlag} <folder> (or set OPENFO4_FO4_DIR).");
-            if (install == null)
-                throw new LaunchArgumentException($"A headless install needs the folder to install into: pass {LaunchArguments.InstallDirectoryFlag} <folder>.");
+            string game = launch.GameDirectory ?? Named(environment, GameFolderVariable)
+                ?? throw new LaunchArgumentException($"The Fallout 4 folder is unknown: pass {LaunchArguments.GameDirectoryFlag} <folder> or set {GameFolderVariable}.");
+            string install = launch.InstallDirectory
+                ?? throw new LaunchArgumentException($"The folder to install into is unknown: pass {LaunchArguments.InstallDirectoryFlag} <folder>.");
             return new InstallLocations(Full(game), Full(install), launch.SettingsDirectory is { } settings ? Full(settings) : null);
         }
 
-        private static string Full(string folder)
+        internal static string? Named(Func<string, string?> environment, string variable) =>
+            environment(variable) is { } value && !string.IsNullOrWhiteSpace(value) ? value : null;
+
+        internal static string Full(string folder)
         {
             try
             {

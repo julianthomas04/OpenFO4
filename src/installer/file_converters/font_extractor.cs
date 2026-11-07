@@ -29,20 +29,42 @@ namespace AssetConverter
         /// <returns><c>true</c> when the fonts were extracted, <c>false</c> when they were already present.</returns>
         public static bool Extract(string fo4Location, string settingsDirectory, string stagingRoot, string fontsOut, MemoryBudget memory, CancellationToken ct = default)
         {
+            return PendingExtraction.RunIfPending(Plan(fo4Location, settingsDirectory, stagingRoot, fontsOut, memory, ct));
+        }
+
+        /// <summary>Checks whether the fonts in <paramref name="fontsOut"/> are current (which may start an ffdec JVM to read its version); null when they are, else the extraction that renews them.</summary>
+        internal static PendingExtraction? Plan(string fo4Location, string settingsDirectory, string stagingRoot, string fontsOut, MemoryBudget memory, CancellationToken ct = default)
+        {
             string language = GameLanguage.Resolve(fo4Location, settingsDirectory);
             (SourceFingerprint config, IReadOnlyList<string> libraryNames) = FontLibraries(fo4Location, language);
-            var libraries = InterfaceArchive.ReadMatching(fo4Location, path => libraryNames.Contains(path, StringComparer.OrdinalIgnoreCase))
-                .OrderBy(library => libraryNames.ToList().FindIndex(name => string.Equals(name, library.Path, StringComparison.OrdinalIgnoreCase)))
-                .ToList();
-            if (libraries.Count != libraryNames.Count)
-                throw new FontExtractionException($"Font extraction: the interface archive holds {libraries.Count} of the font libraries {string.Join(", ", libraryNames)}.");
+            var libraries = ReadLibraries(fo4Location, libraryNames);
             var stamp = new ConversionStamp(ExtractorVersion, language, [config, .. libraries.Select(l => SourceFingerprint.Of(l.Path, l.Content))], Ffdec.Version(memory, ct));
             string? reason = stamp.SidecarStaleReason(fontsOut);
             if (reason is null)
             {
                 Console.WriteLine($"Fonts of {string.Join(", ", libraryNames)} already present in {fontsOut}; skipping.");
-                return false;
+                return null;
             }
+            return new PendingExtraction(PendingDetail, () => Export(fo4Location, libraryNames, stamp, reason, stagingRoot, fontsOut, memory, ct));
+        }
+
+        const string PendingDetail = "UI fonts";
+
+        /// <summary>The font libraries in the order the configuration lists them.</summary>
+        static List<(string Path, byte[] Content)> ReadLibraries(string fo4Location, IReadOnlyList<string> libraryNames)
+        {
+            var libraries = InterfaceArchive.ReadMatching(fo4Location, path => libraryNames.Contains(path, StringComparer.OrdinalIgnoreCase))
+                .OrderBy(library => libraryNames.ToList().FindIndex(name => string.Equals(name, library.Path, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+            return libraries.Count == libraryNames.Count
+                ? libraries
+                : throw new FontExtractionException($"Font extraction: the interface archive holds {libraries.Count} of the font libraries {string.Join(", ", libraryNames)}.");
+        }
+
+        static void Export(string fo4Location, IReadOnlyList<string> libraryNames, ConversionStamp stamp, string reason,
+            string stagingRoot, string fontsOut, MemoryBudget memory, CancellationToken ct)
+        {
+            var libraries = ReadLibraries(fo4Location, libraryNames);
             Console.WriteLine($"Fonts in {fontsOut} are extracted again: {reason}.");
             int count = 0;
             AtomicPublish.Folder(fontsOut, tmp =>
@@ -56,7 +78,6 @@ namespace AssetConverter
                 stamp.WriteSidecar(tmp);
             });
             Console.WriteLine($"Extracted {count} FO4 UI font(s) from {string.Join(", ", libraryNames)} -> {fontsOut}");
-            return true;
         }
 
         /// <summary>The installed language's font configuration and the font libraries it lists, in its order.</summary>

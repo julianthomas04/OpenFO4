@@ -140,68 +140,78 @@ namespace InstallerTests
         private static LaunchArguments Launch(string? install = null, string? game = null) =>
             new(Headless: true, KeepStaging: false, InstallDirectory: install, GameDirectory: game);
 
+        private static Func<string, string?> Env(string? game = null, string? install = null) =>
+            variable => variable switch
+            {
+                HeadlessLocations.GameFolderVariable => game,
+                HeadlessLocations.InstallFolderVariable => install,
+                _ => null,
+            };
+
         [Fact]
-        public void TheNamedFoldersWinOverEveryDefault()
+        public void Headless_TheFlagsWinOverTheGameVariable()
         {
-            var locations = HeadlessLocations.Resolve(Launch(@"D:\Out\OpenFO4", @"D:\Games\Fallout 4"), @"E:\FromEnvironment", @"Z:\Dev", @"Z:\DevInstall");
+            var locations = HeadlessLocations.ForHeadlessInstall(Launch(@"D:\Out\OpenFO4", @"D:\Games\Fallout 4"), Env(@"E:\FromEnvironment"));
 
             Assert.Equal(@"D:\Games\Fallout 4", locations.Fo4Location);
             Assert.Equal(@"D:\Out\OpenFO4", locations.InstallRoot);
         }
 
         [Fact]
+        public void Headless_TheGameFolderMayComeFromTheVariable()
+        {
+            var locations = HeadlessLocations.ForHeadlessInstall(Launch(@"D:\Out"), Env(@"E:\FromEnvironment"));
+
+            Assert.Equal(@"E:\FromEnvironment", locations.Fo4Location);
+        }
+
+        [Fact]
+        public void Headless_TheInstallVariableDoesNotNameTheInstallFolder()
+        {
+            var error = Assert.Throws<LaunchArgumentException>(() =>
+                HeadlessLocations.ForHeadlessInstall(Launch(game: @"D:\Games\Fallout 4"), Env(install: @"E:\LiveInstall")));
+
+            Assert.Contains("--install-dir", error.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(HeadlessLocations.InstallFolderVariable, error.Message, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void Headless_TheInstallVariableDoesNotOverrideTheFlag()
+        {
+            var locations = HeadlessLocations.ForHeadlessInstall(Launch(@"D:\Out", @"D:\Games"), Env(install: @"E:\LiveInstall"));
+
+            Assert.Equal(@"D:\Out", locations.InstallRoot);
+        }
+
+        [Fact]
+        public void Headless_AnUnknownGameFolderIsRefused()
+        {
+            var error = Assert.Throws<LaunchArgumentException>(() => HeadlessLocations.ForHeadlessInstall(Launch(install: @"D:\Out"), Env()));
+
+            Assert.Contains("--game-dir", error.Message, StringComparison.Ordinal);
+            Assert.Contains(HeadlessLocations.GameFolderVariable, error.Message, StringComparison.Ordinal);
+        }
+
+        [Fact]
         public void TheSettingsFolderIsTheNamedOneOtherwiseTheDetectedDefault()
         {
-            var named = HeadlessLocations.Resolve(Launch(@"D:\Out", @"D:\Games") with { SettingsDirectory = @"D:\Settings" }, null, null, null);
-            var detected = HeadlessLocations.Resolve(Launch(@"D:\Out", @"D:\Games"), null, null, null);
+            var named = HeadlessLocations.ForHeadlessInstall(Launch(@"D:\Out", @"D:\Games") with { SettingsDirectory = @"D:\Settings" }, Env());
+            var detected = HeadlessLocations.ForHeadlessInstall(Launch(@"D:\Out", @"D:\Games"), Env());
 
             Assert.Equal(@"D:\Settings", named.SettingsDirectory);
             Assert.Equal(GameIniFiles.DocumentsDirectory(), detected.SettingsDirectory);
         }
 
         [Fact]
-        public void TheEnvironmentGameFolderWinsOverTheDevelopmentDefault()
-        {
-            var locations = HeadlessLocations.Resolve(Launch(@"D:\Out"), @"E:\FromEnvironment", @"Z:\Dev", null);
-
-            Assert.Equal(@"E:\FromEnvironment", locations.Fo4Location);
-        }
-
-        [Fact]
-        public void ADevelopmentRunFallsBackToItsDefaultsExactlyAsBefore()
-        {
-            var locations = HeadlessLocations.Resolve(Launch(), null, @"Z:\Games\Fallout 4", @"C:\repo\test_installation");
-
-            Assert.Equal(@"Z:\Games\Fallout 4", locations.Fo4Location);
-            Assert.Equal(@"C:\repo\test_installation", locations.InstallRoot);
-        }
-
-        [Fact]
-        public void APackagedRunWithoutAnInstallFolderIsRefusedWithTheFlagToUse()
-        {
-            var error = Assert.Throws<LaunchArgumentException>(() => HeadlessLocations.Resolve(Launch(game: @"D:\Games\Fallout 4"), null, null, null));
-
-            Assert.Contains("--install-dir", error.Message, StringComparison.Ordinal);
-        }
-
-        [Fact]
-        public void APackagedRunWithoutAGameFolderIsRefusedWithTheFlagToUse()
-        {
-            var error = Assert.Throws<LaunchArgumentException>(() => HeadlessLocations.Resolve(Launch(install: @"D:\Out"), null, null, null));
-
-            Assert.Contains("--game-dir", error.Message, StringComparison.Ordinal);
-        }
-
-        [Fact]
         public void APathThatCannotBeResolvedIsAnArgumentError()
         {
-            Assert.Throws<LaunchArgumentException>(() => HeadlessLocations.Resolve(Launch("bad\0path", @"D:\G"), null, null, null));
+            Assert.Throws<LaunchArgumentException>(() => HeadlessLocations.ForHeadlessInstall(Launch("bad" + '\0' + "path", @"D:\G"), Env()));
         }
 
         [Fact]
         public void RelativeFoldersBecomeFullPathsAndSeparatorsAreTrimmed()
         {
-            var locations = HeadlessLocations.Resolve(Launch(@"out\", @"game\"), null, null, null);
+            var locations = HeadlessLocations.ForHeadlessInstall(Launch(@"out\", @"game\"), Env());
 
             Assert.True(Path.IsPathFullyQualified(locations.InstallRoot));
             Assert.Equal(Path.GetFullPath("out"), locations.InstallRoot);

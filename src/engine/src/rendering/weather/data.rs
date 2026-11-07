@@ -1,0 +1,330 @@
+use serde::Deserialize;
+
+use super::error::WeatherLibraryError;
+use crate::rendering::lighting::exterior_weather::{parse_field, parse_json};
+use crate::weather::{
+    FadeRange, LightningParams, SoundKind, WeatherFlags, WeatherSound, WindParams,
+};
+
+/// The scalar values of a weather's `DATA` record.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WeatherData {
+    pub wind: WindParams,
+    pub precipitation_fade: FadeRange,
+    pub lightning: LightningParams,
+    /// The record's unscaled byte.
+    pub trans_delta_raw: u8,
+    pub sun_glare: f32,
+    pub sun_damage: f32,
+    pub visual_effect_begin: f32,
+    pub visual_effect_end: f32,
+    pub flags: WeatherFlags,
+    /// 1.0 when the weather has no multiplier.
+    pub volatility_mult: f32,
+    pub visibility_mult: Option<f32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawData {
+    wind_speed: f32,
+    wind_turbulence: Option<f32>,
+    wind_direction_raw: u8,
+    wind_direction_range_raw: u8,
+    trans_delta_raw: u8,
+    sun_glare: f32,
+    sun_damage: f32,
+    precipitation_begin_fade_in: f32,
+    precipitation_end_fade_out: f32,
+    thunder_begin_fade_in: f32,
+    thunder_end_fade_out: f32,
+    thunder_frequency: f32,
+    lightning_color: [u8; 3],
+    flags: u32,
+    visual_effect_begin: f32,
+    visual_effect_end: f32,
+    volatility_mult: Option<f32>,
+    visibility_mult: Option<f32>,
+}
+
+impl WeatherData {
+    pub(super) fn parse(weather: &str, json: Option<&str>) -> Result<Self, WeatherLibraryError> {
+        let raw: RawData = parse_field(weather, "data", json)?;
+        let flags = WeatherFlags::from_bits(raw.flags).ok_or_else(|| {
+            WeatherLibraryError::UnknownFlagBits {
+                weather: weather.to_string(),
+                field: "data flags",
+                bits: raw.flags,
+            }
+        })?;
+        Ok(Self {
+            wind: WindParams {
+                speed: raw.wind_speed,
+                turbulence: raw.wind_turbulence,
+                direction_raw: raw.wind_direction_raw,
+                direction_range_raw: raw.wind_direction_range_raw,
+            },
+            precipitation_fade: FadeRange {
+                begin_fade_in: raw.precipitation_begin_fade_in,
+                end_fade_out: raw.precipitation_end_fade_out,
+            },
+            lightning: LightningParams {
+                fade: FadeRange {
+                    begin_fade_in: raw.thunder_begin_fade_in,
+                    end_fade_out: raw.thunder_end_fade_out,
+                },
+                frequency: raw.thunder_frequency,
+                color_srgb: raw.lightning_color,
+            },
+            trans_delta_raw: raw.trans_delta_raw,
+            sun_glare: raw.sun_glare,
+            sun_damage: raw.sun_damage,
+            visual_effect_begin: raw.visual_effect_begin,
+            visual_effect_end: raw.visual_effect_end,
+            flags,
+            volatility_mult: raw.volatility_mult.unwrap_or(1.0),
+            visibility_mult: raw.visibility_mult,
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RawSound {
+    kind: SoundKind,
+    sound: String,
+}
+
+pub(super) fn parse_sounds(
+    weather: &str,
+    json: Option<&str>,
+) -> Result<Vec<WeatherSound>, WeatherLibraryError> {
+    let Some(json) = json else {
+        return Ok(Vec::new());
+    };
+    let raw: Vec<RawSound> = parse_json(weather, "sounds", json)?;
+    Ok(raw
+        .into_iter()
+        .map(|sound| WeatherSound {
+            kind: sound.kind,
+            descriptor: sound.sound,
+        })
+        .collect())
+}
+
+#[cfg(test)]
+pub(super) mod fixtures {
+    use serde_json::{Value, json};
+
+    pub(in crate::rendering::weather) fn data() -> Value {
+        json!({
+            "wind_speed": 0.4,
+            "wind_turbulence": 0.2,
+            "wind_direction_raw": 128,
+            "wind_direction_range_raw": 32,
+            "trans_delta_raw": 4,
+            "sun_glare": 0.5,
+            "sun_damage": 0.3,
+            "precipitation_begin_fade_in": 0.1,
+            "precipitation_end_fade_out": 0.9,
+            "thunder_begin_fade_in": 0.15,
+            "thunder_end_fade_out": 0.8,
+            "thunder_frequency": 0.25,
+            "lightning_color": [255, 0, 128],
+            "flags": 6,
+            "visual_effect_begin": 0.35,
+            "visual_effect_end": 0.65,
+            "volatility_mult": 2.0,
+            "visibility_mult": 0.6,
+        })
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests compare exact sentinels and copied values"
+)]
+mod tests {
+    use serde_json::json;
+
+    use super::fixtures::data;
+    use super::*;
+    use crate::rendering::lighting::exterior_weather::ExteriorWeatherError;
+    use crate::weather::WeatherFlag;
+
+    const WEATHER: &str = "0012AB:Fallout4.esm";
+
+    fn parse(value: &serde_json::Value) -> Result<WeatherData, WeatherLibraryError> {
+        WeatherData::parse(WEATHER, Some(&value.to_string()))
+    }
+
+    #[test]
+    fn a_complete_data_block_yields_wind_fades_lightning_and_flags() {
+        let data = parse(&data()).unwrap();
+        assert_eq!(
+            data.wind,
+            WindParams {
+                speed: 0.4,
+                turbulence: Some(0.2),
+                direction_raw: 128,
+                direction_range_raw: 32,
+            }
+        );
+        assert_eq!(
+            data.precipitation_fade,
+            FadeRange {
+                begin_fade_in: 0.1,
+                end_fade_out: 0.9
+            }
+        );
+        assert_eq!(
+            data.lightning.fade,
+            FadeRange {
+                begin_fade_in: 0.15,
+                end_fade_out: 0.8
+            }
+        );
+        assert_eq!(data.lightning.frequency, 0.25);
+        assert_eq!(data.lightning.color_srgb, [255, 0, 128]);
+    }
+
+    #[test]
+    fn every_scalar_of_the_data_block_lands_in_its_own_field() {
+        let data = parse(&data()).unwrap();
+        assert_eq!(data.trans_delta_raw, 4);
+        assert_eq!(data.sun_glare, 0.5);
+        assert_eq!(data.sun_damage, 0.3);
+        assert_eq!(data.visual_effect_begin, 0.35);
+        assert_eq!(data.visual_effect_end, 0.65);
+        assert_eq!(data.volatility_mult, 2.0);
+        assert_eq!(data.visibility_mult, Some(0.6));
+    }
+
+    #[test]
+    fn flags_are_typed() {
+        let flags = parse(&data()).unwrap().flags;
+        assert!(flags.contains(WeatherFlag::Cloudy));
+        assert!(flags.contains(WeatherFlag::Rainy));
+        assert!(!flags.contains(WeatherFlag::Pleasant));
+        assert!(!flags.contains(WeatherFlag::Snow));
+    }
+
+    #[test]
+    fn flag_bits_no_flag_names_are_an_error() {
+        let mut value = data();
+        value["flags"] = json!(256);
+        assert!(matches!(
+            parse(&value),
+            Err(WeatherLibraryError::UnknownFlagBits {
+                field: "data flags",
+                bits: 256,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn null_optionals_stay_absent_and_the_volatility_multiplier_defaults_to_one() {
+        let mut value = data();
+        value["wind_turbulence"] = json!(null);
+        value["volatility_mult"] = json!(null);
+        value.as_object_mut().unwrap().remove("visibility_mult");
+        let data = parse(&value).unwrap();
+        assert_eq!(data.wind.turbulence, None);
+        assert_eq!(data.volatility_mult, 1.0);
+        assert_eq!(data.visibility_mult, None);
+    }
+
+    #[test]
+    fn malformed_data_is_an_error_naming_the_weather_and_field() {
+        let mut missing = data();
+        missing.as_object_mut().unwrap().remove("thunder_frequency");
+        let mut wrong_type = data();
+        wrong_type["wind_speed"] = json!("fast");
+        let mut byte_overflow = data();
+        byte_overflow["wind_direction_raw"] = json!(300);
+        for value in [missing, wrong_type, byte_overflow] {
+            let error = parse(&value).unwrap_err();
+            assert!(
+                matches!(&error, WeatherLibraryError::Lighting(ExteriorWeatherError::Malformed { weather, field: "data", .. }) if weather == WEATHER),
+                "{error:?}"
+            );
+        }
+        assert!(matches!(
+            WeatherData::parse(WEATHER, Some("{ not json")),
+            Err(WeatherLibraryError::Lighting(
+                ExteriorWeatherError::Malformed { field: "data", .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn a_weather_without_a_data_block_is_an_error_naming_it() {
+        let error = WeatherData::parse(WEATHER, None).unwrap_err();
+        assert!(
+            matches!(&error, WeatherLibraryError::Lighting(ExteriorWeatherError::MissingField { weather, field: "data" }) if weather == WEATHER),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn sounds_carry_their_kind_and_descriptor() {
+        let sounds = parse_sounds(
+            WEATHER,
+            Some(r#"[{"kind": "thunder", "sound": "00AA:Fallout4.esm"}]"#),
+        )
+        .unwrap();
+        assert_eq!(
+            sounds,
+            [WeatherSound {
+                kind: SoundKind::Thunder,
+                descriptor: "00AA:Fallout4.esm".to_owned()
+            }]
+        );
+    }
+
+    #[test]
+    fn every_kind_spelling_is_understood() {
+        let json = r#"[{"kind":"default","sound":"a"},{"kind":"precipitation","sound":"b"},{"kind":"wind","sound":"c"},{"kind":"thunder","sound":"d"}]"#;
+        let kinds: Vec<SoundKind> = parse_sounds(WEATHER, Some(json))
+            .unwrap()
+            .iter()
+            .map(|sound| sound.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                SoundKind::Default,
+                SoundKind::Precipitation,
+                SoundKind::Wind,
+                SoundKind::Thunder
+            ]
+        );
+    }
+
+    #[test]
+    fn a_weather_without_sounds_has_none() {
+        assert_eq!(parse_sounds(WEATHER, None).unwrap(), []);
+        assert_eq!(parse_sounds(WEATHER, Some("[]")).unwrap(), []);
+    }
+
+    #[test]
+    fn malformed_sounds_and_unknown_kinds_are_errors() {
+        for json in [
+            r#"[{"kind": "default"}]"#,
+            r#"[{"kind": "rumble", "sound": "S"}]"#,
+        ] {
+            assert!(
+                matches!(
+                    parse_sounds(WEATHER, Some(json)),
+                    Err(WeatherLibraryError::Lighting(
+                        ExteriorWeatherError::Malformed {
+                            field: "sounds",
+                            ..
+                        }
+                    ))
+                ),
+                "{json}"
+            );
+        }
+    }
+}

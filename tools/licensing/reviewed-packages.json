@@ -1444,28 +1444,28 @@
       "runtimeFiles": []
     },
     {
-      "id": "cargo:clipboard-win/5.4.1",
-      "version": "5.4.1",
+      "id": "cargo:clipboard-win/5.4.3",
+      "version": "5.4.3",
       "licenseExpression": "BSL-1.0",
       "reviewStatus": "approved",
       "role": "runtime",
       "origin": {
         "url": "https://github.com/DoumanAsh/clipboard-win",
-        "revision": "3b27cf2bfd1adcfa6e0264eb51c1025ddaf0f342"
+        "revision": "ed27008ae5d1f10cfbb266de039f0fb35fd05a56"
       },
       "modifications": "No repository patch declared; upstream source archive pinned by Cargo.lock checksum.",
       "licenseFiles": [
         {
-          "path": "tools/licensing/licenses/cargo/DoumanAsh-clipboard-win-3b27cf2bfd1a/LICENSE",
+          "path": "tools/licensing/licenses/cargo/DoumanAsh-clipboard-win-ed27008ae5d1/LICENSE",
           "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566",
-          "url": "https://raw.githubusercontent.com/DoumanAsh/clipboard-win/3b27cf2bfd1adcfa6e0264eb51c1025ddaf0f342/LICENSE"
+          "url": "https://raw.githubusercontent.com/DoumanAsh/clipboard-win/ed27008ae5d1f10cfbb266de039f0fb35fd05a56/LICENSE"
         }
       ],
       "sourceInputs": [
         {
-          "url": "https://static.crates.io/crates/clipboard-win/clipboard-win-5.4.1.crate",
-          "sha256": "bde03770d3df201d4fb868f2c9c59e66a3e4e2bd06692a0fe701e7103c7e84d4",
-          "path": "{cargo-cache}/clipboard-win-5.4.1.crate"
+          "url": "https://static.crates.io/crates/clipboard-win/clipboard-win-5.4.3.crate",
+          "sha256": "052af7878466feccda12ba7a6a67d019d712f296809559b47c12c8cc196d3a9a",
+          "path": "{cargo-cache}/clipboard-win-5.4.3.crate"
         }
       ],
       "runtimeFiles": []

@@ -1,0 +1,167 @@
+using System.Numerics;
+using AssetConverter;
+using InstallerTests.Nif;
+using NiflySharp.Structs;
+using Xunit;
+
+namespace InstallerTests
+{
+    public sealed class DoorTriggerBoundsTests : IAsyncLifetime
+    {
+        const string AutomaticFlags = "2";
+        const string Marker = """{"Min":{"X":-64,"Y":-8,"Z":0},"Max":{"X":64,"Y":8,"Z":192}}""";
+        static readonly Triangle[] OneTriangle = [new Triangle(0, 1, 2)];
+
+        SchemaDatabase _db = null!;
+
+        public async ValueTask InitializeAsync() => _db = await SchemaDatabase.CreateAsync();
+
+        public ValueTask DisposeAsync()
+        {
+            _db.Dispose();
+            return ValueTask.CompletedTask;
+        }
+
+        void AddDoor(string formKey, string? model, string? flags) =>
+            _db.Execute("INSERT INTO doors (form_key, editor_id, model_path, flags) VALUES (@formKey, @formKey, @model, @flags)", new { formKey, model, flags });
+
+        string? TriggerBounds(string formKey) =>
+            _db.QuerySingle<string?>("SELECT trigger_bounds FROM doors WHERE form_key = @formKey", new { formKey });
+
+        static byte[] NifWithShape(string shapeName, Vector3[] positions)
+        {
+            using var directory = new TempDirectory();
+            var scene = new NifSceneBuilder();
+            scene.AddShape(scene.Root, shapeName, positions, OneTriangle);
+            return File.ReadAllBytes(scene.Save(directory.Path, "model.nif"));
+        }
+
+        static byte[] MarkerNif() => NifWithShape("EditorMarker", [new(-64, -8, 0), new(64, 8, 192), new(-64, 8, 0)]);
+
+        [Fact]
+        public void AnAutomaticDoorGetsTheBoundsOfItsModelsEditorMarker()
+        {
+            AddDoor("A", "marker.nif", AutomaticFlags);
+            var nif = MarkerNif();
+
+            int filled = DoorTriggerBounds.Run(_db.DatabasePath, model => model == "marker.nif" ? nif : null);
+
+            Assert.Equal(Marker, TriggerBounds("A"));
+            Assert.Equal(1, filled);
+        }
+
+        [Theory]
+        [InlineData("0")]
+        [InlineData("64")]
+        [InlineData(null)]
+        public void ADoorWithoutTheAutomaticFlagIsLeftAloneAndItsModelIsNotRead(string? flags)
+        {
+            AddDoor("A", "marker.nif", flags);
+            var read = new List<string>();
+
+            int filled = DoorTriggerBounds.Run(_db.DatabasePath, model => { read.Add(model); return null; });
+
+            Assert.Null(TriggerBounds("A"));
+            Assert.Empty(read);
+            Assert.Equal(0, filled);
+        }
+
+        [Fact]
+        public void AnAutomaticFlagAmongOthersCounts()
+        {
+            AddDoor("A", "marker.nif", "66");
+            var nif = MarkerNif();
+
+            DoorTriggerBounds.Run(_db.DatabasePath, _ => nif);
+
+            Assert.Equal(Marker, TriggerBounds("A"));
+        }
+
+        [Fact]
+        public void ASharedModelIsReadOnce()
+        {
+            AddDoor("A", "marker.nif", "2");
+            AddDoor("B", "MARKER.nif", "66");
+            var nif = MarkerNif();
+            int reads = 0;
+
+            DoorTriggerBounds.Run(_db.DatabasePath, _ => { reads++; return nif; });
+
+            Assert.Equal(1, reads);
+            Assert.Equal(Marker, TriggerBounds("B"));
+        }
+
+        [Fact]
+        public void AMissingModelFailsTheStepNamingTheDoor()
+        {
+            AddDoor("A", "gone.nif", AutomaticFlags);
+
+            var error = Assert.Throws<DoorTriggerBoundsException>(() => DoorTriggerBounds.Run(_db.DatabasePath, _ => null));
+
+            Assert.Null(TriggerBounds("A"));
+            var failure = Assert.Single(error.Failures);
+            Assert.Contains("A", failure);
+            Assert.Contains("gone.nif", failure);
+        }
+
+        [Fact]
+        public void AModelWithoutMarkerGeometryFailsTheStep()
+        {
+            AddDoor("A", "plain.nif", AutomaticFlags);
+            var nif = NifWithShape("Door", [new(0, 0, 0), new(1, 0, 0), new(0, 1, 0)]);
+
+            var error = Assert.Throws<DoorTriggerBoundsException>(() => DoorTriggerBounds.Run(_db.DatabasePath, _ => nif));
+
+            Assert.Null(TriggerBounds("A"));
+            Assert.Contains("no EditorMarker geometry", Assert.Single(error.Failures));
+        }
+
+        [Fact]
+        public void AnUnreadableModelFailsTheStep()
+        {
+            AddDoor("A", "broken.nif", AutomaticFlags);
+
+            var error = Assert.Throws<DoorTriggerBoundsException>(() => DoorTriggerBounds.Run(_db.DatabasePath, _ => [1, 2, 3, 4]));
+
+            Assert.Null(TriggerBounds("A"));
+            Assert.Contains("could not be read", Assert.Single(error.Failures));
+        }
+
+        [Fact]
+        public void AnAutomaticDoorWithoutAModelFailsTheStep()
+        {
+            AddDoor("A", null, AutomaticFlags);
+
+            var error = Assert.Throws<DoorTriggerBoundsException>(
+                () => DoorTriggerBounds.Run(_db.DatabasePath, _ => throw new InvalidOperationException("no read expected")));
+
+            Assert.Contains("has no model", Assert.Single(error.Failures));
+        }
+
+        [Fact]
+        public void OneFailedDoorLeavesEveryDoorWithoutBoundsAndIsNamedInTheMessage()
+        {
+            AddDoor("A", "marker.nif", AutomaticFlags);
+            AddDoor("B", "gone.nif", AutomaticFlags);
+            var nif = MarkerNif();
+
+            var error = Assert.Throws<DoorTriggerBoundsException>(
+                () => DoorTriggerBounds.Run(_db.DatabasePath, model => model == "marker.nif" ? nif : null));
+
+            Assert.Null(TriggerBounds("A"));
+            Assert.Null(TriggerBounds("B"));
+            Assert.Contains("gone.nif", error.Message);
+        }
+
+        [Fact]
+        public void AMissingMeshArchiveIsReportedBeforeAnyArchiveIsOpened()
+        {
+            using var data = new TempDirectory();
+            File.WriteAllBytes(Path.Combine(data.Path, "Fallout4 - MeshesExtra.ba2"), [1, 2, 3, 4]);
+
+            var error = Assert.Throws<FileNotFoundException>(() => new GameMeshReader(data.Path));
+
+            Assert.Equal(Path.Combine(data.Path, "Fallout4 - Meshes.ba2"), error.FileName);
+        }
+    }
+}

@@ -10,7 +10,7 @@ namespace AssetConverter.Pipeline
     /// The work of each stage of the full install, one method per stage. When and after what each runs is <see cref="InstallPipeline"/>'s
     /// business; a stage reports its own progress phase and checks for cancellation between its sub-steps.
     /// </summary>
-    internal sealed class PipelineStages
+    internal sealed class PipelineStages : IPipelineStages
     {
         private const string MeshesArchiveName = "Fallout4 - Meshes.ba2";
         private const string MeshesExtraArchiveName = "Fallout4 - MeshesExtra.ba2";
@@ -35,13 +35,15 @@ namespace AssetConverter.Pipeline
         private readonly CancellationToken _ct;
         private readonly CollisionCandidates _collisionCandidates = new();
         private readonly Lazy<string> _language;
+        private Func<Task, int>? _drainLateBakes;
+        private LodWaterHeights? _lodWater;
 
-        public PipelineStages(InstallLocations paths, MemoryBudget memory, CancellationToken ct)
+        public PipelineStages(InstallLocations paths, MemoryBudget memory, CancellationToken ct, string? language = null)
         {
             _paths = paths;
             _memory = memory;
             _ct = ct;
-            _language = new Lazy<string>(() => GameLanguage.Resolve(paths.Fo4Location, paths.SettingsDirectory));
+            _language = new Lazy<string>(() => language ?? GameLanguage.Resolve(paths.Fo4Location, paths.SettingsDirectory));
         }
 
         /// <summary>The installed language (<c>sLanguage</c> of the game's INIs) the localized files are taken in.</summary>
@@ -54,12 +56,12 @@ namespace AssetConverter.Pipeline
         /// Materials, the actor .hkx files, then the mesh archives: what the CPU stages need first, in the order they need it. Each NIF is
         /// handed to <paramref name="meshes"/> the moment it is complete, so the conversion runs while the archives are still extracting.
         /// A failure ends the queue with the same exception, so the workers waiting on it never hang. Each NIF that carries the collision
-        /// marker is handed to <see cref="CollisionWork"/> in the same way, so the collision worker decodes it while the archives extract.
+        /// marker is recorded in <see cref="CollisionWork"/> in the same way, which the collision step reads once the extraction is over.
         /// </summary>
         /// <param name="skeletons">Told which staged NIFs are the render skeletons, as soon as the .hkx files they derive from are staged.</param>
         /// <param name="onInputsReady">Called once the materials and the .hkx files are staged: all the NIF conversion needs besides the NIFs themselves. Material files in the mesh archives
         /// count, so the call comes after the last archive that holds one, which is later than the .hkx files when the mesh archives do.</param>
-        public void ExtractMeshArchives(NifWorkQueue meshes, PriorityFiles skeletons, Action onInputsReady)
+        public bool ExtractMeshArchives(NifWorkQueue meshes, PriorityFiles skeletons, Action onInputsReady)
         {
             try
             {
@@ -68,10 +70,11 @@ namespace AssetConverter.Pipeline
                 meshes.Announce(extraction.WrittenFiles.Where(IsStagedNif).Select(StagedPath));
 
                 int phase = InstallProgress.BeginPhase(InstallSteps.ExtractMeshes, extraction.WrittenFiles.Count);
-                extraction.Run(phase, _ct);
+                bool allSucceeded = extraction.Run(phase, _ct);
                 InstallProgress.EndPhase(phase);
                 meshes.Complete();
                 CollisionWork.Complete();
+                return allSucceeded;
             }
             catch (Exception ex)
             {
@@ -105,6 +108,29 @@ namespace AssetConverter.Pipeline
             }
             if (!Directory.Exists(_paths.StagedMeshes))
                 throw new InvalidOperationException($"The extraction markers claim the mesh archives are staged, but {_paths.StagedMeshes} does not exist; delete the markers (.Fallout4 - Meshes*.extracted) and run again.");
+        }
+
+        /// <summary>
+        /// For dev commands that read the staged materials but run without a staging folder: extracts the materials archive by the same
+        /// source and marker as the full install, so an archive already marked complete is skipped.
+        /// </summary>
+        /// <exception cref="FileNotFoundException">The materials archive is missing from the game's Data folder.</exception>
+        /// <exception cref="InvalidOperationException">An entry failed to extract, or the extraction left no staged materials behind.</exception>
+        public void EnsureStagedMaterials()
+        {
+            string archivePath = Path.Combine(_paths.GameDataDirectory, MaterialsArchiveName);
+            if (!File.Exists(archivePath)) throw new FileNotFoundException($"{archivePath} not found; the materials cannot be staged.", archivePath);
+
+            using var extraction = StagingExtraction.Open(_paths.GameDataDirectory, _paths.StagingRoot, [ArchiveSource(MaterialsArchiveName)], _memory);
+            if (extraction.WrittenFiles.Count > 0)
+            {
+                Console.WriteLine($"The staged materials are missing or incomplete: extracting {extraction.WrittenFiles.Count:N0} files from the materials archive into {_paths.StagingRoot} first.");
+                Directory.CreateDirectory(_paths.StagingRoot);
+                if (!extraction.Run(-1, _ct))
+                    throw new InvalidOperationException("Some materials archive entries failed to extract; the staged materials are incomplete.");
+            }
+            if (!Directory.Exists(_paths.StagedMaterials))
+                throw new InvalidOperationException($"The extraction marker claims the materials archive is staged, but {_paths.StagedMaterials} does not exist; delete the marker (.{MaterialsArchiveName}.extracted) and run again.");
         }
 
         private IReadOnlyList<StagingSource> MeshSources(NifWorkQueue meshes, PriorityFiles skeletons)
@@ -150,6 +176,20 @@ namespace AssetConverter.Pipeline
             || MaterialExtensions.Any(extension => stagingRelativePath.EndsWith(extension, StringComparison.OrdinalIgnoreCase));
 
         /// <summary>
+        /// The census decides palette-ness by LUT existence and the textures are not on disk when it builds, so its check goes through the
+        /// texture index; the palette bakes read the textures from where they extract straight into; and the database load queues the late
+        /// bakes it finds instead of baking them. Disposing the result ends the deferral.
+        /// </summary>
+        public IDisposable ConfigureConverters()
+        {
+            MaterialCensus.TextureExistsOverride = NifConverter.TextureIndexContains;
+            PaletteBaker.SourceTexturesOverride = _paths.TexturesOut;
+            var lateBakes = new DeferredLateBakes();
+            _drainLateBakes = databaseLoaded => lateBakes.Drain(databaseLoaded, _paths.StagingRoot, _paths.TexturesOut);
+            return lateBakes;
+        }
+
+        /// <summary>
         /// Opens the texture archives that still need extracting and seeds the texture-existence index from their name tables, so NIF
         /// conversion can start before a single texture byte is extracted. The caller owns and disposes the set.
         /// </summary>
@@ -170,12 +210,12 @@ namespace AssetConverter.Pipeline
 
         /// <summary>
         /// One local ESM copy (the load reads the file three times: Mutagen overlay + two raw scans, never pay network latency three
-        /// times), the string tables the localized ESM resolves its names from, then the INI cascade.
+        /// times), then the string tables the localized ESM resolves its names from.
         /// </summary>
-        /// <param name="onEsmCopied">Called as soon as the local ESM is complete, while the INIs are still copied.</param>
+        /// <param name="onEsmCopied">Called as soon as the local ESM is complete, while the string tables are still extracted.</param>
         public void CopyGameData(Action onEsmCopied)
         {
-            int phase = InstallProgress.BeginPhase(InstallSteps.CopyGameData, 3);
+            int phase = InstallProgress.BeginPhase(InstallSteps.CopyGameData, InstallSteps.CopyGameDataTotal);
             InstallProgress.SetDetail(phase, "Fallout4.esm");
             CopyEsm();
             _ct.ThrowIfCancellationRequested();
@@ -183,28 +223,59 @@ namespace AssetConverter.Pipeline
 
             RunGameDataStep(phase, "string tables", () => StringTables.Extract(_paths.Fo4Location, _paths.StagingRoot, Language));
             onEsmCopied();
-
-            RunGameDataStep(phase, "game INIs", () => InstallOperations.CopyGameInis(_paths.Fo4Location, _paths.DataOut, _paths.SettingsDirectory));
             InstallProgress.EndPhase(phase);
         }
 
         /// <summary>
-        /// FO4's own UI fonts, Pip-Boy art and the UI layout documents. The fonts and the
-        /// art start ffdec JVMs unless an earlier run extracted them; the rest is read from the SWFs in process.
+        /// The INI cascade of the game into the install. Every install does this, whichever asset groups it converts, so it belongs to no progress
+        /// step: it is quick, and an INI edited since the last install must be picked up.
         /// </summary>
-        public void ExtractInterfaceAssets()
+        public void CopyGameInis()
         {
-            int phase = InstallProgress.BeginPhase(InstallSteps.ExtractInterface, 0);
-            RunExtraction(phase, "UI fonts", () => FontExtractor.Extract(_paths.Fo4Location, _paths.SettingsDirectory, _paths.StagingRoot, _paths.FontsOut, _memory, _ct));
-            RunExtraction(phase, "UI layout", () => UiLayoutExtractor.Extract(_paths.Fo4Location, _paths.SettingsDirectory, _paths.UiLayoutOut));
-            RunExtraction(phase, "Pip-Boy art", () => PipboyArtExtractor.Extract(_paths.Fo4Location, _paths.StagingRoot, _paths.PipboyArtOut, _memory, _ct));
+            _ct.ThrowIfCancellationRequested();
+            InstallOperations.CopyGameInis(_paths.Fo4Location, _paths.DataOut, _paths.SettingsDirectory);
+        }
+
+        /// <summary>
+        /// FO4's own UI fonts, Pip-Boy art and the UI layout documents. Each extractor first checks whether its output is current (the fonts
+        /// and the art may start an ffdec JVM to read its version); the step's total is the number of extractors that have work, so one
+        /// with everything cached shows as skipped, and the pending ones then run, each ticking once.
+        /// </summary>
+        public void ExtractInterfaceAssets() =>
+            ExtractInterfaceAssets(
+            [
+                () => FontExtractor.Plan(_paths.Fo4Location, _paths.SettingsDirectory, _paths.StagingRoot, _paths.FontsOut, _memory, _ct),
+                () => UiLayoutExtractor.Plan(_paths.Fo4Location, _paths.SettingsDirectory, _paths.UiLayoutOut),
+                () => PipboyArtExtractor.Plan(_paths.Fo4Location, _paths.StagingRoot, _paths.PipboyArtOut, _memory, _ct),
+            ]);
+
+        internal void ExtractInterfaceAssets(IReadOnlyList<Func<PendingExtraction?>> plans)
+        {
+            int phase = InstallProgress.BeginPhase(InstallSteps.ExtractInterface, null);
+            InstallProgress.SetDetail(phase, "checking which assets are out of date");
+            var pending = new List<PendingExtraction>();
+            foreach (var plan in plans)
+            {
+                _ct.ThrowIfCancellationRequested();
+                if (plan() is { } extraction) pending.Add(extraction);
+            }
+            InstallProgress.AddTotal(phase, pending.Count);
+            InstallProgress.SealTotal(phase);
+            foreach (var extraction in pending)
+            {
+                _ct.ThrowIfCancellationRequested();
+                InstallProgress.SetDetail(phase, extraction.Detail);
+                extraction.Run();
+                _ct.ThrowIfCancellationRequested();
+                InstallProgress.Tick(phase);
+            }
             InstallProgress.EndPhase(phase);
         }
 
         /// <summary>FO4's shaders: Shaders.ba2 -> DXBC -> WGSL the engine composes with its own wrappers.</summary>
         public void TranslateShaders()
         {
-            int phase = InstallProgress.BeginPhase(InstallSteps.ConvertShaders, 0);
+            int phase = InstallProgress.BeginPhase(InstallSteps.ConvertShaders, null);
             ShaderTranslateStep.Run(_paths.Fo4Location, _paths.AssetsRoot, InstallerPaths.Require(ShaderManifestReader.RepoRelativePath), phase, _ct);
             _ct.ThrowIfCancellationRequested();
             InstallProgress.EndPhase(phase);
@@ -243,14 +314,29 @@ namespace AssetConverter.Pipeline
         /// Texture archives extract straight into assets\textures with the "textures\" prefix stripped; there is no staging copy.
         /// <see cref="TextureExtraction.ConcurrentArchives"/> archives are read at once, after the mesh archives, which must not share the source.
         /// </summary>
-        public void ExtractTextures(TextureArchiveSet textures)
+        public bool ExtractTextures(TextureArchiveSet textures)
         {
             var extraction = new TextureExtraction(textures, memory: _memory);
             int phase = InstallProgress.BeginPhase(InstallSteps.ExtractTextures, extraction.FileCount);
             bool allSucceeded = extraction.Run(_paths.TexturesOut, phase, BA2ParallelUnpacker.DefaultMaxInFlightBytes, _ct);
             InstallProgress.EndPhase(phase);
-            if (!allSucceeded)
-                Console.Error.WriteLine("WARNING: some texture archives had extraction failures; markers withheld, re-run to repair.");
+            return allSucceeded;
+        }
+
+        /// <summary>The image spaces' colour LUTs, from Misc.ba2 straight into assets	extures like every other texture.</summary>
+        /// <exception cref="FileNotFoundException">Misc.ba2 is missing from the game's Data folder.</exception>
+        /// <exception cref="InvalidOperationException">A LUT failed to extract, or the archive holds none.</exception>
+        public void ExtractColourLuts()
+        {
+            string archivePath = Path.Combine(_paths.GameDataDirectory, ColourLuts.ArchiveName);
+            if (!File.Exists(archivePath))
+                throw new FileNotFoundException($"{archivePath} not found; the image spaces' colour LUTs cannot be extracted.", archivePath);
+            var result = BA2ParallelUnpacker.Unpack(archivePath, _paths.TexturesOut, _memory, quiet: true,
+                stripFirstSegment: TextureExtraction.StrippedSegment, entryFilter: ColourLuts.IsColourLut, ct: _ct);
+            if (result.Total == 0)
+                throw new InvalidOperationException($"{archivePath} holds no colour LUT below {ColourLuts.ArchiveFolder}.");
+            if (!result.AllSucceeded)
+                throw new InvalidOperationException($"{result.Failed} of {result.Total} colour LUTs failed to extract from {archivePath}.");
         }
 
         /// <summary>
@@ -272,22 +358,33 @@ namespace AssetConverter.Pipeline
             InstallOperations.UseEffectShaderCatalog(_paths.Fo4Location);
             int converted = NifConverter.ConvertToGltfBatched(_paths.StagedMeshes, _paths.MeshesOut, meshes, bgsmScanRoot: _paths.StagingRoot,
                 progressPhase: phase, priorityFiles: skeletons, ct: _ct, memory: _memory);
-            InstallProgress.AddTotal(phase, converted - expected);
+            if (MeshCountMismatch(converted, expected) is { } mismatch)
+                Console.Error.WriteLine(mismatch);
             _ct.ThrowIfCancellationRequested();
             InstallProgress.EndPhase(phase);
         }
+
+        /// <summary>
+        /// The total of the step is fixed before the conversion starts, so a conversion that handled another number of NIFs than were
+        /// announced cannot adjust it; this is the warning for that, or null when the counts agree.
+        /// </summary>
+        internal static string? MeshCountMismatch(int processed, int announced) =>
+            processed == announced
+                ? null
+                : $"WARNING: the mesh conversion handled {processed:N0} NIFs but {announced:N0} were announced; the step's progress count was based on the announced number.";
 
         private string[] EnumerateStagedNifs() =>
             Directory.Exists(_paths.StagedMeshes) ? NifConverter.EnumerateNifs(_paths.StagedMeshes) : [];
 
         /// <summary>
-        /// Starts the collision worker and feeds it <see cref="CollisionWork"/> as the NIFs are queued; it writes *.col.json next to the
-        /// GLBs and ends once the queue is finished and drained. The NIFs extracted by this run were checked for the worker's marker while
-        /// they were written, and are queued the moment they are complete; the rest is queued by <see cref="QueueUnobservedCollisionCandidates"/>.
+        /// Starts the collision worker once <see cref="CollisionWork"/> is final and feeds it the queued NIFs; it writes *.col.json next to
+        /// the GLBs and ends once the queue is drained. The NIFs extracted by this run were checked for the worker's marker while they
+        /// were written and queued the moment they were complete; <see cref="QueueUnobservedCollisionCandidates"/> queued the rest and
+        /// finished the queue, so its size is the step's total.
         /// </summary>
         public void ExtractCollision()
         {
-            int phase = InstallProgress.BeginPhase(InstallSteps.ExtractCollision, 0);
+            int phase = InstallProgress.BeginPhase(InstallSteps.ExtractCollision, CollisionWork.ExpectedCount);
             CollisionSidecars.PurgeIfStale(_paths.MeshesOut, _ct);
             NifConverter.ExtractFo4Collision(_paths.StagedMeshes, _paths.MeshesOut, CollisionWork, phase, _memory, _ct);
             CollisionSidecars.RecordCurrent(_paths.MeshesOut);
@@ -324,7 +421,7 @@ namespace AssetConverter.Pipeline
         /// </summary>
         public void BakePalettes()
         {
-            int phase = InstallProgress.BeginPhase(InstallSteps.BakePalettes, 1);
+            int phase = InstallProgress.BeginPhase(InstallSteps.BakePalettes, InstallSteps.BakePalettesTotal);
             PaletteBaker.BakeAll(_paths.StagingRoot, _paths.TexturesOut, _ct);
             _ct.ThrowIfCancellationRequested();
             InstallProgress.Tick(phase);
@@ -333,41 +430,46 @@ namespace AssetConverter.Pipeline
 
         public async Task LoadDatabase()
         {
-            DeleteDatabase();
             var loader = new ESMLoader(_paths.DatabasePath, materialsRoot: _paths.StagingRoot, texturesOut: _paths.TexturesOut)
             {
                 Strings = new StringTableSet(StringTables.Directory(_paths.StagingRoot), Language),
                 Memory = _memory,
             };
-            int phase = InstallProgress.BeginPhase(InstallSteps.BuildDatabase, 0);
+            int phase = InstallProgress.BeginPhase(InstallSteps.BuildDatabase, null);
             await loader.LoadESMAsync(_paths.StagedEsm, ct: _ct, progressPhase: phase).ConfigureAwait(false);
             InstallProgress.EndPhase(phase);
         }
 
         /// <summary>Reads only the game's archives; the database write waits for <see cref="FinalizeDatabase"/>.</summary>
-        public LodWaterHeights ScanLodWater()
+        public void ScanLodWater()
         {
-            int phase = InstallProgress.BeginPhase(InstallSteps.ScanLodWater, 1);
+            int phase = InstallProgress.BeginPhase(InstallSteps.ScanLodWater, InstallSteps.ScanLodWaterTotal);
             var heights = LodWaterStage.Scan(_paths.GameDataDirectory, _ct);
             _ct.ThrowIfCancellationRequested();
             InstallProgress.Tick(phase);
             InstallProgress.EndPhase(phase);
-            return heights;
+            _lodWater = heights;
         }
 
         /// <summary>
         /// Everything that needs the finished database, the converted GLBs, the extracted textures and the palette bakes. The MODC swap
         /// synthesis comes first: it reads the model paths as the ESM load wrote them and the statics before the LOD backfill.
         /// </summary>
-        public void FinalizeDatabase(DeferredLateBakes lateBakes, Task databaseLoaded, LodWaterHeights lodWater)
+        public void FinalizeDatabase(Task databaseLoaded)
         {
-            int phase = InstallProgress.BeginPhase(InstallSteps.FinalizeDatabase, 5);
-            RunFinalizeStep(phase, "MODC material swaps",
-                () => ModcSwapSynthesizer.Run(_paths.DatabasePath, _paths.MeshesOut, _paths.StagingRoot, _paths.TexturesOut, _ct));
-            RunFinalizeStep(phase, "late palette bakes", () => lateBakes.Drain(databaseLoaded, _paths.StagingRoot, _paths.TexturesOut));
-            RunFinalizeStep(phase, "LOD water", () => LodWaterStage.WriteTable(_paths.DatabasePath, lodWater));
-            RunFinalizeStep(phase, "LOD backfill", () => LodBackfill.Run(_paths.DatabasePath, _paths.MeshesOut));
-            RunFinalizeStep(phase, "model path normalization", () => ModelPathNormalizer.Run(_paths.DatabasePath));
+            var drainLateBakes = _drainLateBakes ?? throw new InvalidOperationException("The converters were not configured before the database was finalized.");
+            var lodWater = _lodWater ?? throw new InvalidOperationException("The LOD water was not scanned before the database was finalized.");
+            (string Detail, Action Run)[] steps =
+            [
+                ("MODC material swaps", () => ModcSwapSynthesizer.Run(_paths.DatabasePath, _paths.MeshesOut, _paths.StagingRoot, _paths.TexturesOut, _ct)),
+                ("late palette bakes", () => drainLateBakes(databaseLoaded)),
+                ("LOD water", () => LodWaterStage.WriteTable(_paths.DatabasePath, lodWater)),
+                ("LOD backfill", () => LodBackfill.Run(_paths.DatabasePath, _paths.MeshesOut)),
+                ("door trigger bounds", () => DoorTriggerBounds.RunOnGame(_paths.DatabasePath, _paths.GameDataDirectory)),
+                ("model path normalization", () => ModelPathNormalizer.Run(_paths.DatabasePath)),
+            ];
+            int phase = InstallProgress.BeginPhase(InstallSteps.FinalizeDatabase, steps.Length);
+            foreach (var (detail, run) in steps) RunFinalizeStep(phase, detail, run);
             InstallProgress.EndPhase(phase);
         }
 
@@ -402,7 +504,7 @@ namespace AssetConverter.Pipeline
         /// </summary>
         public StagingRemovalResult RemoveStaging()
         {
-            int phase = InstallProgress.BeginPhase(InstallSteps.RemoveStaging, 0);
+            int phase = InstallProgress.BeginPhase(InstallSteps.RemoveStaging, null);
             var elapsed = System.Diagnostics.Stopwatch.StartNew();
             var result = StagingRemoval.Run(_paths.StagingRoot, phase, ct: _ct);
             Console.WriteLine($"Removed temporary files: {result.FilesRemoved:N0} files and {result.FoldersRemoved:N0} folders in {ProgressFormatter.Invariant.Duration(elapsed.Elapsed)}.");
@@ -430,18 +532,6 @@ namespace AssetConverter.Pipeline
             InstallProgress.Tick(phase);
         }
 
-        /// <summary>Counts the item as work only when <paramref name="extract"/> did extract it, so a step with everything cached shows as skipped.</summary>
-        private void RunExtraction(int phase, string detail, Func<bool> extract)
-        {
-            _ct.ThrowIfCancellationRequested();
-            InstallProgress.SetDetail(phase, detail);
-            bool extracted = extract();
-            _ct.ThrowIfCancellationRequested();
-            if (!extracted) return;
-            InstallProgress.AddTotal(phase, 1);
-            InstallProgress.Tick(phase);
-        }
-
         private void RunFinalizeStep(int phase, string detail, Action step)
         {
             _ct.ThrowIfCancellationRequested();
@@ -458,16 +548,6 @@ namespace AssetConverter.Pipeline
             Console.WriteLine("Copying Fallout4.esm to staging...");
             File.Copy(_paths.GameEsm, _paths.StagedEsm, overwrite: true);
             File.SetLastWriteTimeUtc(_paths.StagedEsm, source.LastWriteTimeUtc);
-        }
-
-        private void DeleteDatabase()
-        {
-            string dbPath = _paths.DatabasePath;
-            if (!File.Exists(dbPath)) return;
-            Console.WriteLine("Deleting existing database for fresh rebuild...");
-            File.Delete(dbPath);
-            foreach (var aux in new[] { dbPath + "-shm", dbPath + "-wal" })
-                if (File.Exists(aux)) File.Delete(aux);
         }
     }
 }

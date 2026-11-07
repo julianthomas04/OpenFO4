@@ -32,11 +32,13 @@ gpu_passes! {
     ShadowCascade2 => "shadow cascade2",
     ShadowCascade3 => "shadow cascade3",
     LampShadows => "lamp shadows",
+    RainOcclusion => "rain occlusion",
     World => "world",
     Grass => "grass",
     WaterDisplacement => "water displacement",
     WaterSsr => "water ssr",
     Water => "water",
+    Rain => "rain",
     HizBuild => "hiz build",
     AutoExposure => "auto exposure",
     Tonemap => "tonemap",
@@ -56,7 +58,10 @@ impl GpuPass {
     /// unrecorded frame counts as 0 ms so the smoothed time reflects the
     /// per-frame average rather than the last recorded frame.
     pub fn is_amortised(self) -> bool {
-        matches!(self, GpuPass::ShadowCull | GpuPass::LampShadows) || self.cascade_index().is_some()
+        matches!(
+            self,
+            GpuPass::ShadowCull | GpuPass::LampShadows | GpuPass::RainOcclusion
+        ) || self.cascade_index().is_some()
     }
 
     const CASCADES: [GpuPass; 4] = [
@@ -135,6 +140,23 @@ mod tests {
         assert_eq!(GpuPass::Grass.index(), GpuPass::World.index() + 1);
         assert_eq!(GpuPass::Grass.label(), "grass");
         assert!(!GpuPass::Grass.is_amortised());
+    }
+
+    #[test]
+    fn the_rain_occlusion_map_is_timed_with_the_shadows_and_only_counts_on_frames_that_render_it() {
+        assert_eq!(
+            GpuPass::RainOcclusion.index(),
+            GpuPass::LampShadows.index() + 1
+        );
+        assert!(GpuPass::RainOcclusion.is_amortised());
+        assert_eq!(GpuPass::RainOcclusion.label(), "rain occlusion");
+    }
+
+    #[test]
+    fn the_rain_is_timed_right_after_the_water_pass_and_on_every_frame() {
+        assert_eq!(GpuPass::Rain.index(), GpuPass::Water.index() + 1);
+        assert!(!GpuPass::Rain.is_amortised());
+        assert_eq!(GpuPass::Rain.label(), "rain");
     }
 
     #[test]

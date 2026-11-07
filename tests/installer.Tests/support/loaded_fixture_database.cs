@@ -24,7 +24,7 @@ namespace InstallerTests
         readonly TempDirectory _directory = new();
         internal TinyPlugin Plugin { get; } = new();
 
-        public string DatabasePath => Path.Combine(_directory.Path, "data.db");
+        string DatabasePath => Path.Combine(_directory.Path, "data.db");
 
         public string EsmPath { get; private set; } = "";
 
@@ -33,6 +33,8 @@ namespace InstallerTests
             DescribeFixtureRecords();
             EsmPath = Plugin.Write(_directory.Path);
             RawEsmBuilder.AddRecordFlags(EsmPath, "REFR", Plugin.FormKeyOf("DeletedRef").ID, DeletedFlag);
+            ReplaceWeatherData("RawDataWeather", WeatherFixture.RawData);
+            ReplaceWeatherData("ShortDataWeather", WeatherFixture.RawData[..WeatherFixture.ShortDataLength]);
             ReplaceImageSpaceDof("FixtureImageSpace", [1f, -2500f, 3500f, FixtureImageSpaceMode, FixtureVignetteRadius, FixtureVignetteStrength]);
             ReplaceImageSpaceDof("FixtureImageSpaceWithoutVignette", [0.5f, 100f, 200f, FixtureShortImageSpaceMode]);
             AppendWaterCurrents("CELL", "FixtureExterior", CellCurrents);
@@ -44,6 +46,10 @@ namespace InstallerTests
         void ReplaceImageSpaceDof(string editorId, float[] dnamFloats) =>
             RawEsmBuilder.ReplaceSubrecord(EsmPath, "IMGS", Plugin.FormKeyOf(editorId).ID, "DNAM",
                 dnamFloats.SelectMany(BitConverter.GetBytes).ToArray());
+
+        /// <summary>Mutagen rewrites the WTHR DATA from its scaled model; the loader must recover the authored bytes.</summary>
+        void ReplaceWeatherData(string editorId, byte[] data) =>
+            RawEsmBuilder.ReplaceSubrecord(EsmPath, "WTHR", Plugin.FormKeyOf(editorId).ID, "DATA", data);
 
         void AppendWaterCurrents(string signature, string editorId, float[][] currents) =>
             RawEsmBuilder.AppendSubrecords(EsmPath, signature, Plugin.FormKeyOf(editorId).ID,
@@ -71,6 +77,19 @@ namespace InstallerTests
             return connection.QuerySingle<T>(sql, parameters);
         }
 
+        /// <summary>
+        /// Copies the database with SQLite's backup API, waiting out any checkpoint. A plain file copy can tear: the loaded
+        /// database still sits in the write-ahead log, and any test clearing the connection pools checkpoints it into the file.
+        /// </summary>
+        public void CopyDatabaseTo(string path)
+        {
+            using var source = Open();
+            source.Execute("PRAGMA busy_timeout = 30000");
+            using var destination = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString());
+            destination.Open();
+            source.BackupDatabase(destination);
+        }
+
         SqliteConnection Open()
         {
             var connection = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -87,6 +106,18 @@ namespace InstallerTests
         {
             var plugin = Plugin;
             plugin.AddClimate("FixtureClimate");
+            plugin.AddClimate("VolatileClimate", climate => climate.Volatility = 60);
+            plugin.AddClimate("MasserClimate", climate =>
+            {
+                climate.PhaseLength = 4;
+                climate.Moons = Climate.Moon.Masser;
+                climate.Model = new Model { File = @"Sky\Stars.nif" };
+            });
+            plugin.AddClimate("TwinMoonClimate", climate =>
+            {
+                climate.PhaseLength = 63;
+                climate.Moons = Climate.Moon.Masser | Climate.Moon.Secunda;
+            });
             plugin.AddWorldspace("FixtureWorld").Climate.FormKey = plugin.FormKeyOf("FixtureClimate");
             DescribeWater(plugin);
             plugin.AddImageSpace("FixtureImageSpace", imageSpace =>
@@ -94,6 +125,7 @@ namespace InstallerTests
                 imageSpace.DepthOfFieldStrength = 1f;
                 imageSpace.DepthOfFieldDistance = -2500f;
                 imageSpace.DepthOfFieldRange = 3500f;
+                imageSpace.Lut = FixtureImageSpaceLut;
             });
             plugin.AddImageSpace("FixtureImageSpaceWithoutVignette", imageSpace =>
             {
@@ -104,6 +136,13 @@ namespace InstallerTests
             plugin.AddStatic("WallStatic", ModelOfWall);
             plugin.AddStatic("MarkerStatic", @"Markers\Marker.nif", TinyPlugin.MarkerFlag);
             plugin.AddDoor("DoorBase", @"Doors\Door01.nif");
+            plugin.AddCollisionLayer("LayerStatic", layer => { layer.Index = 1; layer.Flags = CollisionLayer.Flag.TriggerVolume; });
+            plugin.AddCollisionLayer("LayerCharacter", layer =>
+            {
+                layer.Index = 30;
+                layer.CollidesWith = [new FormLink<ICollisionLayerGetter>(plugin.FormKeyOf("LayerStatic")), new FormLink<ICollisionLayerGetter>(layer.FormKey)];
+            });
+            plugin.AddCollisionLayer("LayerIsolated", layer => layer.Index = 7);
             plugin.AddLight("LampLight", light =>
             {
                 light.Radius = 512;
@@ -286,6 +325,7 @@ namespace InstallerTests
 
         /// <summary>Mode floats with a top byte set (0x41D00000, 0x42780000), which Mutagen's DNAM model drops.</summary>
         public const float FixtureImageSpaceMode = 26f;
+        public const string FixtureImageSpaceLut = @"Effects\LUTs\FixtureLUT.dds";
         public const float FixtureShortImageSpaceMode = 62f;
         public const float FixtureVignetteRadius = 40f;
         public const float FixtureVignetteStrength = 0.25f;
@@ -322,14 +362,69 @@ namespace InstallerTests
             plugin.PersistentCell.WaterHeight = 0f;
         }
 
-        static void DescribeWeather(TinyPlugin plugin) =>
+        static void DescribeWeather(TinyPlugin plugin)
+        {
+            plugin.AddSoundDescriptor("ThunderSound", descriptor => descriptor.Data = new SoundDescriptorStandardData());
+            plugin.AddGodRays("FixtureGodRays", godRays =>
+            {
+                godRays.BackColor = TinyPlugin.Rgb(WeatherFixture.GodRaysBackRed, 128, 0);
+                godRays.ForwardColor = TinyPlugin.Rgb(1, 2, 3);
+                godRays.AirColor = TinyPlugin.Rgb(10, 20, 30);
+                godRays.BackColorScale = WeatherFixture.GodRaysBackColorScale;
+                godRays.ForwardColorScale = WeatherFixture.GodRaysForwardColorScale;
+                godRays.AirColorScale = WeatherFixture.GodRaysAirColorScale;
+                godRays.Intensity = WeatherFixture.GodRaysIntensity;
+                godRays.BackPhase = WeatherFixture.GodRaysBackPhase;
+                godRays.ForwardPhase = WeatherFixture.GodRaysForwardPhase;
+            });
             plugin.AddWeather("FixtureWeather", weather =>
             {
+                weather.GodRays = new WeatherGodRays();
+                weather.GodRays.GodRayDay.SetTo(plugin.FormKeyOf("FixtureGodRays"));
+                weather.GodRays.GodRayLateSunset.SetTo(plugin.FormKeyOf("FixtureGodRays"));
                 weather.SkyUpperColor.Day = TinyPlugin.Rgb(10, 20, 30);
                 weather.SkyUpperColor.Night = TinyPlugin.Rgb(1, 2, 3);
                 weather.FogDistanceDayNear = 100f;
                 weather.FogDistanceNightFar = 9000f;
+                weather.WindSpeed = new Percent(WeatherFixture.WindSpeed);
+                weather.WindTurbulance = new Percent(WeatherFixture.WindTurbulence);
+                weather.WindDirection = WeatherFixture.WindDirection;
+                weather.WindDirectionRange = WeatherFixture.WindDirectionRange;
+                weather.TransDelta = WeatherFixture.TransDelta;
+                weather.SunGlare = new Percent(WeatherFixture.SunGlare);
+                weather.ThunderLightningFrequency = new Percent(WeatherFixture.ThunderFrequency);
+                weather.LightningColor = TinyPlugin.Rgb(WeatherFixture.LightningRed, 200, 100);
+                weather.Flags = Weather.Flag.Cloudy | Weather.Flag.RainOcclusion;
+                weather.VolatilityMult = WeatherFixture.VolatilityMult;
+                weather.NAM4 = WeatherFixture.FogScales;
+                foreach (var (raw, _) in WeatherFixture.SoundKinds)
+                    weather.Sounds.Add(new WeatherSound { Sound = new FormLink<ISoundDescriptorGetter>(plugin.FormKeyOf("ThunderSound")), Type = (WeatherSound.TypeEnum)raw });
+                weather.CloudTextures[WeatherFixture.TexturedCloudSlot] = WeatherFixture.CloudTexture;
+                var layer = weather.Clouds[WeatherFixture.ConfiguredCloudLayer];
+                layer.Enabled = true;
+                layer.Colors = new WeatherColor();
+                layer.Alphas = new WeatherAlpha();
+                layer.XSpeed = WeatherFixture.CloudXSpeed;
+                layer.YSpeed = WeatherFixture.CloudYSpeed;
+                layer.Colors.Day = TinyPlugin.Rgb(WeatherFixture.CloudDayRed, 20, 30);
+                layer.Colors.LateSunset = TinyPlugin.Rgb(4, 5, 6);
+                layer.Alphas.Day = WeatherFixture.CloudDayAlpha;
+                layer.Alphas.EarlySunrise = WeatherFixture.CloudEarlySunriseAlpha;
             });
+            plugin.AddWeather("RawDataWeather", _ => { });
+            plugin.AddWeather("ShortDataWeather", _ => { });
+            plugin.AddShaderParticleGeometry("SnowGeometry", geometry =>
+            {
+                geometry.Type = ShaderParticleGeometry.ShaderParticleType.Snow;
+                geometry.GravityVelocity = 1.5f;
+                geometry.ParticleSizeX = 0.25f;
+                geometry.NumSubtexturesX = 4f;
+                geometry.NumSubtexturesY = 2f;
+                geometry.BoxSize = 4096;
+                geometry.ParticleDensity = 0.5f;
+                geometry.ParticleTexture = WeatherFixture.ParticleMaterial;
+            });
+        }
 
         static void DescribeExteriorRefs(TinyPlugin plugin)
         {
@@ -433,6 +528,7 @@ namespace InstallerTests
                     Door = new FormLink<IPlacedObjectGetter>(plugin.FormKeyOf("ExteriorDoor")),
                     Position = new P3Float(10f, 20f, 30f),
                     Rotation = new P3Float(0f, 0f, 1.5f),
+                    Flags = TeleportDestination.Flag.NoLoadScreen,
                 });
             var exteriorDoor = (PlacedObject)plugin.Exterior.Temporary.Single(p => p.EditorID == "ExteriorDoor");
             exteriorDoor.TeleportDestination = new TeleportDestination

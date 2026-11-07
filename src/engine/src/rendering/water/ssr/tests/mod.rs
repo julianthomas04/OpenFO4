@@ -12,14 +12,18 @@ pub(crate) mod harness;
 use glam::{UVec2, Vec3};
 use wgpu::util::DeviceExt;
 
-use self::harness::*;
+use self::harness::depth_texture;
 use super::{
     constants::half_extent,
     pipelines::SsrPipelines,
     targets::{HIZ_MIP_COUNT, hiz_level_extent},
     *,
 };
-use crate::rendering::{camera::Camera, gpu_test::test_device, scene_copy::SceneCopy};
+use crate::rendering::{
+    camera::Camera,
+    gpu_test::{extent, read_f32_mip, test_device},
+    scene_copy::SceneCopy,
+};
 
 fn surface(wading: bool, lod: bool) -> SurfaceSsr {
     SurfaceSsr {

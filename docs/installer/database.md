@@ -19,6 +19,21 @@ extracts the installed language's tables to resolve them.
 same file. Every record has a row in `records`, keyed by its form key, which the
 domain tables reference. Nested data is stored as JSON.
 
+`collision_layers` rows carry the layer's Havok filter layer number (`layer_index`), its `flags`, and the
+layers it collides with (`collides_with`, a JSON array of form keys in the record's order). A NULL
+`collides_with` means the list is absent or unreadable, so what the layer collides with is unknown.
+`flags` is the raw flag word: Trigger Volume 0x1, Sensor 0x2, Navmesh Obstacle 0x4.
+
+`doors.bounds` and `statics.bounds` hold the record's object bounds as JSON with `Min` and `Max` points of `X`, `Y`,
+`Z`, in Bethesda units (int16, Z up).
+`doors.trigger_bounds` holds the same JSON for the volume that triggers an automatic door, measured from the editor-marker geometry of its model
+(whole or fractional units); it is NULL for every other door.
+
+`climates.data` is JSON with the climate's `Weathers` (each with `Weather`, `Chance` and optional `Global`), the
+`SunriseBegin`, `SunriseEnd`, `SunsetBegin` and `SunsetEnd` times as `HH:MM:SS`, `MoonPhaseLength` (days each of the
+eight moon phases lasts) and `Moons`, which has a boolean for each of `Masser` and `Secunda`. `ModelPath` is the lowercased sky model
+(for example `sky\stars.nif`) and is absent when the climate has none.
+
 ## Finalization
 
 Material swaps are resolved at install time into final texture paths, so the

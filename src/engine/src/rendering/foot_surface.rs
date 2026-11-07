@@ -35,12 +35,8 @@ impl LandscapeSource for DbClient {
         grid_x: i32,
         grid_y: i32,
     ) -> anyhow::Result<Option<Vec<LandscapeLayer>>> {
-        let cell = self.get_cell(grid_x, grid_y, worldspace)?;
-        let Some(form_key) = cell.form_key else {
-            return Ok(None);
-        };
-        let landscape = self.get_landscape(&form_key, grid_x, grid_y)?;
-        Ok(landscape.layers.as_deref().and_then(decode_layers))
+        let landscape = self.get_landscape_at(worldspace, grid_x, grid_y)?;
+        Ok(landscape.and_then(|landscape| landscape.layers.as_deref().and_then(decode_layers)))
     }
 }
 

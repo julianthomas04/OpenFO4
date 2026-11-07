@@ -12,6 +12,8 @@ use crate::anim::{AnimationRig, JointIndex};
 use crate::assets::AssetServer;
 use crate::assets::db::DbClient;
 use crate::assets::db::addon_nodes::AddonNodes;
+use crate::assets::db::collision_layers::PlayerCollisionLayers;
+use crate::assets::db::landscapes::Landscape;
 use crate::assets::db::lights::Light;
 use crate::assets::db::material_swaps::SwapEntry;
 use crate::assets::db::placed_objects::PlacedObject;
@@ -33,6 +35,7 @@ use crate::audio::place::PlaceSnapshot;
 use crate::bethesda_space;
 use crate::navmesh::{CellNavmeshes, NavMesh, NavResidency, NavWorld, build_meshes};
 use crate::rendering::animated_objects::{AnimatedObjectEvent, AnimatedRefr};
+use crate::rendering::broken_asset::{BrokenAsset, BrokenAssetSink, BrokenAssets};
 use crate::rendering::cube_array::CubeArray;
 use crate::rendering::effects::geometry::{EffectInstance, EffectMeshData, RefractionInstance};
 use crate::rendering::frustum::Aabb;
@@ -40,7 +43,7 @@ use crate::rendering::gpu_driven::{
     DRAW_BUCKET_COUNT, FALLBACK_MATERIAL_ID, FALLBACK_SLOT, GpuInstance, GpuTerrainInstance,
     INSTANCE_FLAGS_BLEND, INSTANCE_FLAGS_DECAL, INSTANCE_FLAGS_EFFECT, INSTANCE_FLAGS_HIDDEN_FX,
     INSTANCE_FLAGS_MARKER, INSTANCE_FLAGS_MULTIPLY, INSTANCE_FLAGS_TWO_SIDED, INSTANCE_FLAGS_WATER,
-    InstanceBuffer, LEGACY_SURFACE, MaterialKey, MaterialRegistry, MaterialSlots,
+    InstanceBuffer, LEGACY_SURFACE, MaterialKey, MaterialRegistry, MaterialSlots, NO_SPLAT_LAYER,
     SPLAT_FALLBACK_LAYER, SlotChanges, SplatmapArray, SurfaceParams, TERRAIN_FLAGS_BAKED,
     TerrainInstanceBuffer, TextureArray, TextureHandle, potential_buckets,
 };
@@ -52,6 +55,7 @@ use crate::rendering::placed_light::{
     GpuPlacedLight, LightBase, LightBaseError, LightPlacement, PlacedLight, PlacedLightError,
 };
 use crate::rendering::ragdoll_objects::{RagdollEvent, RagdollRefr, SkinPlan};
+use crate::rendering::reveal_texture_check::Draw;
 use crate::rendering::shadows::lamps::{
     ShadowInvalidations,
     source::{LampCandidate, LampKey, ShadowLampSource},
@@ -62,6 +66,8 @@ use crate::rendering::texture_streaming::demand::{
     self, CameraMotion, DemandView, NO_DEMAND, ScreenView,
 };
 use crate::rendering::texture_streaming::material::{MaterialSource, build_gpu_material};
+use crate::rendering::texture_streaming::read_failure::ReadFailure;
+use crate::rendering::texture_streaming::readiness::TextureReadiness;
 use crate::rendering::texture_streaming::role::{Admission, admit_texture};
 use crate::rendering::texture_streaming::{
     ResidencyPolicy, TextureResidency, residency, uv_density,
@@ -70,14 +76,16 @@ use crate::rendering::vertex::Vertex;
 use crate::rendering::water::PlacedWater;
 
 mod one_shot;
+mod staging;
 use crate::shared_cache::SharedCache;
 use crate::sim::collision::{
     CellColliderBatch, CollisionMeta, ObjectColliderGroup, PartShape, Placement, SidecarData,
-    TerrainColliderSpec, load_manifest, load_sidecar_file, manifest_key,
+    TerrainColliderSpec, TerrainCollision, load_manifest, load_sidecar_file, manifest_key,
 };
 use crate::sim::{EntityId, SimCommand, refr_entity_id};
 use crate::water_world::{LoadedCell, VolumeShapes};
 use one_shot::OneShot;
+use staging::{DeferredSpawn, Ring, StagedCell, Staging};
 
 mod effect_shapes;
 pub(crate) use effect_shapes::{AddonAttachment, AttachmentKey};
@@ -225,6 +233,36 @@ enum CellRequest {
         grid: (i32, i32),
         epoch: u64,
     },
+}
+
+/// The interior cell request could not reach the cell workers: their request channel is closed.
+#[derive(Debug, thiserror::Error)]
+#[error("interior cell {cell_form_key} request not sent: the cell worker channel is closed")]
+pub struct InteriorRequestError {
+    pub cell_form_key: String,
+}
+
+/// Marks `grid` pending and sends its interior request; a failed send leaves `grid` not
+/// pending so the streamer never waits for a cell that was never requested.
+fn request_interior(
+    tx: &crossbeam_channel::Sender<CellRequest>,
+    pending: &mut HashSet<(i32, i32)>,
+    cell_form_key: &str,
+    grid: (i32, i32),
+    epoch: u64,
+) -> Result<(), InteriorRequestError> {
+    pending.insert(grid);
+    tx.send(CellRequest::Interior {
+        cell_form_key: cell_form_key.to_string(),
+        grid,
+        epoch,
+    })
+    .map_err(|_| {
+        pending.remove(&grid);
+        InteriorRequestError {
+            cell_form_key: cell_form_key.to_string(),
+        }
+    })
 }
 
 impl CellRequest {
@@ -523,6 +561,9 @@ impl SubMeshMaterial {
     }
 }
 
+/// The worker's reads of a cell's textures (see `CellLoadResult::textures`).
+type Prereads = HashMap<String, Result<Arc<TexturePayload>, ReadFailure>>;
+
 /// All placements of one (mesh path, material swap) combination within a
 /// cell, sharing the parsed data. Variants of one mesh split into separate
 /// groups but share geometry: mega-buffer slots, AABBs, and colliders are
@@ -596,15 +637,18 @@ struct CellLoadResult {
     ragdoll_refs: Vec<RagdollRefr>,
     /// Pre-read mips for every texture this cell needs, keyed by the exact
     /// cache/refcount path strings the main thread uses. The worker reads only
-    /// the mips the cell's distance calls for. Three states: `Some(Some)` =
-    /// read and ready to upload; `Some(None)` = the worker tried and failed
-    /// (missing/unreadable — already logged, the main thread must NOT probe
-    /// the disk again); key absent = the worker believed it GPU-resident
-    /// (main thread: `try_add_ref`, placeholder plus async load on the rare
-    /// release race).
-    textures: HashMap<String, Option<Arc<TexturePayload>>>,
+    /// the mips the cell's distance calls for. `Ok` = read and ready to
+    /// upload; `Err` = the worker tried and failed (the main thread must NOT
+    /// probe the disk again): a missing file was warned about, a broken one is
+    /// for the main thread to report; key absent = the worker believed it
+    /// GPU-resident (main thread: `try_add_ref`, placeholder plus async load on
+    /// the rare release race).
+    textures: Prereads,
     /// Navigation meshes of the cell, decoded and indexed on the worker. Empty for LOD cells.
     navmeshes: Vec<NavMesh>,
+    /// Why a LOD cell's data could not be read; the main thread reports it as broken. Always
+    /// `None` for full and interior cells, and for a grid the worldspace has no cell at.
+    load_failure: Option<String>,
 }
 
 /// All placed instances of one mega-buffer slot within a cell. Keeping the
@@ -662,6 +706,12 @@ const POSE_EPS_BASIS: f32 = 1e-3;
 /// slot of group `g`'s instance `i` is `instance_range.offset + base[g] + i`.
 /// Single source for that layout so the per-frame dynamic-pose rewrite can't
 /// drift from how the slab is actually packed.
+/// Fixes a staged cell's group offsets, through which the pose readback resolves its rows
+/// before promotion uploads them.
+fn index_staged_rows(res: &mut CellResources) {
+    res.group_base = group_base_offsets(&res.object_groups);
+}
+
 fn group_base_offsets(groups: &[CellObjectGroup]) -> Vec<u32> {
     let mut base = Vec::with_capacity(groups.len());
     let mut acc = 0u32;
@@ -814,7 +864,8 @@ struct CellResources {
     /// height the cell water rule compares the water height against.
     land_lowest_y: Option<f32>,
     terrain_mega_key: Option<String>,
-    splat_key: Option<String>,
+    /// The cell's splatmaps, by their keys in the splatmap array.
+    splat_keys: Vec<String>,
     /// One entry per successful texture acquire (diffuse, normal, layers).
     texture_refs: Vec<TextureHandle>,
     /// Which of `texture_refs` each submesh or terrain cell uses and where;
@@ -882,12 +933,27 @@ const RETIRE_BUDGET: std::time::Duration = std::time::Duration::from_millis(1);
 /// which the lookahead covers.
 const DEMAND_SWEEP_BUDGET: Duration = Duration::from_micros(300);
 
-/// A pass over the resident cells gathering texture demand: grids, and whether
-/// each is a LOD cell.
+/// A pass over the resident and staged cells gathering texture demand: grids,
+/// and which cells each names.
 struct DemandSweep {
-    cells: Vec<((i32, i32), bool)>,
+    cells: Vec<((i32, i32), SweepSet)>,
     next: usize,
 }
+
+/// Which of the cell maps a demand sweep entry is in.
+#[derive(Clone, Copy)]
+enum SweepSet {
+    Full,
+    Lod,
+    StagedFull,
+    StagedLod,
+}
+
+/// The least demand, in pixels per UV unit, the textures of a staged cell carry. A texture
+/// without demand is never loaded, and a staged cell waits for every texture it uses, also one
+/// the view gives no demand, such as on a mesh outside it. One pixel per UV unit asks for the
+/// coarsest mips; real demand refines them once the cell is drawn.
+const STAGED_DEMAND_FLOOR: f32 = 1.0;
 
 /// Minimum spacing of demand recomputes forced only by cell releases.
 const DEMAND_STALE_INTERVAL: Duration = Duration::from_millis(500);
@@ -972,10 +1038,11 @@ pub struct StreamUpdate {
     pub sim_commands: Vec<SimCommand>,
     /// Set exactly once, on the frame the initial spawn finishes integrating.
     pub spawn_complete: Option<SpawnCompleteReport>,
-    /// True on exactly one frame per load: the frame the full-detail ring (the
-    /// ring that carries the colliders) finishes integrating. The LOD ring
-    /// usually still loads after it.
+    /// Every cell of the full-detail ring (the ring that carries the colliders) is integrated,
+    /// drawn or staged. The LOD ring usually still loads after it.
     pub full_ring_complete: bool,
+    /// Every cell of both rings is drawn, each with its textures ready.
+    pub world_complete: bool,
 }
 
 /// Timing summary for the initial spawn. The rings load concurrently with
@@ -983,12 +1050,35 @@ pub struct StreamUpdate {
 /// measured from `initial_load`, not disjoint shares of `total`.
 pub struct SpawnCompleteReport {
     pub total: Duration,
-    /// Full-detail ring finish time and integrated cell count.
+    /// Time by which the full-detail ring was drawn, and its cell count.
     pub full: Duration,
     pub full_cells: usize,
-    /// LOD ring finish time and integrated cell count.
+    /// Time by which the LOD ring was drawn, and its cell count.
     pub lod: Duration,
     pub lod_cells: usize,
+}
+
+/// When a ring of the initial spawn was first integrated (every cell staged or drawn) and
+/// when it was first drawn (every cell's textures ready), relative to the spawn timer.
+#[derive(Debug, Clone, Copy, Default)]
+struct RingTimes {
+    integrated: Option<Duration>,
+    drawn: Option<Duration>,
+}
+
+impl RingTimes {
+    fn note(&mut self, elapsed: Duration, integrated: bool, drawn: bool) {
+        if integrated && self.integrated.is_none() {
+            self.integrated = Some(elapsed);
+        }
+        if drawn && self.drawn.is_none() {
+            self.drawn = Some(elapsed);
+        }
+    }
+}
+
+fn millis(time: Option<Duration>) -> String {
+    time.map_or_else(|| "never".to_owned(), |time| time.as_millis().to_string())
 }
 
 /// Rolling integration-rate tracker for the debug UI: cells/s averaged over
@@ -1100,9 +1190,9 @@ pub struct WorldStreamer {
     /// have static ground). Defaults to `collision_radius`; bigger costs more
     /// (more colliders folded + stepped while dynamics are awake).
     physics_radius: i32,
-    /// Dynamic REFR entity id -> its owning resident cell, so the per-frame pose
-    /// readback finds the cell's `dynamic_instances` in O(1). Maintained beside
-    /// the `loaded` map (integrate adds, retire removes).
+    /// Dynamic REFR entity id -> its owning full-detail cell, drawn or staged, so the per-frame
+    /// pose readback finds the cell's `dynamic_instances` in O(1). Staging adds, retiring or
+    /// dropping a staged cell removes.
     entity_cell: HashMap<EntityId, (i32, i32)>,
     /// Animated objects entering or leaving residency, drained each frame by
     /// the animation runtime.
@@ -1161,13 +1251,20 @@ pub struct WorldStreamer {
     /// Set by `initial_load`; once the initial full+LOD rings finish
     /// integrating, a `SPAWN_COMPLETE` line is logged and this clears.
     spawn_timer: Option<std::time::Instant>,
-    /// Per-ring finish times relative to `spawn_timer`, recorded the first
-    /// frame each ring's pending+buffered sets drain during the initial
-    /// spawn. Feed the `SpawnCompleteReport` breakdown.
-    spawn_full_done: Option<Duration>,
-    spawn_lod_done: Option<Duration>,
+    /// Per-ring finish times of the initial spawn. Feed the `SpawnCompleteReport` breakdown.
+    spawn_full: RingTimes,
+    spawn_lod: RingTimes,
     /// Armed with the spawn timer; fires once when the full ring drains.
     full_ring_signal: OneShot,
+    /// Broken assets met during the running update; ending the game is the caller's.
+    broken: BrokenAssetSink,
+    /// Integrated cells hidden until their textures are ready. A staged cell keeps its request
+    /// marker in `pending_cells`/`lod_pending_cells` until it is promoted into
+    /// `loaded`/`lod_loaded`, so it counts as still loading.
+    staging: Staging,
+    /// At the last promotion pass some staged cell waited for nothing but the next material
+    /// bind group rebuild.
+    waiting_only_for_binding: bool,
     /// Last ~500 ms bucket a `SPAWN_PROGRESS` line was logged for.
     spawn_progress_tick: u64,
     /// Worst frame gap in `LoadMode::Loading`, reported at `SPAWN_COMPLETE`.
@@ -1224,6 +1321,10 @@ impl WorldStreamer {
         let light_lookup = build_light_lookup(&lights, db.schema().light_columns_present);
         let light_models = build_light_models(&lights);
         let addon_nodes = db.get_addon_nodes()?;
+        let player_layers = db.get_player_collision_layers().unwrap_or_else(|error| {
+            error!("collision layers unreadable ({error:#}); every collision shape stays solid");
+            PlayerCollisionLayers::all_solid()
+        });
 
         // Material swaps (FO4 MSWP): base-record swaps (MODS) + the
         // pre-resolved substitution entries. A ref-level swap (XMSP) comes per
@@ -1264,6 +1365,14 @@ impl WorldStreamer {
                 "{}/{} landscape textures missing a diffuse path",
                 ltex_missing,
                 ltex_records.len()
+            );
+        }
+        if let Some(diffuse) = db.get_texture_set_diffuse(terrain::DEFAULT_LAND_TEXTURE_SET)? {
+            ltex_to_diffuse.insert(terrain::DEFAULT_LAND_TEXTURE_SET.to_string(), diffuse);
+        } else {
+            warn!(
+                "default land texture set {} has no diffuse path; quadrants without a base layer render fallback",
+                terrain::DEFAULT_LAND_TEXTURE_SET
             );
         }
         let ltex_to_diffuse = Arc::new(ltex_to_diffuse);
@@ -1332,6 +1441,7 @@ impl WorldStreamer {
             collision_manifest: load_manifest(&format!(
                 "{asset_root}/{MESHES_DIR}/collision_manifest.json"
             )),
+            player_layers: player_layers.clone(),
             resident_textures,
             texture_policy,
             demand_view: Mutex::new(DemandView::default()),
@@ -1339,9 +1449,7 @@ impl WorldStreamer {
             collider_cache: SharedCache::new(COLLIDER_CACHE_CAP),
             layout_cache: SharedCache::new(LAYOUT_CACHE_CAP),
             dds_cache: SharedCache::new(DDS_CACHE_MAX_BYTES),
-            bake_cache: crate::sim::bake::ShapeBakeCache::new(crate::sim::bake::physics_cache_dir(
-                asset_root,
-            )),
+            bake_cache: new_bake_cache(asset_root, &player_layers),
             ws_editor_ids: Mutex::new(HashMap::new()),
             tile_exists: Mutex::new(HashMap::new()),
             persistent_by_grid: Mutex::new(HashMap::new()),
@@ -1426,9 +1534,12 @@ impl WorldStreamer {
             next_residency: 0,
             needs_light_repack: false,
             spawn_timer: None,
-            spawn_full_done: None,
+            spawn_full: RingTimes::default(),
             full_ring_signal: OneShot::default(),
-            spawn_lod_done: None,
+            broken: BrokenAssetSink::default(),
+            staging: Staging::default(),
+            waiting_only_for_binding: false,
+            spawn_lod: RingTimes::default(),
             spawn_progress_tick: 0,
             load_frames: LoadFrameMeter::new(),
             mode,
@@ -1534,12 +1645,14 @@ impl WorldStreamer {
         }
     }
 
+    /// Integrates and retires cells, moves the rings and pumps the texture residency. A broken
+    /// asset met on the way ends the game: it is returned once the update has run.
     #[tracing::instrument(skip_all)]
     pub(crate) fn update_gpu_driven(
         &mut self,
         camera_eye: Vec3,
         targets: &mut StreamTargets,
-    ) -> StreamUpdate {
+    ) -> Result<StreamUpdate, BrokenAssets> {
         let mut membership_changed = false;
         let frame_started = Instant::now();
         self.load_frames.observe(frame_started, self.mode);
@@ -1558,24 +1671,29 @@ impl WorldStreamer {
         let max_cells_per_frame = self.effective_cells_per_frame();
 
         self.drain_worker_responses();
+        self.staging.advance(frame_started);
 
-        // Integrate buffered results one at a time — full cells (player-
-        // facing) before LOD — stopping once the cell count OR the upload
-        // byte budget is spent. The first successful integration is exempt
+        // Integrate: first promote the staged cells whose textures became
+        // ready, then stage buffered results one at a time, promotions and
+        // stagings sharing the frame's cell cap — full cells
+        // (player-facing) before LOD — stopping once the cell count OR the
+        // upload byte budget is spent. The first successful staging is exempt
         // so a single oversized cell can't stall streaming forever; gated/
-        // stale drops (integrate returns false) cost nothing and don't
-        // consume that guaranteed slot. The channel re-drains between
-        // integrations: a fat loading-mode frame that only drained at frame
-        // start left the bounded response channel full for its whole
-        // duration and stalled every worker mid-spawn.
+        // stale drops (stage returns false) cost nothing and don't consume
+        // that guaranteed slot. The channel re-drains between stagings: a fat
+        // loading-mode frame that only drained at frame start left the
+        // bounded response channel full for its whole duration and stalled
+        // every worker mid-spawn.
         let integrate_span = info_span!(
             "integrate_cells",
             mode = self.mode.label(),
             integrated = tracing::field::Empty
         )
         .entered();
-        let mut integrated = 0usize;
         let integrate_started = Instant::now();
+        let promoted = self.promote_ready_cells(targets, max_cells_per_frame, integrate_started);
+        membership_changed |= promoted > 0;
+        let mut integrated = promoted;
         loop {
             if integration_must_stop(
                 self.mode,
@@ -1591,12 +1709,10 @@ impl WorldStreamer {
             let Some(mut result) = self.buffered_full.pop_front() else {
                 break;
             };
-            let changed = self.integrate_full(&mut result, targets);
+            let staged = self.stage_full(&mut result, targets);
             crate::utils::drop_off_thread(result);
-            if changed {
-                membership_changed = true;
+            if staged {
                 integrated += 1;
-                self.full_spawn_rate.record();
             }
             self.drain_worker_responses();
         }
@@ -1615,12 +1731,10 @@ impl WorldStreamer {
             let Some(mut result) = self.buffered_lod.pop_front() else {
                 break;
             };
-            let changed = self.integrate_lod(&mut result, targets);
+            let staged = self.stage_lod(&mut result, targets);
             crate::utils::drop_off_thread(result);
-            if changed {
-                membership_changed = true;
+            if staged {
                 integrated += 1;
-                self.lod_spawn_rate.record();
             }
             self.drain_worker_responses();
         }
@@ -1630,19 +1744,22 @@ impl WorldStreamer {
 
         // Initial-spawn benchmark hook: both rings fully integrated.
         let mut spawn_complete = None;
-        let mut full_ring_complete = false;
+        let full_ring_complete = self.full_ring_integrated();
+        let world_complete = self.rings_drawn();
         if let Some(start) = self.spawn_timer {
-            if self.spawn_full_done.is_none()
-                && self.pending_cells.is_empty()
-                && self.buffered_full.is_empty()
-            {
-                self.spawn_full_done = Some(start.elapsed());
-            }
-            let full_ring_drained = self.pending_cells.is_empty()
-                && self.buffered_full.is_empty()
-                && !self.loaded.is_empty();
-            full_ring_complete = self.full_ring_signal.fire(full_ring_drained);
-            if full_ring_complete {
+            let full_integrated = self.full_ring_integrated();
+            let lod_integrated = self.lod_ring_integrated();
+            self.spawn_full.note(
+                start.elapsed(),
+                full_integrated,
+                full_integrated && self.staging.len(Ring::Full) == 0,
+            );
+            self.spawn_lod.note(
+                start.elapsed(),
+                lod_integrated,
+                lod_integrated && self.staging.len(Ring::Lod) == 0,
+            );
+            if self.full_ring_signal.fire(full_integrated) {
                 info!(
                     "FULL_RING_COMPLETE elapsed_ms={} full_cells={} lod_loaded={}/{}",
                     start.elapsed().as_millis(),
@@ -1650,12 +1767,6 @@ impl WorldStreamer {
                     self.lod_loaded.len(),
                     self.lod_loaded.len() + self.lod_pending_cells.len(),
                 );
-            }
-            if self.spawn_lod_done.is_none()
-                && self.lod_pending_cells.is_empty()
-                && self.buffered_lod.is_empty()
-            {
-                self.spawn_lod_done = Some(start.elapsed());
             }
             // Ramp-up visibility: one INTEGRATED-side progress line per
             // ~500 ms while the initial spawn runs (worker-side progress is
@@ -1673,15 +1784,14 @@ impl WorldStreamer {
                     self.buffered_full.len() + self.buffered_lod.len(),
                 );
             }
-            if self.pending_cells.is_empty()
-                && self.lod_pending_cells.is_empty()
-                && self.buffered_full.is_empty()
-                && self.buffered_lod.is_empty()
-                && !self.loaded.is_empty()
-            {
+            if world_complete {
                 info!(
-                    "SPAWN_COMPLETE elapsed_ms={} full_cells={} lod_cells={} cells_per_frame={} mode={} workers={} worst_frame_ms={:.1}",
+                    "SPAWN_COMPLETE elapsed_ms={} full_integrated_ms={} full_drawn_ms={} lod_integrated_ms={} lod_drawn_ms={} full_cells={} lod_cells={} cells_per_frame={} mode={} workers={} worst_frame_ms={:.1}",
                     start.elapsed().as_millis(),
+                    millis(self.spawn_full.integrated),
+                    millis(self.spawn_full.drawn),
+                    millis(self.spawn_lod.integrated),
+                    millis(self.spawn_lod.drawn),
                     self.loaded.len(),
                     self.lod_loaded.len(),
                     max_cells_per_frame,
@@ -1692,9 +1802,9 @@ impl WorldStreamer {
                 let total = start.elapsed();
                 spawn_complete = Some(SpawnCompleteReport {
                     total,
-                    full: self.spawn_full_done.unwrap_or(total),
+                    full: self.spawn_full.drawn.unwrap_or(total),
                     full_cells: self.loaded.len(),
-                    lod: self.spawn_lod_done.unwrap_or(total),
+                    lod: self.spawn_lod.drawn.unwrap_or(total),
                     lod_cells: self.lod_loaded.len(),
                 });
                 self.spawn_timer = None;
@@ -1730,7 +1840,7 @@ impl WorldStreamer {
 
             // Unload full-detail cells that left both rings. A full cell that
             // merely dropped into the LOD ring stays resident until its LOD
-            // replacement arrives (pop-free demotion in integrate_lod).
+            // replacement is drawn (pop-free demotion in promote_lod).
             let to_unload_full: Vec<(i32, i32)> = self
                 .loaded
                 .keys()
@@ -1774,12 +1884,27 @@ impl WorldStreamer {
 
             // Prune stale pending markers and buffered payloads. In-flight
             // responses whose markers were pruned are dropped by the gates in
-            // integrate_full/integrate_lod.
+            // stage_full/stage_lod.
             let prune_span = info_span!("cell_change_prune").entered();
             self.pending_cells.retain(|cell| rings.in_full(*cell));
             self.lod_pending_cells.retain(|cell| rings.in_lod(*cell));
             retain_deferred_drop(&mut self.buffered_full, |r| rings.in_full(r.grid));
             retain_deferred_drop(&mut self.buffered_lod, |r| rings.in_lod(r.grid));
+            let unwanted_staged: Vec<CellResources> = self
+                .staging
+                .drain_unwanted(Ring::Full, |grid| rings.in_full(grid))
+                .into_iter()
+                .chain(
+                    self.staging
+                        .drain_unwanted(Ring::Lod, |grid| rings.in_lod(grid)),
+                )
+                .collect();
+            if !unwanted_staged.is_empty() {
+                self.collision_ring_dirty = true;
+            }
+            for res in unwanted_staged {
+                self.drop_staged(&res, targets);
+            }
             drop(prune_span);
 
             // Cells whose earlier request never went out are still wanted when
@@ -1871,14 +1996,22 @@ impl WorldStreamer {
             let _span = info_span!("texture_residency").entered();
             self.update_texture_demand(targets.residency);
             let _pump = info_span!("texture_pump").entered();
+            // Staged cells wait for these uploads: behind the loading screen
+            // the pump is held only by its own caps, not by what the
+            // integration left of the frame's budget.
+            let pump_budget = match self.mode {
+                LoadMode::Streaming => targets.upload_budget.remaining(),
+                LoadMode::Loading => u64::MAX,
+            };
             targets.residency.pump(
                 targets.device,
                 targets.queue,
                 targets.texture_array,
-                targets.upload_budget.remaining(),
+                pump_budget,
             )
         };
         targets.upload_budget.add(uploaded);
+        self.broken.extend(targets.residency.take_broken());
         self.trace_textures(targets.residency);
         for texture in targets.residency.take_undemanded() {
             warn!(
@@ -1892,12 +2025,14 @@ impl WorldStreamer {
             );
         }
 
-        StreamUpdate {
+        self.broken.take()?;
+        Ok(StreamUpdate {
             slot_changes: targets.texture_array.take_slot_changes(),
             sim_commands: std::mem::take(&mut self.sim_commands),
             spawn_complete,
             full_ring_complete,
-        }
+            world_complete,
+        })
     }
 
     /// Size and field of view of the screen; takes effect at the next demand
@@ -1911,6 +2046,18 @@ impl WorldStreamer {
     fn set_demand_camera(&mut self, camera: Option<Vec3>) {
         self.demand_view = DemandView::new(camera, self.screen, self.motion.lookahead());
         *self.worker_shared.demand_view.lock().unwrap() = self.demand_view;
+    }
+
+    /// A staged cell's demand, with every texture held at least at `STAGED_DEMAND_FLOOR`.
+    fn note_staged_cell_demand(
+        res: &CellResources,
+        view: &DemandView,
+        residency: &mut TextureResidency,
+    ) {
+        Self::note_cell_demand(res, view, residency);
+        for handle in &res.texture_refs {
+            residency.note_demand(handle.slot, STAGED_DEMAND_FLOOR);
+        }
     }
 
     /// Record every texture of `res` as a user at the strongest demand its
@@ -1992,15 +2139,26 @@ impl WorldStreamer {
         }
     }
 
+    /// Every cell holding texture references, drawn or staged, with what it is.
+    fn cells_with_kind(&self) -> impl Iterator<Item = (&(i32, i32), &'static str, &CellResources)> {
+        let staged = |ring, kind| {
+            self.staging
+                .cells(ring)
+                .iter()
+                .map(move |(grid, cell)| (grid, kind, &cell.res))
+        };
+        self.loaded
+            .iter()
+            .map(|(grid, res)| (grid, "full", res))
+            .chain(self.lod_loaded.iter().map(|(grid, res)| (grid, "lod", res)))
+            .chain(staged(Ring::Full, "staged full"))
+            .chain(staged(Ring::Lod, "staged lod"))
+    }
+
     /// The source placing the strongest demand on `slot`, described for the trace.
     fn demand_driver(&self, view: &DemandView, slot: u32) -> String {
         let mut best: Option<(f32, String)> = None;
-        let cells = self
-            .loaded
-            .iter()
-            .map(|(grid, res)| (grid, "full", res))
-            .chain(self.lod_loaded.iter().map(|(grid, res)| (grid, "lod", res)));
-        for (grid, kind, res) in cells {
+        for (grid, kind, res) in self.cells_with_kind() {
             for source in &res.demand_sources {
                 if !res.texture_refs[source.textures.clone()]
                     .iter()
@@ -2090,12 +2248,7 @@ impl WorldStreamer {
     fn describe_texture_owners(&self, slot: u32) -> String {
         const MAX_OWNERS: usize = 3;
         let mut owners = Vec::new();
-        let cells = self
-            .loaded
-            .iter()
-            .map(|(grid, res)| (grid, "full", res))
-            .chain(self.lod_loaded.iter().map(|(grid, res)| (grid, "lod", res)));
-        'cells: for (grid, kind, res) in cells {
+        'cells: for (grid, kind, res) in self.cells_with_kind() {
             for source in &res.demand_sources {
                 if !res.texture_refs[source.textures.clone()]
                     .iter()
@@ -2130,20 +2283,37 @@ impl WorldStreamer {
         }
     }
 
-    /// Cells for a new demand sweep: full-detail cells nearest the camera
-    /// first, then the LOD cells.
+    /// Cells for a new demand sweep: the staged cells, whose textures hold
+    /// them back, then full-detail cells nearest the camera, then the LOD
+    /// cells.
     fn begin_demand_sweep(&self) -> DemandSweep {
         let mut near: Vec<(i32, i32)> = self.loaded.keys().copied().collect();
         if let Some(camera) = self.demand_view.camera() {
             let (cx, cy) = Self::camera_to_grid(camera);
             near.sort_unstable_by_key(|&(gx, gy)| (gx - cx).abs().max((gy - cy).abs()));
         }
-        let cells = near
-            .into_iter()
-            .map(|grid| (grid, false))
-            .chain(self.lod_loaded.keys().map(|&grid| (grid, true)))
+        let staged = |ring, set| {
+            self.staging
+                .cells(ring)
+                .keys()
+                .map(move |&grid| (grid, set))
+        };
+        let cells = staged(Ring::Full, SweepSet::StagedFull)
+            .chain(staged(Ring::Lod, SweepSet::StagedLod))
+            .chain(near.into_iter().map(|grid| (grid, SweepSet::Full)))
+            .chain(self.lod_loaded.keys().map(|&grid| (grid, SweepSet::Lod)))
             .collect();
         DemandSweep { cells, next: 0 }
+    }
+
+    /// The cell a demand sweep entry names, if it is still there.
+    fn sweep_cell(&self, grid: (i32, i32), set: SweepSet) -> Option<&CellResources> {
+        match set {
+            SweepSet::Full => self.loaded.get(&grid),
+            SweepSet::Lod => self.lod_loaded.get(&grid),
+            SweepSet::StagedFull => self.staging.get(Ring::Full, grid).map(|cell| &cell.res),
+            SweepSet::StagedLod => self.staging.get(Ring::Lod, grid).map(|cell| &cell.res),
+        }
     }
 
     /// Advance the texture demand sweep by at most `DEMAND_SWEEP_BUDGET`. A
@@ -2168,14 +2338,19 @@ impl WorldStreamer {
 
         let _span = info_span!("texture_demand_sweep").entered();
         let started = Instant::now();
-        let Some(sweep) = self.sweep.as_mut() else {
+        let Some(mut sweep) = self.sweep.take() else {
             return;
         };
-        while let Some(&(grid, lod)) = sweep.cells.get(sweep.next) {
+        while let Some(&(grid, set)) = sweep.cells.get(sweep.next) {
             sweep.next += 1;
-            let cells = if lod { &self.lod_loaded } else { &self.loaded };
-            if let Some(res) = cells.get(&grid) {
-                Self::note_cell_demand(res, &view, residency);
+            match (self.sweep_cell(grid, set), set) {
+                (Some(res), SweepSet::StagedFull | SweepSet::StagedLod) => {
+                    Self::note_staged_cell_demand(res, &view, residency);
+                }
+                (Some(res), SweepSet::Full | SweepSet::Lod) => {
+                    Self::note_cell_demand(res, &view, residency);
+                }
+                (None, _) => {}
             }
             if started.elapsed() >= DEMAND_SWEEP_BUDGET {
                 break;
@@ -2183,8 +2358,9 @@ impl WorldStreamer {
         }
         if sweep.next >= sweep.cells.len() {
             residency.finish_demand_sweep();
-            self.sweep = None;
             self.last_demand_pass = Instant::now();
+        } else {
+            self.sweep = Some(sweep);
         }
     }
 
@@ -2250,23 +2426,26 @@ impl WorldStreamer {
         }
     }
 
-    /// Integrate a full-detail cell result. Gated: drops responses whose
-    /// request marker was pruned, that left the ring, or that are already
-    /// resident (double-response after a re-request). Returns true when cell
-    /// membership changed.
-    fn integrate_full(&mut self, result: &mut CellLoadResult, targets: &mut StreamTargets) -> bool {
-        let _span = info_span!("integrate_full").entered();
+    /// Stage a full-detail cell result: build its geometry, take its textures and keep it hidden
+    /// until `promote_ready_cells` finds them ready. Gated: drops responses whose request marker
+    /// was pruned, that left the ring, or that are already resident or staged (double-response
+    /// after a re-request). The request marker stays until the cell is promoted. Returns true
+    /// when the cell was staged.
+    fn stage_full(&mut self, result: &mut CellLoadResult, targets: &mut StreamTargets) -> bool {
+        let _span = info_span!("stage_full").entered();
         let grid = result.grid;
-        if !self.pending_cells.remove(&grid) {
+        if !self.pending_cells.contains(&grid) || self.staging.holds(Ring::Full, grid) {
             return false;
         }
         if !self.in_full_ring(grid) || self.loaded.contains_key(&grid) {
+            self.pending_cells.remove(&grid);
             return false;
         }
 
         // Held, not registered: sync_collision_ring registers it once the
         // collision ring covers this grid (often this same frame).
         let mut res = CellResources {
+            residency: self.new_residency(),
             collider_payload: result
                 .colliders
                 .take()
@@ -2283,14 +2462,208 @@ impl WorldStreamer {
                 self.build_mesh_group(group, &result.textures, &mut res, targets);
             }
         }
-        self.upload_cell_instances(&mut res, targets);
         Self::add_cell_grass(&mut res, &result.grass, &result.grass_models, targets);
-        res.lights = std::mem::take(&mut result.lights);
-        res.shadow_lamps = std::mem::take(&mut result.shadow_lamps);
-        res.light_models = std::mem::take(&mut result.light_models);
+        // Index the dynamic REFRs now: their bodies simulate while the cell is staged, and the
+        // pose readback keeps its rows where the bodies are by the time it is drawn.
+        for entity in res.dynamic_instances.keys() {
+            self.entity_cell.insert(*entity, grid);
+        }
+        let spawn = DeferredSpawn {
+            mesh_groups: result.meshes.len(),
+            lights: std::mem::take(&mut result.lights),
+            shadow_lamps: std::mem::take(&mut result.shadow_lamps),
+            light_models: std::mem::take(&mut result.light_models),
+            addon_lights: result.addon_lights,
+            navmeshes: std::mem::take(&mut result.navmeshes),
+            animated_refs: std::mem::take(&mut result.animated_refs),
+            ragdoll_refs: std::mem::take(&mut result.ragdoll_refs),
+        };
+        index_staged_rows(&mut res);
+        self.stage(Ring::Full, grid, res, spawn, targets);
+        // The staged cell's static collision registers at once.
+        self.collision_ring_dirty = true;
+        true
+    }
+
+    /// Stage a LOD cell result, same gating as `stage_full`. Returns true when the cell was
+    /// staged.
+    fn stage_lod(&mut self, result: &mut CellLoadResult, targets: &mut StreamTargets) -> bool {
+        let _span = info_span!("stage_lod").entered();
+        let grid = result.grid;
+        if let Some(reason) = result.load_failure.take() {
+            self.lod_pending_cells.remove(&grid);
+            self.broken.push(BrokenAsset::LodCell { grid, reason });
+            return false;
+        }
+        if !self.lod_pending_cells.contains(&grid) || self.staging.holds(Ring::Lod, grid) {
+            return false;
+        }
+        if !self.in_lod_ring(grid) || self.lod_loaded.contains_key(&grid) {
+            self.lod_pending_cells.remove(&grid);
+            return false;
+        }
+
+        let mut res = CellResources {
+            residency: self.new_residency(),
+            ..CellResources::default()
+        };
+        if let Some(cpu) = result.terrain.take() {
+            self.build_terrain_instance(&cpu, true, &result.textures, &mut res, targets);
+        }
+        for group in &result.meshes {
+            self.build_mesh_group(group, &result.textures, &mut res, targets);
+        }
+        let spawn = DeferredSpawn {
+            mesh_groups: result.meshes.len(),
+            ..DeferredSpawn::default()
+        };
+        self.stage(Ring::Lod, grid, res, spawn, targets);
+        true
+    }
+
+    /// A residency id no cell had before: lamp keys and the grass stage tell integrations apart
+    /// by it.
+    fn new_residency(&mut self) -> u64 {
+        self.next_residency += 1;
+        self.next_residency
+    }
+
+    /// Every texture a cell is drawn with: its own and its grass's.
+    fn cell_textures<'a>(
+        res: &'a CellResources,
+        grass: &'a GrassStage,
+    ) -> impl Iterator<Item = TextureHandle> + 'a {
+        let grass_textures = res
+            .has_grass
+            .then(|| grass.cell_textures(res.residency))
+            .into_iter()
+            .flatten();
+        res.texture_refs.iter().copied().chain(grass_textures)
+    }
+
+    /// Hand a built cell to the staging. Its textures get their demand now, so the residency
+    /// loads the ones still missing.
+    fn stage(
+        &mut self,
+        ring: Ring,
+        grid: (i32, i32),
+        res: CellResources,
+        spawn: DeferredSpawn,
+        targets: &mut StreamTargets,
+    ) {
+        Self::note_staged_cell_demand(&res, &self.demand_view, targets.residency);
+        targets.residency.end_demand_round();
+        self.staging.stage(ring, grid, res, spawn);
+    }
+
+    /// Promote the staged cells whose textures are all loaded and bound, oldest first, within
+    /// the frame's integration budget. A cell still waiting after `TEXTURE_READY_DEADLINE` is
+    /// reported as broken. Returns how many cells it promoted.
+    fn promote_ready_cells(
+        &mut self,
+        targets: &mut StreamTargets,
+        cell_cap: usize,
+        started: Instant,
+    ) -> usize {
+        let _span = info_span!("promote_ready_cells").entered();
+        let judgement = {
+            let residency = &*targets.residency;
+            let array = &*targets.texture_array;
+            let grass = &*targets.grass;
+            self.staging.judge(|res, waited| {
+                staging::verdict(
+                    Self::cell_textures(res, grass)
+                        .map(|handle| TextureReadiness::of_handle(residency, array, handle)),
+                    waited,
+                )
+            })
+        };
+        self.waiting_only_for_binding = judgement.waiting_only_for_binding;
+        for (ring, grid) in judgement.overdue {
+            let overdue = self.describe_overdue(ring, grid, targets);
+            self.broken.push(overdue);
+        }
+
+        let mut promoted = 0usize;
+        for (ring, grid) in judgement.ready {
+            if integration_must_stop(
+                self.mode,
+                &IntegrationProgress {
+                    integrated: promoted,
+                    cell_cap,
+                    bytes_exhausted: targets.upload_budget.exhausted(),
+                    elapsed: started.elapsed(),
+                },
+            ) {
+                break;
+            }
+            let Some(cell) = self.staging.take(ring, grid) else {
+                continue;
+            };
+            match ring {
+                Ring::Full => {
+                    self.promote_full(grid, cell, targets);
+                    self.full_spawn_rate.record();
+                }
+                Ring::Lod => {
+                    self.promote_lod(grid, cell, targets);
+                    self.lod_spawn_rate.record();
+                }
+            }
+            promoted += 1;
+        }
+        promoted
+    }
+
+    /// The broken-asset report of a staged cell whose textures did not get ready in time.
+    fn describe_overdue(
+        &self,
+        ring: Ring,
+        grid: (i32, i32),
+        targets: &StreamTargets,
+    ) -> BrokenAsset {
+        let cell = self
+            .staging
+            .get(ring, grid)
+            .expect("an overdue cell is staged");
+        let waiting = Self::cell_textures(&cell.res, targets.grass)
+            .filter_map(|handle| {
+                match TextureReadiness::of_handle(targets.residency, targets.texture_array, handle)
+                {
+                    TextureReadiness::Ready => None,
+                    TextureReadiness::Unbound => Some(format!(
+                        "{} (loaded, not yet in the material bind group)",
+                        targets.residency.describe(handle)
+                    )),
+                    TextureReadiness::Loading => Some(targets.residency.describe(handle)),
+                }
+            })
+            .collect();
+        BrokenAsset::TexturesOverdue {
+            grid,
+            lod: ring == Ring::Lod,
+            waited: cell.waited(),
+            waiting,
+        }
+    }
+
+    /// Make a staged full-detail cell visible: upload its instances and lights, hand over its
+    /// grass, navigation meshes and dynamic objects, and retire the LOD twin it replaces.
+    fn promote_full(&mut self, grid: (i32, i32), cell: StagedCell, targets: &mut StreamTargets) {
+        let _span = info_span!("promote_full").entered();
+        let removed = self.pending_cells.remove(&grid);
+        debug_assert!(removed, "a staged cell keeps its request marker");
+        let StagedCell { mut res, spawn, .. } = cell;
+        self.upload_cell_instances(&mut res, targets);
+        if res.has_grass {
+            targets.grass.reveal_cell(res.residency);
+        }
+        res.lights = spawn.lights;
+        res.shadow_lamps = spawn.shadow_lamps;
+        res.light_models = spawn.light_models;
         self.upload_cell_lights(&mut res, targets);
-        self.log_addon_attachments(&res, result.addon_lights);
-        res.nav_meshes = self.nav.integrate(std::mem::take(&mut result.navmeshes));
+        self.log_addon_attachments(&res, spawn.addon_lights);
+        res.nav_meshes = self.nav.integrate(spawn.navmeshes);
 
         // Promotion: this grid was resident as LOD — swap the LOD twin out.
         if let Some(old) = self.lod_loaded.remove(&grid) {
@@ -2301,80 +2674,102 @@ impl WorldStreamer {
             "Cell ({}, {}) ready: {} mesh groups, {} placed lights ({} shadow-type)",
             grid.0,
             grid.1,
-            result.meshes.len(),
+            spawn.mesh_groups,
             res.lights.len(),
             res.shadow_lamps.len()
         );
-        self.marker_instance_count += res.marker_count;
-        self.fx_instance_count += res.fx_count;
-        for bucket in 0..DRAW_BUCKET_COUNT {
-            self.bucket_potential_total[bucket] += res.bucket_potential[bucket];
-        }
-        // Index this cell's dynamic REFRs so the pose readback finds them O(1).
-        for entity in res.dynamic_instances.keys() {
-            self.entity_cell.insert(*entity, grid);
-        }
-        res.animated_entities = result
-            .animated_refs
-            .iter()
-            .map(|refr| refr.entity)
-            .collect();
+        self.add_cell_tallies(&res);
+        res.animated_entities = spawn.animated_refs.iter().map(|refr| refr.entity).collect();
         self.animated_events.extend(
-            result
+            spawn
                 .animated_refs
-                .drain(..)
+                .into_iter()
                 .map(AnimatedObjectEvent::Added),
         );
-        res.ragdoll_entities = result.ragdoll_refs.iter().map(|refr| refr.entity).collect();
+        res.ragdoll_entities = spawn.ragdoll_refs.iter().map(|refr| refr.entity).collect();
         self.ragdoll_events
-            .extend(result.ragdoll_refs.drain(..).map(RagdollEvent::Added));
-        Self::note_cell_demand(&res, &self.demand_view, targets.residency);
-        targets.residency.end_demand_round();
+            .extend(spawn.ragdoll_refs.into_iter().map(RagdollEvent::Added));
         self.loaded.insert(grid, res);
         self.mark_loaded_changed();
-        true
     }
 
-    /// Integrate a LOD cell result, same gating as `integrate_full`. Handles
-    /// demotion: a previously full-detail cell is released when its LOD
-    /// replacement arrives.
-    fn integrate_lod(&mut self, result: &mut CellLoadResult, targets: &mut StreamTargets) -> bool {
-        let _span = info_span!("integrate_lod").entered();
-        let grid = result.grid;
-        if !self.lod_pending_cells.remove(&grid) {
-            return false;
-        }
-        if !self.in_lod_ring(grid) || self.lod_loaded.contains_key(&grid) {
-            return false;
-        }
-
-        let mut res = CellResources::default();
-
-        if let Some(cpu) = result.terrain.take() {
-            self.build_terrain_instance(&cpu, true, &result.textures, &mut res, targets);
-        }
-        for group in &result.meshes {
-            self.build_mesh_group(group, &result.textures, &mut res, targets);
-        }
+    /// Make a staged LOD cell visible. Handles demotion: a previously full-detail cell is
+    /// released only now that its LOD replacement is drawn.
+    fn promote_lod(&mut self, grid: (i32, i32), cell: StagedCell, targets: &mut StreamTargets) {
+        let _span = info_span!("promote_lod").entered();
+        let removed = self.lod_pending_cells.remove(&grid);
+        debug_assert!(removed, "a staged cell keeps its request marker");
+        let mut res = cell.res;
         self.upload_cell_instances(&mut res, targets);
 
         // Demotion: full-detail twin leaves only now that its replacement is
-        // ready. Its colliders, if it still had any registered, are
+        // drawn. Its colliders, if it still had any registered, are
         // deregistered by sync_collision_ring when it leaves `loaded`.
         if let Some(old) = self.loaded.remove(&grid) {
             self.mark_loaded_changed();
             self.retire_cell(&old, targets);
         }
 
+        self.add_cell_tallies(&res);
+        self.lod_loaded.insert(grid, res);
+    }
+
+    /// Roll a cell that became visible into the resident tallies; `finish_retire` rolls it out.
+    fn add_cell_tallies(&mut self, res: &CellResources) {
         self.marker_instance_count += res.marker_count;
         self.fx_instance_count += res.fx_count;
         for bucket in 0..DRAW_BUCKET_COUNT {
             self.bucket_potential_total[bucket] += res.bucket_potential[bucket];
         }
-        Self::note_cell_demand(&res, &self.demand_view, targets.residency);
-        targets.residency.end_demand_round();
-        self.lod_loaded.insert(grid, res);
-        true
+    }
+
+    /// Release a staged cell that is no longer wanted, with its hidden grass. It was never drawn,
+    /// so it holds no slab ranges or navigation meshes and is not in the tallies.
+    fn drop_staged(&mut self, res: &CellResources, targets: &mut StreamTargets) {
+        self.demand_stale = true;
+        for entity in res.dynamic_instances.keys() {
+            self.entity_cell.remove(entity);
+        }
+        if res.has_grass {
+            with_grass_gpu(targets, |grass, gpu| grass.remove_cell(res.residency, gpu));
+        }
+        Self::release_cell_buffers(res, targets);
+    }
+
+    /// Whether every full-detail cell of the ring has arrived from the workers and is at least
+    /// staged, so its static collision is registered; its textures may still load.
+    fn full_ring_integrated(&self) -> bool {
+        let staged = self.staging.len(Ring::Full);
+        self.buffered_full.is_empty()
+            && self.pending_cells.len() == staged
+            && (staged > 0 || !self.loaded.is_empty())
+    }
+
+    /// Every cell of both rings is drawn: none is still requested, buffered or staged (a staged
+    /// cell keeps its request marker).
+    fn rings_drawn(&self) -> bool {
+        self.pending_cells.is_empty()
+            && self.lod_pending_cells.is_empty()
+            && self.buffered_full.is_empty()
+            && self.buffered_lod.is_empty()
+            && !self.loaded.is_empty()
+    }
+
+    /// Every requested LOD cell has arrived; some may still wait in staging.
+    fn lod_ring_integrated(&self) -> bool {
+        self.buffered_lod.is_empty() && self.lod_pending_cells.len() == self.staging.len(Ring::Lod)
+    }
+
+    /// Whether `grid` holds a full-detail cell, drawn or staged.
+    fn holds_full_cell(&self, grid: (i32, i32)) -> bool {
+        self.loaded.contains_key(&grid) || self.staging.holds(Ring::Full, grid)
+    }
+
+    /// The full-detail cell at `grid`, drawn or staged.
+    fn full_cell(&self, grid: (i32, i32)) -> Option<&CellResources> {
+        self.loaded
+            .get(&grid)
+            .or_else(|| self.staging.get(Ring::Full, grid).map(|cell| &cell.res))
     }
 
     /// Register/deregister cell colliders so exactly the resident full cells
@@ -2412,7 +2807,7 @@ impl WorldStreamer {
         let stale: Vec<(i32, i32)> = self
             .collision_registered
             .iter()
-            .filter(|g| !in_ring(g) || !self.loaded.contains_key(g))
+            .filter(|g| !in_ring(g) || !self.holds_full_cell(**g))
             .copied()
             .collect();
         let mut ring_changed = !stale.is_empty();
@@ -2428,7 +2823,7 @@ impl WorldStreamer {
                 if self.collision_registered.contains(&grid) {
                     continue;
                 }
-                let Some(res) = self.loaded.get(&grid) else {
+                let Some(res) = self.full_cell(grid) else {
                     continue;
                 };
                 let Some((batch, baked)) = &res.collider_payload else {
@@ -2461,7 +2856,7 @@ impl WorldStreamer {
     /// Retire a resident cell: roll its marker tally out of the running
     /// total, then release its GPU resources. Every removal from
     /// `loaded`/`lod_loaded` must come through here so the tally balances
-    /// the `+=` in `integrate_full/integrate_lod`.
+    /// the `+=` in `add_cell_tallies`.
     fn retire_cell(&mut self, res: &CellResources, targets: &mut StreamTargets) {
         self.forget_cell_entities(res);
         self.finish_retire(res, targets);
@@ -2543,8 +2938,8 @@ impl WorldStreamer {
         Self::release_cell(res, targets);
     }
 
-    /// Hands the cell's grass to the grass stage, keyed by the cell's residency id.
-    /// The buffers it creates count against the frame's upload budget.
+    /// Hands the cell's grass to the grass stage, keyed by the cell's residency id, hidden until
+    /// the cell is promoted. The buffers it creates count against the frame's upload budget.
     fn add_cell_grass(
         res: &mut CellResources,
         grass: &[CellGrass],
@@ -2589,7 +2984,7 @@ impl WorldStreamer {
         if let Some(key) = &res.terrain_mega_key {
             targets.terrain_mega.release(key);
         }
-        if let Some(key) = &res.splat_key {
+        for key in &res.splat_keys {
             targets.splatmaps.release(key);
         }
         for &handle in &res.texture_refs {
@@ -2607,8 +3002,6 @@ impl WorldStreamer {
     /// a range.
     fn upload_cell_instances(&mut self, res: &mut CellResources, targets: &mut StreamTargets) {
         let _span = info_span!("upload_cell_instances").entered();
-        self.next_residency += 1;
-        res.residency = self.next_residency;
         res.group_base = group_base_offsets(&res.object_groups);
         res.caster_bounds = caster_bounds(res);
         if let Some(bounds) = res.caster_bounds {
@@ -2782,7 +3175,12 @@ impl WorldStreamer {
     /// instance copies. The caller must follow with `repack_instances` to push
     /// the patched copies to the GPU.
     fn patch_object_mega_offsets(&mut self, object_mega: &MegaBuffer) {
-        for res in self.loaded.values_mut().chain(self.lod_loaded.values_mut()) {
+        for res in self
+            .loaded
+            .values_mut()
+            .chain(self.lod_loaded.values_mut())
+            .chain(self.staging.resources_mut())
+        {
             for group in &mut res.object_groups {
                 if let Some(slot) = object_mega.slot(&group.mega_key) {
                     for inst in &mut group.instances {
@@ -2798,7 +3196,12 @@ impl WorldStreamer {
     /// Terrain twin of `patch_object_mega_offsets`; the caller must follow
     /// with `rebuild_terrain_instances`.
     fn patch_terrain_mega_offsets(&mut self, terrain_mega: &MegaBuffer) {
-        for res in self.loaded.values_mut().chain(self.lod_loaded.values_mut()) {
+        for res in self
+            .loaded
+            .values_mut()
+            .chain(self.lod_loaded.values_mut())
+            .chain(self.staging.resources_mut())
+        {
             if let (Some(key), Some(t)) = (&res.terrain_mega_key, res.terrain.as_mut())
                 && let Some(slot) = terrain_mega.slot(key)
             {
@@ -2823,7 +3226,7 @@ impl WorldStreamer {
         path: &str,
         fallback_slot: u32,
         srgb: bool,
-        preloaded: &HashMap<String, Option<Arc<TexturePayload>>>,
+        preloaded: &Prereads,
         res: &mut CellResources,
         targets: &mut StreamTargets,
     ) -> u32 {
@@ -2832,9 +3235,22 @@ impl WorldStreamer {
             return handle.slot;
         }
         let payload = match preloaded.get(path) {
-            Some(Some(payload)) => Some(payload),
-            // The worker already tried, failed and logged the cause.
-            Some(None) => return fallback_slot,
+            Some(Ok(payload)) => Some(payload),
+            // The worker already tried and warned about the missing file.
+            Some(Err(ReadFailure::Missing)) => return fallback_slot,
+            Some(Err(ReadFailure::Broken(reason))) => {
+                self.broken.push(BrokenAsset::Texture {
+                    path: path.to_owned(),
+                    reason: reason.clone(),
+                });
+                return fallback_slot;
+            }
+            Some(Err(ReadFailure::Transient(reason))) => {
+                debug!(
+                    "texture '{path}' pre-read failed for a passing reason, the residency reads it again: {reason}"
+                );
+                None
+            }
             None => None,
         };
         let _span = info_span!("texture_admit").entered();
@@ -2870,7 +3286,14 @@ impl WorldStreamer {
                     drained = true;
                     self.drain_retire_queue(targets, std::time::Duration::MAX);
                 }
-                Admission::Exhausted | Admission::Failed => return fallback_slot,
+                Admission::Failed(error) => {
+                    self.broken.push(BrokenAsset::Texture {
+                        path: path.to_owned(),
+                        reason: format!("upload rejected: {error}"),
+                    });
+                    return fallback_slot;
+                }
+                Admission::Exhausted => return fallback_slot,
             }
         }
     }
@@ -2878,7 +3301,7 @@ impl WorldStreamer {
     fn acquire_material_slots(
         &mut self,
         mat: &SubMeshMaterial,
-        preloaded: &HashMap<String, Option<Arc<TexturePayload>>>,
+        preloaded: &Prereads,
         res: &mut CellResources,
         targets: &mut StreamTargets,
     ) -> MaterialSlots {
@@ -2995,7 +3418,7 @@ impl WorldStreamer {
     fn build_mesh_group(
         &mut self,
         group: &PreparedMeshGroup,
-        preloaded: &HashMap<String, Option<Arc<TexturePayload>>>,
+        preloaded: &Prereads,
         res: &mut CellResources,
         targets: &mut StreamTargets,
     ) {
@@ -3171,7 +3594,7 @@ impl WorldStreamer {
         &mut self,
         cpu: &terrain::TerrainCellCpu,
         lod: bool,
-        preloaded: &HashMap<String, Option<Arc<TexturePayload>>>,
+        preloaded: &Prereads,
         res: &mut CellResources,
         targets: &mut StreamTargets,
     ) {
@@ -3203,39 +3626,43 @@ impl WorldStreamer {
         let (bounds_min, bounds_max) = cpu.world_bounds();
         let world_per_uv = cpu.world_per_uv();
         let texture_start = res.texture_refs.len();
-        let (splat_layer, layer_indices, flags) = if let Some(tile) = &cpu.baked_tile {
+        let (splat_layers, layer_indices, flags) = if let Some(tile) = &cpu.baked_tile {
             // Baked level-4 LOD tile: one shared texture (up to 16 cells per
             // tile via the refcount), no splat slot consumed — the shader
             // ignores splat weights when TERRAIN_FLAGS_BAKED is set. A load
             // failure here, despite the worker's existence check, leaves the
             // magenta FALLBACK_SLOT as the deliberate last resort.
             let slot = self.acquire_texture(tile, FALLBACK_SLOT, true, preloaded, res, targets);
+            let mut layer_indices = [FALLBACK_SLOT; terrain::MAX_LAYERS];
+            layer_indices[0] = slot;
             (
-                SPLAT_FALLBACK_LAYER,
-                [slot, FALLBACK_SLOT, FALLBACK_SLOT, FALLBACK_SLOT],
+                [SPLAT_FALLBACK_LAYER, NO_SPLAT_LAYER],
+                layer_indices,
                 [TERRAIN_FLAGS_BAKED, 0, 0, 0],
             )
         } else {
             // Splat data is identical for full and LOD variants — shared key;
             // the refcount covers the promotion/demotion overlap window.
-            let splat_key = format!("splatmap_{}_{}", cpu.grid_x, cpu.grid_y);
-            let mut splat_layer =
-                targets
+            let mut splat_layers = [SPLAT_FALLBACK_LAYER, NO_SPLAT_LAYER];
+            for (i, pixels) in cpu.splatmaps.iter().enumerate() {
+                let splat_key = format!("splatmap_{}_{}_{i}", cpu.grid_x, cpu.grid_y);
+                let mut layer = targets
                     .splatmaps
-                    .acquire(&splat_key, &cpu.splatmap_data, targets.queue);
-            if splat_layer == SPLAT_FALLBACK_LAYER && !self.retire_queue.is_empty() {
-                self.drain_retire_queue(targets, std::time::Duration::MAX);
-                splat_layer =
-                    targets
+                    .acquire(&splat_key, &pixels[..], targets.queue);
+                if layer == SPLAT_FALLBACK_LAYER && !self.retire_queue.is_empty() {
+                    self.drain_retire_queue(targets, std::time::Duration::MAX);
+                    layer = targets
                         .splatmaps
-                        .acquire(&splat_key, &cpu.splatmap_data, targets.queue);
-            }
-            if splat_layer != SPLAT_FALLBACK_LAYER {
-                res.splat_key = Some(splat_key);
+                        .acquire(&splat_key, &pixels[..], targets.queue);
+                }
+                if layer != SPLAT_FALLBACK_LAYER {
+                    res.splat_keys.push(splat_key);
+                    splat_layers[i] = layer;
+                }
             }
 
             // Layer textures
-            let mut layer_indices = [0u32; 4];
+            let mut layer_indices = [0u32; terrain::MAX_LAYERS];
             for (i, path_opt) in cpu.texture_paths.iter().enumerate() {
                 if let Some(path) = path_opt {
                     // Key construction pinned to the worker's pre-read
@@ -3252,7 +3679,7 @@ impl WorldStreamer {
                     );
                 }
             }
-            (splat_layer, layer_indices, [0u32; 4])
+            (splat_layers, layer_indices, [0u32; 4])
         };
 
         if res.texture_refs.len() > texture_start {
@@ -3285,8 +3712,23 @@ impl WorldStreamer {
             index_offset: slot.index_offset,
             index_count: slot.index_count,
             vertex_offset: slot.vertex_offset,
-            splat_layer,
-            layer_indices,
+            splat_layer: splat_layers[0],
+            layer_indices: [
+                layer_indices[0],
+                layer_indices[1],
+                layer_indices[2],
+                layer_indices[3],
+            ],
+            splat_layer_hi: splat_layers[1],
+            _pad2: 0,
+            _pad3: 0,
+            _pad4: 0,
+            layer_indices_hi: [
+                layer_indices[4],
+                layer_indices[5],
+                layer_indices[6],
+                layer_indices[7],
+            ],
             flags,
         });
     }
@@ -3342,6 +3784,13 @@ impl WorldStreamer {
     /// frame in `worst_frame_ms`.
     pub fn suspend_frame_meter(&mut self) {
         self.load_frames.suspend();
+        self.staging.suspend();
+    }
+
+    /// Whether the material bind group should be rebuilt now rather than after its debounce: a
+    /// load behind the loading screen has staged cells waiting for nothing else.
+    pub(crate) fn wants_views_bound_now(&self) -> bool {
+        self.mode == LoadMode::Loading && self.waiting_only_for_binding
     }
 
     /// Arm the spawn-completion instrumentation (the timer + per-ring finish
@@ -3350,8 +3799,8 @@ impl WorldStreamer {
     /// (`enter_interior`) — so the auto-drop back to Streaming fires for each.
     fn arm_spawn_timer(&mut self) {
         self.spawn_timer = Some(std::time::Instant::now());
-        self.spawn_full_done = None;
-        self.spawn_lod_done = None;
+        self.spawn_full = RingTimes::default();
+        self.spawn_lod = RingTimes::default();
         self.full_ring_signal.arm();
         self.spawn_progress_tick = 0;
         self.load_frames.reset();
@@ -3471,6 +3920,10 @@ impl WorldStreamer {
         for (_, res) in self.lod_loaded.drain() {
             Self::release_cell_buffers(&res, targets);
         }
+        for res in self.staging.drain_all() {
+            Self::release_cell_buffers(&res, targets);
+        }
+        self.waiting_only_for_binding = false;
         self.marker_instance_count = 0;
         self.fx_instance_count = 0;
         self.bucket_potential_total = [0; DRAW_BUCKET_COUNT];
@@ -3520,13 +3973,16 @@ impl WorldStreamer {
     /// in the collision ring however the player moves. Returns the player start
     /// position (`start_world_pos`); the caller applies the queued collider
     /// removals + `flush_colliders`, enables sim interior mode, then teleports.
+    ///
+    /// Fails when the cell request cannot be sent. The old content is already torn down
+    /// by then and no cell is pending, so the caller must not teleport into the void.
     pub(crate) fn enter_interior(
         &mut self,
         cell_form_key: &str,
         grid: (i32, i32),
         start_world_pos: Vec3,
         targets: &mut StreamTargets,
-    ) -> Vec3 {
+    ) -> Result<Vec3, InteriorRequestError> {
         self.teardown_resident(targets);
         self.interior_cell = Some(cell_form_key.to_string());
         self.set_demand_camera(None);
@@ -3540,19 +3996,20 @@ impl WorldStreamer {
 
         // One frozen cell, requested directly by form_key: no ring, no LOD, and
         // no worldspace-persistent prefetch (interiors have none).
-        self.pending_cells.insert(grid);
-        let _ = self.db_worker_tx.send(CellRequest::Interior {
-            cell_form_key: cell_form_key.to_string(),
+        request_interior(
+            &self.db_worker_tx,
+            &mut self.pending_cells,
+            cell_form_key,
             grid,
-            epoch: self.epoch,
-        });
+            self.epoch,
+        )?;
 
         info!(
             "Interior -> {} (epoch {}), start cell ({}, {})",
             cell_form_key, self.epoch, grid.0, grid.1
         );
 
-        start_world_pos
+        Ok(start_world_pos)
     }
 
     /// Whether a single interior cell is loaded in place of a worldspace.
@@ -3827,6 +4284,41 @@ impl WorldStreamer {
         self.lod_pending_cells.len()
     }
 
+    /// The drawn cells, of either ring, that use a texture which is not loaded and bound.
+    pub(crate) fn drawn_cells_with_unready_textures(
+        &self,
+        residency: &TextureResidency,
+        array: &TextureArray,
+        grass: &GrassStage,
+    ) -> Vec<Draw> {
+        let unready = |res: &CellResources| {
+            Self::cell_textures(res, grass).any(|handle| {
+                TextureReadiness::of_handle(residency, array, handle) != TextureReadiness::Ready
+            })
+        };
+        let full = self
+            .loaded
+            .iter()
+            .filter(|(_, res)| unready(res))
+            .map(|(&grid, _)| Draw::FullCell(grid));
+        let lod = self
+            .lod_loaded
+            .iter()
+            .filter(|(_, res)| unready(res))
+            .map(|(&grid, _)| Draw::LodCell(grid));
+        full.chain(lod).collect()
+    }
+
+    /// Whether some cells are loaded and no cell of either ring is still loading or waiting to be
+    /// integrated.
+    pub(crate) fn fully_streamed(&self) -> bool {
+        !self.loaded.is_empty()
+            && self.pending_cells.is_empty()
+            && self.lod_pending_cells.is_empty()
+            && self.buffered_full.is_empty()
+            && self.buffered_lod.is_empty()
+    }
+
     /// (full, LOD) integration rates in cells/s, averaged over the last
     /// 0.5 s (see `SpawnRate`). `&mut` because reading prunes aged entries.
     pub(crate) fn spawn_rates(&mut self) -> (f32, f32) {
@@ -3882,7 +4374,7 @@ impl WorldStreamer {
 
     /// Mode switches are safe mid-stream: workers check the gate between
     /// cells, and in-flight responses are gated/dropped by
-    /// `integrate_full/integrate_lod` like any other stale result.
+    /// `stage_full/stage_lod` like any other stale result.
     fn apply_mode(&mut self, mode: LoadMode) {
         self.mode = mode;
         let active = match mode {
@@ -4019,6 +4511,9 @@ struct WorkerShared {
     /// collision". The bulky shapes are read lazily from the loose sidecar only
     /// when a cold `.colbin` miss forces a bake.
     collision_manifest: HashMap<String, CollisionMeta>,
+    /// Which collision layers never touch the player; static sidecar shapes on
+    /// those layers are left out of the bake.
+    player_layers: PlayerCollisionLayers,
     /// `TextureArray`'s path mirror (see `TextureArray::resident_paths`):
     /// workers skip pre-reading DDS files that are already GPU-resident.
     resident_textures: Arc<Mutex<HashSet<String>>>,
@@ -4028,9 +4523,9 @@ struct WorkerShared {
     /// resolution.
     demand_view: Mutex<DemandView>,
     /// Path -> DDS header. Present entries weigh one (LRU-bounded by
-    /// `LAYOUT_CACHE_CAP`); `None` weighs nothing, is pinned,
-    /// and records missing/unreadable files so they are probed once.
-    layout_cache: SharedCache<String, Option<Arc<texture::TextureLayout>>>,
+    /// `LAYOUT_CACHE_CAP`); a failure weighs nothing, is pinned,
+    /// and records missing or broken files so they are probed once.
+    layout_cache: SharedCache<String, Result<Arc<texture::TextureLayout>, ReadFailure>>,
     /// Path -> parsed submeshes. Failed loads cache as empty vecs so broken
     /// meshes aren't re-parsed per cell.
     mesh_cache: SharedCache<String, Arc<PreparedModel>>,
@@ -4038,18 +4533,18 @@ struct WorkerShared {
     /// `.colbin` miss forces a bake; `None` records missing/unreadable sidecars
     /// so absent files aren't re-probed.
     collider_cache: SharedCache<String, Option<SidecarData>>,
-    /// (Texture path, first mip) -> the mips from there down; `None` records
-    /// unreadable files — they weigh zero bytes and never evict.
+    /// (Texture path, first mip) -> the mips from there down; a failure records
+    /// a missing or broken file — it weighs zero bytes and never evicts.
     ///
     /// This complements (not replaces) the resident-set check: the resident
     /// set dedups against what's already on the GPU; this cache dedups
     /// across cells in flight together — a boundary crossing requests a
     /// whole row of cells sharing ground/rock textures, none resident yet.
-    dds_cache: SharedCache<(String, u32), Option<Arc<TexturePayload>>>,
+    dds_cache: SharedCache<(String, u32), Result<Arc<TexturePayload>, ReadFailure>>,
     bake_cache: crate::sim::bake::ShapeBakeCache,
     /// Baked terrain-LOD tile lookups, memoized for the pool's lifetime: one
     /// DB round-trip per worldspace and one fs metadata call per tile.
-    ws_editor_ids: Mutex<HashMap<String, Option<String>>>,
+    ws_editor_ids: Mutex<HashMap<String, Vec<String>>>,
     tile_exists: Mutex<HashMap<String, bool>>,
     /// Worldspace persistent REFRs (WRLD.TopCell) are unreachable through
     /// the grid query — loaded once per worldspace, bucketed by the grid
@@ -4315,9 +4810,13 @@ fn prepare_submesh(
 /// Loose-sidecar shape loader: `foo.glb` -> `{asset_root}/foo.col.json`. `None`
 /// means no collider (missing or unparseable sidecar). Read only on a cold
 /// `.colbin` miss.
-fn load_collider_sidecar(asset_root: &str, path: &str) -> Option<SidecarData> {
+fn load_collider_sidecar(
+    asset_root: &str,
+    path: &str,
+    layers: &PlayerCollisionLayers,
+) -> Option<SidecarData> {
     let stem = path.strip_suffix(".glb")?;
-    load_sidecar_file(&format!("{asset_root}/{stem}.col.json"))
+    load_sidecar_file(&format!("{asset_root}/{stem}.col.json"), layers)
 }
 
 /// `foo.glb` -> `{asset_root}/foo.col.json`, the sidecar carrying the ragdoll bodies.
@@ -4333,21 +4832,33 @@ fn ragdoll_sidecar_path(asset_root: &str, path: &str) -> Option<String> {
 /// so an empty result here means the sidecar is missing/unreadable/degenerate
 /// (manifest⇄disk drift) — warned once rather than silently dropping the
 /// collider, since the static collider path is otherwise silent.
+///
+/// Dynamic meshes keep every shape: their bodies also collide with the world
+/// and each other, so only static geometry is thinned by player layers.
 fn load_collision_shapes(shared: &WorkerShared, path: &str) -> Arc<Vec<PartShape>> {
     let key = [path.to_string()];
-    let shapes = shared
+    let layers = if is_havok_dynamic(shared, path) {
+        &PlayerCollisionLayers::all_solid()
+    } else {
+        &shared.player_layers
+    };
+    let sidecar = shared
         .collider_cache
         .resolve(
             &key,
-            |p| load_collider_sidecar(&shared.asset_root, p),
+            |p| load_collider_sidecar(&shared.asset_root, p, layers),
             |_| 1,
         )
         .get(path)
         .cloned()
-        .flatten()
-        .map(|sd| sd.shapes)
-        .unwrap_or_default();
-    if shapes.is_empty() {
+        .flatten();
+    let dropped_for_player = sidecar.as_ref().map_or(0, |sd| sd.dropped_for_player);
+    let shapes = sidecar.map(|sd| sd.shapes).unwrap_or_default();
+    if shapes.is_empty() && dropped_for_player > 0 {
+        tracing::debug!(
+            "collision: every shape of {path} ({dropped_for_player}) sits on a layer that never touches the player; no collider"
+        );
+    } else if shapes.is_empty() {
         crate::utils::warn_once(path, || {
             format!(
                 "collision: manifest lists collision for {path} but its sidecar loaded no \
@@ -4356,6 +4867,15 @@ fn load_collision_shapes(shared: &WorkerShared, path: &str) -> Arc<Vec<PartShape
         });
     }
     bind_shapes_to_joints(shared, path, shapes)
+}
+
+/// The shape bake cache of an install, keyed by the layer table its sidecars are filtered with.
+fn new_bake_cache(
+    asset_root: &str,
+    layers: &PlayerCollisionLayers,
+) -> crate::sim::bake::ShapeBakeCache {
+    crate::sim::bake::ShapeBakeCache::new(crate::sim::bake::physics_cache_dir(asset_root))
+        .with_player_layers(layers)
 }
 
 fn bake_cell_colliders(
@@ -4374,9 +4894,13 @@ fn bake_cell_colliders(
 /// (logged once) when the mesh has no usable collision: its water is drawn
 /// but covers no position for height queries.
 fn load_water_volume(shared: &WorkerShared, path: &str) -> Option<Arc<VolumeShapes>> {
-    let volume = load_collider_sidecar(&shared.asset_root, path)
-        .and_then(|sidecar| VolumeShapes::from_sidecar(&sidecar.shapes, path))
-        .map(Arc::new);
+    let volume = load_collider_sidecar(
+        &shared.asset_root,
+        path,
+        &PlayerCollisionLayers::all_solid(),
+    )
+    .and_then(|sidecar| VolumeShapes::from_sidecar(&sidecar.shapes, path))
+    .map(Arc::new);
     if volume.is_none() {
         crate::utils::warn_once(&format!("water-volume:{path}"), || {
             format!(
@@ -4605,6 +5129,12 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
         ragdoll_refs: Vec::new(),
         textures: HashMap::new(),
         navmeshes: Vec::new(),
+        load_failure: None,
+    };
+    let fail_lod = |result: &mut CellLoadResult, reason: String| {
+        if is_lod {
+            result.load_failure = Some(reason);
+        }
     };
 
     match &request {
@@ -4619,12 +5149,15 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
             let (gx, gy, worldspace) = (*gx, *gy, worldspace.as_str());
             // Built alongside the render data for full cells, packed into
             // result.colliders before every send.
-            let mut terrain_collider: Option<TerrainColliderSpec> = None;
+            let mut terrain_collider;
 
             let cell = match db.get_cell(gx, gy, worldspace) {
                 Ok(c) => c,
                 Err(e) => {
                     warn!("Cell ({}, {}) not found: {}", gx, gy, e);
+                    if !is_absent_row(&e) {
+                        fail_lod(&mut result, format!("the cell query failed: {e:#}"));
+                    }
                     return wrap(result);
                 }
             };
@@ -4633,6 +5166,7 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
                 fk.clone()
             } else {
                 warn!("Cell ({}, {}) has no form_key", gx, gy);
+                fail_lod(&mut result, "the cell row has no form_key".to_owned());
                 return wrap(result);
             };
 
@@ -4642,38 +5176,44 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
 
             {
                 let _span = info_span!("build_terrain").entered();
-                if let Ok(landscape) = db.get_landscape(&cell_form_key, gx, gy) {
-                    let built = if is_lod {
-                        terrain::build_cell_cpu_lod(&landscape, &shared.ltex_to_diffuse)
-                    } else {
-                        terrain::build_cell_cpu(&landscape, &shared.ltex_to_diffuse)
-                    };
-                    match built {
-                        Ok(cpu) => {
-                            if !is_lod {
-                                // Copy positions before the cpu mesh moves on:
-                                // the physics trimesh must match the render mesh
-                                // exactly. (Baked-tile UV remaps don't touch
-                                // positions, so copying here is safe.)
-                                terrain_collider = Some(TerrainColliderSpec {
-                                    vertices: cpu
-                                        .vertices
-                                        .iter()
-                                        .map(|v| Vec3::from(v.position))
-                                        .collect(),
-                                    indices: cpu.indices.as_chunks::<3>().0.to_vec(),
-                                });
-                            }
-                            result.terrain = Some(cpu);
-                        }
-                        Err(e) => warn!("Failed to build terrain for ({}, {}): {}", gx, gy, e),
-                    }
-                    if !is_lod {
-                        result.grass =
-                            shared
-                                .grass
-                                .place(db, worldspace, &cell_form_key, &landscape);
-                    }
+                let cell_terrain = resolve_cell_terrain(
+                    db.get_landscape_at(worldspace, gx, gy),
+                    gx,
+                    gy,
+                    |landscape| {
+                        let cpu = if is_lod {
+                            terrain::build_cell_cpu_lod(landscape, &shared.ltex_to_diffuse)?
+                        } else {
+                            terrain::build_cell_cpu(landscape, &shared.ltex_to_diffuse)?
+                        };
+                        // Copy positions before the cpu mesh moves on:
+                        // the physics trimesh must match the render mesh
+                        // exactly. (Baked-tile UV remaps don't touch
+                        // positions, so copying here is safe.)
+                        let collision = if is_lod {
+                            TerrainCollision::Absent
+                        } else {
+                            TerrainCollision::Present(TerrainColliderSpec {
+                                vertices: cpu
+                                    .vertices
+                                    .iter()
+                                    .map(|v| Vec3::from(v.position))
+                                    .collect(),
+                                indices: cpu.indices.as_chunks::<3>().0.to_vec(),
+                            })
+                        };
+                        Ok((cpu, collision))
+                    },
+                );
+                if let Some(reason) = cell_terrain.failure {
+                    fail_lod(&mut result, format!("its terrain failed: {reason}"));
+                }
+                terrain_collider = cell_terrain.collision;
+                result.terrain = cell_terrain.cpu;
+                if let (false, Some(landscape)) = (is_lod, &cell_terrain.landscape) {
+                    result.grass = shared
+                        .grass
+                        .place(db, worldspace, &cell_form_key, landscape);
                 }
             }
             result.grass_models = shared.grass_models.prepare(&result.grass);
@@ -4686,33 +5226,34 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
             if let Some(cpu) = result.terrain.as_mut() {
                 let unpainted = cpu.texture_paths.iter().all(std::option::Option::is_none);
                 if is_lod || unpainted {
-                    let editor_id = shared
+                    let editor_ids = shared
                         .ws_editor_ids
                         .lock()
                         .unwrap()
                         .entry(worldspace.to_string())
-                        .or_insert_with(|| {
-                            db.get_worldspace(worldspace).ok().and_then(|w| w.editor_id)
-                        })
+                        .or_insert_with(|| baked_tile_editor_ids(db, worldspace))
                         .clone();
-                    if let Some(eid) = editor_id {
-                        let tx = terrain::baked_tile_coord(gx);
-                        let ty = terrain::baked_tile_coord(gy);
-                        // Single construction site: this string is also the
-                        // texture cache/refcount key on the main thread.
-                        let rel = format!("{TEXTURES_DIR}/Terrain/{eid}/{eid}.4.{tx}.{ty}.DDS");
-                        let exists = *shared
-                            .tile_exists
-                            .lock()
-                            .unwrap()
-                            .entry(rel.clone())
-                            .or_insert_with(|| {
-                                std::path::Path::new(&format!("{}/{rel}", shared.asset_root))
-                                    .is_file()
-                            });
-                        if exists {
-                            terrain::apply_baked_tile_uvs(cpu, rel);
-                        }
+                    let tx = terrain::baked_tile_coord(gx);
+                    let ty = terrain::baked_tile_coord(gy);
+                    // Single construction site: this string is also the
+                    // texture cache/refcount key on the main thread.
+                    let tile = first_existing_baked_tile(
+                        &editor_ids,
+                        |eid| format!("{TEXTURES_DIR}/Terrain/{eid}/{eid}.4.{tx}.{ty}.DDS"),
+                        |rel| {
+                            *shared
+                                .tile_exists
+                                .lock()
+                                .unwrap()
+                                .entry(rel.to_owned())
+                                .or_insert_with(|| {
+                                    std::path::Path::new(&format!("{}/{rel}", shared.asset_root))
+                                        .is_file()
+                                })
+                        },
+                    );
+                    if let Some(rel) = tile {
+                        terrain::apply_baked_tile_uvs(cpu, rel);
                     }
                 }
             }
@@ -4723,11 +5264,16 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
                     Ok(objs) => objs,
                     Err(e) => {
                         warn!("Failed to load placed objects for ({}, {}): {}", gx, gy, e);
+                        fail_lod(
+                            &mut result,
+                            format!("its placed objects could not be loaded: {e:#}"),
+                        );
                         if !is_lod {
                             // Ship the terrain collider anyway: a cell that lost
-                            // its objects should still be walkable ground.
+                            // its objects should still be walkable ground. Without
+                            // terrain the objects were the ground, so it has none.
                             let batch = Arc::new(CellColliderBatch {
-                                terrain: terrain_collider.take(),
+                                terrain: std::mem::take(&mut terrain_collider).without_objects(),
                                 objects: Vec::new(),
                             });
                             result.baked_colliders = Some(bake_cell_colliders(shared, &batch));
@@ -4759,9 +5305,7 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
             let cell = match db.get_cell_by_form_key(cell_form_key) {
                 Ok(c) => c,
                 Err(e) => {
-                    if let Some(rusqlite::Error::QueryReturnedNoRows) =
-                        e.downcast_ref::<rusqlite::Error>()
-                    {
+                    if is_absent_row(&e) {
                         info!("Interior cell {cell_form_key} not found");
                     } else {
                         warn!("Interior cell {cell_form_key} query failed: {e}");
@@ -4787,7 +5331,7 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
                 &mut result,
                 placed_objects.iter(),
                 placed_objects.len(),
-                None,
+                TerrainCollision::Absent,
                 false,
                 shared,
             );
@@ -4795,6 +5339,120 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
     }
 
     wrap(result)
+}
+
+/// Whether a query failed only because no row matched, as for a grid without a cell.
+fn is_absent_row(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<rusqlite::Error>(),
+        Some(rusqlite::Error::QueryReturnedNoRows)
+    )
+}
+
+/// The LAND query for a cell failed with this error; the failure is already logged.
+#[derive(Debug)]
+struct LandscapeLookupFailed(String);
+
+struct CellTerrain<C> {
+    landscape: Option<Landscape>,
+    cpu: Option<C>,
+    collision: TerrainCollision,
+    /// Why the lookup or the build failed, when `collision` is `Failed`.
+    failure: Option<String>,
+}
+
+/// Looks up and builds a cell's terrain. `Absent` means legitimately landless; a failed lookup or
+/// build is `Failed`, so the cell never counts as ground-ready.
+fn resolve_cell_terrain<C>(
+    lookup: anyhow::Result<Option<Landscape>>,
+    gx: i32,
+    gy: i32,
+    build: impl FnOnce(&Landscape) -> anyhow::Result<(C, TerrainCollision)>,
+) -> CellTerrain<C> {
+    let landscape = match terrain_landscape(lookup, gx, gy) {
+        Ok(Some(landscape)) if landscape.vertex_height_map.is_some() => landscape,
+        Ok(_) => {
+            return CellTerrain {
+                landscape: None,
+                cpu: None,
+                collision: TerrainCollision::Absent,
+                failure: None,
+            };
+        }
+        Err(LandscapeLookupFailed(reason)) => {
+            return CellTerrain {
+                landscape: None,
+                cpu: None,
+                collision: TerrainCollision::Failed,
+                failure: Some(format!("the landscape lookup failed: {reason}")),
+            };
+        }
+    };
+    match build(&landscape) {
+        Ok((cpu, collision)) => CellTerrain {
+            landscape: Some(landscape),
+            cpu: Some(cpu),
+            collision,
+            failure: None,
+        },
+        Err(e) => {
+            warn!("Failed to build terrain for ({gx}, {gy}): {e}");
+            CellTerrain {
+                landscape: Some(landscape),
+                cpu: None,
+                collision: TerrainCollision::Failed,
+                failure: Some(format!("the build failed: {e:#}")),
+            }
+        }
+    }
+}
+
+/// The LAND a cell's terrain is built from: `None` for a cell without LAND anywhere in its
+/// worldspace chain, which is legitimately landless, unlike a failed lookup.
+fn terrain_landscape(
+    lookup: anyhow::Result<Option<Landscape>>,
+    gx: i32,
+    gy: i32,
+) -> Result<Option<Landscape>, LandscapeLookupFailed> {
+    lookup.map_err(|error| {
+        warn!("Failed to look up the landscape of ({gx}, {gy}): {error:#}");
+        LandscapeLookupFailed(format!("{error:#}"))
+    })
+}
+
+/// The editor ids whose baked terrain tile folders can texture a worldspace, preferred first: its
+/// own, then that of the worldspace whose LOD data it uses (a child worldspace may ship no tiles).
+fn baked_tile_editor_ids(db: &DbClient, worldspace: &str) -> Vec<String> {
+    let lod_owner = db.lod_data_owner(worldspace).unwrap_or_else(|error| {
+        warn!("No LOD data owner for worldspace {worldspace}: {error:#}");
+        worldspace.to_owned()
+    });
+    let mut form_keys = vec![worldspace];
+    if lod_owner != worldspace {
+        form_keys.push(&lod_owner);
+    }
+    form_keys
+        .into_iter()
+        .filter_map(|form_key| match db.get_worldspace(form_key) {
+            Ok(worldspace) => worldspace.editor_id,
+            Err(error) => {
+                warn!("No editor id for worldspace {form_key}: {error:#}");
+                None
+            }
+        })
+        .collect()
+}
+
+/// The first baked tile, in editor id preference order, that exists.
+fn first_existing_baked_tile(
+    editor_ids: &[String],
+    tile_key: impl Fn(&str) -> String,
+    mut exists: impl FnMut(&str) -> bool,
+) -> Option<String> {
+    editor_ids
+        .iter()
+        .map(|editor_id| tile_key(editor_id))
+        .find(|key| exists(key))
 }
 
 /// Decodes and builds the navigation meshes of one cell on the worker. A cell whose query fails
@@ -4872,13 +5530,13 @@ fn expand_weapon_refr(
 /// the caller has already set `result.grid` and `result.terrain`; this fills
 /// `meshes`, `colliders`, `baked_colliders`, and `textures`. `is_lod` selects
 /// LOD mesh variants and suppresses collision (distant shells never collide);
-/// `terrain_collider` is the caller's prebuilt terrain trimesh, packed into the
-/// collision batch (always `None` for interiors and LOD).
+/// `terrain_collider` is the caller's prebuilt terrain trimesh state, packed into the
+/// collision batch (always `Absent` for interiors and LOD).
 fn assemble_cell_payload<'a>(
     result: &mut CellLoadResult,
     placements: impl Iterator<Item = &'a PlacedObject>,
     placement_count: usize,
-    mut terrain_collider: Option<TerrainColliderSpec>,
+    terrain_collider: TerrainCollision,
     is_lod: bool,
     shared: &WorkerShared,
 ) {
@@ -5124,7 +5782,7 @@ fn assemble_cell_payload<'a>(
                 }
             }
             let batch = Arc::new(CellColliderBatch {
-                terrain: terrain_collider.take(),
+                terrain: terrain_collider,
                 objects,
             });
             {
@@ -5323,57 +5981,67 @@ fn preload_textures(result: &mut CellLoadResult, shared: &WorkerShared) {
     let _span = info_span!("preload_textures", count = to_read.len()).entered();
 
     let paths: Vec<String> = to_read.iter().map(|(path, _)| path.clone()).collect();
-    let layouts = shared.layout_cache.resolve(
+    let layouts = shared.layout_cache.resolve_keeping(
         &paths,
         |path| {
             let full_path = format!("{}/{}", shared.asset_root, path);
-            match texture::read_layout(&full_path) {
-                Ok(layout) => Some(Arc::new(layout)),
-                Err(e) => {
-                    crate::utils::warn_once(&format!("texture-preload:{path}"), || {
-                        format!("texture '{path}' unreadable: {e}")
-                    });
-                    None
-                }
-            }
+            texture::read_layout(&full_path)
+                .map(Arc::new)
+                .map_err(|error| preread_failure(path, &error))
         },
-        |layout| u64::from(layout.is_some()),
+        |layout| u64::from(layout.is_ok()),
+        |layout| !is_transient(layout),
     );
 
     let mut wanted: Vec<(String, u32)> = Vec::with_capacity(to_read.len());
     for (path, demand) in to_read {
-        match layouts.get(&path).and_then(Option::as_ref) {
-            Some(layout) => {
+        match &layouts[&path] {
+            Ok(layout) => {
                 let first = residency::initial_first_mip(shared.texture_policy, layout, demand);
                 wanted.push((path, first));
             }
-            None => {
-                result.textures.insert(path, None);
+            Err(failure) => {
+                result.textures.insert(path, Err(failure.clone()));
             }
         }
     }
 
-    let payloads = shared.dds_cache.resolve(
+    let payloads = shared.dds_cache.resolve_keeping(
         &wanted,
         |(path, first)| {
-            let layout = layouts.get(path).and_then(Option::as_ref)?;
+            let Ok(layout) = &layouts[path] else {
+                unreachable!("only textures with a layout are wanted");
+            };
             let full_path = format!("{}/{}", shared.asset_root, path);
-            match texture::read_mips(&full_path, layout, *first..layout.mip_count) {
-                Ok(payload) => Some(Arc::new(payload)),
-                Err(e) => {
-                    crate::utils::warn_once(&format!("texture-preload:{path}"), || {
-                        format!("texture '{path}' unreadable: {e}")
-                    });
-                    None
-                }
-            }
+            texture::read_mips(&full_path, layout, *first..layout.mip_count)
+                .map(Arc::new)
+                .map_err(|error| preread_failure(path, &error))
         },
         |payload| payload.as_ref().map_or(0, |p| p.data.len() as u64),
+        |payload| !is_transient(payload),
     );
     for key in wanted {
-        let payload = payloads.get(&key).cloned().flatten();
+        let payload = payloads[&key].clone();
         result.textures.insert(key.0, payload);
     }
+}
+
+/// Whether a pre-read failed for a reason that may pass; such a failure is not cached.
+fn is_transient<T>(read: &Result<T, ReadFailure>) -> bool {
+    matches!(read, Err(ReadFailure::Transient(_)))
+}
+
+/// Classifies a failed pre-read and warns once about a missing file; a broken one is reported
+/// by the main thread when the cell integrates, and a transient one is read again by the
+/// texture residency.
+fn preread_failure(path: &str, error: &texture::TextureError) -> ReadFailure {
+    let failure = ReadFailure::from(error);
+    if failure == ReadFailure::Missing {
+        crate::utils::warn_once(&format!("texture-preload:{path}"), || {
+            format!("texture '{path}' unreadable: {error}")
+        });
+    }
+    failure
 }
 
 /// Shared stand-in for marker NIFs that convert to empty GLBs: a chest-high
@@ -5774,10 +6442,15 @@ fn build_base_object_lookup(
         );
     }
     for s in rows_or_warn("get_doors", db.get_doors()) {
+        // Automatic doors are walk-in triggers (see `rendering::walk_in`), not geometry.
+        let automatic = s.is_automatic().unwrap_or_else(|error| {
+            tracing::warn!("{error}; the door is placed as an ordinary door");
+            false
+        });
         insert(
             &s.form_key,
             &s.model_path,
-            s.is_marker,
+            s.is_marker || automatic,
             None,
             false,
             false,
@@ -5929,6 +6602,238 @@ mod tests {
     use bytemuck::Zeroable;
 
     use super::*;
+
+    #[test]
+    fn the_bake_cache_is_keyed_by_the_players_layer_table() {
+        use crate::assets::db::collision_layers::fixtures::dropping_layer;
+        let install = tempfile::tempdir().unwrap();
+        let assets = install.path().join("assets");
+        let assets = assets.to_str().unwrap();
+        let unfiltered = new_bake_cache(assets, &PlayerCollisionLayers::all_solid());
+        let filtered = new_bake_cache(assets, &dropping_layer(12));
+        assert_ne!(unfiltered.layer_table(), filtered.layer_table());
+        assert_eq!(
+            filtered.layer_table(),
+            new_bake_cache(assets, &dropping_layer(12)).layer_table()
+        );
+    }
+
+    #[test]
+    fn interior_request_is_pending_and_delivered_when_the_workers_listen() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut pending = HashSet::new();
+
+        request_interior(&tx, &mut pending, "Cell:1", (3, 4), 7).unwrap();
+
+        assert!(pending.contains(&(3, 4)));
+        match rx.try_recv().unwrap() {
+            CellRequest::Interior {
+                cell_form_key,
+                grid,
+                epoch,
+            } => {
+                assert_eq!((cell_form_key.as_str(), grid, epoch), ("Cell:1", (3, 4), 7));
+            }
+            _ => panic!("expected an interior request"),
+        }
+    }
+
+    #[test]
+    fn failed_interior_request_reports_the_cell_and_leaves_nothing_pending() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        drop(rx);
+        let mut pending = HashSet::from([(9, 9)]);
+
+        let error = request_interior(&tx, &mut pending, "Cell:1", (3, 4), 7).unwrap_err();
+
+        assert_eq!(error.cell_form_key, "Cell:1");
+        assert_eq!(pending, HashSet::from([(9, 9)]));
+    }
+
+    #[test]
+    fn every_texture_of_a_staged_cell_carries_the_demand_floor() {
+        let mut residency = TextureResidency::new(
+            ResidencyPolicy {
+                global_skip: 0,
+                max_anisotropy: 16,
+            },
+            "no-such-asset-root",
+        );
+        let res = CellResources {
+            texture_refs: vec![TextureHandle {
+                slot: 7,
+                generation: 1,
+            }],
+            ..CellResources::default()
+        };
+
+        WorldStreamer::note_staged_cell_demand(&res, &DemandView::default(), &mut residency);
+
+        assert_eq!(residency.sweep_demand(7), STAGED_DEMAND_FLOOR);
+    }
+
+    fn landscape() -> Landscape {
+        Landscape {
+            form_key: None,
+            editor_id: None,
+            cell: "cell".to_owned(),
+            grid_x: 1,
+            grid_y: 2,
+            vertex_height_map: Some(Vec::new()),
+            vertex_colors: None,
+            layers: None,
+            flags: None,
+        }
+    }
+
+    #[test]
+    fn a_worldspace_with_its_own_baked_tile_keeps_it_over_its_lod_owners() {
+        let ids = ["Own".to_owned(), "Owner".to_owned()];
+        let tile = first_existing_baked_tile(&ids, |id| format!("{id}.dds"), |_| true);
+        assert_eq!(tile.as_deref(), Some("Own.dds"));
+    }
+
+    #[test]
+    fn a_worldspace_without_its_own_baked_tile_falls_back_to_its_lod_owners() {
+        let ids = ["Own".to_owned(), "Owner".to_owned()];
+        let tile =
+            first_existing_baked_tile(&ids, |id| format!("{id}.dds"), |key| key == "Owner.dds");
+        assert_eq!(tile.as_deref(), Some("Owner.dds"));
+    }
+
+    #[test]
+    fn a_worldspace_without_any_baked_tile_gets_none() {
+        let ids = ["Own".to_owned(), "Owner".to_owned()];
+        assert_eq!(
+            first_existing_baked_tile(&ids, |id| format!("{id}.dds"), |_| false),
+            None
+        );
+        assert_eq!(
+            first_existing_baked_tile(&[], std::borrow::ToOwned::to_owned, |_| true),
+            None
+        );
+    }
+
+    #[test]
+    fn terrain_is_built_only_from_a_landscape_that_was_found() {
+        assert!(matches!(
+            terrain_landscape(Ok(Some(landscape())), 1, 2),
+            Ok(Some(_))
+        ));
+    }
+
+    fn present() -> ((), TerrainCollision) {
+        (
+            (),
+            TerrainCollision::Present(TerrainColliderSpec {
+                vertices: Vec::new(),
+                indices: Vec::new(),
+            }),
+        )
+    }
+
+    #[test]
+    fn a_built_terrain_keeps_its_landscape_and_collider() {
+        let terrain = resolve_cell_terrain(Ok(Some(landscape())), 1, 2, |_| Ok(present()));
+        assert!(terrain.landscape.is_some() && terrain.cpu.is_some());
+        assert!(matches!(terrain.collision, TerrainCollision::Present(_)));
+        assert_eq!(terrain.failure, None);
+    }
+
+    #[test]
+    fn a_landless_cell_has_absent_terrain_and_never_builds() {
+        let terrain = resolve_cell_terrain(Ok(None), 1, 2, |_| -> anyhow::Result<((), _)> {
+            panic!("built without LAND")
+        });
+        assert!(terrain.landscape.is_none() && terrain.cpu.is_none());
+        assert!(matches!(terrain.collision, TerrainCollision::Absent));
+        assert_eq!(terrain.failure, None, "a landless cell is not broken");
+    }
+
+    #[test]
+    fn a_land_without_heights_is_landless_and_never_builds() {
+        let heightless = Landscape {
+            vertex_height_map: None,
+            ..landscape()
+        };
+        let terrain =
+            resolve_cell_terrain(Ok(Some(heightless)), 1, 2, |_| -> anyhow::Result<((), _)> {
+                panic!("built without heights")
+            });
+        assert!(terrain.landscape.is_none() && terrain.cpu.is_none());
+        assert!(matches!(terrain.collision, TerrainCollision::Absent));
+        assert_eq!(terrain.failure, None);
+    }
+
+    /// Diamond City ships LAND records for cells such as (9, 7) without any height data.
+    #[test]
+    #[ignore = "needs OPENFO4_INSTALL_DIR with the installed database"]
+    fn the_heightless_diamond_city_land_of_the_installed_database_is_landless() {
+        const DIAMOND_CITY: &str = "000F94:Fallout4.esm";
+        let install = std::env::var(crate::assets::INSTALL_DIR_VAR).expect("OPENFO4_INSTALL_DIR");
+        let root = format!("{install}/{}", crate::assets::layout::ASSETS_DIR);
+        let db = DbClient::new(&format!(
+            "{}/{}",
+            crate::assets::layout::data_dir(&root),
+            crate::assets::layout::DATABASE_FILE
+        ))
+        .expect("the installed database opens");
+
+        let lookup = db.get_landscape_at(DIAMOND_CITY, 9, 7);
+
+        let land = lookup.as_ref().expect("the lookup succeeds").as_ref();
+        assert!(land.is_some_and(|land| land.vertex_height_map.is_none()));
+        let terrain = resolve_cell_terrain(lookup, 9, 7, |_| -> anyhow::Result<((), _)> {
+            panic!("built without heights")
+        });
+        assert!(matches!(terrain.collision, TerrainCollision::Absent));
+        assert_eq!(terrain.failure, None);
+    }
+
+    #[test]
+    fn a_failed_landscape_lookup_fails_the_terrain() {
+        let terrain =
+            resolve_cell_terrain(Err(anyhow::anyhow!("db down")), 1, 2, |_| Ok(present()));
+        assert!(terrain.landscape.is_none() && terrain.cpu.is_none());
+        assert!(matches!(terrain.collision, TerrainCollision::Failed));
+        assert_eq!(
+            terrain.failure.as_deref(),
+            Some("the landscape lookup failed: db down")
+        );
+    }
+
+    #[test]
+    fn a_failed_terrain_build_fails_the_collision_but_keeps_the_landscape() {
+        let terrain = resolve_cell_terrain(Ok(Some(landscape())), 1, 2, |_| {
+            Err::<((), _), _>(anyhow::anyhow!("bad heightmap"))
+        });
+        assert!(terrain.landscape.is_some() && terrain.cpu.is_none());
+        assert!(matches!(terrain.collision, TerrainCollision::Failed));
+        assert_eq!(
+            terrain.failure.as_deref(),
+            Some("the build failed: bad heightmap")
+        );
+    }
+
+    #[test]
+    fn only_a_query_that_matched_no_row_counts_as_an_absent_cell() {
+        assert!(is_absent_row(&anyhow::Error::from(
+            rusqlite::Error::QueryReturnedNoRows
+        )));
+        assert!(!is_absent_row(&anyhow::Error::from(
+            rusqlite::Error::InvalidQuery
+        )));
+        assert!(!is_absent_row(&anyhow::anyhow!("db down")));
+    }
+
+    #[test]
+    fn a_missing_landscape_is_told_apart_from_a_failed_lookup() {
+        assert!(matches!(terrain_landscape(Ok(None), 1, 2), Ok(None)));
+        assert!(matches!(
+            terrain_landscape(Err(anyhow::anyhow!("db down")), 1, 2),
+            Err(LandscapeLookupFailed(reason)) if reason == "db down"
+        ));
+    }
 
     #[test]
     fn the_music_place_agrees_with_the_grid_cell_and_converts_the_point_to_bethesda_units() {

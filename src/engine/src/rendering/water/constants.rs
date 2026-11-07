@@ -16,8 +16,8 @@ pub(super) use crate::rendering::game_frame::cb12::camera_relative_bethesda;
 use crate::rendering::game_frame::cb12::{CB12_LEN, frame_cb12};
 #[cfg(test)]
 use crate::rendering::game_frame::cb12::{
-    DEPTH_FAR_RANGE_REGISTER, DEPTH_NEAR_RANGE_REGISTER, DEPTH_RANGE_SPLIT,
-    FAR_FOG_HEIGHT_STRENGTH, FAR_RANGE_SCALE, NEAR_RANGE_SCALE, UNSET_FOG_RANGE,
+    DEPTH_FAR_RANGE_REGISTER, DEPTH_NEAR_RANGE_REGISTER, DEPTH_RANGE_SPLIT, FAR_RANGE_SCALE,
+    NEAR_RANGE_SCALE, UNSET_FOG_RANGE,
 };
 use crate::rendering::lighting::frame_uniform::{FrameUniform, TIME_WRAP_SECONDS};
 
@@ -53,9 +53,6 @@ pub const SUN_SCATTER_EXPONENT: f32 = 8.0;
 pub const WATER_BLUR_RATIO: f32 = 0.9;
 /// `cb0[7].y`: INI `[SSLR] fSSLRAngleThreshold`, default 0.2.
 pub const SSLR_ANGLE_THRESHOLD: f32 = 0.2;
-/// `fSunAlphaTransTime` (default 2.0): the sun's alpha transition around
-/// sunrise and sunset.
-pub const SUN_ALPHA_TRANS_TIME: f32 = 2.0;
 
 /// `cb0` and `cb12`: constants shared by every water draw of a frame.
 #[repr(C)]
@@ -265,25 +262,51 @@ impl WaterMaterial {
     }
 }
 
+/// Where this frame's water is drawn: the one source of both the far-field water and the
+/// weather's water multiplier, so the two never disagree.
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum WaterSetting {
+    Interior,
+    /// `None` without a weather loaded.
+    Exterior {
+        water_multiplier: Option<Vec3>,
+    },
+}
+
+impl WaterSetting {
+    pub fn is_interior(self) -> bool {
+        matches!(self, Self::Interior)
+    }
+
+    /// Interiors have no weather, so no multiplier.
+    pub fn water_multiplier(self) -> Option<Vec3> {
+        match self {
+            Self::Interior => None,
+            Self::Exterior { water_multiplier } => water_multiplier,
+        }
+    }
+}
+
 /// Frame state the pixel `cb1` rows depend on besides the WATR.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct WaterEnvironment {
     /// `cb1[2]` source: the current worldspace's water.
     pub far_field: FarField,
-    /// The water multiplier colour applied to `cb1[0..=2]`, `[6]`, `[7]` and the interior
-    /// `[3..=5]`. Which tint applies depends on a weather flag that the engine's
-    /// weather does not resolve yet, so callers pass [`Self::NEUTRAL_TINT`], the `(1, 1, 1)`
-    /// value for a clear flag.
+    /// The water multiplier colour applied to `cb1[0..=2]`, `[6]` and `[7]`: the weather's, else
+    /// [`Self::NEUTRAL_TINT`]. The reflection rows `[3..=5]` and the underwater colour that
+    /// replaces `cb1[0]` under water stay untinted.
     pub tint: Vec3,
 }
 
 impl WaterEnvironment {
     pub const NEUTRAL_TINT: Vec3 = Vec3::ONE;
 
-    pub fn new(far_field: FarField) -> Self {
+    /// The environment under a weather's water multiplier; without one (an interior, or no
+    /// weather loaded) the colours stay as the WATR gives them.
+    pub fn under(far_field: FarField, water_multiplier: Option<Vec3>) -> Self {
         Self {
             far_field,
-            tint: Self::NEUTRAL_TINT,
+            tint: water_multiplier.unwrap_or(Self::NEUTRAL_TINT),
         }
     }
 }
@@ -300,46 +323,10 @@ fn vertex_cb1(scroll: &NormalScroll, layers: &[NoiseLayer; 3]) -> [Vec4; VS_CB1_
     ]
 }
 
-/// Daylight window of the climate in game hours (the climate stores the four
-/// bounds in 1/6 h).
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub struct DaylightWindow {
-    pub sunrise_begin: f32,
-    pub sunrise_end: f32,
-    pub sunset_begin: f32,
-    pub sunset_end: f32,
-}
-
-/// `cb0[2].w`, the daylight factor: 0 outside
-/// `[rise - T, set + T]`, a linear ramp over `[rise - T, rise + T]`, 1 in
-/// between, a ramp down over `[set - T, set + T]`, with
-/// `rise = (begin + end) / 2`, `set` likewise and `T = trans_time / 2`.
-pub fn daylight_factor(hour: f32, window: &DaylightWindow, trans_time: f32) -> f32 {
-    let rise = f32::midpoint(window.sunrise_begin, window.sunrise_end);
-    let set = f32::midpoint(window.sunset_begin, window.sunset_end);
-    let half = trans_time * 0.5;
-    if hour <= rise - half || hour >= set + half {
-        0.0
-    } else if hour < rise + half {
-        (hour - (rise - half)) / trans_time
-    } else if hour > set - half {
-        ((set + half) - hour) / trans_time
-    } else {
-        1.0
-    }
-}
-
-/// The engine has no clock or climate (its weather is the permanent `Day`
-/// slot), so the factor is the end state of [`daylight_factor`]: 1 while the sun is
-/// up (inside `[rise + T, set - T]`), 0 once it has set.
-fn fixed_day_daylight(frame: &FrameUniform) -> f32 {
-    f32::from(frame.to_sun.y > 0.0)
-}
-
 /// `cb0[3].xyz`: the sun light's linear colour times its dimmer. Unlike the
-/// lighting shader, the water fill does not multiply in the image space's
-/// sunlight scale, so the scale folded
-/// into the frame's sun illuminance is divided out again.
+/// lighting shader, the water fill multiplies in neither the image space's
+/// sunlight scale nor the weather light's surface response, so the scales folded
+/// into the frame's sun illuminance are divided out again.
 fn unscaled_sun_colour(frame: &FrameUniform) -> Vec3 {
     let illuminance = frame.sun_illuminance.truncate();
     let sunlight_scale = frame.sun_illuminance.w;
@@ -367,7 +354,7 @@ pub fn frame_constants(frame: &FrameUniform) -> WaterFrameConstants {
         0.0,
         0.0,
     );
-    cb0[2] = axes_from_engine(frame.to_sun.truncate()).extend(fixed_day_daylight(frame));
+    cb0[2] = axes_from_engine(frame.to_sun.truncate()).extend(frame.daylight.x);
     cb0[3] = unscaled_sun_colour(frame).extend(SUN_SCATTER_EXPONENT);
     cb0[7] = Vec4::new(WATER_BLUR_RATIO, SSLR_ANGLE_THRESHOLD, 0.0, 0.0);
 
@@ -439,9 +426,6 @@ fn pixel_cb1(
     let tint = environment.tint;
     let mut cb1 = material.cb1;
 
-    if underwater {
-        cb1[0] = material.underwater_color.extend(cb1[0].w);
-    }
     let far_field = if interior {
         FarField::INTERIOR
     } else {
@@ -451,9 +435,12 @@ fn pixel_cb1(
     for row in [0, 1, 2, 6, 7] {
         cb1[row] = tinted(cb1[row], tint);
     }
+    if underwater {
+        cb1[0] = material.underwater_color.extend(cb1[0].w);
+    }
 
     let gradient = if interior {
-        [tinted(material.reflection_color.extend(0.0), tint); 3]
+        [material.reflection_color.extend(0.0); 3]
     } else {
         // Horizon, sky lower, sky upper; the frame's sky colours already carry the HDR sky scale.
         [frame.sky_horizon, frame.sky_ground, frame.sky_zenith]
@@ -528,13 +515,17 @@ mod tests {
         frame.camera_pos = eye.extend(1.0);
         frame.viewport = Vec4::new(1920.0, 1080.0, 1.0 / 1920.0, 1.0 / 1080.0);
         frame.to_sun = Vec3::new(0.0, 1.0, 0.0).extend(0.99);
+        frame.daylight = Vec4::new(1.0, 0.0, 0.0, 0.0);
         frame.sun_illuminance = Vec4::new(3.0, 2.0, 1.0, 0.0);
         frame.sky_zenith = Vec4::new(0.1, 0.2, 0.9, 0.0);
         frame.sky_horizon = Vec4::new(0.6, 0.7, 0.8, 0.0);
         frame.sky_ground = Vec4::new(0.2, 0.25, 0.3, 0.0);
         frame.fog_near_color = Vec4::new(0.5, 0.5, 0.6, 10.0);
         frame.fog_far_color = Vec4::new(0.7, 0.7, 0.8, 110.0);
-        frame.fog_params = Vec4::new(2.0, 0.9, 0.0, 0.0);
+        frame.fog_params = Vec4::new(2.0, 0.9, 0.95, 0.0);
+        frame.fog_near_high_color = Vec4::new(0.3, 0.35, 0.4, 0.0);
+        frame.fog_far_high_color = Vec4::new(0.45, 0.5, 0.6, 0.0);
+        frame.fog_near_band = Vec4::new(1.0 / 128.0, 0.5, 1.0, 0.0);
         frame.flags = UVec4::new(0, 0, 13, 0);
         frame
     }
@@ -559,7 +550,7 @@ mod tests {
     }
 
     fn exterior_cb1() -> [Vec4; PS_CB1_LEN] {
-        let environment = WaterEnvironment::new(other_water_far_field());
+        let environment = WaterEnvironment::under(other_water_far_field(), None);
         pixel_cb1(&ocean_material(), &frame_fixture(), &environment, false)
     }
 
@@ -634,18 +625,61 @@ mod tests {
 
     #[test]
     fn interior_far_field_is_black_with_reflectivity_one() {
-        let environment = WaterEnvironment::new(other_water_far_field());
+        let environment = WaterEnvironment::under(other_water_far_field(), None);
         let cb1 = pixel_cb1(&ocean_material(), &frame_fixture(), &environment, true);
         assert_eq!(cb1[2], Vec4::new(0.0, 0.0, 0.0, 1.0));
     }
 
     #[test]
+    fn an_interior_setting_has_no_multiplier_and_an_exterior_one_carries_its_weathers() {
+        let multiplier = Some(Vec3::new(0.2, 0.4, 0.6));
+        assert!(WaterSetting::Interior.is_interior());
+        assert_eq!(WaterSetting::Interior.water_multiplier(), None);
+        let exterior = WaterSetting::Exterior {
+            water_multiplier: multiplier,
+        };
+        assert!(!exterior.is_interior());
+        assert_eq!(exterior.water_multiplier(), multiplier);
+    }
+
+    #[test]
+    fn without_a_weather_multiplier_the_tint_is_neutral() {
+        let without = WaterEnvironment::under(other_water_far_field(), None);
+        assert_eq!(without.tint, WaterEnvironment::NEUTRAL_TINT);
+    }
+
+    /// The multiplier bytes (51, 102, 255) are linear factors (0.2, 0.4, 1.0); the shallow
+    /// colour bytes (10, 20, 30) decode to `(10/255)^2.2`, `(20/255)^2.2`, `(30/255)^2.2` =
+    /// `(0.000_804_7, 0.003_697_2, 0.009_021_5)`.
+    #[test]
+    fn the_weathers_multiplier_scales_the_decoded_body_colour_by_its_stored_bytes() {
+        let multiplier = Vec3::new(51.0, 102.0, 255.0) / 255.0;
+        let environment = WaterEnvironment::under(other_water_far_field(), Some(multiplier));
+        let cb1 = pixel_cb1(&ocean_material(), &frame_fixture(), &environment, false);
+        let shallow = Vec3::new(0.000_804_7, 0.003_697_2, 0.009_021_5);
+        assert!(
+            cb1[0]
+                .truncate()
+                .abs_diff_eq(shallow * Vec3::new(0.2, 0.4, 1.0), 1e-7),
+            "{:?}",
+            cb1[0]
+        );
+    }
+
+    #[test]
+    fn the_underwater_colour_stays_untinted_under_a_weather_multiplier() {
+        let mut frame = frame_fixture();
+        frame.time_water.z = 1.0;
+        let environment =
+            WaterEnvironment::under(other_water_far_field(), Some(Vec3::new(0.2, 0.4, 0.6)));
+        let cb1 = pixel_cb1(&ocean_material(), &frame, &environment, false);
+        assert_close(cb1[0].truncate(), gamma([100, 110, 120]), "cb1[0].xyz");
+    }
+
+    #[test]
     fn tint_multiplies_the_colour_rows_but_not_their_w() {
         let tint = Vec3::new(0.5, 2.0, 0.25);
-        let environment = WaterEnvironment {
-            tint,
-            ..WaterEnvironment::new(other_water_far_field())
-        };
+        let environment = WaterEnvironment::under(other_water_far_field(), Some(tint));
         let plain = exterior_cb1();
         let tinted_cb1 = pixel_cb1(&ocean_material(), &frame_fixture(), &environment, false);
         for row in [0, 1, 2, 6, 7] {
@@ -665,7 +699,7 @@ mod tests {
     fn camera_underwater_swaps_the_underwater_colour_into_cb1_0() {
         let mut frame = frame_fixture();
         frame.time_water.z = 1.0;
-        let environment = WaterEnvironment::new(other_water_far_field());
+        let environment = WaterEnvironment::under(other_water_far_field(), None);
         let cb1 = pixel_cb1(&ocean_material(), &frame, &environment, false);
         assert_close(cb1[0].truncate(), gamma([100, 110, 120]), "cb1[0].xyz");
         assert_eq!(cb1[0].w, 10000.0, "the sparkle power stays");
@@ -673,10 +707,7 @@ mod tests {
 
     #[test]
     fn exterior_sky_gradient_is_horizon_lower_upper_untinted() {
-        let environment = WaterEnvironment {
-            tint: Vec3::splat(0.5),
-            ..WaterEnvironment::new(other_water_far_field())
-        };
+        let environment = WaterEnvironment::under(other_water_far_field(), Some(Vec3::splat(0.5)));
         let frame = frame_fixture();
         let cb1 = pixel_cb1(&ocean_material(), &frame, &environment, false);
         assert_eq!(cb1[3], frame.sky_horizon.truncate().extend(0.0));
@@ -685,14 +716,11 @@ mod tests {
     }
 
     #[test]
-    fn interior_sky_gradient_is_the_tinted_reflection_colour_three_times() {
-        let tint = Vec3::new(0.5, 1.0, 2.0);
-        let environment = WaterEnvironment {
-            tint,
-            ..WaterEnvironment::new(other_water_far_field())
-        };
+    fn interior_sky_gradient_is_the_untinted_reflection_colour_three_times() {
+        let environment =
+            WaterEnvironment::under(other_water_far_field(), Some(Vec3::new(0.5, 1.0, 2.0)));
         let cb1 = pixel_cb1(&ocean_material(), &frame_fixture(), &environment, true);
-        let expected = gamma([50, 60, 70]) * tint;
+        let expected = gamma([50, 60, 70]);
         for (row, register) in cb1.iter().enumerate().take(6).skip(3) {
             assert_close(register.truncate(), expected, &format!("cb1[{row}]"));
             assert_eq!(register.w, 0.0);
@@ -729,10 +757,19 @@ mod tests {
     }
 
     #[test]
-    fn a_set_sun_has_no_daylight() {
+    fn the_daylight_register_carries_the_suns_alpha_whatever_lights_the_scene() {
         let mut frame = frame_fixture();
-        frame.to_sun = Vec4::new(0.0, -1.0, 0.0, 0.99);
-        assert_eq!(frame_constants(&frame).cb0[2].w, 0.0);
+        frame.daylight.x = 0.25;
+        assert_eq!(frame_constants(&frame).cb0[2].w, 0.25);
+        // At night the light still shines from above: the direction follows it, the daylight stays 0.
+        frame.to_sun = Vec4::new(0.0, 0.5, 0.0, 0.99);
+        frame.daylight.x = 0.0;
+        let cb0 = frame_constants(&frame).cb0;
+        assert_eq!(cb0[2].w, 0.0);
+        assert_eq!(
+            cb0[2].truncate(),
+            axes_from_engine(Vec3::new(0.0, 0.5, 0.0))
+        );
     }
 
     #[test]
@@ -741,61 +778,47 @@ mod tests {
         assert_eq!(cb0[7], Vec4::new(0.9, 0.2, 0.0, 0.0));
     }
 
-    const CLIMATE: DaylightWindow = DaylightWindow {
-        sunrise_begin: 5.0,
-        sunrise_end: 7.0,
-        sunset_begin: 17.0,
-        sunset_end: 19.0,
-    };
-
-    #[test]
-    fn daylight_ramps_over_the_transition_around_sunrise_and_sunset() {
-        // rise = 6, set = 18, T = 1.
-        let factor = |hour| daylight_factor(hour, &CLIMATE, SUN_ALPHA_TRANS_TIME);
-        assert_eq!(factor(5.0), 0.0);
-        assert_eq!(factor(3.0), 0.0);
-        assert_eq!(factor(5.5), 0.25);
-        assert_eq!(factor(6.0), 0.5);
-        assert_eq!(factor(7.0), 1.0);
-        assert_eq!(factor(12.0), 1.0);
-        assert_eq!(factor(17.0), 1.0);
-        assert_eq!(factor(18.5), 0.25);
-        assert_eq!(factor(19.0), 0.0);
-        assert_eq!(factor(23.0), 0.0);
-    }
-
     // --- cb12: fog ------------------------------------------
 
     #[test]
-    fn fog_distance_registers_are_in_bethesda_units_with_unset_height_ranges() {
+    fn fog_range_registers_are_in_bethesda_units_and_an_unset_height_band_takes_the_unset_pair() {
         let cb12 = frame_constants(&frame_fixture()).cb12;
         // Near 10 / far 110 engine units = 100 / 1100 Bethesda units.
         let (near, far) = (100.0, 1100.0);
+        // The near band starts at -64 and spans 128 engine units: -640 to 640 Bethesda units.
+        let (near_bottom, near_top) = (-640.0, 640.0);
         let (unset_near, unset_far) = UNSET_FOG_RANGE;
         let unset_scale = 1.0 / (unset_far - unset_near);
         let unset_offset = unset_near / (unset_far - unset_near);
+        let near_height_scale = 1.0 / (near_top - near_bottom);
+        let near_height_offset = near_bottom / (near_top - near_bottom);
         assert_eq!(
             cb12[41],
             Vec4::new(
                 1.0 / (far - near),
-                unset_scale,
+                near_height_scale,
                 near / (far - near),
-                unset_offset
+                near_height_offset
             )
         );
         assert_eq!(
             cb12[46],
-            Vec4::new(unset_scale, unset_scale, unset_offset, unset_offset)
+            Vec4::new(
+                near_height_scale,
+                unset_scale,
+                near_height_offset,
+                unset_offset
+            )
         );
     }
 
     #[test]
-    fn fog_colour_registers_carry_power_max_and_the_unknown_height_strength() {
+    fn fog_colour_registers_carry_the_high_colours_power_max_and_high_density_scale() {
         let cb12 = frame_constants(&frame_fixture()).cb12;
         assert_eq!(cb12[42], Vec4::new(0.5, 0.5, 0.6, 2.0));
-        assert_eq!(cb12[43], Vec4::new(0.5, 0.5, 0.6, 0.9));
-        assert_eq!(cb12[44], Vec4::new(0.7, 0.7, 0.8, FAR_FOG_HEIGHT_STRENGTH));
-        assert_eq!(cb12[45], Vec4::new(0.7, 0.7, 0.8, 0.0));
+        assert_eq!(cb12[43], Vec4::new(0.3, 0.35, 0.4, 0.9));
+        assert_eq!(cb12[44], Vec4::new(0.7, 0.7, 0.8, 0.95));
+        assert_eq!(cb12[45], Vec4::new(0.45, 0.5, 0.6, 0.0));
     }
 
     #[test]
@@ -1026,7 +1049,7 @@ mod tests {
         let frame = frame_fixture();
         let mut material = ocean_material();
         material.advance_scroll(5.0);
-        let environment = WaterEnvironment::new(material.far_field());
+        let environment = WaterEnvironment::under(material.far_field(), None);
         let draw = draw_constants(
             &material,
             &frame,

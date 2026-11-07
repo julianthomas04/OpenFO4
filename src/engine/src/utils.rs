@@ -137,6 +137,12 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// `value`, or 0 when it is NaN or infinite: the guard for numbers that come from game data
+/// before they reach a buffer a shader reads.
+pub fn finite_or_zero(value: f32) -> f32 {
+    if value.is_finite() { value } else { 0.0 }
+}
+
 /// The warning for an environment variable whose value is not used: the variable, the value
 /// and the reason, so a bad value can be fixed without reading the source.
 fn invalid_value_message(name: &str, raw: &str, reason: &dyn Display, outcome: &str) -> String {
@@ -297,6 +303,16 @@ pub fn drop_off_thread<T: Send + 'static>(value: T) {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finite_numbers_pass_and_the_others_become_zero() {
+        for value in [0.0, -3.5, 1.0e30, f32::MIN_POSITIVE] {
+            assert_eq!(finite_or_zero(value), value);
+        }
+        for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(finite_or_zero(value), 0.0, "{value}");
+        }
+    }
 
     #[test]
     fn parse_flag_accepts_one_and_true_in_any_case() {

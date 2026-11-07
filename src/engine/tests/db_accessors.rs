@@ -8,7 +8,8 @@
 )]
 
 use openfo4::assets::db::DbClient;
-use openfo4::assets::db::schema::DbSchema;
+use openfo4::assets::db::schema::{DbSchema, SchemaError};
+use openfo4::assets::db::teleports::{DoorLocation, WalkInDoors};
 use openfo4::assets::db::water_placement::CellWaterHeight;
 use rusqlite::Connection;
 use rusqlite::types::Value;
@@ -164,6 +165,8 @@ fn detect_reports_every_optional_group_present_on_the_real_schema() {
     assert!(schema.material_swap_name_column_present);
     assert!(schema.weather_columns_present);
     assert!(schema.weather_fog_column_present);
+    assert!(schema.weather_library_columns_present);
+    assert!(schema.particle_material_data_column_present);
     assert!(schema.cell_water_columns_present);
     assert!(schema.worldspace_water_columns_present);
     assert!(schema.activator_water_column_present);
@@ -657,12 +660,12 @@ fn landscape_blobs_round_trip_byte_for_byte_and_optional_blobs_are_none() {
     let db = client(conn);
 
     let plain = db.get_landscape("C1", 4, -5).unwrap();
-    assert_eq!(plain.vertex_height_map, heights);
+    assert_eq!(plain.vertex_height_map, Some(heights));
     assert_eq!((plain.vertex_colors, plain.layers), (None, None));
     assert_eq!((plain.grid_x, plain.grid_y), (4, -5));
 
     let full = db.get_landscape("C2", 0, 0).unwrap();
-    assert_eq!(full.vertex_height_map, [1, 0, 2]);
+    assert_eq!(full.vertex_height_map.as_deref(), Some(&[1, 0, 2][..]));
     assert_eq!(full.vertex_colors.as_deref(), Some(&[9, 8, 7][..]));
     assert_eq!(full.layers.as_deref(), Some(&[0, 0][..]));
 }
@@ -716,6 +719,308 @@ fn batched_landscapes_skip_cells_without_a_form_key_or_grid_and_empty_input_is_e
     assert!(db.get_landscapes(&[]).unwrap().is_empty());
     let interior = vec![db.get_cell_by_form_key("INT").unwrap()];
     assert!(db.get_landscapes(&interior).unwrap().is_empty());
+}
+
+// ------------------------------------------------ worldspace LAND lineage
+
+const LAND_DATA: i64 = 0x01;
+const LOD_DATA: i64 = 0x02;
+
+fn worldspace_row(
+    form_key: &str,
+    parent: Option<&str>,
+    parent_flags: i64,
+) -> Vec<(&'static str, Value)> {
+    let mut row = vec![
+        ("form_key", text(form_key)),
+        ("editor_id", text(&format!("{form_key}Edid"))),
+        ("parent_flags", int(parent_flags)),
+    ];
+    if let Some(parent) = parent {
+        row.push(("parent_worldspace", text(parent)));
+    }
+    row
+}
+
+fn seed_worldspaces(conn: &Connection, rows: &[(&str, Option<&str>, i64)]) {
+    for (form_key, parent, flags) in rows {
+        insert(
+            conn,
+            "worldspaces",
+            &worldspace_row(form_key, *parent, *flags),
+        );
+    }
+}
+
+/// A grid cell of `worldspace` at (1, 2) with a one-byte LAND whose height byte is `marker`.
+fn seed_land(conn: &Connection, worldspace: &str, marker: u8) {
+    let cell = format!("{worldspace}-cell");
+    insert(
+        conn,
+        "cells",
+        &cell_row(&cell, Some(worldspace), Some((1, 2))),
+    );
+    insert(
+        conn,
+        "landscapes",
+        &landscape_row(&format!("{worldspace}-land"), &cell, &[marker], None, None),
+    );
+}
+
+fn seed_cell_without_land(conn: &Connection, worldspace: &str) {
+    insert(
+        conn,
+        "cells",
+        &cell_row(
+            &format!("{worldspace}-cell"),
+            Some(worldspace),
+            Some((1, 2)),
+        ),
+    );
+}
+
+fn marker_at(db: &DbClient, worldspace: &str) -> Option<u8> {
+    db.get_landscape_at(worldspace, 1, 2)
+        .unwrap()
+        .and_then(|land| land.vertex_height_map?.first().copied())
+}
+
+#[test]
+fn a_worldspace_with_its_own_land_reads_it_with_the_requested_grid() {
+    let conn = schema_connection();
+    seed_worldspaces(&conn, &[("WS", None, 0)]);
+    seed_land(&conn, "WS", 7);
+    let land = client(conn).get_landscape_at("WS", 1, 2).unwrap().unwrap();
+    assert_eq!(land.vertex_height_map.as_deref(), Some(&[7][..]));
+    assert_eq!((land.grid_x, land.grid_y), (1, 2));
+    assert_eq!(land.cell, "WS-cell");
+}
+
+#[test]
+fn a_land_without_heights_is_read_without_them() {
+    let conn = schema_connection();
+    seed_worldspaces(&conn, &[("WS", None, 0)]);
+    insert(
+        &conn,
+        "cells",
+        &cell_row("WS-cell", Some("WS"), Some((1, 2))),
+    );
+    insert(
+        &conn,
+        "landscapes",
+        &[("form_key", text("WS-land")), ("cell", text("WS-cell"))],
+    );
+
+    let land = client(conn).get_landscape_at("WS", 1, 2).unwrap().unwrap();
+
+    assert_eq!(land.vertex_height_map, None);
+    assert!(land.height_map().is_err());
+}
+
+#[test]
+fn a_cell_without_land_inherits_it_from_the_parent_when_the_land_bit_is_set() {
+    let conn = schema_connection();
+    seed_worldspaces(
+        &conn,
+        &[("CHILD", Some("PARENT"), LAND_DATA), ("PARENT", None, 0)],
+    );
+    seed_cell_without_land(&conn, "CHILD");
+    seed_land(&conn, "PARENT", 9);
+    let db = client(conn);
+    let land = db.get_landscape_at("CHILD", 1, 2).unwrap().unwrap();
+    assert_eq!(land.vertex_height_map.as_deref(), Some(&[9][..]));
+    assert_eq!((land.grid_x, land.grid_y), (1, 2));
+}
+
+#[test]
+fn a_child_without_any_cell_at_the_grid_inherits_the_parents_land() {
+    let conn = schema_connection();
+    seed_worldspaces(
+        &conn,
+        &[("CHILD", Some("PARENT"), LAND_DATA), ("PARENT", None, 0)],
+    );
+    seed_land(&conn, "PARENT", 9);
+    assert_eq!(marker_at(&client(conn), "CHILD"), Some(9));
+}
+
+#[test]
+fn the_childs_own_land_wins_over_the_parents() {
+    let conn = schema_connection();
+    seed_worldspaces(
+        &conn,
+        &[("CHILD", Some("PARENT"), LAND_DATA), ("PARENT", None, 0)],
+    );
+    seed_land(&conn, "CHILD", 1);
+    seed_land(&conn, "PARENT", 9);
+    assert_eq!(marker_at(&client(conn), "CHILD"), Some(1));
+}
+
+#[test]
+fn a_cleared_land_bit_blocks_inheritance() {
+    let conn = schema_connection();
+    seed_worldspaces(
+        &conn,
+        &[
+            ("CHILD", Some("PARENT"), 0xFF & !LAND_DATA),
+            ("PARENT", None, 0),
+        ],
+    );
+    seed_cell_without_land(&conn, "CHILD");
+    seed_land(&conn, "PARENT", 9);
+    assert_eq!(marker_at(&client(conn), "CHILD"), None);
+}
+
+#[test]
+fn land_is_inherited_through_a_grandparent_while_every_link_defers() {
+    let conn = schema_connection();
+    seed_worldspaces(
+        &conn,
+        &[
+            ("CHILD", Some("PARENT"), LAND_DATA),
+            ("PARENT", Some("GRAND"), LAND_DATA),
+            ("GRAND", None, 0),
+        ],
+    );
+    seed_land(&conn, "GRAND", 5);
+    assert_eq!(marker_at(&client(conn), "CHILD"), Some(5));
+}
+
+#[test]
+fn the_nearest_ancestor_with_land_wins() {
+    let conn = schema_connection();
+    seed_worldspaces(
+        &conn,
+        &[
+            ("CHILD", Some("PARENT"), LAND_DATA),
+            ("PARENT", Some("GRAND"), LAND_DATA),
+            ("GRAND", None, 0),
+        ],
+    );
+    seed_land(&conn, "PARENT", 6);
+    seed_land(&conn, "GRAND", 5);
+    assert_eq!(marker_at(&client(conn), "CHILD"), Some(6));
+}
+
+#[test]
+fn a_link_that_keeps_its_land_cuts_the_chain_to_the_grandparent() {
+    let conn = schema_connection();
+    seed_worldspaces(
+        &conn,
+        &[
+            ("CHILD", Some("PARENT"), LAND_DATA),
+            ("PARENT", Some("GRAND"), 0),
+            ("GRAND", None, 0),
+        ],
+    );
+    seed_land(&conn, "GRAND", 5);
+    assert_eq!(marker_at(&client(conn), "CHILD"), None);
+}
+
+#[test]
+fn the_worldspace_persistent_cell_never_provides_land() {
+    let conn = schema_connection();
+    seed_worldspaces(&conn, &[("WS", None, 0)]);
+    let mut persistent = cell_row("WS-top", Some("WS"), Some((1, 2)));
+    persistent.push(("is_worldspace_persistent_cell", int(1)));
+    insert(&conn, "cells", &persistent);
+    insert(
+        &conn,
+        "landscapes",
+        &landscape_row("TOP-land", "WS-top", &[3], None, None),
+    );
+    assert_eq!(marker_at(&client(conn), "WS"), None);
+}
+
+#[test]
+fn a_database_without_the_pnam_column_inherits_nothing() {
+    let conn = legacy_connection(&[
+        ("worldspaces", "water_type"),
+        ("worldspaces", "lod_water_type"),
+        ("worldspaces", "lod_water_height"),
+        ("worldspaces", "default_land_height"),
+        ("worldspaces", "default_water_height"),
+        ("worldspaces", "water_environment_map"),
+        ("worldspaces", "parent_flags"),
+    ]);
+    insert(
+        &conn,
+        "worldspaces",
+        &[
+            ("form_key", text("CHILD")),
+            ("parent_worldspace", text("PARENT")),
+        ],
+    );
+    insert(&conn, "worldspaces", &[("form_key", text("PARENT"))]);
+    seed_land(&conn, "PARENT", 9);
+    let db = client(conn);
+    assert_eq!(marker_at(&db, "CHILD"), None);
+    assert_eq!(db.lod_data_owner("CHILD").unwrap(), "CHILD");
+}
+
+#[test]
+fn a_parent_loop_is_an_error_not_a_missing_land() {
+    let conn = schema_connection();
+    seed_worldspaces(
+        &conn,
+        &[("A", Some("B"), LAND_DATA), ("B", Some("A"), LAND_DATA)],
+    );
+    let error = client(conn).get_landscape_at("A", 1, 2).err().unwrap();
+    assert!(error.to_string().contains("loops at"), "{error}");
+}
+
+#[test]
+fn an_unknown_worldspace_is_an_error_not_a_missing_land() {
+    let error = client(schema_connection())
+        .get_landscape_at("NOPE", 1, 2)
+        .err()
+        .unwrap();
+    assert!(is_no_rows(&error));
+}
+
+#[test]
+fn a_missing_parent_row_ends_the_chain_without_land() {
+    let conn = schema_connection();
+    seed_worldspaces(&conn, &[("CHILD", Some("GONE"), LAND_DATA)]);
+    assert_eq!(marker_at(&client(conn), "CHILD"), None);
+}
+
+#[test]
+fn a_worldspace_that_keeps_its_lod_data_owns_it() {
+    let conn = schema_connection();
+    seed_worldspaces(
+        &conn,
+        &[
+            ("CHILD", Some("PARENT"), 0xFF & !LOD_DATA),
+            ("PARENT", None, 0),
+        ],
+    );
+    assert_eq!(client(conn).lod_data_owner("CHILD").unwrap(), "CHILD");
+}
+
+#[test]
+fn lod_data_is_owned_by_the_nearest_ancestor_that_keeps_its_own() {
+    let conn = schema_connection();
+    seed_worldspaces(
+        &conn,
+        &[
+            ("CHILD", Some("PARENT"), LOD_DATA),
+            ("PARENT", Some("GRAND"), LOD_DATA),
+            ("GRAND", None, 0),
+        ],
+    );
+    let db = client(conn);
+    assert_eq!(db.lod_data_owner("CHILD").unwrap(), "GRAND");
+    assert_eq!(db.lod_data_owner("PARENT").unwrap(), "GRAND");
+}
+
+#[test]
+fn lod_data_ignores_the_land_bit() {
+    let conn = schema_connection();
+    seed_worldspaces(
+        &conn,
+        &[("CHILD", Some("PARENT"), LAND_DATA), ("PARENT", None, 0)],
+    );
+    assert_eq!(client(conn).lod_data_owner("CHILD").unwrap(), "CHILD");
 }
 
 // --------------------------------------------------------- placed objects
@@ -1033,6 +1338,421 @@ fn teleport_into_a_cell_picks_the_lowest_source_ref() {
     assert!(db.get_teleport_into_cell("EXT").unwrap().is_none());
 }
 
+#[test]
+fn teleports_carry_their_stored_flags_and_report_no_load_screen() {
+    let conn = teleport_world();
+    teleport(&conn, "door_plain", "dest_int");
+    teleport(&conn, "door_skip", "dest_ext");
+    teleport(&conn, "door_alarm_only", "dest_ext");
+    conn.execute_batch(
+        "UPDATE placed_teleports SET flags = 2 WHERE source_ref = 'door_skip';
+         UPDATE placed_teleports SET flags = 5 WHERE source_ref = 'door_alarm_only';",
+    )
+    .unwrap();
+    let mut all = client(conn).get_placed_teleports().unwrap();
+    all.sort_by(|a, b| a.source_ref.cmp(&b.source_ref));
+
+    let seen: Vec<(&str, u32, bool)> = all
+        .iter()
+        .map(|t| (t.source_ref.as_str(), t.flags, t.no_load_screen()))
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            ("door_alarm_only", 5, false),
+            ("door_plain", 0, false),
+            ("door_skip", 2, true),
+        ]
+    );
+}
+
+#[test]
+fn teleport_flags_read_as_zero_on_a_database_from_an_older_installer() {
+    let conn = legacy_connection(&[("placed_teleports", "flags")]);
+    insert(
+        &conn,
+        "cells",
+        &[("form_key", text("INT")), ("is_interior", int(1))],
+    );
+    insert(
+        &conn,
+        "placed_objects",
+        &placed("dest_int", "INT", (0.0, 0.0, 0.0)),
+    );
+    teleport(&conn, "door_a", "dest_int");
+    let db = client(conn);
+    assert!(!db.schema().teleport_flags_column_present);
+
+    let all = db.get_placed_teleports().unwrap();
+    let into_cell = db.get_teleport_into_cell("INT").unwrap().unwrap();
+
+    assert_eq!((all[0].flags, all[0].no_load_screen()), (0, false));
+    assert_eq!(into_cell.flags, 0);
+}
+
+const LOAD_SCREEN_COLUMNS: [&str; 8] = [
+    "tip",
+    "model",
+    "flags",
+    "transform",
+    "rotation_min",
+    "rotation_max",
+    "zoom_min",
+    "zoom_max",
+];
+
+#[test]
+fn the_load_screen_catalog_is_read_from_the_real_schema() {
+    let conn = schema_connection();
+    insert(
+        &conn,
+        "statics",
+        &[
+            ("form_key", text("STAT")),
+            ("model_path", text("loadscreen/truck.nif")),
+        ],
+    );
+    insert(
+        &conn,
+        "transforms",
+        &[
+            ("form_key", text("TRNS")),
+            ("pos_x", real(0.0)),
+            ("pos_y", real(0.0)),
+            ("pos_z", real(0.0)),
+            ("rot_x", real(0.0)),
+            ("rot_y", real(0.0)),
+            ("rot_z", real(0.0)),
+            ("scale", real(1.0)),
+            ("flags", int(0x10000)),
+            ("zoom_min", real(0.0)),
+            ("zoom_max", real(1.0)),
+        ],
+    );
+    insert(
+        &conn,
+        "load_screens",
+        &[
+            ("form_key", text("LSCR")),
+            ("editor_id", text("LS_Truck")),
+            ("model", text("STAT")),
+            ("flags", int(0)),
+            ("transform", text("TRNS")),
+        ],
+    );
+
+    let catalog = client(conn).get_load_screen_catalog().unwrap().unwrap();
+
+    assert_eq!(catalog.screens.len(), 1);
+    assert_eq!(catalog.screens[0].model_path, "loadscreen/truck.nif");
+    assert!(catalog.screens[0].transform.around_origin);
+}
+
+#[test]
+fn the_load_screen_catalog_is_absent_on_a_database_from_an_older_installer() {
+    let dropped: Vec<(&str, &str)> = LOAD_SCREEN_COLUMNS
+        .iter()
+        .map(|column| ("load_screens", *column))
+        .collect();
+    let conn = legacy_connection(&dropped);
+    conn.execute_batch("DROP TABLE load_screen_conditions; DROP TABLE transforms;")
+        .unwrap();
+    let db = client(conn);
+
+    assert!(!db.schema().load_screen_columns_present);
+    assert!(db.get_load_screen_catalog().unwrap().is_none());
+}
+
+#[test]
+fn detect_rejects_a_partial_load_screen_group_naming_the_missing_columns() {
+    let conn = legacy_connection(&[("load_screens", "tip"), ("load_screens", "zoom_max")]);
+
+    let error = DbSchema::detect(&conn).unwrap_err().to_string();
+
+    assert!(
+        error.contains("tip") && error.contains("zoom_max"),
+        "{error}"
+    );
+}
+
+#[test]
+fn detect_rejects_load_screen_data_present_in_only_some_of_its_tables() {
+    let conn = schema_connection();
+    conn.execute_batch("DROP TABLE transforms;").unwrap();
+
+    let error = DbSchema::detect(&conn).unwrap_err().to_string();
+
+    assert!(
+        error.contains("transform") && error.contains("half converted"),
+        "{error}"
+    );
+}
+
+#[test]
+fn detect_reports_load_screen_data_absent_from_every_table_as_absent() {
+    let conn = schema_connection();
+    conn.execute_batch(
+        "DROP TABLE load_screen_conditions; DROP TABLE transforms; DROP TABLE load_screens;",
+    )
+    .unwrap();
+
+    assert!(!DbSchema::detect(&conn).unwrap().load_screen_columns_present);
+}
+
+#[test]
+fn a_migrated_stub_screen_makes_the_catalog_fail_naming_the_screen() {
+    let conn = schema_connection();
+    insert(
+        &conn,
+        "load_screens",
+        &[
+            ("form_key", text("LSCR")),
+            ("editor_id", text("LS_Stub")),
+            ("model", text("")),
+            ("flags", int(0)),
+        ],
+    );
+
+    let error = client(conn).get_load_screen_catalog().unwrap_err();
+
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("LSCR") && message.contains("LS_Stub"),
+        "{message}"
+    );
+}
+
+// ---------------------------------------------------------- walk-in doors
+
+const BOUNDS_JSON: &str = r#"{"Min":{"X":-64,"Y":-8,"Z":0},"Max":{"X":64,"Y":8,"Z":192}}"#;
+
+/// The schema file gains `doors.trigger_bounds` with the installer; this keeps the tests valid
+/// either side of that change.
+fn with_trigger_bounds_column(conn: Connection, present: bool) -> Connection {
+    let has_column: bool = conn
+        .query_row(
+            "SELECT count(*) > 0 FROM pragma_table_info('doors') WHERE name = 'trigger_bounds'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    match (has_column, present) {
+        (false, true) => conn
+            .execute_batch("ALTER TABLE doors ADD COLUMN trigger_bounds TEXT;")
+            .unwrap(),
+        (true, false) => conn
+            .execute_batch("ALTER TABLE doors DROP COLUMN trigger_bounds;")
+            .unwrap(),
+        _ => {}
+    }
+    conn
+}
+
+fn walk_in_world() -> Connection {
+    let conn = with_trigger_bounds_column(teleport_world(), true);
+    insert(
+        &conn,
+        "doors",
+        &[
+            ("form_key", text("AUTO")),
+            ("flags", text("2")),
+            ("trigger_bounds", text(BOUNDS_JSON)),
+        ],
+    );
+    insert(
+        &conn,
+        "doors",
+        &[
+            ("form_key", text("AUTO_NO_TEXT")),
+            ("flags", text("66")),
+            ("trigger_bounds", text(BOUNDS_JSON)),
+        ],
+    );
+    insert(
+        &conn,
+        "doors",
+        &[
+            ("form_key", text("PLAIN")),
+            ("flags", text("0")),
+            ("trigger_bounds", text(BOUNDS_JSON)),
+        ],
+    );
+    conn
+}
+
+fn placed_door(
+    conn: &Connection,
+    form_key: &str,
+    cell: &str,
+    base: &str,
+    extra: &[(&'static str, Value)],
+) {
+    let mut row = placed(form_key, cell, (10.0, 20.0, 30.0));
+    let overridden =
+        |column: &str| column == "base_object" || extra.iter().any(|(name, _)| *name == column);
+    row.retain(|(column, _)| !overridden(column));
+    row.push(("base_object", text(base)));
+    row.extend(extra.iter().cloned());
+    insert(conn, "placed_objects", &row);
+    teleport(conn, form_key, "dest_int");
+}
+
+#[test]
+fn walk_in_doors_are_the_automatic_doors_with_location_pose_and_bounds() {
+    let conn = walk_in_world();
+    placed_door(
+        &conn,
+        "outdoor",
+        "EXT",
+        "AUTO",
+        &[("scale", real(1.5)), ("rotation_z", real(0.5))],
+    );
+    placed_door(&conn, "indoor", "INT", "AUTO_NO_TEXT", &[]);
+    placed_door(&conn, "ordinary", "EXT", "PLAIN", &[]);
+    let doors = client(conn).get_walk_in_doors().unwrap();
+
+    assert_eq!(doors.without_bounds, Vec::<String>::new());
+    assert!(doors.rejected.is_empty(), "{:?}", doors.rejected);
+    assert_eq!(doors.doors.len(), 2);
+    let indoor = &doors.doors[0];
+    assert_eq!(indoor.source_ref, "indoor");
+    assert_eq!(
+        indoor.location,
+        DoorLocation::Interior { cell: "INT".into() }
+    );
+    let outdoor = &doors.doors[1];
+    assert_eq!(outdoor.source_ref, "outdoor");
+    assert_eq!(
+        outdoor.location,
+        DoorLocation::Exterior {
+            worldspace: "WS".into()
+        }
+    );
+    assert_eq!(outdoor.position, [10.0, 20.0, 30.0]);
+    assert_eq!(outdoor.rotation, [0.0, 0.0, 0.5]);
+    assert_eq!(outdoor.scale, 1.5);
+    assert_eq!(outdoor.bounds.min, [-64.0, -8.0, 0.0]);
+    assert_eq!(outdoor.bounds.max, [64.0, 8.0, 192.0]);
+}
+
+#[test]
+fn walk_in_doors_exclude_refs_that_start_disabled_or_hidden() {
+    let conn = walk_in_world();
+    placed_door(&conn, "on", "EXT", "AUTO", &[]);
+    placed_door(
+        &conn,
+        "disabled",
+        "EXT",
+        "AUTO",
+        &[("is_initially_disabled", int(1))],
+    );
+    placed_door(
+        &conn,
+        "hidden",
+        "EXT",
+        "AUTO",
+        &[("initially_hidden", int(1))],
+    );
+    let doors = client(conn).get_walk_in_doors().unwrap();
+    let refs: Vec<_> = doors.doors.iter().map(|d| d.source_ref.as_str()).collect();
+    assert_eq!(refs, ["on"]);
+}
+
+#[test]
+fn walk_in_doors_without_trigger_bounds_are_reported_not_defaulted() {
+    let conn = walk_in_world();
+    conn.execute(
+        "UPDATE doors SET trigger_bounds = NULL WHERE form_key = 'AUTO'",
+        [],
+    )
+    .unwrap();
+    placed_door(&conn, "nobounds", "EXT", "AUTO", &[]);
+    placed_door(&conn, "fine", "EXT", "AUTO_NO_TEXT", &[]);
+    let doors = client(conn).get_walk_in_doors().unwrap();
+    assert_eq!(doors.without_bounds, ["nobounds"]);
+    assert_eq!(doors.doors.len(), 1);
+    assert_eq!(doors.doors[0].source_ref, "fine");
+}
+
+#[test]
+fn walk_in_doors_from_a_database_without_the_trigger_bounds_column_report_every_ref() {
+    let conn = with_trigger_bounds_column(schema_connection(), false);
+    insert(
+        &conn,
+        "cells",
+        &[("form_key", text("INT")), ("is_interior", int(1))],
+    );
+    insert(
+        &conn,
+        "placed_objects",
+        &placed("dest_int", "INT", (0.0, 0.0, 0.0)),
+    );
+    insert(
+        &conn,
+        "doors",
+        &[("form_key", text("AUTO")), ("flags", text("2"))],
+    );
+    placed_door(&conn, "legacy", "INT", "AUTO", &[]);
+    let doors = client(conn).get_walk_in_doors().unwrap();
+    assert_eq!(doors.doors.len(), 0);
+    assert_eq!(doors.without_bounds, ["legacy"]);
+}
+
+fn rejected_refs(doors: &WalkInDoors) -> Vec<String> {
+    doors.rejected.iter().map(ToString::to_string).collect()
+}
+
+fn walk_in_refs(doors: &WalkInDoors) -> Vec<&str> {
+    doors.doors.iter().map(|d| d.source_ref.as_str()).collect()
+}
+
+#[test]
+fn walk_in_doors_with_malformed_flags_or_bounds_are_rejected_alone_naming_the_ref() {
+    let conn = walk_in_world();
+    conn.execute("UPDATE doors SET flags = 'x' WHERE form_key = 'PLAIN'", [])
+        .unwrap();
+    placed_door(&conn, "badflags", "EXT", "PLAIN", &[]);
+    placed_door(&conn, "fine", "EXT", "AUTO", &[]);
+    let doors = client(conn).get_walk_in_doors().unwrap();
+    let rejected = rejected_refs(&doors);
+    assert!(
+        rejected.len() == 1 && rejected[0].contains("badflags"),
+        "{rejected:?}"
+    );
+    assert_eq!(walk_in_refs(&doors), ["fine"]);
+
+    let conn = walk_in_world();
+    conn.execute(
+        "UPDATE doors SET trigger_bounds = '{\"Min\":1}' WHERE form_key = 'AUTO'",
+        [],
+    )
+    .unwrap();
+    placed_door(&conn, "badbounds", "EXT", "AUTO", &[]);
+    placed_door(&conn, "fine", "EXT", "AUTO_NO_TEXT", &[]);
+    let doors = client(conn).get_walk_in_doors().unwrap();
+    let rejected = rejected_refs(&doors);
+    assert!(
+        rejected.len() == 1 && rejected[0].contains("badbounds"),
+        "{rejected:?}"
+    );
+    assert_eq!(walk_in_refs(&doors), ["fine"]);
+}
+
+#[test]
+fn walk_in_doors_standing_in_an_exterior_cell_without_a_worldspace_are_rejected_naming_the_ref() {
+    let conn = walk_in_world();
+    insert(&conn, "cells", &cell_row("ORPHAN", None, Some((0, 0))));
+    placed_door(&conn, "lost", "ORPHAN", "AUTO", &[]);
+    placed_door(&conn, "fine", "EXT", "AUTO", &[]);
+    let doors = client(conn).get_walk_in_doors().unwrap();
+    let rejected = rejected_refs(&doors);
+    assert!(
+        rejected.len() == 1 && rejected[0].contains("lost"),
+        "{rejected:?}"
+    );
+    assert_eq!(walk_in_refs(&doors), ["fine"]);
+}
+
 // ---------------------------------------------------------- material swaps
 
 #[test]
@@ -1211,6 +1931,30 @@ fn weather_without_the_fog_column_reads_fog_as_none() {
 }
 
 #[test]
+fn weather_fog_scales_are_read_and_a_database_without_their_column_reads_them_as_none() {
+    let scales = "[1.0,1.1]";
+    let conn = schema_connection();
+    insert(
+        &conn,
+        "weather",
+        &[("form_key", text("W")), ("fog_scales", text(scales))],
+    );
+    let db = client(conn);
+    assert!(db.schema().weather_fog_scales_column_present);
+    assert_eq!(
+        db.get_weather("W").unwrap().fog_scales.as_deref(),
+        Some(scales)
+    );
+
+    let conn = legacy_connection(&[("weather", "fog_scales")]);
+    insert(&conn, "weather", &[("form_key", text("W"))]);
+    let db = client(conn);
+    assert!(!db.schema().weather_fog_scales_column_present);
+    assert_eq!(db.get_weather("W").unwrap().fog_scales, None);
+    assert!(db.schema().weather_fog_column_present);
+}
+
+#[test]
 fn unknown_weather_is_a_no_rows_error() {
     let error = client(schema_connection())
         .get_weather("nope")
@@ -1260,6 +2004,34 @@ fn climate_and_image_space_data_are_returned_verbatim() {
     assert_eq!(db.get_image_space_data("IS").unwrap(), None);
     assert!(matches!(
         db.get_climate_data("missing").unwrap_err(),
+        rusqlite::Error::QueryReturnedNoRows
+    ));
+}
+
+#[test]
+fn climate_sun_textures_are_returned_and_may_be_null() {
+    let conn = schema_connection();
+    insert(
+        &conn,
+        "climates",
+        &[
+            ("form_key", text("CL")),
+            ("sun_texture", text(r"Sky\Sun_d.dds")),
+            ("sun_glare_texture", text(r"Sky\SunGlare.dds")),
+        ],
+    );
+    insert(&conn, "climates", &[("form_key", text("BARE"))]);
+    let db = client(conn);
+    assert_eq!(
+        db.get_climate_sun_textures("CL").unwrap(),
+        (
+            Some(r"Sky\Sun_d.dds".to_owned()),
+            Some(r"Sky\SunGlare.dds".to_owned())
+        )
+    );
+    assert_eq!(db.get_climate_sun_textures("BARE").unwrap(), (None, None));
+    assert!(matches!(
+        db.get_climate_sun_textures("missing").unwrap_err(),
         rusqlite::Error::QueryReturnedNoRows
     ));
 }
@@ -2699,4 +3471,404 @@ fn a_database_with_only_some_navmesh_columns_is_rejected() {
     )
     .unwrap();
     assert!(DbClient::from_connection(conn).is_err());
+}
+
+fn seed_collision_layer(
+    conn: &Connection,
+    form_key: &str,
+    editor_id: &str,
+    index: i64,
+    flags: i64,
+    collides_with: Value,
+) {
+    insert(
+        conn,
+        "collision_layers",
+        &[
+            ("form_key", text(form_key)),
+            ("editor_id", text(editor_id)),
+            ("layer_index", int(index)),
+            ("flags", int(flags)),
+            ("collides_with", collides_with),
+        ],
+    );
+}
+
+fn seed_character_layers(conn: &Connection) {
+    seed_collision_layer(
+        conn,
+        "08877F:Fallout4.esm",
+        "L_CHARCONTROLLER",
+        30,
+        0,
+        text(r#"["0D8121:Fallout4.esm"]"#),
+    );
+    seed_collision_layer(
+        conn,
+        "0D8121:Fallout4.esm",
+        "L_CHARBUMPER",
+        56,
+        0,
+        text(r#"["08877F:Fallout4.esm"]"#),
+    );
+}
+
+#[test]
+fn player_collision_layers_resolve_from_the_stored_rows() {
+    use openfo4::assets::db::collision_layers::LayerSolidity;
+    let conn = schema_connection();
+    seed_character_layers(&conn);
+    seed_collision_layer(
+        &conn,
+        "000001:Fallout4.esm",
+        "L_STATIC",
+        1,
+        0,
+        text(r#"["08877F:Fallout4.esm"]"#),
+    );
+    seed_collision_layer(&conn, "000002:Fallout4.esm", "L_NAVCUT", 49, 5, Value::Null);
+    seed_collision_layer(
+        &conn,
+        "000003:Fallout4.esm",
+        "L_NONCOLLIDABLE",
+        15,
+        0,
+        text(r#"["000001:Fallout4.esm"]"#),
+    );
+    let layers = client(conn).get_player_collision_layers().unwrap();
+    assert_eq!(layers.solidity(Some(1)), LayerSolidity::Solid);
+    assert_eq!(layers.solidity(Some(49)), LayerSolidity::NeverTouchesPlayer);
+    assert_eq!(layers.solidity(Some(15)), LayerSolidity::NeverTouchesPlayer);
+    assert_eq!(layers.solidity(Some(99)), LayerSolidity::SolidUnknown);
+}
+
+#[test]
+fn player_collision_layers_keep_everything_solid_on_a_database_from_an_older_installer() {
+    use openfo4::assets::db::collision_layers::LayerSolidity;
+    let conn = legacy_connection(&[
+        ("collision_layers", "layer_index"),
+        ("collision_layers", "flags"),
+        ("collision_layers", "collides_with"),
+    ]);
+    let layers = client(conn).get_player_collision_layers().unwrap();
+    assert_eq!(layers.solidity(Some(49)), LayerSolidity::Solid);
+}
+
+#[test]
+fn player_collision_layers_keep_everything_solid_without_the_character_layers() {
+    use openfo4::assets::db::collision_layers::LayerSolidity;
+    let conn = schema_connection();
+    seed_collision_layer(&conn, "000002:Fallout4.esm", "L_NAVCUT", 49, 5, Value::Null);
+    let layers = client(conn).get_player_collision_layers().unwrap();
+    assert_eq!(layers.solidity(Some(49)), LayerSolidity::Solid);
+}
+
+#[test]
+fn a_malformed_collides_with_list_is_an_error() {
+    let conn = schema_connection();
+    seed_character_layers(&conn);
+    seed_collision_layer(
+        &conn,
+        "000004:Fallout4.esm",
+        "L_BAD",
+        7,
+        0,
+        text("not json"),
+    );
+    let error = client(conn).get_player_collision_layers().unwrap_err();
+    assert!(
+        format!("{error:#}").contains("000004:Fallout4.esm"),
+        "{error:#}"
+    );
+}
+
+// ---------------------------------------------------- globals and game settings
+
+fn seed_global(conn: &Connection, editor_id: &str, value: Value) {
+    insert(
+        conn,
+        "globals",
+        &[
+            ("form_key", text(&format!("{editor_id}:Fallout4.esm"))),
+            ("editor_id", text(editor_id)),
+            ("value_type", text("float")),
+            ("value", value),
+        ],
+    );
+}
+
+fn seed_game_setting(
+    conn: &Connection,
+    editor_id: &str,
+    value_type: &str,
+    (value_int, value_float): (Value, Value),
+) {
+    insert(
+        conn,
+        "game_settings",
+        &[
+            ("form_key", text(&format!("{editor_id}:Fallout4.esm"))),
+            ("editor_id", text(editor_id)),
+            ("value_type", text(value_type)),
+            ("value_int", value_int),
+            ("value_float", value_float),
+        ],
+    );
+}
+
+#[test]
+fn a_global_is_read_by_editor_id() {
+    let conn = schema_connection();
+    seed_global(&conn, "TimeScale", real(20.0));
+    seed_global(&conn, "GameHour", real(11.5));
+    let db = client(conn);
+    assert_eq!(db.get_global("TimeScale").unwrap(), Some(20.0));
+    assert_eq!(db.get_global("GameHour").unwrap(), Some(11.5));
+}
+
+#[test]
+fn an_unknown_global_is_absent_rather_than_an_error() {
+    let db = client(schema_connection());
+    assert_eq!(db.get_global("TimeScale").unwrap(), None);
+}
+
+#[test]
+fn a_global_without_a_value_is_an_error() {
+    let conn = schema_connection();
+    seed_global(&conn, "TimeScale", Value::Null);
+    assert!(client(conn).get_global("TimeScale").is_err());
+}
+
+#[test]
+fn a_global_query_fails_when_the_table_is_missing() {
+    let conn = schema_connection();
+    conn.execute_batch("DROP TABLE globals;").unwrap();
+    assert!(client(conn).get_global("TimeScale").is_err());
+}
+
+#[test]
+fn float_and_int_game_settings_read_as_numbers() {
+    let conn = schema_connection();
+    seed_game_setting(&conn, "fSunXExtreme", "float", (Value::Null, real(600.0)));
+    seed_game_setting(&conn, "iMasserSize", "int", (int(90), Value::Null));
+    let db = client(conn);
+    assert_eq!(
+        db.get_game_setting_number("fSunXExtreme").unwrap(),
+        Some(600.0)
+    );
+    assert_eq!(
+        db.get_game_setting_number("iMasserSize").unwrap(),
+        Some(90.0)
+    );
+}
+
+#[test]
+fn an_unknown_game_setting_is_absent_rather_than_an_error() {
+    let db = client(schema_connection());
+    assert_eq!(db.get_game_setting_number("fSunXExtreme").unwrap(), None);
+}
+
+#[test]
+fn a_non_numeric_game_setting_is_an_error_naming_it() {
+    let conn = schema_connection();
+    seed_game_setting(
+        &conn,
+        "sMasserTexture",
+        "string",
+        (Value::Null, Value::Null),
+    );
+    seed_game_setting(&conn, "bFlag", "bool", (int(1), Value::Null));
+    let db = client(conn);
+    for name in ["sMasserTexture", "bFlag"] {
+        let error = db.get_game_setting_number(name).unwrap_err();
+        assert!(format!("{error:#}").contains(name), "{error:#}");
+    }
+}
+
+#[test]
+fn a_numeric_game_setting_without_a_value_is_an_error_naming_it() {
+    let conn = schema_connection();
+    seed_game_setting(&conn, "fSunXExtreme", "float", (Value::Null, Value::Null));
+    let error = client(conn)
+        .get_game_setting_number("fSunXExtreme")
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("fSunXExtreme"), "{error:#}");
+}
+
+// ---------------------------------------------------------------- weather sound catalog
+
+const WIND_BED: &str = "000A01:Test.esm";
+const THUNDER: &str = "000A02:Test.esm";
+const THUNDER_LAYER: &str = "000A03:Test.esm";
+const UNRELATED_SOUND: &str = "000A04:Test.esm";
+const SOUND_MODEL: &str = "000A10:Test.esm";
+const SOUND_CATEGORY: &str = "000A11:Test.esm";
+const STANDARD_SOUND: i64 = 0x1EEF_540A;
+const COMPOUND_SOUND: i64 = 0x5465_1A43;
+const LOOPING_BED: i64 = 0x0804;
+
+fn seed_sound(
+    conn: &Connection,
+    key: &str,
+    descriptor_type: i64,
+    looping_flags: i64,
+    file: Option<&str>,
+) {
+    insert(
+        conn,
+        "sound_descriptors",
+        &[
+            ("form_key", text(key)),
+            ("descriptor_type", int(descriptor_type)),
+            ("category", text(SOUND_CATEGORY)),
+            ("output_model", text(SOUND_MODEL)),
+            (
+                "sound_files",
+                text(&serde_json::json!(file.into_iter().collect::<Vec<_>>()).to_string()),
+            ),
+            ("freq_shift_pct", int(0)),
+            ("freq_variance_pct", int(0)),
+            ("priority", int(0)),
+            ("db_variance", int(0)),
+            ("static_attenuation_centidb", int(0)),
+            ("looping_flags", int(looping_flags)),
+        ],
+    );
+}
+
+/// A looping wind bed, a compound thunder with one layer, a sound no weather reaches, and the
+/// output model and category they share.
+fn seed_weather_sounds(conn: &Connection) {
+    insert(
+        conn,
+        "sound_categories",
+        &[
+            ("form_key", text(SOUND_CATEGORY)),
+            ("static_attenuation", real(0.5)),
+        ],
+    );
+    insert(
+        conn,
+        "sound_output_models",
+        &[
+            ("form_key", text(SOUND_MODEL)),
+            ("output_type", int(1)),
+            ("static_attenuation_db", real(2.0)),
+        ],
+    );
+    for speaker in ["L", "R"] {
+        insert(
+            conn,
+            "sound_output_channels",
+            &[
+                ("model", text(SOUND_MODEL)),
+                ("ord", int(0)),
+                ("speaker", text(speaker)),
+                ("percent", int(50)),
+            ],
+        );
+    }
+    seed_sound(
+        conn,
+        WIND_BED,
+        STANDARD_SOUND,
+        LOOPING_BED,
+        Some("Sound\\FX\\AMB\\wind_bed.wav"),
+    );
+    seed_sound(conn, THUNDER, COMPOUND_SOUND, 0, None);
+    seed_sound(
+        conn,
+        THUNDER_LAYER,
+        STANDARD_SOUND,
+        0,
+        Some("Sound\\FX\\AMB\\thunder.wav"),
+    );
+    seed_sound(
+        conn,
+        UNRELATED_SOUND,
+        STANDARD_SOUND,
+        0,
+        Some("Sound\\FX\\AMB\\other.wav"),
+    );
+    insert(
+        conn,
+        "sound_descriptor_children",
+        &[
+            ("descriptor", text(THUNDER)),
+            ("ord", int(0)),
+            ("child", text(THUNDER_LAYER)),
+        ],
+    );
+}
+
+fn weather_roots() -> [String; 2] {
+    [WIND_BED.to_string(), THUNDER.to_string()]
+}
+
+#[test]
+fn the_weather_sound_catalog_holds_the_sounds_below_the_roots_with_their_model_and_category() {
+    let conn = schema_connection();
+    seed_weather_sounds(&conn);
+
+    let catalog = client(conn)
+        .get_weather_sound_catalog(weather_roots())
+        .unwrap();
+
+    let mut keys: Vec<&str> = catalog.descriptors.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, [WIND_BED, THUNDER, THUNDER_LAYER]);
+    assert_eq!(catalog.descriptors[WIND_BED].looping_flags, 0x0804);
+    assert_eq!(catalog.descriptors[THUNDER].children, [THUNDER_LAYER]);
+    assert!(catalog.output_models.contains_key(SOUND_MODEL));
+    assert_eq!(
+        catalog.categories[SOUND_CATEGORY].static_multiplier,
+        Some(0.5)
+    );
+}
+
+#[test]
+fn the_weather_sound_catalog_does_not_need_the_footstep_tables() {
+    let conn = legacy_connection(&[("footstep_sets", "editor_id")]);
+    seed_weather_sounds(&conn);
+    let db = client(conn);
+
+    assert!(db.get_weather_sound_catalog(weather_roots()).is_ok());
+    assert!(db.get_footstep_catalog().is_err());
+}
+
+#[test]
+fn the_weather_sound_catalog_names_the_sound_column_an_older_installer_did_not_extract() {
+    let conn = legacy_connection(&[("sound_descriptors", "looping_flags")]);
+
+    let error = client(conn)
+        .get_weather_sound_catalog(weather_roots())
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            error.downcast_ref::<SchemaError>(),
+            Some(SchemaError::WeatherSoundColumnsMissing { table: "sound_descriptors", missing })
+                if missing == &["looping_flags"]
+        ),
+        "{error:#}"
+    );
+    assert!(
+        format!("{error:#}").contains("re-run the installer"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn a_weather_sound_root_the_database_does_not_know_is_an_error_naming_it() {
+    let conn = schema_connection();
+    seed_weather_sounds(&conn);
+
+    let error = client(conn)
+        .get_weather_sound_catalog(["000FFF:Test.esm".to_string()])
+        .unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("000FFF:Test.esm"),
+        "{error:#}"
+    );
 }

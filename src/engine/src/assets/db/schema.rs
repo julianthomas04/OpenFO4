@@ -35,6 +35,11 @@ const MATERIAL_SWAP_COLUMNS: &[&str] = &["material_name"];
 const WORLDSPACE_WEATHER_COLUMNS: &[&str] = &["climate"];
 const WEATHER_COLUMNS: &[&str] = &["directional_ambient"];
 const WEATHER_FOG_COLUMNS: &[&str] = &["fog"];
+const WEATHER_FOG_SCALES_COLUMNS: &[&str] = &["fog_scales"];
+const WEATHER_LIBRARY_COLUMNS: &[&str] = &["clouds", "data"];
+const CLIMATE_VOLATILITY_COLUMNS: &[&str] = &["volatility"];
+const PARTICLE_GEOMETRY_COLUMNS: &[&str] = &["data", "particle_texture", "particle_material"];
+const PARTICLE_MATERIAL_DATA_COLUMNS: &[&str] = &["particle_material_data"];
 const CELL_WATER_COLUMNS: &[&str] = &[
     "has_water",
     "no_lod_water",
@@ -69,11 +74,54 @@ const MAP_MARKER_COLUMNS: &[&str] = &[
 ];
 const WORLDSPACE_MAP_IMAGE_COLUMNS: &[&str] = &["map_image"];
 
+/// The installer command that fills the weather fog scales.
+const WEATHER_FOG_SCALES_TABLES_FIX: &str = "esm-only --tables weather";
+
+/// The installer command that fills the weather library columns.
+pub const WEATHER_LIBRARY_TABLES_FIX: &str =
+    "esm-only --tables weather,climates,shader_particle_geometries";
+
 /// The installer command that fills the Pip-Boy tables and columns.
 const PIPBOY_TABLES_FIX: &str =
     "esm-only --tables worldspaces,map_markers,perks,perk_chart,special_attributes";
 const WEAPON_DEFAULT_MODS_COLUMNS: &[&str] = &["default_mods"];
 const OBJECT_MOD_MODEL_COLUMNS: &[&str] = &["model_path", "attach_point_name"];
+const DOOR_TRIGGER_BOUNDS_COLUMNS: &[&str] = &["trigger_bounds"];
+const LOAD_SCREEN_COLUMNS: &[&str] = &[
+    "tip",
+    "model",
+    "flags",
+    "transform",
+    "rotation_min",
+    "rotation_max",
+    "zoom_min",
+    "zoom_max",
+];
+const LOAD_SCREEN_CONDITION_COLUMNS: &[&str] = &[
+    "screen",
+    "ord",
+    "function",
+    "compare_op",
+    "or_flag",
+    "flags",
+    "compare_value",
+    "compare_global",
+    "run_on",
+    "reference",
+    "param1_num",
+    "param1_record",
+    "param1_string",
+    "param2_num",
+    "param2_record",
+    "param2_string",
+    "param3",
+];
+const TRANSFORM_COLUMNS: &[&str] = &[
+    "pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "scale", "flags", "zoom_min", "zoom_max",
+];
+const WORLDSPACE_LOCATION_COLUMNS: &[&str] = &["location"];
+const TELEPORT_FLAGS_COLUMNS: &[&str] = &["flags"];
+const COLLISION_LAYER_COLUMNS: &[&str] = &["layer_index", "flags", "collides_with"];
 const NAVMESH_COLUMNS: &[&str] = &[
     "form_id",
     "cell",
@@ -101,6 +149,11 @@ pub enum ColumnGroup {
     WorldspaceWeather,
     Weather,
     WeatherFog,
+    WeatherFogScales,
+    WeatherLibrary,
+    ClimateVolatility,
+    ParticleGeometry,
+    ParticleMaterialData,
     CellWater,
     WorldspaceWater,
     ActivatorWater,
@@ -113,6 +166,13 @@ pub enum ColumnGroup {
     WeaponDefaultMods,
     ObjectModModel,
     Navmesh,
+    CollisionLayer,
+    DoorTriggerBounds,
+    LoadScreen,
+    LoadScreenCondition,
+    Transform,
+    TeleportFlags,
+    WorldspaceLocation,
 }
 
 impl std::fmt::Display for ColumnGroup {
@@ -125,6 +185,11 @@ impl std::fmt::Display for ColumnGroup {
             Self::WorldspaceWeather => "worldspace weather",
             Self::Weather => "weather",
             Self::WeatherFog => "weather fog",
+            Self::WeatherFogScales => "weather fog scales",
+            Self::WeatherLibrary => "weather library",
+            Self::ClimateVolatility => "climate volatility",
+            Self::ParticleGeometry => "particle geometry",
+            Self::ParticleMaterialData => "particle material data",
             Self::CellWater => "cell water",
             Self::WorldspaceWater => "worldspace water",
             Self::ActivatorWater => "activator water",
@@ -137,6 +202,13 @@ impl std::fmt::Display for ColumnGroup {
             Self::WeaponDefaultMods => "weapon default mods",
             Self::ObjectModModel => "object modification model",
             Self::Navmesh => "navmesh",
+            Self::CollisionLayer => "collision layer",
+            Self::DoorTriggerBounds => "door trigger bounds",
+            Self::LoadScreen => "load screen",
+            Self::LoadScreenCondition => "load screen condition",
+            Self::Transform => "transform",
+            Self::TeleportFlags => "teleport flags",
+            Self::WorldspaceLocation => "worldspace location",
         })
     }
 }
@@ -216,6 +288,7 @@ const MUSIC_TABLES: &[(&str, &[&str])] = &[
     ),
 ];
 
+/// The footstep tables besides the sound ones.
 const FOOTSTEP_TABLES: &[(&str, &[&str])] = &[
     ("default_object_slots", &["manager", "slot", "target"]),
     ("footstep_sets", &["form_key", "editor_id"]),
@@ -238,6 +311,11 @@ const FOOTSTEP_TABLES: &[(&str, &[&str])] = &[
         &["form_key", "editor_id", "material_hash", "parent"],
     ),
     ("landscape_textures", &["form_key", "material_type"]),
+];
+
+/// The sound descriptors, their output models and the sound categories: what a sound that plays
+/// from a descriptor reads, footsteps and weather alike.
+const SOUND_TABLES: &[(&str, &[&str])] = &[
     (
         "sound_descriptors",
         &[
@@ -304,11 +382,18 @@ pub enum SchemaError {
         table: &'static str,
         missing: Vec<&'static str>,
     },
+    #[error("table `{table}` lacks the sound columns {}; the database predates sound extraction, re-run the installer", missing.join(", "))]
+    WeatherSoundColumnsMissing {
+        table: &'static str,
+        missing: Vec<&'static str>,
+    },
     #[error("table `{table}` lacks the ambient music columns {}; the database predates music extraction, re-run the installer", missing.join(", "))]
     MusicColumnsMissing {
         table: &'static str,
         missing: Vec<&'static str>,
     },
+    #[error("the load screen data is present in some tables but missing from the {} columns; the database is half converted, re-run the installer", missing.iter().map(ToString::to_string).collect::<Vec<_>>().join(" and "))]
+    PartialLoadScreenTables { missing: Vec<ColumnGroup> },
     #[error("table `{table}` has only some of its {group} columns; missing: {}", missing.join(", "))]
     PartialColumnGroup {
         group: ColumnGroup,
@@ -328,6 +413,12 @@ pub struct DbSchema {
     pub material_swap_name_column_present: bool,
     pub weather_columns_present: bool,
     pub weather_fog_column_present: bool,
+    pub weather_fog_scales_column_present: bool,
+    /// The weather clouds and data, the climate volatility and the particle geometry
+    /// columns the weather library needs, all or none.
+    pub weather_library_columns_present: bool,
+    /// The material data of the particle geometries, which the weather library reads when present.
+    pub particle_material_data_column_present: bool,
     pub cell_water_columns_present: bool,
     pub worldspace_water_columns_present: bool,
     pub activator_water_column_present: bool,
@@ -340,6 +431,13 @@ pub struct DbSchema {
     pub weapon_default_mods_column_present: bool,
     pub object_mod_model_columns_present: bool,
     pub navmesh_columns_present: bool,
+    pub collision_layer_columns_present: bool,
+    pub door_trigger_bounds_column_present: bool,
+    /// The load screen, load screen condition and transform tables the loading screen catalog
+    /// reads, all or none.
+    pub load_screen_columns_present: bool,
+    pub teleport_flags_column_present: bool,
+    pub worldspace_location_column_present: bool,
 }
 
 impl DbSchema {
@@ -385,6 +483,34 @@ impl DbSchema {
                 ColumnGroup::WeatherFog,
                 "weather",
                 WEATHER_FOG_COLUMNS,
+            )?,
+            weather_fog_scales_column_present: column_group_present(
+                conn,
+                ColumnGroup::WeatherFogScales,
+                "weather",
+                WEATHER_FOG_SCALES_COLUMNS,
+            )?,
+            weather_library_columns_present: column_group_present(
+                conn,
+                ColumnGroup::WeatherLibrary,
+                "weather",
+                WEATHER_LIBRARY_COLUMNS,
+            )? & column_group_present(
+                conn,
+                ColumnGroup::ClimateVolatility,
+                "climates",
+                CLIMATE_VOLATILITY_COLUMNS,
+            )? & column_group_present(
+                conn,
+                ColumnGroup::ParticleGeometry,
+                "shader_particle_geometries",
+                PARTICLE_GEOMETRY_COLUMNS,
+            )?,
+            particle_material_data_column_present: column_group_present(
+                conn,
+                ColumnGroup::ParticleMaterialData,
+                "shader_particle_geometries",
+                PARTICLE_MATERIAL_DATA_COLUMNS,
             )?,
             cell_water_columns_present: column_group_present(
                 conn,
@@ -458,6 +584,31 @@ impl DbSchema {
                 "navigation_meshes",
                 NAVMESH_COLUMNS,
             )?,
+            collision_layer_columns_present: column_group_present(
+                conn,
+                ColumnGroup::CollisionLayer,
+                "collision_layers",
+                COLLISION_LAYER_COLUMNS,
+            )?,
+            door_trigger_bounds_column_present: column_group_present(
+                conn,
+                ColumnGroup::DoorTriggerBounds,
+                "doors",
+                DOOR_TRIGGER_BOUNDS_COLUMNS,
+            )?,
+            load_screen_columns_present: load_screen_tables_present(conn)?,
+            teleport_flags_column_present: column_group_present(
+                conn,
+                ColumnGroup::TeleportFlags,
+                "placed_teleports",
+                TELEPORT_FLAGS_COLUMNS,
+            )?,
+            worldspace_location_column_present: column_group_present(
+                conn,
+                ColumnGroup::WorldspaceLocation,
+                "worldspaces",
+                WORLDSPACE_LOCATION_COLUMNS,
+            )?,
         })
     }
 
@@ -492,6 +643,11 @@ impl DbSchema {
                     "water columns missing (database predates water extraction); cell and worldspace water planes and placed water meshes cannot name their water type"
                 );
             }
+            if !self.weather_fog_scales_column_present {
+                tracing::warn!(
+                    "weather.fog_scales column missing (database predates the NAM4 export); every weather's far fog colours take the factors of a NAM4 of 1.0. Fix: run the installer with `{WEATHER_FOG_SCALES_TABLES_FIX}`"
+                );
+            }
             if !self.material_swap_name_column_present {
                 tracing::warn!(
                     "material_swap_entries.material_name column missing (database predates material data conversion); material swaps render matte with plain texture fields"
@@ -523,6 +679,21 @@ impl DbSchema {
             if !self.navmesh_columns_present {
                 tracing::warn!(
                     "navigation_meshes geometry columns missing (database predates navmesh extraction); no navigation meshes are loaded"
+                );
+            }
+            if !self.load_screen_columns_present {
+                tracing::warn!(
+                    "load screen columns missing (database predates the load screen extraction); large loading screens fall back to the small one"
+                );
+            }
+            if !self.worldspace_location_column_present {
+                tracing::warn!(
+                    "worldspaces.location column missing (database predates the worldspace location export); exterior cells without a location of their own are in no location"
+                );
+            }
+            if !self.teleport_flags_column_present {
+                tracing::warn!(
+                    "placed_teleports.flags column missing (database predates the teleport flags export); every load door shows its loading screen"
                 );
             }
         });
@@ -585,6 +756,22 @@ pub fn activator_water_select_list(schema: DbSchema, prefix: &str) -> String {
     )
 }
 
+pub fn door_trigger_bounds_select_list(schema: DbSchema, prefix: &str) -> String {
+    select_list(
+        DOOR_TRIGGER_BOUNDS_COLUMNS,
+        schema.door_trigger_bounds_column_present,
+        prefix,
+    )
+}
+
+pub fn teleport_flags_select_list(schema: DbSchema, prefix: &str) -> String {
+    select_list(
+        TELEPORT_FLAGS_COLUMNS,
+        schema.teleport_flags_column_present,
+        prefix,
+    )
+}
+
 pub fn placed_object_light_select_list(schema: DbSchema, prefix: &str) -> String {
     select_list(
         PLACED_OBJECT_LIGHT_COLUMNS,
@@ -611,13 +798,37 @@ pub fn require_music_tables(conn: &Connection) -> anyhow::Result<()> {
 
 /// Every table and column the footstep catalog reads; a missing table reads as all its columns missing.
 pub fn require_footstep_tables(conn: &Connection) -> anyhow::Result<()> {
-    for &(table, columns) in FOOTSTEP_TABLES {
+    match first_table_with_missing_columns(conn, FOOTSTEP_TABLES.iter().chain(SOUND_TABLES))? {
+        Some((table, missing)) => {
+            Err(SchemaError::FootstepColumnsMissing { table, missing }.into())
+        }
+        None => Ok(()),
+    }
+}
+
+/// Every table and column the weather sounds read; a missing table reads as all its columns
+/// missing. The footstep tables are not needed.
+pub fn require_weather_sound_tables(conn: &Connection) -> anyhow::Result<()> {
+    match first_table_with_missing_columns(conn, SOUND_TABLES)? {
+        Some((table, missing)) => {
+            Err(SchemaError::WeatherSoundColumnsMissing { table, missing }.into())
+        }
+        None => Ok(()),
+    }
+}
+
+/// The first of `tables` that lacks columns, with the columns it lacks.
+fn first_table_with_missing_columns<'a>(
+    conn: &Connection,
+    tables: impl IntoIterator<Item = &'a (&'static str, &'static [&'static str])>,
+) -> anyhow::Result<Option<(&'static str, Vec<&'static str>)>> {
+    for &(table, columns) in tables {
         let missing = missing_columns(conn, table, columns)?;
         if !missing.is_empty() {
-            return Err(SchemaError::FootstepColumnsMissing { table, missing }.into());
+            return Ok(Some((table, missing)));
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 fn missing_columns(
@@ -638,6 +849,34 @@ fn table_columns(conn: &Connection, table: &str) -> anyhow::Result<Vec<String>> 
     Ok(stmt
         .query_map([table], |row| row.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?)
+}
+
+/// Whether the load screen, load screen condition and transform tables are all complete. Absent
+/// everywhere is a database from before the export; a mix means a half converted database.
+fn load_screen_tables_present(conn: &Connection) -> anyhow::Result<bool> {
+    let groups = [
+        (ColumnGroup::LoadScreen, "load_screens", LOAD_SCREEN_COLUMNS),
+        (
+            ColumnGroup::LoadScreenCondition,
+            "load_screen_conditions",
+            LOAD_SCREEN_CONDITION_COLUMNS,
+        ),
+        (ColumnGroup::Transform, "transforms", TRANSFORM_COLUMNS),
+    ];
+    let mut present = Vec::new();
+    let mut missing = Vec::new();
+    for (group, table, columns) in groups {
+        if column_group_present(conn, group, table, columns)? {
+            present.push(group);
+        } else {
+            missing.push(group);
+        }
+    }
+    if present.is_empty() || missing.is_empty() {
+        Ok(missing.is_empty())
+    } else {
+        Err(SchemaError::PartialLoadScreenTables { missing }.into())
+    }
 }
 
 fn column_group_present(

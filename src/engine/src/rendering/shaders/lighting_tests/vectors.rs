@@ -262,18 +262,20 @@ fn directional_and_shadowed_lights_drop_the_rim_with_ignore_roughness() {
 }
 
 /// (constant, scalar, exponent) and the attenuation at distance over radius
-/// 0.25, 0.5, 0.75, 0.9 and 0.97.
+/// 0.25, 0.5, 0.75, 0.9 and 0.97. The radius window `(distance / radius)^2` is a
+/// floor under the lost share, which decides the rows whose own loss stays below it.
 #[rustfmt::skip]
-const ATTENUATION_ROWS: [([f32; 3], [f32; 5]); 9] = [
+const ATTENUATION_ROWS: [([f32; 3], [f32; 5]); 10] = [
     ([0.0, 1.0, 2.0], [0.867635, 0.531049, 0.162238, 0.025898, 0.001984]),
     ([0.0, 1.0, 1.0], [0.531049, 0.217638, 0.047366, 0.006310, 0.000446]),
     ([0.0, 1.0, 0.5], [0.217638, 0.067106, 0.012007, 0.001454, 0.000099]),
     ([0.2, 0.8, 1.0], [0.325037, 0.133209, 0.028991, 0.003862, 0.000273]),
     ([0.0, 2.0, 2.0], [0.745449, 0.217638, 0.0, 0.0, 0.0]),
     ([0.5, 0.5, 3.0], [0.210226, 0.162238, 0.065190, 0.012310, 0.001019]),
-    ([0.0, 1.0, 4.0], [0.991426, 0.867635, 0.433068, 0.095532, 0.008533]),
-    ([-0.2, 1.0, 2.0], [1.0, 0.893289, 0.371412, 0.125992, 0.051242]),
-    ([0.0, 0.5, 2.0], [0.932536, 0.745449, 0.483583, 0.319108, 0.246942]),
+    ([0.0, 1.0, 4.0], [0.867635, 0.531049, 0.162238, 0.025898, 0.001984]),
+    ([-0.2, 1.0, 2.0], [0.867635, 0.531049, 0.162238, 0.025898, 0.001984]),
+    ([0.0, 0.5, 2.0], [0.867635, 0.531049, 0.162238, 0.025898, 0.001984]),
+    ([0.0, 1.2, 3.0], [0.867635, 0.531049, 0.162238, 0.010345, 0.0]),
 ];
 const ATTENUATION_DISTANCE_FRACTIONS: [f32; 5] = [0.25, 0.5, 0.75, 0.9, 0.97];
 const ATTENUATION_RADIUS: f32 = 100.0;
@@ -295,6 +297,48 @@ fn attenuation_matches_expected_samples() {
     }
     for (output, (row, expected)) in run(&cases).iter().zip(&rows) {
         assert_close(output.scalar(), *expected, row);
+    }
+}
+
+#[test]
+#[ignore = "needs a GPU adapter"]
+fn loading_scene_falloff_is_the_product_of_the_record_and_window_falloffs() {
+    // (record, fraction of the radius, world falloff, loading scene falloff)
+    let rows = [
+        ([0.0, 1.0, 2.0], 0.25, 0.867635, 0.75279),
+        ([0.0, 1.0, 2.0], 0.5, 0.531049, 0.282013),
+        ([0.0, 1.0, 2.0], 0.75, 0.162238, 0.026321),
+        ([0.5, 0.5, 3.0], 0.5, 0.162238, 0.086156),
+        ([0.0, 1.0, 2.0], 1.0, 0.0, 0.0),
+    ];
+    let lights: Vec<Light> = rows
+        .iter()
+        .map(|&([constant, scalar, exponent], ..)| Light::attenuated(constant, scalar, exponent))
+        .collect();
+    let distances: Vec<f32> = rows
+        .iter()
+        .map(|&(_, fraction, ..)| fraction * ATTENUATION_RADIUS)
+        .collect();
+    let world_cases: Vec<Case> = lights
+        .iter()
+        .zip(&distances)
+        .map(|(l, &d)| Case::attenuation(l, d))
+        .collect();
+    let loading_cases: Vec<Case> = lights
+        .iter()
+        .zip(&distances)
+        .map(|(l, &d)| Case::loading_falloff(l, d))
+        .collect();
+    let world = run(&world_cases);
+    let loading = run(&loading_cases);
+    for (i, &(record, fraction, world_expected, loading_expected)) in rows.iter().enumerate() {
+        let row = format!("record={record:?} x={fraction}");
+        assert_close(world[i].scalar(), world_expected, &format!("world {row}"));
+        assert_close(
+            loading[i].scalar(),
+            loading_expected,
+            &format!("loading {row}"),
+        );
     }
 }
 
@@ -496,6 +540,7 @@ fn ambient_environment(max_specular_intensity: Option<f32>) -> Environment {
     Environment {
         max_specular_intensity,
         ambient_cube: gradient_cube(),
+        ..Environment::default()
     }
 }
 

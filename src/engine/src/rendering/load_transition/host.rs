@@ -1,0 +1,738 @@
+//! Chooses a large loading screen for a destination and keeps the one on show: its model, loaded
+//! off the frame thread, and its tip.
+
+use std::path::{Path, PathBuf};
+
+use super::art_loader::{ArtLoadError, ArtLoader, LoaderPoll};
+use super::preview::{PreviewError, ScreenEntry, ScreenRequest, requested_screen};
+use crate::assets::db::DbClient;
+use crate::assets::db::load_screens::{LoadScreen, LoadScreenCatalog};
+use crate::assets::types::glb_key::glb_key;
+use crate::loading_screen::{LoadScreenContext, Place, select};
+use crate::random::SplitMix64;
+use crate::rendering::loading_screen::{
+    LoadedArt, LoadingArt, LoadingArtRenderer, LoadingScene, ModelControls, ModelTransform,
+    PICTURE_FORMAT, PanKey, SceneLights,
+};
+use crate::rendering::shadows::lamps::LampShadowConfig;
+
+/// The viewer may turn a screen that states no limits all the way around, like 442 of the 448
+/// screens of the game do.
+const DEFAULT_ROTATION_LIMITS_DEG: (i16, i16) = (-180, 180);
+
+/// A screen picked for a destination, ready to be loaded.
+pub(in crate::rendering) struct ChosenScreen {
+    pub label: String,
+    pub tip: Option<String>,
+    pub art: LoadingArt,
+}
+
+/// What a frame's look at the model's load found.
+pub(in crate::rendering) enum ArtStatus {
+    /// No model is being loaded and none is shown.
+    Idle,
+    Pending,
+    Ready,
+    Failed {
+        label: String,
+        error: ArtLoadError,
+    },
+}
+
+enum CatalogState {
+    Ready(Box<LoadScreenCatalog>),
+    /// The database predates the installer's loading screen export.
+    Missing,
+    Failed(String),
+}
+
+struct Showing {
+    label: String,
+    tip: Option<String>,
+}
+
+pub(in crate::rendering) struct LoadScreenHost {
+    db_path: String,
+    asset_root: PathBuf,
+    catalog: Option<CatalogState>,
+    rng: SplitMix64,
+    model_controls: ModelControls,
+    loader: ArtLoader,
+    renderer: LoadingArtRenderer,
+    scene: LoadingScene,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    pending: Option<Showing>,
+    shown_tip: Option<String>,
+}
+
+impl LoadScreenHost {
+    /// A host drawing the model into `scene`, lit by `lights` with shadows as `lamp_shadows`.
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        scene: LoadingScene,
+        lights: &SceneLights,
+        lamp_shadows: &LampShadowConfig,
+        asset_root: &Path,
+        db_path: String,
+        seed: u64,
+    ) -> Self {
+        Self {
+            db_path,
+            asset_root: asset_root.to_path_buf(),
+            catalog: None,
+            rng: SplitMix64::new(seed),
+            model_controls: ModelControls::VANILLA,
+            loader: ArtLoader::default(),
+            renderer: LoadingArtRenderer::new(device, queue, PICTURE_FORMAT, lights, lamp_shadows),
+            scene,
+            device: device.clone(),
+            queue: queue.clone(),
+            pending: None,
+            shown_tip: None,
+        }
+    }
+
+    /// Picks the large screen for `destination`, `cell` being the form key of its cell where it
+    /// has one. `None`, after logging why, when the install has no screen to show.
+    pub fn choose(&mut self, destination: &Place, cell: &str) -> Option<ChosenScreen> {
+        let state = self
+            .catalog
+            .get_or_insert_with(|| load_catalog(&self.db_path));
+        let catalog = match state {
+            CatalogState::Ready(catalog) => catalog,
+            CatalogState::Missing => {
+                crate::utils::warn_once("load-screens-missing", || {
+                    "the database has no loading screens (it predates their export, re-run the installer); large loading screens show the small one".to_string()
+                });
+                return None;
+            }
+            CatalogState::Failed(reason) => {
+                crate::utils::error_once("load-screens-failed", || {
+                    format!("large loading screens are unavailable: {reason}")
+                });
+                return None;
+            }
+        };
+        let Some(screen) = pick(catalog, destination, cell, &mut self.rng) else {
+            tracing::warn!(
+                "no loading screen is eligible for {destination:?}; showing the small one"
+            );
+            return None;
+        };
+        Some(chosen_from(screen, &self.asset_root))
+    }
+
+    /// Picks the screen `request` asks for, whatever the place.
+    pub fn choose_requested(
+        &mut self,
+        request: &ScreenRequest,
+    ) -> Result<ChosenScreen, PreviewError> {
+        let catalog = ready_catalog(&mut self.catalog, &self.db_path)?;
+        let screen = requested_screen(catalog, request, &mut self.rng)?;
+        Ok(chosen_from(screen, &self.asset_root))
+    }
+
+    /// Every screen of the catalog, for the debug menu's list.
+    pub fn screen_entries(&mut self) -> Result<Vec<ScreenEntry>, PreviewError> {
+        let catalog = ready_catalog(&mut self.catalog, &self.db_path)?;
+        Ok(catalog.screens.iter().map(ScreenEntry::of).collect())
+    }
+
+    /// Puts the shown model's camera back at its start and stops its spin.
+    pub fn pin_camera(&mut self) {
+        self.renderer.pin_camera();
+    }
+
+    /// Starts loading `chosen`'s model; what was shown before goes. The tip waits for the model.
+    /// Fails without a usable stage, which frames the model's camera.
+    pub fn show(&mut self, chosen: ChosenScreen) -> Result<(), ArtLoadError> {
+        self.clear();
+        self.scene.prepare()?;
+        self.loader.start(chosen.art, self.model_controls)?;
+        self.pending = Some(Showing {
+            label: chosen.label,
+            tip: chosen.tip,
+        });
+        Ok(())
+    }
+
+    /// Takes down whatever is shown or loading.
+    pub fn clear(&mut self) {
+        self.loader.cancel();
+        self.renderer.set_art(None);
+        self.pending = None;
+        self.shown_tip = None;
+    }
+
+    /// Whether a model is shown or loading.
+    pub fn is_active(&self) -> bool {
+        self.pending.is_some() || self.renderer.has_art()
+    }
+
+    /// Moves a finished model onto the GPU and starts showing it.
+    pub fn poll(&mut self) -> ArtStatus {
+        let result = match self.loader.poll() {
+            LoaderPoll::Idle => return ArtStatus::Idle,
+            LoaderPoll::Pending => return ArtStatus::Pending,
+            LoaderPoll::Done(result) => *result,
+        };
+        let Some(showing) = self.pending.take() else {
+            return ArtStatus::Idle;
+        };
+        let loaded = result.and_then(|cpu| {
+            LoadedArt::upload(&self.device, &self.queue, cpu).map_err(ArtLoadError::from)
+        });
+        match loaded {
+            Ok(loaded) => {
+                self.renderer.set_art(Some(loaded));
+                self.shown_tip = showing.tip;
+                ArtStatus::Ready
+            }
+            Err(error) => ArtStatus::Failed {
+                label: showing.label,
+                error,
+            },
+        }
+    }
+
+    pub fn has_art(&self) -> bool {
+        self.renderer.has_art()
+    }
+
+    /// The tip of the screen on show; none until its model is.
+    pub fn tip(&self) -> Option<&str> {
+        self.shown_tip
+            .as_deref()
+            .filter(|_| self.renderer.has_art())
+    }
+
+    /// Shapes the control of the models shown from now on by `controls`.
+    pub fn with_model_controls(mut self, controls: ModelControls) -> Self {
+        self.model_controls = controls;
+        self
+    }
+
+    /// The viewer let go of the model.
+    pub fn end_drag(&mut self) {
+        self.renderer.drag_ended();
+    }
+
+    /// A drag of `dx_px` pixels to the right and `dy_px` down.
+    pub fn drag(&mut self, dx_px: f32, dy_px: f32) {
+        self.renderer.drag(dx_px, dy_px);
+    }
+
+    /// Lets go of every held pan key.
+    pub fn release_keys(&mut self) {
+        self.renderer.release_pan_keys();
+    }
+
+    /// A pan key went down or up. Key repeats do nothing: the key stays held until its release.
+    pub fn key(&mut self, key: PanKey, pressed: bool, repeat: bool) {
+        if !repeat {
+            self.renderer.set_pan_key(key, pressed);
+        }
+    }
+
+    /// Lets `seconds` pass for the model's spin and pan.
+    pub fn tick(&mut self, seconds: f32) {
+        self.renderer.tick(seconds);
+    }
+
+    /// Draws the shown screen's stage and model, graded, over what `view`, of `size` pixels,
+    /// holds at `fade`.
+    pub fn render(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        size: (u32, u32),
+        fade: f32,
+    ) {
+        if self.renderer.has_art() {
+            self.scene
+                .render(encoder, &mut self.renderer, view, size, fade);
+        }
+    }
+}
+
+fn load_catalog(db_path: &str) -> CatalogState {
+    match DbClient::new(db_path).and_then(|db| db.get_load_screen_catalog()) {
+        Ok(Some(catalog)) => CatalogState::Ready(Box::new(catalog)),
+        Ok(None) => CatalogState::Missing,
+        Err(error) => CatalogState::Failed(format!("{error:#}")),
+    }
+}
+
+/// The screen to show at `destination`, drawn from a generator forked from `rng`.
+fn pick<'a>(
+    catalog: &'a LoadScreenCatalog,
+    destination: &Place,
+    cell: &str,
+    rng: &mut SplitMix64,
+) -> Option<&'a LoadScreen> {
+    let context = LoadScreenContext::new(catalog, destination, cell, rng.fork());
+    select(catalog, &context, &mut rng.fork())
+}
+
+fn ready_catalog<'a>(
+    slot: &'a mut Option<CatalogState>,
+    db_path: &str,
+) -> Result<&'a LoadScreenCatalog, PreviewError> {
+    match slot.get_or_insert_with(|| load_catalog(db_path)) {
+        CatalogState::Ready(catalog) => Ok(catalog),
+        CatalogState::Missing => Err(PreviewError::CatalogUnavailable(
+            "the database predates their export, re-run the installer".to_string(),
+        )),
+        CatalogState::Failed(reason) => Err(PreviewError::CatalogUnavailable(reason.clone())),
+    }
+}
+
+fn chosen_from(screen: &LoadScreen, asset_root: &Path) -> ChosenScreen {
+    ChosenScreen {
+        label: screen.label().to_string(),
+        tip: screen.tip.clone(),
+        art: art_for(screen, asset_root),
+    }
+}
+
+/// The model and its limits as the renderer takes them. A screen without zoom limits of its own
+/// zooms within its transform's.
+fn art_for(screen: &LoadScreen, asset_root: &Path) -> LoadingArt {
+    let transform = &screen.transform;
+    LoadingArt {
+        model_path: asset_root.join(glb_key(&screen.model_path)),
+        asset_root: asset_root.to_path_buf(),
+        transform: ModelTransform {
+            position: transform.position,
+            rotation_radians: transform.rotation_radians,
+            scale: transform.scale,
+            around_origin: transform.around_origin,
+        },
+        rotation_limits_deg: screen
+            .rotation_limits
+            .unwrap_or(DEFAULT_ROTATION_LIMITS_DEG),
+        zoom_limits: screen
+            .zoom_limits
+            .unwrap_or((transform.zoom_min, transform.zoom_max)),
+        no_rotation: screen.no_rotation,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assets::db::load_screens::ModelTransform as RecordTransform;
+
+    fn screen(editor_id: &str) -> LoadScreen {
+        LoadScreen {
+            form_key: format!("0001:{editor_id}"),
+            editor_id: Some(editor_id.to_string()),
+            tip: Some(format!("tip of {editor_id}")),
+            model_path: format!("Props\\{editor_id}.nif"),
+            displays_in_main_menu: false,
+            no_rotation: false,
+            transform: RecordTransform {
+                position: [1.0, 2.0, 3.0],
+                rotation_radians: [0.1, 0.2, 0.3],
+                scale: 1.5,
+                around_origin: true,
+                zoom_min: -0.25,
+                zoom_max: 0.75,
+            },
+            rotation_limits: Some((-90, 45)),
+            zoom_limits: Some((-0.5, 1.5)),
+            conditions: Vec::new(),
+        }
+    }
+
+    fn catalog(editor_ids: &[&str]) -> LoadScreenCatalog {
+        LoadScreenCatalog {
+            screens: editor_ids.iter().map(|id| screen(id)).collect(),
+            ..LoadScreenCatalog::default()
+        }
+    }
+
+    fn commonwealth() -> Place {
+        Place::Exterior {
+            worldspace: "0001:Commonwealth".to_string(),
+        }
+    }
+
+    #[test]
+    fn the_art_names_the_converted_model_below_the_asset_root() {
+        let art = art_for(&screen("Crate"), Path::new("root"));
+        assert_eq!(
+            art.model_path,
+            Path::new("root").join("meshes\\Props\\Crate.glb")
+        );
+        assert_eq!(art.asset_root, Path::new("root"));
+    }
+
+    #[test]
+    fn the_art_carries_the_placement_and_the_limits_of_the_record() {
+        let art = art_for(&screen("Crate"), Path::new("root"));
+        assert_eq!(art.transform.position, [1.0, 2.0, 3.0]);
+        assert_eq!(art.transform.rotation_radians, [0.1, 0.2, 0.3]);
+        assert_eq!(art.transform.scale, 1.5);
+        assert!(art.transform.around_origin);
+        assert_eq!(art.rotation_limits_deg, (-90, 45));
+        assert_eq!(art.zoom_limits, (-0.5, 1.5));
+        assert!(!art.no_rotation);
+    }
+
+    #[test]
+    fn a_screen_without_zoom_limits_zooms_within_its_transforms() {
+        let mut record = screen("Crate");
+        record.zoom_limits = None;
+        let art = art_for(&record, Path::new("root"));
+        assert_eq!(art.zoom_limits, (-0.25, 0.75));
+    }
+
+    #[test]
+    fn a_screen_without_rotation_limits_turns_all_the_way_around() {
+        let mut record = screen("Crate");
+        record.rotation_limits = None;
+        let art = art_for(&record, Path::new("root"));
+        assert_eq!(art.rotation_limits_deg, (-180, 180));
+    }
+
+    #[test]
+    fn the_no_rotation_flag_reaches_the_art() {
+        let mut record = screen("Crate");
+        record.no_rotation = true;
+        assert!(art_for(&record, Path::new("root")).no_rotation);
+    }
+
+    #[test]
+    fn selection_draws_from_the_catalog_and_is_deterministic_for_a_seed() {
+        let catalog = catalog(&["Alpha", "Bravo", "Charlie", "Delta"]);
+        let draw = |seed| {
+            let mut rng = SplitMix64::new(seed);
+            (0..16)
+                .map(|_| {
+                    pick(&catalog, &commonwealth(), "", &mut rng)
+                        .expect("every screen is eligible")
+                        .label()
+                        .to_string()
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(draw(7), draw(7));
+        let first = draw(7);
+        assert!(
+            first.iter().any(|label| label != &first[0]),
+            "the pick varies between draws: {first:?}"
+        );
+    }
+
+    #[test]
+    fn an_empty_catalog_has_nothing_to_pick() {
+        let mut rng = SplitMix64::new(1);
+        assert!(pick(&catalog(&[]), &Place::Interior, "", &mut rng).is_none());
+    }
+
+    mod on_the_gpu {
+        use std::time::{Duration, Instant};
+
+        use super::super::*;
+        use crate::rendering::gpu_test::test_device;
+        use crate::rendering::load_transition::{
+            DragTracker, LoadHistory, LoadScreenPreview, LoadScreens,
+        };
+        use crate::rendering::loading_screen::ArtCamera;
+        use crate::rendering::loading_screen::test_support::{
+            cube_art, install_stage, lamp_shadow_config,
+        };
+        use crate::rendering::loading_screen::{GradeSource, LoadScreenLut};
+        use crate::rendering::post::tonemap::ui_gamma_format;
+
+        const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+        const WAIT: Duration = Duration::from_secs(20);
+
+        /// A host whose asset root, kept alive by the returned folder, holds a stage.
+        fn host(test: &str) -> Option<(LoadScreenHost, tempfile::TempDir)> {
+            let root = tempfile::tempdir().unwrap();
+            install_stage(root.path(), [255; 4], [0; 4]);
+            Some((host_in(test, root.path())?, root))
+        }
+
+        fn host_in(test: &str, asset_root: &Path) -> Option<LoadScreenHost> {
+            let (device, queue) = test_device(test)?;
+            let scene = LoadingScene::new(
+                &device,
+                &queue,
+                ui_gamma_format(FORMAT),
+                asset_root,
+                GradeSource {
+                    lut: LoadScreenLut::from_ini(&crate::assets::ini::GameIni::from_texts([""]))
+                        .unwrap(),
+                    db_path: String::new(),
+                },
+            );
+            Some(LoadScreenHost::new(
+                &device,
+                &queue,
+                scene,
+                &SceneLights::VANILLA,
+                &lamp_shadow_config(),
+                asset_root,
+                String::new(),
+                1,
+            ))
+        }
+
+        #[test]
+        fn without_a_stage_no_screen_is_shown() {
+            let root = tempfile::tempdir().unwrap();
+            let Some(mut host) = host_in("load screen host without stage", root.path()) else {
+                return;
+            };
+            let error = host.show(chosen(cube_art(root.path(), ""))).unwrap_err();
+            assert!(matches!(error, ArtLoadError::Stage(_)), "{error}");
+            assert!(!host.is_active());
+        }
+
+        fn chosen(art: LoadingArt) -> ChosenScreen {
+            ChosenScreen {
+                label: "TestScreen".to_string(),
+                tip: Some("a tip".to_string()),
+                art,
+            }
+        }
+
+        fn settled(host: &mut LoadScreenHost) -> ArtStatus {
+            let deadline = Instant::now() + WAIT;
+            loop {
+                match host.poll() {
+                    ArtStatus::Pending => {
+                        assert!(Instant::now() < deadline, "the load did not finish");
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                    status => return status,
+                }
+            }
+        }
+
+        #[test]
+        fn the_tip_shows_once_the_model_has_arrived_and_not_before() {
+            let Some((mut host, _root)) = host("load screen host ready") else {
+                return;
+            };
+            let dir = tempfile::tempdir().unwrap();
+            host.show(chosen(cube_art(dir.path(), ""))).unwrap();
+            assert!(host.is_active());
+            assert_eq!(host.tip(), None, "the model is still loading");
+            assert!(matches!(settled(&mut host), ArtStatus::Ready));
+            assert!(host.has_art());
+            assert_eq!(host.tip(), Some("a tip"));
+        }
+
+        #[test]
+        fn a_model_that_fails_reports_its_screen_and_leaves_nothing_shown() {
+            let Some((mut host, _root)) = host("load screen host failed") else {
+                return;
+            };
+            let dir = tempfile::tempdir().unwrap();
+            let mut art = cube_art(dir.path(), "");
+            art.model_path = dir.path().join("no_such_model.glb");
+            host.show(chosen(art)).unwrap();
+            let ArtStatus::Failed { label, error } = settled(&mut host) else {
+                panic!("the load must fail");
+            };
+            assert_eq!(label, "TestScreen");
+            assert!(error.to_string().contains("no_such_model.glb"), "{error}");
+            assert!(!host.has_art());
+            assert_eq!(host.tip(), None);
+            assert!(!host.is_active());
+        }
+
+        #[test]
+        fn clearing_takes_down_a_shown_screen_and_one_still_loading() {
+            let Some((mut host, _root)) = host("load screen host clear") else {
+                return;
+            };
+            let dir = tempfile::tempdir().unwrap();
+            host.show(chosen(cube_art(dir.path(), ""))).unwrap();
+            assert!(matches!(settled(&mut host), ArtStatus::Ready));
+            host.clear();
+            assert!(!host.is_active());
+            assert_eq!(host.tip(), None);
+
+            host.show(chosen(cube_art(dir.path(), ""))).unwrap();
+            host.clear();
+            assert!(!host.is_active());
+            assert!(
+                matches!(host.poll(), ArtStatus::Idle),
+                "the load is forgotten"
+            );
+        }
+
+        #[test]
+        fn the_pan_keys_move_the_shown_model_only_while_they_are_held() {
+            let Some((mut host, _root)) = host("load screen host pan") else {
+                return;
+            };
+            let dir = tempfile::tempdir().unwrap();
+            host.show(chosen(cube_art(dir.path(), ""))).unwrap();
+            assert!(matches!(settled(&mut host), ArtStatus::Ready));
+            let pan = |host: &LoadScreenHost| host.renderer.camera().expect("a model").pan();
+
+            host.key(PanKey::Right, true, false);
+            host.tick(0.1);
+            let held = pan(&host);
+            assert!(held.0 > 0.0, "{held:?}");
+            host.key(PanKey::Right, false, false);
+            host.tick(0.1);
+            assert_eq!(pan(&host), held);
+        }
+
+        #[test]
+        fn a_drag_turns_and_zooms_the_shown_model_and_stops_its_spin() {
+            let Some((mut host, _root)) = host("load screen host drag") else {
+                return;
+            };
+            let dir = tempfile::tempdir().unwrap();
+            host.show(chosen(cube_art(dir.path(), ""))).unwrap();
+            assert!(matches!(settled(&mut host), ArtStatus::Ready));
+            host.tick(0.1);
+            assert!(host.renderer.camera().unwrap().is_spinning());
+
+            host.drag(20.0, -50.0);
+
+            let camera = host.renderer.camera().unwrap();
+            assert!(!camera.is_spinning());
+            assert!(camera.zoom() > 0.0);
+        }
+
+        #[test]
+        fn a_key_repeat_does_not_move_the_model() {
+            let Some((mut host, _root)) = host("load screen host key repeat") else {
+                return;
+            };
+            let dir = tempfile::tempdir().unwrap();
+            host.show(chosen(cube_art(dir.path(), ""))).unwrap();
+            assert!(matches!(settled(&mut host), ArtStatus::Ready));
+
+            host.key(PanKey::Right, true, true);
+            host.tick(0.1);
+
+            assert_eq!(host.renderer.camera().expect("a model").pan(), (0.0, 0.0));
+        }
+
+        fn screens(test: &str) -> Option<LoadScreens> {
+            let (mut host, _root) = host(test)?;
+            let dir = tempfile::tempdir().unwrap();
+            host.show(chosen(cube_art(dir.path(), ""))).unwrap();
+            assert!(matches!(settled(&mut host), ArtStatus::Ready));
+            Some(LoadScreens {
+                host,
+                drag: DragTracker::default(),
+                history: LoadHistory::default(),
+                preview: LoadScreenPreview::default(),
+            })
+        }
+
+        fn camera(screens: &LoadScreens) -> &ArtCamera {
+            screens.host.renderer.camera().expect("a model")
+        }
+
+        #[test]
+        fn pointer_motion_without_the_button_held_leaves_the_model_alone() {
+            let Some(mut screens) = screens("load screen pointer free") else {
+                return;
+            };
+            for step in 0..5 {
+                let step = step as f32;
+                screens.pointer_moved(100.0 + 40.0 * step, 50.0 + 30.0 * step);
+            }
+            screens.host.tick(0.0);
+
+            let camera = camera(&screens);
+            assert!(camera.is_spinning());
+            assert_eq!((camera.yaw_degrees(), camera.zoom()), (0.0, 0.0));
+            assert_eq!(camera.pan(), (0.0, 0.0));
+        }
+
+        #[test]
+        fn pointer_motion_with_the_button_held_turns_and_zooms_until_it_is_released() {
+            let Some(mut screens) = screens("load screen pointer held") else {
+                return;
+            };
+            screens.pointer_pressed(100.0, 100.0, true);
+            screens.pointer_moved(140.0, 60.0);
+            let held = camera(&screens).clone();
+            assert!(held.yaw_degrees() > 0.0 && held.zoom() > 0.0, "{held:?}");
+
+            screens.pointer_released();
+            screens.pointer_moved(400.0, 300.0);
+            let released = camera(&screens);
+            assert_eq!(
+                (released.yaw_degrees(), released.zoom(), released.pan()),
+                (held.yaw_degrees(), held.zoom(), held.pan())
+            );
+        }
+
+        #[test]
+        fn the_model_spins_again_a_second_after_the_button_is_released() {
+            let Some(mut screens) = screens("load screen spin resume") else {
+                return;
+            };
+            screens.pointer_pressed(100.0, 100.0, true);
+            screens.pointer_moved(140.0, 100.0);
+            screens.host.tick(0.1);
+            assert!(!camera(&screens).is_spinning(), "held by the drag");
+
+            screens.pointer_released();
+            screens.host.tick(0.9);
+            assert!(!camera(&screens).is_spinning(), "within the delay");
+            screens.host.tick(0.2);
+            assert!(camera(&screens).is_spinning());
+        }
+
+        #[test]
+        fn a_press_while_no_model_is_shown_starts_no_drag() {
+            let Some(mut screens) = screens("load screen pointer press gate") else {
+                return;
+            };
+            screens.pointer_pressed(100.0, 100.0, false);
+            screens.pointer_moved(140.0, 60.0);
+            assert!(camera(&screens).is_spinning());
+        }
+
+        #[test]
+        fn losing_the_focus_ends_the_drag_and_lets_go_of_the_pan_keys() {
+            let Some(mut screens) = screens("load screen focus lost") else {
+                return;
+            };
+            screens.pointer_pressed(100.0, 100.0, true);
+            screens.host.key(PanKey::Right, true, false);
+
+            screens.focus_lost();
+            screens.pointer_moved(400.0, 300.0);
+            screens.host.tick(0.1);
+
+            let camera = camera(&screens);
+            assert!(camera.is_spinning());
+            assert_eq!(camera.zoom(), 0.0);
+            assert_eq!(camera.pan(), (0.0, 0.0));
+        }
+
+        #[test]
+        fn a_new_screen_replaces_the_one_before() {
+            let Some((mut host, _root)) = host("load screen host replace") else {
+                return;
+            };
+            let dir = tempfile::tempdir().unwrap();
+            host.show(chosen(cube_art(dir.path(), ""))).unwrap();
+            assert!(matches!(settled(&mut host), ArtStatus::Ready));
+            let mut second = chosen(cube_art(dir.path(), ""));
+            second.tip = Some("another tip".to_string());
+            host.show(second).unwrap();
+            assert_eq!(host.tip(), None, "the first screen's tip went with it");
+            assert!(matches!(settled(&mut host), ArtStatus::Ready));
+            assert_eq!(host.tip(), Some("another tip"));
+        }
+    }
+}

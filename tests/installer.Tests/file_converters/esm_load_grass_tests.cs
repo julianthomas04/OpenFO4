@@ -190,7 +190,7 @@ namespace InstallerTests
         {
             _fixture = fixture;
             _dbPath = Path.Combine(_directory.Path, "data.db");
-            File.Copy(fixture.DatabasePath, _dbPath);
+            fixture.CopyDatabaseTo(_dbPath);
         }
 
         public void Dispose()

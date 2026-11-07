@@ -823,6 +823,7 @@ mod tests {
         let snapshot_hints = |page: &MapPage, model: &PipBoyModel| {
             let snapshot = PipBoySnapshot {
                 model,
+                clock: crate::sim::WorldClock::fixture().date(),
                 vitals: crate::rendering::pipboy::pages::test_harness::vitals(),
             };
             page.hints(&snapshot)
@@ -866,6 +867,7 @@ mod tests {
         harness.draw(&mut page, &model);
         let snapshot = PipBoySnapshot {
             model: &model,
+            clock: crate::sim::WorldClock::fixture().date(),
             vitals: crate::rendering::pipboy::pages::test_harness::vitals(),
         };
         assert_eq!(page.hints(&snapshot).len(), 1);

@@ -6,6 +6,7 @@ pub mod animated_objects;
 mod auto_anim;
 mod auto_character;
 pub mod boot;
+pub mod broken_asset;
 pub mod camera;
 pub mod cube_array;
 pub mod cull_stats;
@@ -20,6 +21,7 @@ pub mod fatal_runtime_error;
 mod flow_input;
 pub mod foot_surface;
 pub mod fps;
+pub mod frame_capture;
 pub mod free_list;
 pub mod frustum;
 pub mod game_frame;
@@ -30,6 +32,7 @@ pub mod gpu_profiler;
 pub mod gpu_slab;
 #[cfg(test)]
 pub(crate) mod gpu_test;
+mod grab_input;
 pub mod grass;
 pub mod grass_streaming;
 pub mod hiz;
@@ -38,7 +41,10 @@ pub mod instance;
 pub mod light_anim;
 pub mod lighting;
 mod line_buffer;
+mod load_transition;
+pub mod loading_screen;
 pub mod local_lights;
+mod material_rebuild;
 pub mod mega_buffer;
 pub mod menu;
 mod menu_frame;
@@ -53,13 +59,18 @@ pub mod post;
 pub mod ragdoll_debug_panel;
 pub mod ragdoll_objects;
 mod ragdoll_sim_link;
+pub mod rain;
+mod rain_stage;
 pub mod readback_ring;
 pub mod refraction;
 pub mod render_pipelines;
+mod reveal_texture_check;
 pub(crate) mod row_pose;
 pub mod scene_copy;
+pub mod scene_overrides;
 pub mod shaders;
 pub mod shadows;
+pub mod shot;
 pub mod skeleton_overlay;
 pub mod skinning;
 mod startup_reads;
@@ -71,7 +82,12 @@ pub mod ui_colour;
 pub mod ui_fonts;
 pub mod version_overlay;
 pub mod vertex;
+mod walk_in;
+mod walk_in_hook;
+mod walk_in_trace;
 pub mod water;
+pub mod weather;
+mod weather_sync;
 pub mod window_surface;
 pub mod world_streamer;
 
@@ -87,12 +103,15 @@ use crate::anim::marker_timeline::{FIRST_PERSON_ASSETS_DIR, load_gait_timings};
 use crate::assets::AssetServer;
 use crate::assets::layout;
 use crate::assets::pipboy_art::ArtLibrary;
+use crate::assets::sky_game_settings::load_sky_game_config;
+use crate::audio::weather::load_or_report;
 use crate::audio::world_music_loader::{load_world_music, seed_from_clock};
 use crate::audio::{
     AudioError, AudioFrame, AudioSystem, Footsteps, PLACE_POLLS_PER_SECOND, PlacePoll,
 };
 use crate::bethesda_space::UNITS_FROM_ENGINE;
-use crate::game_flow::{GameFlow, SpawnLocation, SpawnPlace, StartMode};
+use crate::conditions::GameTime;
+use crate::game_flow::{GameFlow, Phase, SpawnLocation, SpawnPlace, StartMode};
 use crate::rendering::water::ssr::constants::Surroundings;
 use crate::rendering::{
     anim_debug_panel::{AnimDebugPanel, characters_section},
@@ -110,12 +129,12 @@ use crate::rendering::{
     },
     gpu_profiler::{GpuPass, GpuProfiler, SpanPart, panel::gpu_profiler_section},
     gpu_slab::GpuSlab,
-    grass::{GrassPanelState, GrassStage, GrassView, grass_panel},
+    grass::{GrassPanelState, GrassStage, GrassView, commonwealth_clear_wind, grass_panel},
     hiz::HizPipeline,
     lighting::{
         FrameBinding, LightingState, debug_panel::lighting_panel,
-        exterior_weather::ExteriorWeather, interior_catalog::InteriorLightingCatalog,
-        state::FrameInputs,
+        exterior_weather::ExteriorWeatherSlots, interior_catalog::InteriorLightingCatalog,
+        state::FrameInputs, time_panel::time_panel,
     },
     line_buffer::LineBuffer,
     local_lights::{
@@ -133,9 +152,12 @@ use crate::rendering::{
         PostChain,
         depth_of_field::{BokehGate, DofCamera, select_frame},
         hdr_target::{HDR_FORMAT, clear_color},
+        night_sky::{MoonSizes, NightSky, SkySizes},
         tonemap,
     },
     ragdoll_debug_panel::ragdoll_settings_section,
+    rain::RainGpu,
+    rain_stage::{RainFrame, RainStage},
     readback_ring::{ReadbackError, escalate_device_loss},
     render_pipelines::{
         debug_lines::{DebugLinePipeline, LineVertex},
@@ -144,6 +166,7 @@ use crate::rendering::{
         world_pass_layout::{FEEDBACK_GROUP, WorldPassLayout},
     },
     scene_copy::SceneCopy,
+    scene_overrides::{SceneOverrides, SpawnLook},
     shadows::{
         ShadowRenderer, ShadowScene, ShadowState,
         lamps::{
@@ -155,25 +178,36 @@ use crate::rendering::{
     },
     skeleton_overlay::{OverlayView, SkeletonOverlay},
     skinning::{
-        CharacterSystem, materials::CharacterGpuContext, pipelines::SkinnedPipelines,
-        scene::Visibility,
+        CharacterSystem, gpu_mesh::GpuSkinnedMesh, materials::CharacterGpuContext,
+        pipelines::SkinnedPipelines, scene::Visibility,
     },
     texture::Texture,
-    texture_streaming::{ResidencyPolicy, TextureFeedback, TextureResidency, demand::ScreenView},
-    water::{CameraWater, WaterStage, water_panel},
+    texture_streaming::{
+        ResidencyPolicy, TextureFeedback, TextureResidency, demand::ScreenView,
+        readiness::TextureReadiness,
+    },
+    water::{CameraWater, WaterSetting, WaterStage, water_panel},
+    weather::{
+        StartupWeather, WeatherSync,
+        panel::{WeatherPanelState, weather_panel},
+        sounds::sound_table,
+        startup::{WEATHER_SEED_VAR, cycle_seed},
+    },
     window_surface::WindowSurface,
     world_streamer::{LoadMode, StreamTargets, UploadBudget, WorldStreamer},
 };
+use crate::sim::commands::{ClockEdit, WeatherEdit};
 use crate::sim::pipboy::PipBoyAction;
 use crate::sim::{
-    DynamicPose, MaterialBuoyancy, PlayerInput, PlayerMovement, SimCommand, SimWorld, water_physics,
+    ClockFrame, DynamicPose, MaterialBuoyancy, PlayerInput, PlayerMovement, SimCommand, SimWorld,
+    refr_entity_id, water_physics,
 };
 use crate::spawn_cell::SpawnCellTarget;
 use crate::startup::{StartupError, StartupTimer};
 use crate::utils;
 use crate::video::{MenuVideo, VideoCommand, VideoError};
 use crate::water_world::{Scope as WaterScope, SharedWaterWorld, WaterWorld, physics_query};
-use activation::Activation;
+use activation::{Activation, TeleportRefusal, teleport_gate};
 use addon_nodes::AddonFx;
 use animated_objects::AnimatedObjects;
 use auto_anim::AutoAnim;
@@ -181,16 +215,29 @@ use auto_character::AutoCharacters;
 use boot::{BootParts, GpuContext, StartupInputs, StateInputs};
 use cube_array::CubeArray;
 use effects::stage::{EffectFrameInputs, EffectStage};
+use grab_input::{
+    AimTarget, CarryContext, GrabAction, GrabInput, carry_key_counts, spin_gate_open,
+};
 use light_anim::LightAnimator;
 use lighting::frame_uniform::FrameUniform;
-use menu::{MenuRenderer, MenuScene};
+use load_transition::{
+    Destination, DragTracker, LoadHistory, LoadScreenHost, LoadScreenPreview, LoadScreens,
+    ScreenRequest, loading_screen_section, spawn_report_title,
+};
+use loading_screen::{GradeSource, LoadingScene};
+use material_rebuild::MaterialDirt;
+use menu::{MenuRenderer, OverlayForeground, PanelContent};
 use particles::CameraBasis;
 use ragdoll_objects::RagdollObjects;
 use refraction::{RefractionFrameInputs, RefractionStage};
+use reveal_texture_check::{Draw, RevealTextureCheck};
 use shaders::startup::EffectValidation;
 use startup_reads::StartupDbReads;
 use ui_colour::UiColourSet;
 use ui_fonts::UiFonts;
+use walk_in::{PlayerLocation, WalkInTriggers};
+use walk_in_hook::{HookAction, HookFrame, WalkInDevHook};
+use walk_in_trace::{BLOCKER_RAY_GAP_UNITS, WalkInTrace, trace_line};
 
 // 00003C:Fallout4.esm // Commonwealth
 const WORLDSPACE: &str = crate::game_flow::spawn_locations::COMMONWEALTH;
@@ -265,6 +312,8 @@ struct ResolvedTarget {
     /// `None` keeps the current look direction: spawns without a stored heading,
     /// and the initial spawn when `OPENFO4_SPAWN_LOOK` is set.
     yaw: Option<f32>,
+    /// The door skips the loading screen (XTEL flag); the spawn cell and the debug pickers do not.
+    no_load_screen: bool,
 }
 
 impl ResolvedTarget {
@@ -285,6 +334,7 @@ impl ResolvedTarget {
                     .heading
                     .map(|heading| crate::bethesda_space::yaw_from_rotation_z(heading as f32))
             },
+            no_load_screen: false,
         }
     }
 
@@ -310,8 +360,34 @@ impl ResolvedTarget {
                     yaw: location
                         .heading
                         .map(|heading| crate::bethesda_space::yaw_from_rotation_z(heading as f32)),
+                    no_load_screen: false,
                 }
             }
+        }
+    }
+
+    /// Where the teleport arrives, for choosing its loading screen. An exterior arrival names no
+    /// cell: its destination ref may sit in the worldspace's persistent `TopCell`, so the cell's own
+    /// location (XLCN) is not used and the worldspace's location stands in for it.
+    fn destination(&self) -> Destination {
+        let (place, cell) = if self.is_interior {
+            (
+                crate::loading_screen::Place::Interior,
+                self.cell_form_key.as_str(),
+            )
+        } else {
+            (
+                crate::loading_screen::Place::Exterior {
+                    worldspace: self.worldspace.clone(),
+                },
+                "",
+            )
+        };
+        Destination {
+            place,
+            cell: cell.to_string(),
+            grid: self.grid,
+            no_load_screen: self.no_load_screen,
         }
     }
 
@@ -476,6 +552,9 @@ pub struct State {
     // Lighting
     lighting: LightingState,
     interior_lighting: Option<InteriorLightingCatalog>,
+    weather: WeatherSync,
+    weather_panel: WeatherPanelState,
+    rain: RainStage,
     frame_binding: FrameBinding,
     shadow_renderer: ShadowRenderer,
     lamp_shadow_cache: LampShadowCache,
@@ -493,6 +572,8 @@ pub struct State {
 
     // Post
     post: PostChain,
+    /// `None` while the exterior has no clocked sky.
+    night_sky: Option<NightSky>,
     scene_copy: SceneCopy,
     water_stage: WaterStage,
     effect_stage: EffectStage,
@@ -595,6 +676,9 @@ pub struct State {
     /// boot. Looked up O(1) by the activation raycast (E) and the debug
     /// `is_interactible` readout — no DB query at runtime.
     teleports: std::collections::HashMap<String, ResolvedTarget>,
+    /// Trigger volumes of the walk-in (automatic) load doors; their sources are keys of
+    /// `teleports`.
+    walk_in: WalkInTriggers,
     /// A load door activated this frame (E), applied next `update` like
     /// `pending_interior`.
     pending_teleport: Option<ResolvedTarget>,
@@ -606,6 +690,13 @@ pub struct State {
     auto_activate: Vec<String>,
     auto_idx: usize,
     auto_cooldown: u32,
+    /// Dev override (`OPENFO4_AUTO_WALK_IN="ref1,ref2,..."`): walk the player into the listed
+    /// walk-in doors so the real detector fires.
+    walk_in_hook: WalkInDevHook,
+    /// The walk-in door the detector fired for in the last sampled frame.
+    walk_in_fired: Option<String>,
+    /// `OPENFO4_WALK_IN_TRACE=1`: diagnostic trace of the distance to the nearest trigger.
+    walk_in_trace: Option<WalkInTrace>,
     /// Resident animated placed objects (doors, containers, ...) and their playback.
     animated_objects: AnimatedObjects,
     /// Skinned replacements of ragdolls that moved (`OPENFO4_RAGDOLL_POKE` pokes one for checks).
@@ -614,12 +705,14 @@ pub struct State {
     auto_anim: AutoAnim,
     /// Dev override (`OPENFO4_AUTO_CHARACTER`): spawn skinned characters playing given clips.
     auto_characters: AutoCharacters,
+    reveal_texture_check: RevealTextureCheck,
 
     // Simulation (sim/render split: commands in, poses out)
     sim: SimWorld,
     input_mode: InputMode,
     freeze_camera: bool,
     walk_keys: WalkKeys,
+    grab_input: GrabInput,
     /// Base world FOV in Bethesda convention (horizontal at a 16:9 base),
     /// from the INI cascade (`fDefaultWorldFOV`).
     world_fov_beth: f32,
@@ -658,6 +751,8 @@ pub struct State {
     pipboy_env: PipBoyEnv,
     /// The screenshot session when `OPENFO4_PIPBOY_CAPTURE` is set.
     capture: Option<PipBoyCapture>,
+    /// The single-screenshot session when `OPENFO4_SHOT` is set.
+    shot: Option<shot::ShotSession>,
     pipboy_was_open: bool,
     /// Whether the mouse was captured when the Pip-Boy opened, to restore on close.
     capture_before_pipboy: bool,
@@ -674,6 +769,8 @@ pub struct State {
     pointer_px: (f32, f32),
     /// The grid cell the load in progress spawns the player in; only the stall report reads it.
     load_spawn_cell: (i32, i32),
+    /// The large loading screen's model and tip, its drag input and the loads so far.
+    load_screens: LoadScreens,
     quit_requested: bool,
 
     // Debug UI
@@ -814,6 +911,7 @@ impl State {
             // to (0,0); trusting that would stream the wrong ring and drop the
             // player through unloaded terrain far from the origin.
             let grid = WorldStreamer::camera_to_grid(start_pos);
+            let no_load_screen = r.no_load_screen();
             map.insert(
                 r.source_ref,
                 ResolvedTarget {
@@ -825,6 +923,7 @@ impl State {
                     yaw: Some(crate::bethesda_space::yaw_from_rotation_z(
                         r.dest_rot_z as f32,
                     )),
+                    no_load_screen,
                 },
             );
         }
@@ -842,17 +941,353 @@ impl State {
         map
     }
 
-    /// What the player is currently aiming at within activation reach, if it can
-    /// be activated: a load door or an animated object. Shared by the E-press
-    /// activation and (via a precomputed bool) the crosshair and the debug
-    /// `is_interactible` readout, so all agree exactly.
-    fn aimed_activation(&self) -> Option<Activation<'_>> {
-        let hit = self.sim.debug_ray_hit(
-            self.camera.eye,
-            self.camera_controller.forward(),
-            ACTIVATE_REACH,
+    /// Trigger volumes of the enabled automatic load doors. A door with an unusable row is
+    /// reported and left out; when the doors cannot be read at all there are none, reported.
+    fn build_walk_in(db_path: &str) -> WalkInTriggers {
+        let doors =
+            match crate::assets::db::DbClient::new(db_path).and_then(|db| db.get_walk_in_doors()) {
+                Ok(doors) => doors,
+                Err(e) => {
+                    tracing::error!("walk-in doors unavailable: {e}");
+                    return WalkInTriggers::default();
+                }
+            };
+        for rejected in &doors.rejected {
+            tracing::error!("walk-in door left out: {rejected}");
+        }
+        if !doors.without_bounds.is_empty() {
+            tracing::error!(
+                "{} walk-in doors have no trigger bounds (database predates door trigger bounds extraction, re-run the installer); they cannot be walked into",
+                doors.without_bounds.len()
+            );
+        }
+        let (triggers, report) = WalkInTriggers::build(&doors.doors);
+        for source_ref in &report.degenerate_bounds {
+            tracing::warn!(
+                "walk-in door {source_ref} has a collapsed trigger bound; only the reach spans that axis"
+            );
+        }
+        for source_ref in &report.non_finite {
+            tracing::error!(
+                "walk-in door {source_ref} has a non-finite placement or bound; it has no trigger"
+            );
+        }
+        tracing::info!(
+            "walk-in doors: {} trigger volumes",
+            doors.doors.len() - report.non_finite.len()
+        );
+        triggers
+    }
+
+    /// Moves the player to `pos` outside any load. The walk-in detector starts over: arriving
+    /// somewhere is not walking into a door.
+    fn teleport_player(&mut self, pos: Vec3) {
+        self.walk_in.rearm();
+        self.sim.apply(SimCommand::TeleportPlayer { pos });
+    }
+
+    /// Queues the teleport of the walk-in door the player just entered, if any. Only while
+    /// walking in play, not while a load runs or fades in: sampling during a pending teleport
+    /// would spend the entering edge on a refused request.
+    fn sample_walk_in(&mut self, pipboy_open: bool, dt: f32) {
+        self.walk_in_fired = None;
+        if self.input_mode != InputMode::Walk
+            || pipboy_open
+            || self.pending_teleport.is_some()
+            || self.flow.phase() != Phase::InGame
+        {
+            return;
+        }
+        let body = self.sim.player_body();
+        let location = match self.streamer.current_interior() {
+            Some(cell) => PlayerLocation::Interior(cell),
+            None => PlayerLocation::Exterior(&self.streamer.worldspace),
+        };
+        let fired = self
+            .walk_in
+            .sample(location, body.as_ref())
+            .map(str::to_owned);
+        self.trace_walk_in(dt, fired.as_deref());
+        let Some(source_ref) = fired else {
+            return;
+        };
+        tracing::info!("WALK_IN ref={source_ref}");
+        match self.queue_teleport(&source_ref) {
+            Ok(()) => {}
+            Err(refusal @ TeleportRefusal::UnknownSource(_)) => {
+                tracing::warn!("walk-in of {source_ref} has no usable destination: {refusal}");
+            }
+            Err(refusal) => tracing::debug!("walk-in of {source_ref} refused: {refusal}"),
+        }
+        self.walk_in_fired = Some(source_ref);
+    }
+
+    /// The `OPENFO4_WALK_IN_TRACE` lines: where the player stands against the nearest trigger and,
+    /// close to it, what the rays toward its centre hit first.
+    fn trace_walk_in(&mut self, dt: f32, fired: Option<&str>) {
+        let Some(trace) = self.walk_in_trace.as_mut() else {
+            return;
+        };
+        let Some(body) = self.sim.player_body() else {
+            return;
+        };
+        let location = match self.streamer.current_interior() {
+            Some(cell) => PlayerLocation::Interior(cell),
+            None => PlayerLocation::Exterior(&self.streamer.worldspace),
+        };
+        let Some(probe) = self.walk_in.probe(location, &body) else {
+            return;
+        };
+        if !trace.should_log(dt, &probe, fired.is_some()) {
+            return;
+        }
+        tracing::info!("{}", trace_line(&probe, fired.is_some()));
+        if probe.gap_units >= BLOCKER_RAY_GAP_UNITS || probe.horizontal_to_center == Vec3::ZERO {
+            return;
+        }
+        for (height, origin) in ["centre", "head", "feet"]
+            .into_iter()
+            .zip(probe.ray_origins)
+        {
+            let hit = self.sim.debug_ray_hit(
+                origin,
+                probe.horizontal_to_center,
+                probe.horizontal_distance,
+            );
+            let outcome = hit.map_or_else(
+                || "clear".to_owned(),
+                |hit| {
+                    format!(
+                        "first_hit_ref={} model={} dist={:.1}",
+                        hit.ref_id.as_deref().unwrap_or("none"),
+                        hit.mesh_path,
+                        hit.dist * crate::bethesda_space::UNITS_FROM_ENGINE
+                    )
+                },
+            );
+            tracing::info!(
+                "WALK_IN_TRACE blocker ref={} height={height} {outcome}",
+                probe.source_ref
+            );
+        }
+    }
+
+    fn describe_location(&self) -> String {
+        match self.streamer.current_interior() {
+            Some(cell) => format!("interior {cell}"),
+            None => format!("exterior {}", self.streamer.worldspace),
+        }
+    }
+
+    /// Carries out the `OPENFO4_AUTO_WALK_IN` dev hook: the moves go through the sim like the
+    /// player's own, so the real detector decides; everything the hook observes is logged.
+    fn tick_walk_in_hook(&mut self) {
+        if !self.walk_in_hook.is_active() {
+            return;
+        }
+        let fired = self.walk_in_fired.take();
+        let frame = HookFrame {
+            player_spawned: self.sim.player_eye().is_some(),
+            teleport_pending: self.pending_teleport.is_some(),
+            fired: fired.as_deref(),
+        };
+        match self.walk_in_hook.tick(frame) {
+            HookAction::None | HookAction::Fired { .. } => {}
+            HookAction::PlaceAtApproach { source_ref } => {
+                let Some(line) = self.walk_line_for_hook(&source_ref) else {
+                    return;
+                };
+                self.teleport_player(line.approach);
+            }
+            HookAction::CrossThrough { source_ref } => {
+                let Some(line) = self.walk_line_for_hook(&source_ref) else {
+                    return;
+                };
+                self.sim
+                    .apply(SimCommand::TeleportPlayer { pos: line.through });
+            }
+            HookAction::DidNotFire { source_ref } => tracing::warn!(
+                "WALK_IN did not fire ref={source_ref} after crossing its trigger (player in {})",
+                self.describe_location()
+            ),
+            HookAction::Arrived { source_ref } => tracing::info!(
+                "WALK_IN arrived ref={source_ref} location={}",
+                self.describe_location()
+            ),
+            HookAction::DidNotArrive { source_ref } => {
+                tracing::warn!("WALK_IN did not arrive after firing ref={source_ref}");
+            }
+            HookAction::FiredAfterArrival {
+                arrived_ref,
+                fired_ref,
+            } => tracing::error!(
+                "WALK_IN fired ref={fired_ref} right after arriving from ref={arrived_ref}"
+            ),
+            HookAction::Finished => tracing::info!("WALK_IN hook finished"),
+        }
+    }
+
+    /// The hook's walk line for a door, or a warning and a skip when there is none.
+    fn walk_line_for_hook(&mut self, source_ref: &str) -> Option<walk_in::WalkLine> {
+        let Some(body) = self.sim.player_body() else {
+            tracing::warn!("WALK_IN ref={source_ref} skipped: the player has no body");
+            self.walk_in_hook.skip_current();
+            return None;
+        };
+        let line = self.walk_in.walk_line(source_ref, body.radius);
+        if line.is_none() {
+            tracing::warn!("WALK_IN ref={source_ref} has no trigger volume; skipped");
+            self.walk_in_hook.skip_current();
+        }
+        line
+    }
+
+    /// What the player is currently aiming at within activation reach, as the E key sees it: a
+    /// load door or an animated object, a loose body, or nothing to act on. Shared by the E key
+    /// and (via a precomputed bool) the crosshair and the debug `is_interactible` readout, so all
+    /// agree exactly.
+    fn aim_target(&self) -> AimTarget {
+        let Some(ref_id) = self.aimed_ref() else {
+            return AimTarget::Nothing;
+        };
+        AimTarget::resolve(
+            activation::resolve(&ref_id, &self.teleports, &self.animated_objects).is_some(),
+            refr_entity_id(&ref_id),
+            |entity| self.sim.is_grabbable(entity),
+        )
+    }
+
+    /// The ref id of the object under the crosshair within activation reach.
+    fn aimed_ref(&self) -> Option<String> {
+        self.sim
+            .debug_ray_hit(
+                self.camera.eye,
+                self.camera_controller.forward(),
+                ACTIVATE_REACH,
+            )?
+            .ref_id
+    }
+
+    /// The one entry for every request to teleport through a load door, by the door's ref id.
+    /// Only a spawned player with no teleport pending and no loading screen up may queue one; the
+    /// teleport itself runs in `update`. The menu spawn path (`begin_play`) bypasses this gate: the
+    /// player is not spawned there by design.
+    fn queue_teleport(&mut self, source_ref: &str) -> Result<(), TeleportRefusal> {
+        teleport_gate(
+            self.flow.transition_active(),
+            self.sim.player_eye().is_some(),
+            self.pending_teleport.is_some(),
         )?;
-        activation::resolve(&hit.ref_id?, &self.teleports, &self.animated_objects)
+        let target = self
+            .teleports
+            .get(source_ref)
+            .ok_or_else(|| TeleportRefusal::UnknownSource(source_ref.to_string()))?;
+        self.pending_teleport = Some(target.clone());
+        Ok(())
+    }
+
+    /// E-press: queues the aimed load door's teleport or toggles the aimed animated object.
+    fn activate_aimed(&mut self) {
+        let Some(ref_id) = self.aimed_ref() else {
+            return;
+        };
+        match activation::resolve(&ref_id, &self.teleports, &self.animated_objects) {
+            Some(Activation::Teleport) => {
+                if let Err(refusal) = self.queue_teleport(&ref_id) {
+                    tracing::debug!("activation of {ref_id} refused: {refusal}");
+                }
+            }
+            Some(Activation::Animate(entity)) => {
+                if let Err(error) = self.animated_objects.toggle(entity) {
+                    tracing::warn!("activation: {error}");
+                }
+            }
+            None => {}
+        }
+    }
+
+    fn carry_context(&self) -> CarryContext {
+        CarryContext {
+            walk_mode: self.input_mode == InputMode::Walk,
+            gameplay_input: self.flow.gameplay_input_enabled(),
+            preview_open: self.loading_screen_preview_open(),
+            pipboy_open: self.pipboy_open(),
+        }
+    }
+
+    fn carry_controls_live(&self) -> bool {
+        self.carry_context().controls_live()
+    }
+
+    /// E went down or up in walk mode: activates the aimed door, or grabs or drops a body.
+    fn handle_activate_key(&mut self, is_pressed: bool, is_repeat: bool, is_synthetic: bool) {
+        if !carry_key_counts(self.carry_controls_live(), is_repeat, is_synthetic) {
+            return;
+        }
+        let carrying = self.sim.carried().is_some();
+        let now = Instant::now();
+        let action = if is_pressed {
+            let aim = self.aim_target();
+            self.grab_input.activate_pressed(aim, carrying, now)
+        } else {
+            self.grab_input.activate_released(carrying, now)
+        };
+        self.apply_grab_action(action);
+    }
+
+    /// R went down or up in walk mode: charges and throws the carried body.
+    fn handle_throw_key(&mut self, is_pressed: bool, is_repeat: bool, is_synthetic: bool) {
+        if !carry_key_counts(self.carry_controls_live(), is_repeat, is_synthetic) {
+            return;
+        }
+        let carrying = self.sim.carried().is_some();
+        let now = Instant::now();
+        if is_pressed {
+            self.grab_input.throw_pressed(carrying, now);
+        } else {
+            let action = self.grab_input.throw_released(carrying, now);
+            self.apply_grab_action(action);
+        }
+    }
+
+    /// Fires a grab whose hold E has reached by `now`.
+    fn advance_carry_input(&mut self, now: Instant) {
+        if self.carry_controls_live() {
+            let action = self.grab_input.advance(now);
+            self.apply_grab_action(action);
+        }
+    }
+
+    fn apply_grab_action(&mut self, action: Option<GrabAction>) {
+        match action {
+            None => {}
+            Some(GrabAction::Activate) => self.activate_aimed(),
+            Some(GrabAction::Carry(command)) => {
+                self.sim.apply(command.into_sim_command());
+                self.follow_carry_outcome();
+            }
+        }
+    }
+
+    /// Reports how the sim answered: a release of the carried body lets go of E and R, and a
+    /// refused grab is logged.
+    fn follow_carry_outcome(&mut self) {
+        if let Some(reason) = self.sim.take_release() {
+            tracing::debug!("carried body let go: {reason:?}");
+            self.grab_input.release_keys();
+        }
+        if let Some(refusal) = self.sim.take_grab_refusal() {
+            tracing::debug!("grab refused: {refusal:?}");
+        }
+    }
+
+    /// Lets go of E and R and drops the carried body, if any.
+    fn release_carry_input(&mut self) {
+        self.grab_input.release_keys();
+        if self.sim.carried().is_some() {
+            self.sim.apply(SimCommand::DropCarried);
+            self.follow_carry_outcome();
+        }
     }
 
     /// Assembles the renderer state on the startup worker from the main thread's boot parts.
@@ -903,7 +1338,8 @@ impl State {
 
         // Camera. Base FOV comes from the game INI cascade the installer
         // copies (step 2d), validated at startup.
-        let world_fov_beth = settings.world_fov_beth;
+        let overrides = SceneOverrides::from_env()?;
+        let world_fov_beth = overrides.world_fov.unwrap_or(settings.world_fov_beth);
         tracing::info!(
             "world FOV {world_fov_beth} ({:.1}° vertical)",
             beth_fov_to_vertical(world_fov_beth),
@@ -924,9 +1360,21 @@ impl State {
             LampShadowState::new(settings.lamp_shadows),
             LocalLightSettings::new(settings.light_fade),
         );
-        if let Some(weather) = ExteriorWeather::load_or_report(&asset_server.db_path(), WORLDSPACE)
-        {
-            lighting.set_exterior_weather(weather);
+        let weather = StartupWeather::load_or_report(&asset_server.db_path(), WORLDSPACE);
+        let forced_weather = overrides
+            .weather
+            .as_ref()
+            .map(|selector| selector.resolve(weather.as_ref().map(|weather| &weather.library)))
+            .transpose()?;
+        let exterior_slots = match &weather {
+            Some(weather) => Some(weather.library.initial_weather().slots.clone()),
+            None => ExteriorWeatherSlots::load_or_report(&asset_server.db_path(), WORLDSPACE),
+        };
+        if let Some(slots) = exterior_slots {
+            let game = crate::assets::db::DbClient::new(&asset_server.db_path())
+                .and_then(|db| load_sky_game_config(&db))
+                .map_err(StartupError::SkySettings)?;
+            lighting.set_exterior_sky(slots, game);
         }
         let shadow_maps = ShadowMaps::new(&device, &lighting.shadows.config);
         let lamp_atlas_resolution = lighting.lamp_shadows.config.atlas_resolution;
@@ -947,16 +1395,48 @@ impl State {
             lamp_atlas.view(),
             &cluster_buffers,
         );
+        let rain = RainStage::new(
+            &device,
+            &queue,
+            asset_server.asset_location(),
+            &frame_binding.layout,
+            seed_from_clock(),
+        );
         let scene_copy = SceneCopy::new(&device, config.width, config.height);
         let world_pass_layout = WorldPassLayout::new(&device, &frame_binding.layout);
         let post = PostChain::new(
             &device,
+            &queue,
+            asset_server.asset_location(),
             config.format,
             config.width,
             config.height,
             &frame_binding.layout,
             &world_pass_layout.pipeline_layout,
         );
+        let night_sky = lighting.sky_game_config().map(|game| {
+            let (initial_moon, initial_sky_model) = lighting.initial_night_sky();
+            let sizes = SkySizes {
+                moon: MoonSizes {
+                    masser: game.masser_size(),
+                    secunda: game.secunda_size(),
+                },
+                sun: settings.sun,
+            };
+            NightSky::new(
+                &device,
+                &queue,
+                asset_server.asset_location(),
+                [
+                    &world_pass_layout.material_bind_group_layout,
+                    &frame_binding.layout,
+                    &world_pass_layout.instance_bind_group_layout,
+                ],
+                sizes,
+                initial_moon,
+                initial_sky_model,
+            )
+        });
         timer.mark("frame_resources")?;
 
         // GPU-driven: textures & materials
@@ -1031,14 +1511,15 @@ impl State {
             texture_feedback.enabled(),
         );
 
+        let overlay_format = tonemap::ui_gamma_format(config.format);
         let skeleton_overlay = SkeletonOverlay::new(
             &device,
-            HDR_FORMAT,
+            overlay_format,
             &frame_binding.layout,
             &depth_texture.view,
         );
         let debug_line_pipeline =
-            DebugLinePipeline::new(&device, HDR_FORMAT, &world_pass_layout.pipeline_layout);
+            DebugLinePipeline::new(&device, overlay_format, &world_pass_layout.pipeline_layout);
 
         // Mega-buffers
         let object_mega = MegaBuffer::new(&device, "object");
@@ -1077,7 +1558,7 @@ impl State {
             cluster_buffers,
             &placed_lights.buffer,
             hiz_pipeline.pyramid_view(),
-            HDR_FORMAT,
+            overlay_format,
             &world_pass_layout.pipeline_layout,
         );
 
@@ -1173,7 +1654,8 @@ impl State {
             .map(|capture_config| PipBoyCapture::new(&capture_config))
             .transpose()
             .map_err(|error| StartupError::Pipboy(error.into()))?;
-        if capture.is_some() {
+        let shot = shot::ShotConfig::from_env()?.map(shot::ShotSession::new);
+        if capture.is_some() || shot.is_some() {
             config.usage |= wgpu::TextureUsages::COPY_SRC;
         }
         let fps_utils = FpsUtils::new(64);
@@ -1235,22 +1717,20 @@ impl State {
             &world_pass_layout,
             &frame_binding.layout,
             settings.grass_fade_limits,
+            weather
+                .as_ref()
+                .map_or_else(commonwealth_clear_wind, |weather| {
+                    weather.library.wind_ceiling()
+                }),
         );
         timer.mark("effects_and_grass")?;
 
-        // Dev override: OPENFO4_SPAWN_LOOK="yaw_deg,pitch_deg" aims the camera at
-        // launch (yaw 0 = +X/east, pitch -90 = straight down). The controller drives
-        // the look direction every frame in both walk and fly modes, so set it there;
-        // the first-frame camera.target is updated to match so frame 0 already aims.
-        let spawn_look = std::env::var("OPENFO4_SPAWN_LOOK").ok().and_then(|raw| {
-            let parsed = camera::parse_spawn_look(&raw);
-            if parsed.is_none() {
-                tracing::warn!(
-                    "OPENFO4_SPAWN_LOOK={raw:?} is not `yaw_deg,pitch_deg` with finite numbers; ignoring it"
-                );
-            }
-            parsed
-        });
+        // Dev override: OPENFO4_SPAWN_LOOK="yaw_deg,pitch_deg" (or OPENFO4_SPAWN_ANGLE as
+        // player.getangle prints it) aims the camera at launch (yaw 0 = +X/east, pitch -90 =
+        // straight down). The controller drives the look direction every frame in both walk
+        // and fly modes, so set it there; the first-frame camera.target is updated to match so
+        // frame 0 already aims.
+        let spawn_look = overrides.look.map(|SpawnLook { yaw, pitch }| (yaw, pitch));
         let spawn_target =
             spawn_cell.map(|target| ResolvedTarget::interior_spawn(target, spawn_look));
         // Dev override: OPENFO4_SPAWN="x,y,z" in Bethesda world units (the
@@ -1287,6 +1767,7 @@ impl State {
             interior_lighting,
             interiors,
             teleports,
+            walk_in,
             player_movement,
             buoyancy_table,
         } = match db_reads.join() {
@@ -1297,7 +1778,27 @@ impl State {
 
         // The player spawns at the camera start and snaps to the ground as
         // soon as the cell's terrain collision streams in.
-        let mut sim = SimWorld::new(player_movement);
+        let world_clock = crate::assets::db::DbClient::new(&db_path)
+            .and_then(|db| crate::assets::world_clock_start::load_world_clock(&db))
+            .map_err(StartupError::WorldClock)?;
+        let mut sim = SimWorld::new(player_movement, world_clock);
+        if let Some(hour) = overrides.hour {
+            sim.apply(SimCommand::SetWorldClock(ClockEdit::SetHour(hour)));
+        }
+        if overrides.hour.is_some() || shot.is_some() {
+            sim.apply(SimCommand::SetWorldClock(ClockEdit::SetPaused(true)));
+        }
+        let weather_library = weather.map(|StartupWeather { library, table }| {
+            let seed = cycle_seed(std::env::var(WEATHER_SEED_VAR), seed_from_clock());
+            tracing::info!(
+                "weather cycle seed {seed}; set {WEATHER_SEED_VAR}={seed} to roll the same weather again"
+            );
+            sim.install_weather(table, seed);
+            library
+        });
+        if let Some(weather) = forced_weather {
+            sim.apply(SimCommand::SetWeather(WeatherEdit::Force(weather)));
+        }
         if let Some(table) = buoyancy_table {
             sim.set_material_buoyancy_table(std::sync::Arc::new(table));
         }
@@ -1344,6 +1845,17 @@ impl State {
             )
             .map_err(AudioError::from)?;
             audio.set_footsteps(footsteps);
+            if let Some(weather_sounds) =
+                weather_library.as_ref().map(sound_table).and_then(|table| {
+                    load_or_report(
+                        &db_path,
+                        table,
+                        Path::new(&layout::audio_dir(asset_server.asset_location())),
+                    )
+                })
+            {
+                audio.set_weather(weather_sounds);
+            }
         }
         let menu_video = MenuVideo::new(
             settings.menu_video,
@@ -1368,6 +1880,32 @@ impl State {
         timer.mark("sim_and_profiler")?;
 
         let material_bg_built_len = texture_array.bind_group_len();
+        let loading_scene = LoadingScene::new(
+            &device,
+            &queue,
+            tonemap::ui_gamma_format(surface_format),
+            Path::new(asset_server.asset_location()),
+            GradeSource {
+                lut: settings.loading_screen_lut.clone(),
+                db_path: db_path.clone(),
+            },
+        );
+        let load_screens = LoadScreens {
+            host: LoadScreenHost::new(
+                &device,
+                &queue,
+                loading_scene,
+                &settings.loading_lights,
+                &settings.lamp_shadows,
+                Path::new(asset_server.asset_location()),
+                db_path.clone(),
+                seed_from_clock(),
+            )
+            .with_model_controls(settings.loading_model),
+            drag: DragTracker::default(),
+            history: LoadHistory::default(),
+            preview: LoadScreenPreview::default(),
+        };
         Ok(Self {
             surface,
             device,
@@ -1385,7 +1923,11 @@ impl State {
             camera_controller,
             lighting,
             interior_lighting,
+            weather: WeatherSync::new(weather_library),
+            weather_panel: WeatherPanelState::default(),
+            rain,
             frame_binding,
+            night_sky,
             shadow_renderer,
             lamp_shadow_cache,
             lamp_candidates: Vec::new(),
@@ -1449,6 +1991,7 @@ impl State {
             world_mode: DebugWorldMode::Worldspace,
             interior_filter: String::new(),
             teleports,
+            walk_in,
             pending_teleport: spawn_target,
             auto_activate: std::env::var("OPENFO4_AUTO_ACTIVATE")
                 .ok()
@@ -1461,14 +2004,22 @@ impl State {
                 .unwrap_or_default(),
             auto_idx: 0,
             auto_cooldown: 0,
+            walk_in_hook: WalkInDevHook::from_list(
+                &std::env::var("OPENFO4_AUTO_WALK_IN").unwrap_or_default(),
+                AUTO_ACTIVATE_COOLDOWN_FRAMES,
+            ),
+            walk_in_fired: None,
+            walk_in_trace: WalkInTrace::from_env(),
             animated_objects: AnimatedObjects::default(),
             ragdoll_objects: RagdollObjects::default(),
             auto_anim: AutoAnim::from_env(),
             auto_characters: AutoCharacters::from_env(),
+            reveal_texture_check: RevealTextureCheck::default(),
             sim,
             input_mode: InputMode::Walk,
             freeze_camera,
             walk_keys: WalkKeys::default(),
+            grab_input: GrabInput::default(),
             world_fov_beth,
             fov_adjust: 0.0,
             collision_wireframe: false,
@@ -1488,6 +2039,7 @@ impl State {
             pipboy,
             pipboy_env,
             capture,
+            shot,
             pipboy_was_open: false,
             capture_before_pipboy: false,
             flow,
@@ -1498,6 +2050,7 @@ impl State {
             menu,
             pointer_px: (0.0, 0.0),
             load_spawn_cell: WorldStreamer::camera_to_grid(start_pos),
+            load_screens,
             quit_requested: false,
             debug_ui,
             mouse_capture,
@@ -1771,24 +2324,25 @@ impl State {
 
         drop(encode_cull_span);
 
+        let shadow_scene = ShadowScene {
+            material_bind_group: self
+                .shadow_material_bind_group
+                .as_ref()
+                .unwrap_or(&self.material_bind_group),
+            instance_bind_group: &self.instance_bind_group,
+            object_mega: &self.object_mega,
+            terrain_mega: &self.terrain_mega,
+            object_count: self.object_instances.dispatch_count(),
+            terrain_count: self.terrain_instances.len(),
+            skinned: self.characters.scene(),
+        };
         {
             let _span = tracing::info_span!("shadows").entered();
             if !skip.skips(DebugPass::Shadows) {
                 self.shadow_renderer.encode(
                     &mut encoder,
                     &self.queue,
-                    &ShadowScene {
-                        material_bind_group: self
-                            .shadow_material_bind_group
-                            .as_ref()
-                            .unwrap_or(&self.material_bind_group),
-                        instance_bind_group: &self.instance_bind_group,
-                        object_mega: &self.object_mega,
-                        terrain_mega: &self.terrain_mega,
-                        object_count: self.object_instances.dispatch_count(),
-                        terrain_count: self.terrain_instances.len(),
-                        skinned: self.characters.scene(),
-                    },
+                    &shadow_scene,
                     &self.gpu_profiler,
                 );
                 if self.lighting.lamp_shadows.settings.show_atlas {
@@ -1797,8 +2351,24 @@ impl State {
             }
         }
 
-        let encode_world_span = tracing::info_span!("encode_world_pass").entered();
         let world_skipped = skip.skips(DebugPass::World);
+        if !world_skipped {
+            self.rain.prepare(
+                RainGpu {
+                    device: &self.device,
+                    queue: &self.queue,
+                    encoder: &mut encoder,
+                    shadows: &self.shadow_renderer,
+                    scene: &shadow_scene,
+                    profiler: &self.gpu_profiler,
+                },
+                &self.camera,
+                self.streamer.loaded_generation(),
+                self.water_stage.camera_water().underwater,
+            );
+        }
+
+        let encode_world_span = tracing::info_span!("encode_world_pass").entered();
         let pipelines = self.object_pipelines.pipelines_in_bucket_order();
         let skinned = self.characters.scene();
         let skinned_pipelines = &self.skinned_pipelines;
@@ -1913,6 +2483,11 @@ impl State {
                 // instead.
                 if self.lighting.draws_sky() {
                     self.post.draw_sky(&mut render_pass);
+                    if self.lighting.sky_objects().is_some()
+                        && let Some(night_sky) = &self.night_sky
+                    {
+                        night_sky.draw(&mut render_pass, self.texture_feedback.bind_group());
+                    }
                 }
             }
         }
@@ -2001,8 +2576,8 @@ impl State {
             );
         }
 
-        // Translucent pass: loads the opaque result, then the water stage, the
-        // overlay buckets and the debug lines. Timed as `water`, so it includes
+        // Translucent pass: loads the opaque result, then the water stage and the
+        // overlay buckets. Timed as `water`, so it includes
         // the overlay buckets.
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2064,18 +2639,16 @@ impl State {
                 if self.effect_stage.draw(&mut render_pass, &self.scene_copy) {
                     bind_world_groups(&mut render_pass);
                 }
-
-                // Collision wireframe overlay.
-                if self.collision_wireframe {
-                    self.collision_lines
-                        .draw(&mut render_pass, &self.debug_line_pipeline.pipeline);
-                }
-                self.navmesh_overlay
-                    .draw(&mut render_pass, &self.debug_line_pipeline.pipeline);
-
-                self.local_lights
-                    .draw_spheres(&mut render_pass, &self.lighting.local_lights);
             }
+        }
+        if !world_skipped {
+            self.rain.encode(
+                &mut encoder,
+                self.post.hdr_view(),
+                &self.depth_texture.view,
+                &self.frame_binding,
+                &self.gpu_profiler,
+            );
         }
         if !world_skipped && !skip.skips(DebugPass::DepthOfField) {
             let underwater = self
@@ -2105,9 +2678,6 @@ impl State {
         }
         drop(encode_world_span);
 
-        self.skeleton_overlay
-            .encode(&mut encoder, self.post.hdr_view(), &self.frame_binding);
-
         let encode_post_span = tracing::info_span!("encode_post").entered();
         // HiZ pyramid for next frame's occlusion culling.
         if !skip.skips(DebugPass::Hiz) {
@@ -2132,14 +2702,56 @@ impl State {
             );
         }
 
+        // Debug overlays draw on the displayed picture, so their colours are shown as stored
+        // whatever the exposure and grading make of the scene.
+        let overlay_view = output.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(tonemap::ui_gamma_format(self.config.format)),
+            ..Default::default()
+        });
+        if !world_skipped {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Debug Overlay Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &overlay_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                occlusion_query_set: None,
+                timestamp_writes: None,
+                multiview_mask: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_texture.view,
+                    depth_ops: None,
+                    stencil_ops: None,
+                }),
+            });
+            bind_world_groups(&mut render_pass);
+            if self.collision_wireframe {
+                self.collision_lines
+                    .draw(&mut render_pass, &self.debug_line_pipeline.pipeline);
+            }
+            self.navmesh_overlay
+                .draw(&mut render_pass, &self.debug_line_pipeline.pipeline);
+            self.local_lights
+                .draw_spheres(&mut render_pass, &self.lighting.local_lights);
+        }
+        self.skeleton_overlay
+            .encode(&mut encoder, &overlay_view, &self.frame_binding);
+
         // Native HUD overlay. Color-only, LoadOp::Load, no depth: the HiZ
         // pyramid above already consumed the depth buffer, so the HUD must not
         // touch it. Drawn before egui so the developer menu paints over the HUD.
         // The Pip-Boy replaces the HUD while it is open.
+        // A shot shows the world alone: no HUD, Pip-Boy, version line or developer UI.
+        let shows_interface = !self.shot_active();
         let pipboy_open = self.sim.pipboy_snapshot().model.open;
         self.pipboy.sync_open(pipboy_open);
         if pipboy_open {
-            if !skip.skips(DebugPass::PipBoy) {
+            if shows_interface && !skip.skips(DebugPass::PipBoy) {
                 let snapshot = self.sim.pipboy_snapshot();
                 self.pipboy.render(
                     &self.device,
@@ -2151,7 +2763,7 @@ impl State {
                     &snapshot,
                 );
             }
-        } else if !skip.skips(DebugPass::Hud) {
+        } else if shows_interface && !skip.skips(DebugPass::Hud) {
             self.hud.render(
                 &self.device,
                 &self.queue,
@@ -2165,23 +2777,45 @@ impl State {
 
         // The black layer of the loading screen and the reveal fade, over the world and
         // the HUD and under the debug UI.
-        let overlay_alpha = self.flow.overlay_alpha();
+        let overlay = self.overlay_view();
+        let overlay_alpha = overlay.alpha;
         if overlay_alpha > 0.0 {
             let menu_view = self.menu.target_view(&output.texture);
-            self.menu.render(
+            let framebuffer = (self.config.width, self.config.height);
+            let layers = overlay.layers;
+            let art_shown = self.art_shown();
+            self.menu.render_backdrop(
                 &self.device,
                 &self.queue,
                 &mut encoder,
                 &menu_view,
-                (self.config.width, self.config.height),
-                MenuScene::Overlay {
-                    alpha: overlay_alpha,
-                    loading_seconds: self.flow.loading_seconds(),
-                },
+                framebuffer,
+                overlay_alpha,
+            );
+            if art_shown {
+                self.load_screens
+                    .host
+                    .render(&mut encoder, &menu_view, framebuffer, overlay_alpha);
+            }
+            let foreground = OverlayForeground {
+                alpha: overlay_alpha,
+                loading_seconds: overlay.loading_seconds,
+                panel: (layers.panel && art_shown)
+                    .then(|| PanelContent::placeholder(self.load_screens.host.tip())),
+            };
+            self.menu.render_foreground(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                &menu_view,
+                framebuffer,
+                foreground,
             );
         }
 
-        self.render_version_overlay(&mut encoder, &view);
+        if shows_interface {
+            self.render_version_overlay(&mut encoder, &view);
+        }
 
         // Queued toasts must register before debug_ui.render so they paint
         // inside this frame's egui pass.
@@ -2208,13 +2842,13 @@ impl State {
         // be called inside the egui closure once `self.debug_ui` is borrowed
         // mutably by render, so capture the plain bool here.
         let dbg_interactible = self.aimed_door;
-        let developer_window_visible =
-            self.flow.developer_window_visible() && !self.capture_active();
+        let developer_window_visible = self.developer_window_visible() && !self.capture_active();
+        let mut preview_request: Option<ScreenRequest> = None;
         let mut memory_section_open = false;
 
         // Debug UI
         let egui_span = tracing::info_span!("egui").entered();
-        if !skip.skips(DebugPass::Egui) {
+        if shows_interface && !skip.skips(DebugPass::Egui) {
             self.debug_ui.render(
                 &self.window,
                 &self.device,
@@ -2464,6 +3098,12 @@ impl State {
                                 }
                             });
 
+                        egui::CollapsingHeader::new("Loading screen")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                preview_request = loading_screen_section(ui, &mut self.load_screens);
+                            });
+
                         egui::CollapsingHeader::new("Streaming")
                             .default_open(false)
                             .show(ui, |ui| {
@@ -2652,6 +3292,7 @@ impl State {
                                     if fly {
                                         self.input_mode = InputMode::Fly;
                                     } else {
+                                        self.walk_in.rearm();
                                         self.sim.apply(SimCommand::TeleportPlayer {
                                             pos: self.camera.eye,
                                         });
@@ -2663,6 +3304,38 @@ impl State {
                                         .speed(1)
                                         .prefix("Camera Speed: "),
                                 );
+                            });
+
+                        egui::CollapsingHeader::new("Environment")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                let mut clock_edits = Vec::new();
+                                time_panel(
+                                    ui,
+                                    self.sim.world_clock(),
+                                    self.lighting.sky_moment(),
+                                    self.night_sky.as_ref().map(NightSky::asset_status),
+                                    &mut clock_edits,
+                                );
+                                for edit in clock_edits {
+                                    self.sim.apply(SimCommand::SetWorldClock(edit));
+                                }
+                                egui::CollapsingHeader::new("Weather cycle")
+                                    .default_open(true)
+                                    .show(ui, |ui| {
+                                        let view = self.weather.view(self.sim.weather_snapshot());
+                                        let mut weather_edits = Vec::new();
+                                        weather_panel(
+                                            ui,
+                                            &mut self.weather_panel,
+                                            view.as_ref(),
+                                            self.rain.asset_status(),
+                                            &mut weather_edits,
+                                        );
+                                        for edit in weather_edits {
+                                            self.sim.apply(SimCommand::SetWeather(edit));
+                                        }
+                                    });
                             });
 
                         egui::CollapsingHeader::new("Lighting")
@@ -2718,6 +3391,9 @@ impl State {
         }
 
         drop(egui_span);
+        if let Some(request) = preview_request {
+            self.open_requested_loading_screen(&request);
+        }
         if !memory_section_open {
             // Drop the cached report so a reopened header refreshes at once
             // instead of showing a stale reading.
@@ -2725,6 +3401,7 @@ impl State {
         }
         self.memory_section_open = memory_section_open;
         let frame_capture = self.begin_frame_capture(&mut encoder, &output.texture);
+        let shot_capture = self.begin_shot_capture(&mut encoder, &output.texture);
         self.texture_feedback.encode_readback(
             &mut encoder,
             Instant::now(),
@@ -2743,6 +3420,7 @@ impl State {
             self.queue.submit(std::iter::once(command_buffer));
         }
         self.finish_frame_capture(frame_capture);
+        self.finish_shot_capture(shot_capture);
         let post_submit_span = tracing::info_span!("post_submit").entered();
         self.cull_stats.post_submit();
         self.texture_feedback.post_submit();
@@ -2823,6 +3501,49 @@ impl State {
         f(&mut self.streamer, &mut targets)
     }
 
+    /// Feeds the reveal texture check this frame's draws, now that the material bind group is
+    /// final for the frame, and logs its report once a fade ends.
+    fn check_reveal_textures(&mut self) {
+        let fading = self.flow.phase() == Phase::Revealing;
+        let mut check = std::mem::take(&mut self.reveal_texture_check);
+        let report = check.frame(fading, || self.draws_with_unready_textures());
+        self.reveal_texture_check = check;
+        match report {
+            Some(report) if report.is_clean() => tracing::info!("REVEAL_TEXTURE_CHECK {report}"),
+            Some(report) => tracing::warn!(
+                "REVEAL_TEXTURE_CHECK {report}: the fade showed meshes whose textures were not ready"
+            ),
+            None => {}
+        }
+    }
+
+    fn draws_with_unready_textures(&self) -> Vec<Draw> {
+        let residency = &self.texture_residency;
+        let array = &self.texture_array;
+        let mut draws =
+            self.streamer
+                .drawn_cells_with_unready_textures(residency, array, &self.grass);
+        draws.extend(
+            self.characters
+                .characters()
+                .iter()
+                .filter(|character| !character.is_faulted())
+                .filter(|character| {
+                    character
+                        .rig()
+                        .meshes
+                        .iter()
+                        .flat_map(GpuSkinnedMesh::texture_refs)
+                        .any(|handle| {
+                            TextureReadiness::of_handle(residency, array, handle)
+                                != TextureReadiness::Ready
+                        })
+                })
+                .map(|character| Draw::Skinned(character.rig().name.clone())),
+        );
+        draws
+    }
+
     /// Finish a streamer teardown+load (worldspace switch or interior enter):
     /// apply the queued `RemoveCellColliders` and fold the broad phase BEFORE
     /// teleporting, then move the camera and request the player spawn at
@@ -2831,6 +3552,7 @@ impl State {
     /// terrain at a grid that numerically aliases the new start.
     fn apply_stream_teleport(&mut self, start: Vec3) {
         stream_settle::apply_teardown(&mut self.sim, self.streamer.take_sim_commands());
+        self.walk_in.rearm();
         self.camera.eye = start;
         self.sim.apply(SimCommand::SpawnPlayer { pos: start });
     }
@@ -3005,11 +3727,21 @@ impl State {
         let dt = Duration::from_secs_f32(dt.max(0.0));
         let place = (!phase.shows_menu() && self.music_poll.due(dt))
             .then(|| self.streamer.music_place(self.camera.eye));
+        let weather = (!phase.shows_menu())
+            .then(|| {
+                self.weather
+                    .audio_input(self.sim.weather_snapshot(), !self.streamer.in_interior())
+            })
+            .flatten();
         let frame = AudioFrame {
             phase,
             dt,
-            hour: self.sim.pipboy_snapshot().model.clock.hour(),
+            time: {
+                let clock = self.sim.world_clock();
+                GameTime::new(clock.hour(), clock.days_passed())
+            },
             place,
+            weather,
         };
         match &mut self.audio {
             Some(audio) => audio.sync(frame),
@@ -3026,15 +3758,16 @@ impl State {
     #[tracing::instrument(skip_all, name = "update")]
     pub fn update(&mut self, asset_server: &mut AssetServer) -> Result<(), FatalRuntimeError> {
         self.device_loss.check()?;
+        let frame_start = Instant::now();
         self.fps_utils.tick();
         let dt = self.fps_utils.dt().unwrap_or(0.0);
         self.flow.tick(dt);
-        self.sync_audio(dt)?;
         self.sync_menu_video();
         // Nothing is loaded and nothing simulates until the player picks a spawn.
         if self.flow.phase().shows_menu() {
             self.drive_pipboy_capture(dt);
             self.streamer.suspend_frame_meter();
+            self.sync_audio(dt)?;
             return Ok(());
         }
 
@@ -3043,14 +3776,22 @@ impl State {
         let pipboy_open = self.sim.pipboy_snapshot().model.open;
         self.sync_pipboy_session(pipboy_open);
         // The world stands still behind the Pip-Boy: render-side clocks get no time.
-        let world_dt = if pipboy_open { 0.0 } else { dt };
+        let world_dt = self.sim.world_dt(dt);
         self.world_seconds += world_dt;
+        self.sim.advance_world_clock(ClockFrame {
+            in_game: self.flow.phase() == Phase::InGame,
+            world_dt,
+        });
+        // The audio reads the strikes of the step the clock has just taken.
+        self.sync_audio(dt)?;
 
         // Apply a debug-UI worldspace selection before anything reads the
         // camera this frame: the streamer tears the old content down and reports
         // the new start. The input-mode block below recomputes camera.target
         // from the controller, so only eye is set here (in apply_stream_teleport).
-        if let Some(ws) = self.pending_worldspace.take() {
+        if let Some(ws) =
+            self.take_pending_transition(|state| &mut state.pending_worldspace, "worldspace pick")
+        {
             // Re-picking the current worldspace is a no-op — unless we're in an
             // interior, where it is the way back out and must reload.
             if ws != self.streamer.worldspace || self.streamer.in_interior() {
@@ -3061,9 +3802,17 @@ impl State {
                     .iter()
                     .find(|w| w.form_key == ws)
                     .map_or((0, 0), |w| w.start_cell);
+                let plan = self.plan_transition(Destination::picked(
+                    crate::loading_screen::Place::Exterior {
+                        worldspace: ws.clone(),
+                    },
+                    "",
+                    start_cell,
+                ));
                 let start = self.with_stream_targets(asset_server, |streamer, targets| {
                     streamer.switch_worldspace(&ws, start_cell, targets)
                 });
+                self.begin_transition(&plan);
                 if leaving_interior {
                     // Restore terrain-gated walking for the worldspace spawn.
                     self.sim.apply(SimCommand::SetInteriorMode(false));
@@ -3076,7 +3825,9 @@ impl State {
         // Apply a debug-UI interior selection: drop the worldspace cells and
         // load the single interior cell as a walkable unit (sim interior mode on
         // so the player grounds on its object-mesh floors).
-        if let Some(fk) = self.pending_interior.take() {
+        if let Some(fk) =
+            self.take_pending_transition(|state| &mut state.pending_interior, "interior pick")
+        {
             // Copy out grid + start (Copy) so the &self.interiors borrow ends
             // before with_stream_targets takes &mut self.
             let target = self
@@ -3085,9 +3836,15 @@ impl State {
                 .find(|i| i.form_key == fk)
                 .map(|i| (i.grid, i.start_pos));
             if let Some((grid, start_pos)) = target {
+                let plan = self.plan_transition(Destination::picked(
+                    crate::loading_screen::Place::Interior,
+                    &fk,
+                    grid,
+                ));
                 let start = self.with_stream_targets(asset_server, |streamer, targets| {
                     streamer.enter_interior(&fk, grid, start_pos, targets)
-                });
+                })?;
+                self.begin_transition(&plan);
                 self.sim.apply(SimCommand::SetInteriorMode(true));
                 self.input_mode = InputMode::Walk;
                 self.apply_stream_teleport(start);
@@ -3105,29 +3862,48 @@ impl State {
                 self.auto_cooldown -= 1;
             } else if self.sim.player_eye().is_some() {
                 let r = self.auto_activate[self.auto_idx].clone();
-                if let Some(t) = self.teleports.get(&r) {
-                    self.pending_teleport = Some(t.clone());
-                    tracing::info!("OPENFO4_AUTO_ACTIVATE[{}]: {r}", self.auto_idx);
-                } else {
-                    tracing::warn!("OPENFO4_AUTO_ACTIVATE: {r} not in teleport map");
+                let hop_consumed = match self.queue_teleport(&r) {
+                    Ok(()) => {
+                        tracing::info!("OPENFO4_AUTO_ACTIVATE[{}]: {r}", self.auto_idx);
+                        true
+                    }
+                    Err(refusal @ TeleportRefusal::UnknownSource(_)) => {
+                        tracing::warn!("OPENFO4_AUTO_ACTIVATE: {refusal}");
+                        true
+                    }
+                    Err(refusal) => {
+                        tracing::debug!("OPENFO4_AUTO_ACTIVATE: {r} deferred: {refusal}");
+                        false
+                    }
+                };
+                if hop_consumed {
+                    self.auto_idx += 1;
+                    self.auto_cooldown = AUTO_ACTIVATE_COOLDOWN_FRAMES;
                 }
-                self.auto_idx += 1;
-                self.auto_cooldown = AUTO_ACTIVATE_COOLDOWN_FRAMES;
             }
         }
+
+        self.tick_walk_in_hook();
 
         // Apply a load-door activation (E): the same teardown + teleport path as
         // the debug pickers, but the arrival position, grid and facing all come
         // from the door's XTEL. `switch_worldspace`'s returned default start is
         // intentionally discarded — we always arrive at the door's destination.
-        if let Some(t) = self.pending_teleport.take() {
+        if let Some(t) =
+            self.take_pending_transition(|state| &mut state.pending_teleport, "load door teleport")
+        {
+            let plan = self.plan_transition(t.destination());
             self.with_stream_targets(asset_server, |streamer, targets| {
                 if t.is_interior {
-                    streamer.enter_interior(&t.cell_form_key, t.grid, t.start_pos, targets);
+                    streamer
+                        .enter_interior(&t.cell_form_key, t.grid, t.start_pos, targets)
+                        .map(drop)
                 } else {
                     streamer.switch_worldspace(&t.worldspace, t.grid, targets);
+                    Ok(())
                 }
-            });
+            })?;
+            self.begin_transition(&plan);
             self.sim.apply(SimCommand::SetInteriorMode(t.is_interior));
             self.input_mode = InputMode::Walk;
             if let Some(yaw) = t.yaw {
@@ -3145,11 +3921,17 @@ impl State {
             };
         }
 
+        self.begin_unstarted_initial_load();
+        self.sync_load_screen(dt);
+
         self.tick_animated_objects(world_dt);
 
         let sim_tick_span = tracing::info_span!("sim_tick").entered();
         if self.freeze_camera {
             self.input_mode = InputMode::Fly;
+        }
+        if !self.carry_controls_live() {
+            self.release_carry_input();
         }
         match self.input_mode {
             InputMode::Fly => {
@@ -3168,7 +3950,11 @@ impl State {
             InputMode::Walk => {
                 self.sim
                     .apply(SimCommand::SetPlayerInput(self.player_input()));
+                // Before the tick, with this frame's view: the grab hold is measured to the
+                // start of the frame, not to after a streaming hitch inside it.
+                self.advance_carry_input(frame_start);
                 self.sim.tick(dt);
+                self.sample_walk_in(pipboy_open, dt);
                 // Until the player has spawned onto the ground the camera
                 // holds its last position (initial load, teleports).
                 if let Some(eye) = self.sim.player_eye() {
@@ -3179,6 +3965,7 @@ impl State {
         }
 
         drop(sim_tick_span);
+        self.follow_carry_outcome();
         // After the camera follows the player: placement needs this frame's eye and look direction.
         self.auto_characters.tick(
             || self.sim.player_eye().is_some(),
@@ -3190,7 +3977,7 @@ impl State {
         // Build the HUD overlay for this frame. The crosshair state is selected
         // here (render-side): door-aim depends on the camera, which the sim does
         // not own — the sim only supplies the Standard spread radius.
-        self.aimed_door = self.aimed_activation().is_some();
+        self.aimed_door = self.aim_target() == AimTarget::Activatable;
         let hud_activate = self.aimed_door;
         let mut hud_snapshot = self.sim.hud_snapshot();
         hud_snapshot.visible &= self.flow.hud_visible();
@@ -3222,6 +4009,7 @@ impl State {
             self.streamer.current_interior(),
             self.interior_lighting.as_ref(),
         );
+        self.sync_weather(world_dt);
         let mut water_entries = Vec::new();
         if self.water_stage.wants_water_entries() {
             self.sim.drain_water_entries(&mut water_entries);
@@ -3229,6 +4017,18 @@ impl State {
         let wading_player = matches!(self.input_mode, InputMode::Walk)
             .then(|| self.sim.player_body())
             .flatten();
+        self.rain.sync(
+            &RainFrame {
+                weather: &self.weather,
+                water: &self.water_stage,
+                controls: self.weather_panel.rain,
+                tint: self.lighting.horizon_radiance(),
+                indoors: self.streamer.in_interior(),
+                world_dt,
+                origin: wading_player.map_or(self.camera.eye, |body| body.feet),
+            },
+            &mut water_entries,
+        );
         self.water_stage.update_displacement(
             &self.queue,
             world_dt,
@@ -3279,7 +4079,16 @@ impl State {
             &self.device,
             &self.queue,
             &frame_uniform,
-            self.streamer.in_interior(),
+            if self.streamer.in_interior() {
+                WaterSetting::Interior
+            } else {
+                WaterSetting::Exterior {
+                    water_multiplier: self
+                        .lighting
+                        .exterior_weather()
+                        .map(|weather| weather.water_multiplier),
+                }
+            },
         );
         drop(lighting_frame_span);
         let gpu_poll_span = tracing::info_span!("gpu_poll").entered();
@@ -3320,8 +4129,15 @@ impl State {
         }
         let frame_uniform_write_span = tracing::info_span!("frame_uniform_write").entered();
         self.frame_binding.write(&self.queue, &frame_uniform);
+        let exposure = self.lighting.exposure.gpu_params(dt);
+        let exposure = if self.shot_active() {
+            exposure.adapted_at_once()
+        } else {
+            exposure
+        };
+        self.post.write_exposure_params(&self.queue, &exposure);
         self.post
-            .write_exposure_params(&self.queue, &self.lighting.exposure.gpu_params(dt));
+            .grade_with(&self.queue, &self.lighting.tonemap.lut);
 
         drop(frame_uniform_write_span);
         let eye = self.camera.eye;
@@ -3334,14 +4150,16 @@ impl State {
         });
         let stream = self.with_stream_targets(asset_server, |streamer, targets| {
             streamer.update_gpu_driven(eye, targets)
-        });
+        })?;
         self.update_fire_effects(dt);
 
         let full_ring_complete = stream.full_ring_complete;
+        let world_complete = stream.world_complete;
         if let Some(report) = &stream.spawn_complete {
             self.toast_queue.push((
                 format!(
-                    "Initial spawn: {:.1}s total — detail {:.1}s ({} cells), LOD {:.1}s ({} cells)",
+                    "{}: {:.1}s total — detail {:.1}s ({} cells), LOD {:.1}s ({} cells)",
+                    spawn_report_title(self.load_screens.history.current()),
                     report.total.as_secs_f32(),
                     report.full.as_secs_f32(),
                     report.full_cells,
@@ -3361,7 +4179,7 @@ impl State {
             stream.sim_commands,
             crate::sim::COLLIDER_APPLY_BUDGET,
         );
-        self.feed_load_readiness(settled, full_ring_complete);
+        self.feed_load_readiness(settled, full_ring_complete, world_complete);
 
         // Rewrite moving dynamic clutter into the instance buffer. Runs after
         // the streamer's update_gpu_driven (so any repack already ran) and after
@@ -3464,7 +4282,7 @@ impl State {
         // first-use re-track of all those views in that frame's queue.submit.
         // During streaming bursts the slot table changes on nearly every
         // integrate frame, so rebuilds are debounced: at most one per
-        // MATERIAL_BG_DEBOUNCE while dirt accumulates. The visible artifact
+        // `MATERIAL_BG_DEBOUNCE` while dirt accumulates. The visible artifact
         // is bounded and benign — a texture acquired into a *recycled* slot
         // samples the slot's previous texture for up to the debounce window,
         // on geometry that just streamed in at the ring edge. Two cases are
@@ -3472,22 +4290,27 @@ impl State {
         // references a dead buffer) and slot high-water growth (indexing an
         // unbound entry of a partially-bound array is UB).
         let material_bind_group_span = tracing::info_span!("material_bind_group").entered();
-        const MATERIAL_BG_DEBOUNCE: Duration = Duration::from_millis(150);
         self.pending_slot_changes.merge(stream.slot_changes);
         let new_alpha_slots = self.texture_array.take_new_alpha_slots();
         if self.shadow_material_bind_group.is_some() {
             self.pending_alpha_slots.extend(new_alpha_slots);
         }
         let cube_added = self.cube_array.take_changed();
-        self.material_bg_dirty |= !self.pending_slot_changes.is_empty()
-            || !self.pending_alpha_slots.is_empty()
-            || material_realloc
-            || cube_added;
-        let must_rebuild_now =
-            material_realloc || self.texture_array.bind_group_len() > self.material_bg_built_len;
-        if self.material_bg_dirty
-            && (must_rebuild_now || self.material_bg_last_rebuild.elapsed() >= MATERIAL_BG_DEBOUNCE)
-        {
+        let dirt = MaterialDirt {
+            slots_changed: !self.pending_slot_changes.is_empty()
+                || !self.pending_alpha_slots.is_empty()
+                || cube_added,
+            views_unbound: self.texture_array.has_unbound_views(),
+            buffer_reallocated: material_realloc,
+            array_grew: self.texture_array.bind_group_len() > self.material_bg_built_len,
+            views_wanted_now: self.streamer.wants_views_bound_now(),
+        };
+        self.material_bg_dirty |= dirt.is_dirty();
+        if material_rebuild::rebuild_due(
+            self.material_bg_dirty,
+            dirt,
+            self.material_bg_last_rebuild.elapsed(),
+        ) {
             (self.material_bind_group, self.shadow_material_bind_group) =
                 Self::build_material_bind_groups(
                     &self.device,
@@ -3501,6 +4324,7 @@ impl State {
                     &self.splatmaps.view,
                 );
             self.texture_array.upload_slot_mips(&self.queue);
+            self.texture_array.mark_views_bound();
             self.material_bg_dirty = false;
             self.material_bg_last_rebuild = Instant::now();
             self.material_bg_built_len = self.texture_array.bind_group_len();
@@ -3524,6 +4348,7 @@ impl State {
         }
 
         drop(material_bind_group_span);
+        self.check_reveal_textures();
         let lamp_shadows_span = tracing::info_span!("lamp_shadows").entered();
         let mut shadow_invalidations = self.streamer.take_shadow_invalidations();
         self.characters
@@ -3588,6 +4413,7 @@ impl State {
             placed_lights: placed_lights_realloc,
         });
         drop(rebind_buffers_span);
+        self.drive_shot()?;
         Ok(())
     }
 
@@ -3723,6 +4549,16 @@ impl State {
         }
     }
 
+    /// Drops the movement and carry keys the player holds, as if they were let go, in both camera
+    /// modes, and with them the carried body. The spin buttons keep their physical state.
+    fn release_held_movement(&mut self) {
+        self.walk_keys.release_held();
+        self.release_carry_input();
+        for code in FLY_CAMERA_KEYS {
+            self.camera_controller.handle_key(code, false);
+        }
+    }
+
     /// Follows the model's open flag: opening frees the mouse, drops held movement keys and the
     /// developer menu's keyboard focus,
     /// closing restores the capture the player had.
@@ -3735,17 +4571,25 @@ impl State {
             self.capture_before_pipboy = self.mouse_capture.is_locked();
             self.mouse_capture.set_locked(false);
             self.debug_ui.release_keyboard_focus();
-            self.walk_keys.release_held();
-            for code in FLY_CAMERA_KEYS {
-                self.camera_controller.handle_key(code, false);
-            }
+            self.release_held_movement();
         } else {
             self.mouse_capture.set_locked(self.capture_before_pipboy);
         }
         self.mouse_capture.apply(&self.window);
     }
 
-    pub fn handle_key(&mut self, code: KeyCode, is_pressed: bool, is_repeat: bool) {
+    /// `is_synthetic`: the platform made the event up across a focus change.
+    pub fn handle_key(
+        &mut self,
+        code: KeyCode,
+        is_pressed: bool,
+        is_repeat: bool,
+        is_synthetic: bool,
+    ) {
+        if self.loading_screen_preview_open() {
+            self.handle_preview_key(code, is_pressed, is_repeat);
+            return;
+        }
         if !self.flow.gameplay_input_enabled() {
             self.handle_menu_key(code, is_pressed, is_repeat);
             return;
@@ -3773,19 +4617,13 @@ impl State {
         } else if code == KeyCode::KeyV && is_pressed {
             // Hotkey twin of the debug-UI "Free-fly camera" checkbox.
             self.toggle_input_mode();
-        } else if code == KeyCode::KeyE && is_pressed && self.input_mode == InputMode::Walk {
-            // Activate the load door under the crosshair. Record intent only; the
-            // teleport (streamer teardown + player move) needs `asset_server` and
-            // runs in `update`, like the debug pickers.
-            match self.aimed_activation() {
-                Some(Activation::Teleport(target)) => self.pending_teleport = Some(target.clone()),
-                Some(Activation::Animate(entity)) => {
-                    if let Err(error) = self.animated_objects.toggle(entity) {
-                        tracing::warn!("activation: {error}");
-                    }
-                }
-                None => {}
-            }
+        } else if code == KeyCode::KeyE && self.input_mode == InputMode::Walk {
+            // Activate the load door under the crosshair, or grab the loose body. Record intent
+            // only; the teleport (streamer teardown + player move) needs `asset_server` and runs
+            // in `update`, like the debug pickers.
+            self.handle_activate_key(is_pressed, is_repeat, is_synthetic);
+        } else if code == KeyCode::KeyR && self.input_mode == InputMode::Walk {
+            self.handle_throw_key(is_pressed, is_repeat, is_synthetic);
         } else {
             // Both key maps stay fresh regardless of mode (same physical
             // keys, different meanings), so neither holds stale pressed
@@ -3857,9 +4695,7 @@ impl State {
         self.input_mode = match self.input_mode {
             InputMode::Walk => InputMode::Fly,
             InputMode::Fly => {
-                self.sim.apply(SimCommand::TeleportPlayer {
-                    pos: self.camera.eye,
-                });
+                self.teleport_player(self.camera.eye);
                 InputMode::Walk
             }
         };
@@ -3909,7 +4745,7 @@ impl State {
             .upload(&self.device, &self.queue, &vertices);
     }
 
-    /// Snapshot the walk keys + camera yaw into the sim's input format.
+    /// Snapshot the walk keys, the camera look and the carry spin into the sim's input format.
     fn player_input(&self) -> PlayerInput {
         let move_dir = glam::Vec2::new(
             (i32::from(self.walk_keys.right) - i32::from(self.walk_keys.left)) as f32,
@@ -3918,6 +4754,12 @@ impl State {
         PlayerInput {
             move_dir: move_dir.normalize_or_zero(),
             yaw: self.camera_controller.yaw(),
+            pitch: self.camera_controller.pitch(),
+            spin: self.grab_input.spin(spin_gate_open(
+                self.carry_controls_live(),
+                self.mouse_capture.is_locked(),
+                self.sim.carried().is_some(),
+            )),
             jump: self.walk_keys.jump,
             sprint: self.walk_keys.sprint_active,
             crouch: self.walk_keys.crouch_active,
@@ -3945,6 +4787,51 @@ mod walk_keys_tests {
 
         assert!(!keys.forward && !keys.jump && !keys.sprint_held && !keys.crouch_held);
         assert!(keys.sprint_active && keys.crouch_active);
+    }
+}
+
+#[cfg(test)]
+mod destination_tests {
+    use super::*;
+    use crate::loading_screen::Place;
+
+    fn door(is_interior: bool, no_load_screen: bool) -> ResolvedTarget {
+        ResolvedTarget {
+            is_interior,
+            worldspace: "00003C:Fallout4.esm".to_string(),
+            cell_form_key: "001234:Fallout4.esm".to_string(),
+            start_pos: Vec3::ZERO,
+            grid: (7, -2),
+            yaw: None,
+            no_load_screen,
+        }
+    }
+
+    #[test]
+    fn a_door_that_skips_its_screen_says_so() {
+        assert!(door(true, true).destination().no_load_screen);
+        assert!(door(false, true).destination().no_load_screen);
+        assert!(!door(true, false).destination().no_load_screen);
+    }
+
+    #[test]
+    fn an_interior_door_arrives_in_its_cell() {
+        let destination = door(true, false).destination();
+        assert_eq!(destination.place, Place::Interior);
+        assert_eq!(destination.cell, "001234:Fallout4.esm");
+        assert_eq!(destination.grid, (7, -2));
+    }
+
+    #[test]
+    fn an_exterior_door_arrives_in_its_worldspace_without_a_cell() {
+        let destination = door(false, false).destination();
+        assert_eq!(
+            destination.place,
+            Place::Exterior {
+                worldspace: "00003C:Fallout4.esm".to_string()
+            }
+        );
+        assert_eq!(destination.cell, "");
     }
 }
 

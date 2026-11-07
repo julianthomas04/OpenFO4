@@ -197,7 +197,12 @@ fn acquire_texture(
             });
             fallback_slot
         }
-        Admission::Failed => fallback_slot,
+        Admission::Failed(error) => {
+            warn_once(&format!("texture-admit:{path}"), || {
+                format!("failed to upload texture '{path}': {error}; using the fallback slot")
+            });
+            fallback_slot
+        }
     }
 }
 

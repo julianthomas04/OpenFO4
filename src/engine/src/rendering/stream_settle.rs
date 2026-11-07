@@ -49,10 +49,12 @@ pub(super) fn apply_teardown(sim: &mut SimWorld, commands: Vec<SimCommand>) {
 /// What the streamer says about the load after this frame.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct StreamReport {
-    /// The streamer reported the full-detail ring complete on this frame.
+    /// Every cell of the full-detail ring is integrated after this frame.
     pub full_ring_complete: bool,
+    /// Every cell of both rings is drawn after this frame.
+    pub world_complete: bool,
     pub counts: StreamCounts,
-    /// The grid cell the player spawns in, whose terrain the spawn waits for.
+    /// The grid cell the player spawns in, whose collision the spawn waits for.
     pub spawn_cell: (i32, i32),
 }
 
@@ -64,6 +66,7 @@ pub(super) fn readiness(
 ) -> Readiness {
     Readiness {
         full_ring_complete: stream.full_ring_complete,
+        world_complete: stream.world_complete,
         colliders_pending: sim.has_pending_colliders(),
         player_ready: sim.player_eye().is_some(),
         player: PlayerWait {
@@ -82,14 +85,14 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::sim::PlayerMovement;
-    use crate::sim::collision::{CellColliderBatch, TerrainColliderSpec};
+    use crate::sim::collision::{CellColliderBatch, TerrainColliderSpec, TerrainCollision};
+    use crate::sim::{FIXED_DT, PlayerMovement, WorldClock};
     use glam::Vec3;
 
     const SPAWN_CELL: (i32, i32) = (-3, 12);
 
     fn held_sim() -> SimWorld {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         sim.set_fold_hold(true);
         sim
     }
@@ -116,7 +119,7 @@ mod tests {
         SimCommand::AddCellColliders {
             grid,
             batch: Arc::new(CellColliderBatch {
-                terrain: Some(terrain),
+                terrain: TerrainCollision::Present(terrain),
                 objects: Vec::new(),
             }),
             baked: None,
@@ -135,6 +138,7 @@ mod tests {
             sim,
             StreamReport {
                 full_ring_complete,
+                world_complete: false,
                 counts: StreamCounts::default(),
                 spawn_cell: SPAWN_CELL,
             },
@@ -155,6 +159,21 @@ mod tests {
     }
 
     #[test]
+    fn a_spawn_into_a_cell_without_terrain_is_ready_once_its_collision_is_installed() {
+        let mut sim = held_sim();
+        sim.apply(SimCommand::SpawnPlayer { pos: Vec3::ZERO });
+        readiness_after(&mut sim, vec![add_cell((0, 0))], false, Duration::MAX);
+        sim.set_fold_hold(false);
+        sim.tick(FIXED_DT);
+        sim.tick(FIXED_DT);
+
+        let after = readiness_after(&mut sim, Vec::new(), false, Duration::ZERO);
+
+        assert!(after.player_ready);
+        assert!(!after.player.waiting_for_ground);
+    }
+
+    #[test]
     fn the_progress_follows_the_stream_counts_and_the_installed_colliders() {
         let mut sim = held_sim();
         let counts = StreamCounts {
@@ -165,6 +184,7 @@ mod tests {
         };
         let report = |full_ring_complete| StreamReport {
             full_ring_complete,
+            world_complete: false,
             counts,
             spawn_cell: SPAWN_CELL,
         };

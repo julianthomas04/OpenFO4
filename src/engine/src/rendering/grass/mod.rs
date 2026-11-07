@@ -30,13 +30,16 @@ use self::uniforms::{GrassBatchUniform, GrassFrameUniform};
 pub use self::visibility::GrassView;
 use self::visibility::{blade_reach, blades_bounds};
 use self::wind::GrassWind;
+pub use self::wind::commonwealth_clear_wind;
 use crate::assets::types::grass::{CellGrass, GrassFlags};
 use crate::rendering::frustum::Aabb;
+use crate::rendering::gpu_driven::TextureHandle;
 use crate::rendering::render_pipelines::world_pass_layout::WorldPassLayout;
 use crate::rendering::skinning::materials::{
     CharacterGpuContext, ResolvedMaterial, resolve_material,
 };
 use crate::rendering::texture_streaming::residency::TextureResidency;
+use crate::rendering::weather::WindFrame;
 use crate::utils::{env_flag, error_once, warn_once};
 
 const GRASS_ENV: &str = "OPENFO4_GRASS";
@@ -125,6 +128,9 @@ pub struct GrassStage {
     pipelines: GrassPipelines,
     frame_buffer: wgpu::Buffer,
     wind: GrassWind,
+    fade: GrassFade,
+    /// How far a blade may lean in the culling bounds: that of the strongest wind the stage may be
+    /// blown with, so no wind it is blown with leans a blade out of its bounds.
     max_lean: f32,
     controls: GrassControls,
     applied_fade: FadeOverride,
@@ -144,6 +150,7 @@ impl GrassStage {
         world: &WorldPassLayout,
         frame_layout: &wgpu::BindGroupLayout,
         fade_limits: FadeLimits,
+        wind_limit: WindFrame,
     ) -> Self {
         let wind = GrassWind::default_weather();
         let fade = GrassFade::configured(&fade_limits);
@@ -157,7 +164,8 @@ impl GrassStage {
             pipelines: GrassPipelines::new(device, format, world, frame_layout),
             frame_buffer,
             wind,
-            max_lean: wind.max_lean(),
+            fade,
+            max_lean: GrassWind::from_wind(wind_limit).max_lean(),
             controls: GrassControls::new(&fade_limits),
             applied_fade: FadeOverride::configured(&fade_limits),
             fade_limits,
@@ -205,17 +213,34 @@ impl GrassStage {
             return;
         }
         let resolved = self.controls.fade.resolve(&self.fade_limits);
-        queue.write_buffer(
-            &self.frame_buffer,
-            0,
-            bytemuck::bytes_of(&GrassFrameUniform::new(self.wind, resolved.fade)),
-        );
+        self.fade = resolved.fade;
+        self.write_frame_uniform(queue);
         self.draw_distance = resolved.fade.draw_distance(&self.fade_limits);
         self.applied_fade = self.controls.fade;
     }
 
+    /// Blows the grass in `wind` from now on; a no-op while it is unchanged. The culling bounds
+    /// hold for any wind up to the limit the stage was made with.
+    pub fn set_wind(&mut self, queue: &wgpu::Queue, wind: WindFrame) {
+        let wind = GrassWind::from_wind(wind);
+        if wind == self.wind {
+            return;
+        }
+        self.wind = wind;
+        self.write_frame_uniform(queue);
+    }
+
+    fn write_frame_uniform(&self, queue: &wgpu::Queue) {
+        queue.write_buffer(
+            &self.frame_buffer,
+            0,
+            bytemuck::bytes_of(&GrassFrameUniform::new(self.wind, self.fade)),
+        );
+    }
+
     /// Takes over the grass of a freshly integrated cell, replacing any `key`
-    /// held. `models` are the parsed models the cell's worker prepared.
+    /// held. `models` are the parsed models the cell's worker prepared. The
+    /// grass is held hidden, its textures referenced, until `reveal_cell`.
     pub fn add_cell(
         &mut self,
         key: CellKey,
@@ -232,13 +257,28 @@ impl GrassStage {
             .filter_map(|grass| self.cell_draw(grass, models, gpu, &mut uploaded_bytes))
             .collect();
         let holds_grass = !draws.is_empty();
-        for replaced in self.cells.insert(key, draws).into_iter().flatten() {
+        for replaced in self.cells.insert(key, draws, true).into_iter().flatten() {
             self.release_draw(&replaced, gpu);
         }
         CellGrassAdded {
             holds_grass,
             uploaded_bytes,
         }
+    }
+
+    /// Draws the grass `add_cell` took over for `key`.
+    pub fn reveal_cell(&mut self, key: CellKey) {
+        self.cells.reveal(key);
+    }
+
+    /// The textures the grass of `key` is drawn with.
+    pub fn cell_textures(&self, key: CellKey) -> impl Iterator<Item = TextureHandle> + '_ {
+        self.cells
+            .cell(key)
+            .iter()
+            .filter_map(|draw| self.models.get(&draw.type_key.model_path))
+            .flat_map(|model| &model.submeshes)
+            .flat_map(|submesh| submesh.material.texture_refs.iter().copied())
     }
 
     /// Releases the grass of a retired cell; returns whether it held any.
@@ -283,7 +323,7 @@ impl GrassStage {
         }
         let mut visible: Vec<&CellDraw> = self
             .cells
-            .entries()
+            .visible_entries()
             .filter(|draw| view.sees(&draw.bounds, self.draw_distance))
             .collect();
         let mut stats = GrassStats::default();

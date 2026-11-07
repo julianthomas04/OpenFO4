@@ -26,24 +26,37 @@ namespace AssetConverter
     internal sealed class PreparedNavMeshes
     {
         public const double DefaultMaxSkippedFraction = 0.01;
-        const int DeletedRecordFlag = 0x20;
 
         readonly TextWriter _errors;
         readonly double _maxSkippedFraction;
+        readonly bool _retainEntries;
 
         public List<(INavigationMeshGetter Record, NavMeshRow Row)> Entries { get; } = [];
         public int Skipped { get; private set; }
+        public int Valid { get; private set; }
 
-        PreparedNavMeshes(TextWriter errors, double maxSkippedFraction)
+        PreparedNavMeshes(TextWriter errors, double maxSkippedFraction, bool retainEntries)
         {
             _errors = errors;
             _maxSkippedFraction = maxSkippedFraction;
+            _retainEntries = retainEntries;
         }
 
         public static PreparedNavMeshes From(
             IEnumerable<NavMeshCellScope> cells, TextWriter errors, double maxSkippedFraction = DefaultMaxSkippedFraction)
         {
-            var prepared = new PreparedNavMeshes(errors, maxSkippedFraction);
+            return Prepare(cells, errors, maxSkippedFraction, retainEntries: true);
+        }
+
+        /// <summary>The number of meshes <see cref="From"/> would keep, validated and reported the same way, without retaining any of them.</summary>
+        public static int CountValid(
+            IEnumerable<NavMeshCellScope> cells, TextWriter errors, double maxSkippedFraction = DefaultMaxSkippedFraction) =>
+            Prepare(cells, errors, maxSkippedFraction, retainEntries: false).Valid;
+
+        static PreparedNavMeshes Prepare(
+            IEnumerable<NavMeshCellScope> cells, TextWriter errors, double maxSkippedFraction, bool retainEntries)
+        {
+            var prepared = new PreparedNavMeshes(errors, maxSkippedFraction, retainEntries);
             foreach (var (cell, worldspace) in cells)
                 foreach (var mesh in cell.NavigationMeshes)
                     prepared.Add(cell, worldspace, mesh);
@@ -54,10 +67,12 @@ namespace AssetConverter
         void Add(ICellGetter cell, FormKey? worldspace, INavigationMeshGetter mesh)
         {
             // Deleted records carry no navmesh data.
-            if ((mesh.MajorRecordFlagsRaw & DeletedRecordFlag) != 0) return;
+            if ((mesh.MajorRecordFlagsRaw & RecordFlags.Deleted) != 0) return;
             try
             {
-                Entries.Add((mesh, ToRow(cell, worldspace, NavMeshEncoder.Encode(mesh))));
+                var row = ToRow(cell, worldspace, NavMeshEncoder.Encode(mesh));
+                Valid++;
+                if (_retainEntries) Entries.Add((mesh, row));
             }
             catch (NavMeshValidationException ex)
             {
@@ -68,7 +83,7 @@ namespace AssetConverter
 
         void ThrowIfSystemic()
         {
-            int total = Entries.Count + Skipped;
+            int total = Valid + Skipped;
             if (Skipped > total * _maxSkippedFraction)
                 throw new NavMeshExtractionException(
                     $"{Skipped} of {total} navigation meshes failed validation (more than {_maxSkippedFraction:P0}); see the NAVM ERROR lines");

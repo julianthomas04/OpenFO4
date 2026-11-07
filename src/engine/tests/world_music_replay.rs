@@ -24,6 +24,7 @@ use openfo4::audio::{
     AudioFrame, AudioSystem, MenuMusicSettings, PLACE_POLLS_PER_SECOND, PlacePoll,
 };
 use openfo4::bethesda_space::UNITS_TO_ENGINE;
+use openfo4::conditions::GameTime;
 use openfo4::game_flow::Phase;
 
 const COMMONWEALTH: &str = "00003C:Fallout4.esm";
@@ -132,8 +133,9 @@ impl Replay {
             .sync(AudioFrame {
                 phase: Phase::InGame,
                 dt,
-                hour: HOUR,
+                time: GameTime::at_hour(HOUR),
                 place,
+                weather: None,
             })
             .unwrap();
         render_buffer(&mut self.audio);

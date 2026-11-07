@@ -103,7 +103,7 @@ const RECORD_TO_LIGHT_FLAGS: [(u32, u32); 4] = [
 /// the installer extracted a column, or a NULL). They are the modal vanilla
 /// values: exponent 2 on 651 of 801 light records, scalar 1 on 653, constant 0
 /// on 795, FOV 90 on 701, falloff exponent 1 on 794, fade 1 on 582.
-mod defaults {
+pub(crate) mod defaults {
     pub const CONSTANT: f32 = 0.0;
     pub const SCALAR: f32 = 1.0;
     pub const EXPONENT: f32 = 2.0;
@@ -377,7 +377,16 @@ fn unpack_linear_rgb(packed: i64) -> Result<Vec3, LightBaseError> {
         .filter(|packed| packed >> 24 == 0)
         .ok_or(LightBaseError::InvalidColor(packed))?;
     let channel = |shift: u32| ((packed >> shift) & 0xFF) as f32 / 255.0;
-    Ok(Vec3::new(channel(16), channel(8), channel(0)).powf(COLOR_GAMMA))
+    Ok(linear_colour(
+        Vec3::new(channel(16), channel(8), channel(0)),
+        1.0,
+    ))
+}
+
+/// The linear colour of a light whose gamma-encoded `rgb` runs from 0 to 1 and whose intensity
+/// multiplier is `fade`: `pow(rgb, 2.2) * fade`, as every placed light's colour is built.
+pub(crate) fn linear_colour(rgb: Vec3, fade: f32) -> Vec3 {
+    rgb.powf(COLOR_GAMMA) * fade
 }
 
 /// The ref's XLIG fade is a delta on the base FNAM fade value. FO4 expresses
@@ -388,7 +397,11 @@ fn fade_for(base_fade: f32, ref_fade_delta: Option<f64>) -> f32 {
 
 /// The ref's XRDS is a signed delta on the base radius; the sum is converted
 /// to engine units and multiplied by the ref scale.
-fn radius_for(base_radius_beth: f32, radius_delta_beth: Option<f64>, ref_scale: f32) -> f32 {
+pub(crate) fn radius_for(
+    base_radius_beth: f32,
+    radius_delta_beth: Option<f64>,
+    ref_scale: f32,
+) -> f32 {
     (base_radius_beth + radius_delta_beth.unwrap_or(0.0) as f32) * SCALE * ref_scale
 }
 
@@ -399,7 +412,7 @@ const OMNI_CONE_COS: f32 = -1.0;
 /// LIGH FOV is the full cone angle in degrees (the ref's XLIG FOV is added to
 /// it); the shader wants the cosine of the half-angle:
 /// `cos(radians(fov) / 2)`. 180 degrees gives 0 (a hemisphere).
-fn outer_cone_cos(fov_degrees: f32) -> Result<f32, PlacedLightError> {
+pub(crate) fn outer_cone_cos(fov_degrees: f32) -> Result<f32, PlacedLightError> {
     if !(fov_degrees > MIN_FOV_DEGREES && fov_degrees <= MAX_FOV_DEGREES) {
         return Err(PlacedLightError::InvalidFov(fov_degrees));
     }

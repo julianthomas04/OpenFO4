@@ -6,9 +6,12 @@ namespace AssetConverter
 {
     public partial class ESMLoader
     {
+        private static IEnumerable<IActorValueInformationGetter> ActorValues(IFallout4ModGetter file) =>
+            file.EnumerateMajorRecords<IActorValueInformationGetter>();
+
         private async Task ProcessActorValuesAsync(IFallout4ModGetter file, SqliteConnection conn, SqliteTransaction? transaction)
         {
-            var actorValues = file.EnumerateMajorRecords<IActorValueInformationGetter>().ToList();
+            var actorValues = ActorValues(file).ToList();
             await ProcessGroupAsync(actorValues, "AVIF", conn, new SimpleRecordProcessor<IActorValueInformationGetter>("actor_value_informations"), transaction);
 
             var attributes = SpecialAttributes.Collect(actorValues);

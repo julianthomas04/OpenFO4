@@ -7,7 +7,7 @@ namespace InstallerTests.Progress
     {
         private static StepSnapshot Step(string name = "Converting meshes", StepStatus status = StepStatus.Running, long completed = 0, long total = 0,
             string? unit = null, TimeSpan? elapsed = null) =>
-            new(name, unit, status, completed, total, null, status == StepStatus.Pending ? null : TimeSpan.Zero, null, elapsed ?? TimeSpan.Zero, 0);
+            new(name, unit, status, completed, total, null, status == StepStatus.Pending ? null : TimeSpan.Zero, null, elapsed ?? TimeSpan.Zero, 0) { TotalIsFinal = true };
 
         private static ProgressSnapshot Snapshot(RunState state, params StepSnapshot[] steps) =>
             new(steps, 0, TimeSpan.Zero, state);

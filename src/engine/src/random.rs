@@ -1,0 +1,134 @@
+//! Seedable random numbers: a trait the tests can script and a deterministic generator.
+
+/// Steps of `RandomSource::unit`; a power of two no larger than the `f32` mantissa, so every step is
+/// exactly representable and 1.0 is never reached.
+const UNIT_STEPS: usize = 1 << 24;
+
+#[cfg(test)]
+pub(crate) mod test_support;
+
+pub trait RandomSource {
+    /// A uniform value in `0..n`; `n` is never zero.
+    fn below(&mut self, n: usize) -> usize;
+
+    /// A uniform value in `[0, 1)`.
+    fn unit(&mut self) -> f32 {
+        self.below(UNIT_STEPS) as f32 / UNIT_STEPS as f32
+    }
+
+    /// A uniform value in `[-bound, bound)`; exactly 0 for a bound of 0.
+    fn symmetric(&mut self, bound: f32) -> f32 {
+        (2.0 * self.unit() - 1.0) * bound
+    }
+}
+
+/// A borrowed source is a source, so one generator can serve several consumers in turn.
+impl<R: RandomSource + ?Sized> RandomSource for &mut R {
+    fn below(&mut self, n: usize) -> usize {
+        (**self).below(n)
+    }
+
+    fn unit(&mut self) -> f32 {
+        (**self).unit()
+    }
+
+    fn symmetric(&mut self, bound: f32) -> f32 {
+        (**self).symmetric(bound)
+    }
+}
+
+/// Small seedable generator; the same seed always yields the same sequence.
+#[derive(Debug, Clone)]
+pub struct SplitMix64 {
+    state: u64,
+}
+
+impl SplitMix64 {
+    pub fn new(seed: u64) -> Self {
+        Self { state: seed }
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// A generator seeded from this one's next value, so every consumer of randomness gets a
+    /// sequence of its own.
+    #[must_use]
+    pub fn fork(&mut self) -> Self {
+        Self::new(self.next_u64())
+    }
+}
+
+impl RandomSource for SplitMix64 {
+    fn below(&mut self, n: usize) -> usize {
+        ((u128::from(self.next_u64()) * n as u128) >> 64) as usize
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_same_seed_yields_the_same_sequence() {
+        let mut a = SplitMix64::new(5);
+        let mut b = SplitMix64::new(5);
+        assert!((0..20).all(|_| a.below(1000) == b.below(1000)));
+    }
+
+    #[test]
+    fn forks_are_deterministic_and_each_one_continues_from_the_parent() {
+        let mut parent = SplitMix64::new(9);
+        let mut twin = SplitMix64::new(9);
+        let mut fork = parent.fork();
+        let mut twin_fork = twin.fork();
+        assert!((0..20).all(|_| fork.below(1000) == twin_fork.below(1000)));
+        let mut sibling = parent.fork();
+        let mut first = SplitMix64::new(9).fork();
+        assert_ne!(
+            (0..20).map(|_| sibling.below(1000)).collect::<Vec<_>>(),
+            (0..20).map(|_| first.below(1000)).collect::<Vec<_>>(),
+            "the second fork continues from where the first left the parent"
+        );
+    }
+
+    #[test]
+    fn unit_stays_in_the_half_open_interval() {
+        let mut rng = SplitMix64::new(1);
+        assert!((0..10_000).all(|_| (0.0..1.0).contains(&rng.unit())));
+    }
+
+    #[test]
+    fn symmetric_stays_within_the_bound_and_reaches_both_signs() {
+        let mut rng = SplitMix64::new(2);
+        let draws: Vec<f32> = (0..10_000).map(|_| rng.symmetric(3.0)).collect();
+        assert!(draws.iter().all(|value| (-3.0..3.0).contains(value)));
+        assert!(draws.iter().any(|&value| value < -2.5));
+        assert!(draws.iter().any(|&value| value > 2.5));
+    }
+
+    #[test]
+    fn symmetric_with_a_zero_bound_is_zero() {
+        let mut rng = SplitMix64::new(3);
+        assert!((0..100).all(|_| rng.symmetric(0.0).abs() == 0.0));
+    }
+
+    fn draw_from(mut rng: impl RandomSource) -> (usize, f32) {
+        (rng.below(5), rng.unit())
+    }
+
+    #[test]
+    fn a_borrowed_source_forwards_every_draw_to_the_owner() {
+        let mut owner = test_support::ScriptedRandom::new(&[3], &[0.25]);
+
+        let drawn = draw_from(&mut owner);
+
+        assert_eq!(drawn, (3, 0.25));
+        assert!(owner.is_spent());
+    }
+}

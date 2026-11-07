@@ -21,12 +21,6 @@ pub(super) const GRAVITY_DYN: f32 = 68.59;
 /// mechanism, not sleeping-distance culling.)
 pub(super) const DYN_LINEAR_DAMPING: f32 = 0.2;
 pub(super) const DYN_ANGULAR_DAMPING: f32 = 0.4;
-/// Engine units per real metre (1 unit ≈ 14.3 cm; collision geometry is baked
-/// from Havok metres × 7). rapier is tuned for metre-scale worlds and uses
-/// `IntegrationParameters.length_unit` to keep its internal tolerances (contact
-/// margin, sleep thresholds, CCD) correct at other scales — so it must be told
-/// the world is 7× metre-scale.
-pub(super) const ENGINE_UNITS_PER_METER: f32 = 7.0;
 /// Fallback density for a dynamic body whose sidecar carries no usable Havok
 /// mass (shouldn't happen — `dynamic` implies a positive mass) or whose shapes
 /// have ~zero volume. Rapier's default; mass then derives from shape volume.
@@ -143,6 +137,13 @@ pub(super) fn clamp_linvel(rb: &mut RigidBody, max: f32, wake: bool) {
     }
 }
 
+/// Rescale a body's angular velocity to `max` if it exceeds it (no-op otherwise).
+pub(super) fn clamp_angvel(rb: &mut RigidBody, max: f32, wake: bool) {
+    if let Some(v) = clamp_to_max(rb.angvel(), max) {
+        rb.set_angvel(v, wake);
+    }
+}
+
 /// Bound a dynamic body's post-step state so a single instability can't
 /// compound into an explosion or poison the render readback, and return the
 /// pose to record for interpolation. A non-finite pose/velocity is recovered
@@ -162,9 +163,7 @@ pub(super) fn sanitize_body(rb: &mut RigidBody, last_good: Pose) -> Pose {
         return last_good;
     }
     clamp_linvel(rb, MAX_DYN_LINVEL, false);
-    if let Some(ang) = clamp_to_max(rb.angvel(), MAX_DYN_ANGVEL) {
-        rb.set_angvel(ang, false);
-    }
+    clamp_angvel(rb, MAX_DYN_ANGVEL, false);
     pos
 }
 

@@ -21,10 +21,10 @@ namespace InstallerTests
 
         private string Written() => Encoding.UTF8.GetString(_bytes.ToArray());
 
-        private int StreamAll(NifWorkQueue queue, Action? onTaken = null)
+        private int StreamAll(NifWorkQueue queue)
         {
             using var writer = CollisionNifList.OpenWriter(_bytes);
-            return CollisionNifList.StreamTo(writer, Root, queue, onTaken, Ct);
+            return CollisionNifList.StreamTo(writer, Root, queue, Ct);
         }
 
         private static NifWorkQueue Finished(params string[] relatives)
@@ -78,21 +78,11 @@ namespace InstallerTests
         }
 
         [Fact]
-        public void OnTakenIsCalledOncePerLine()
-        {
-            int taken = 0;
-
-            StreamAll(Finished("a.nif", "b.nif", "c.nif"), () => taken++);
-
-            Assert.Equal(3, taken);
-        }
-
-        [Fact]
         public async Task ALineReachesTheDestinationAsSoonAsItsFileIsQueuedWhileTheQueueIsStillOpen()
         {
             var queue = new NifWorkQueue();
             using var writer = CollisionNifList.OpenWriter(_bytes);
-            var streaming = Task.Run(() => CollisionNifList.StreamTo(writer, Root, queue, null, Ct), Ct);
+            var streaming = Task.Run(() => CollisionNifList.StreamTo(writer, Root, queue, Ct), Ct);
 
             queue.Add(Nif("early.nif"));
             var deadline = DateTime.UtcNow + Patience;
@@ -149,7 +139,7 @@ namespace InstallerTests
             var queue = new NifWorkQueue();
             cancel.CancelAfter(TimeSpan.FromMilliseconds(100));
 
-            Assert.ThrowsAny<OperationCanceledException>(() => CollisionNifList.StreamTo(writer, Root, queue, null, cancel.Token));
+            Assert.ThrowsAny<OperationCanceledException>(() => CollisionNifList.StreamTo(writer, Root, queue, cancel.Token));
         }
 
         [Fact]
@@ -157,7 +147,7 @@ namespace InstallerTests
         {
             using var writer = CollisionNifList.OpenWriter(new BrokenPipeStream());
 
-            Assert.Throws<IOException>(() => CollisionNifList.StreamTo(writer, Root, Finished("a.nif"), null, Ct));
+            Assert.Throws<IOException>(() => CollisionNifList.StreamTo(writer, Root, Finished("a.nif"), Ct));
         }
 
         /// <summary>Fails its first write the way a pipe whose reader has exited does, then takes whatever is left (the disposal of the writer).</summary>

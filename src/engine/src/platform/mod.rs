@@ -36,6 +36,7 @@ mod tests {
     use super::*;
     use crate::audio::AudioError;
     use crate::rendering::device_loss::DeviceLost;
+    use crate::rendering::world_streamer::InteriorRequestError;
 
     #[test]
     fn a_run_without_errors_succeeds() {
@@ -63,6 +64,17 @@ mod tests {
         .unwrap_err();
 
         assert!(format!("{error:#}").contains("no device"), "{error:#}");
+    }
+
+    #[test]
+    fn a_stopped_cell_worker_pool_is_returned_so_main_reports_it() {
+        let stopped = InteriorRequestError {
+            cell_form_key: "Cell:1".to_string(),
+        };
+
+        let error = outcome(None, Some(stopped.into())).unwrap_err();
+
+        assert!(format!("{error:#}").contains("Cell:1"), "{error:#}");
     }
 
     #[test]

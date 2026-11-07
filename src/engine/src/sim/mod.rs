@@ -6,6 +6,7 @@
 
 pub mod bake;
 mod cache_purge;
+mod carry;
 mod collider_user_data;
 pub mod collision;
 mod command_budget;
@@ -27,6 +28,8 @@ mod sidecar_hash;
 mod sound_pose;
 mod water_materials;
 pub mod water_physics;
+pub mod weather;
+pub mod world_clock;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -34,11 +37,14 @@ use std::time::{Duration, Instant};
 use glam::{Quat, Vec3};
 
 use crate::footsteps::{FootstepEvent, GaitTimings, SurfaceMaterial};
+use crate::weather::WeatherRollTable;
 
 use command_budget::{Deferred, DeferredQueue};
 use footstep_clock::{FootstepClock, TickObservation};
+use weather::{WeatherCycle, WeatherStep};
 
-pub use commands::{KinematicPose, PlayerInput, SimCommand};
+pub use carry::{CarriedInfo, GrabRefusal, ReleaseReason};
+pub use commands::{KinematicPose, PlayerInput, SimCommand, look_direction};
 pub use footstep_clock::{JumpWindupMismatch, jump_windup_mismatch};
 pub use hud::{CrosshairState, HudSnapshot, MeterFill};
 pub use player::{PlayerMovement, STANDING_CENTER_ABOVE_FEET};
@@ -46,6 +52,20 @@ pub use ragdoll::{BodyDelta, MAX_SKINNED_RAGDOLLS, RagdollEntry, RagdollPoses};
 pub use ragdoll_tuning::RagdollSettings;
 pub use water_materials::{MaterialBuoyancy, WaterBodyProps};
 pub use water_physics::{WaterCurrent, WaterQuery, WaterSurface};
+pub use weather::{LightningStrike, WeatherSnapshot};
+pub use world_clock::WorldClock;
+
+/// The longest step the world clock takes in one frame.
+const MAX_CLOCK_STEP_SECONDS: f32 = 0.25;
+
+/// What the frame loop tells the sim about one frame, for the world clock.
+#[derive(Clone, Copy, Debug)]
+pub struct ClockFrame {
+    /// Whether the game flow is in gameplay (not a menu, loading or the reveal).
+    pub in_game: bool,
+    /// The world time of the frame, from [`SimWorld::world_dt`].
+    pub world_dt: f32,
+}
 
 /// Stable identity for sim entities. The player is entity 1; static world
 /// collision is tracked per-cell rather than per-entity until something needs
@@ -118,6 +138,8 @@ pub struct PlayerBody {
     pub feet: Vec3,
     /// Engine units from the soles to the top of the capsule.
     pub height: f32,
+    /// Engine units, horizontal radius of the capsule.
+    pub radius: f32,
 }
 
 /// Read-only player snapshot for the debug overlay.
@@ -127,7 +149,7 @@ pub struct PlayerDebug {
     pub vertical_vel: f32,
     pub crouching: bool,
     pub spawned: bool,
-    /// A spawn/teleport is pending a ground raycast (terrain not ready yet).
+    /// A spawn/teleport is pending a ground raycast (ground not ready yet).
     pub waiting_for_ground: bool,
     pub cell: CellGrid,
     pub cell_ready: bool,
@@ -170,15 +192,20 @@ pub struct SimWorld {
     steps_last_tick: u32,
     warned_substep_clamp: bool,
     pipboy: pipboy::PipBoyModel,
+    world_clock: WorldClock,
+    /// Until a climate is installed there is no weather.
+    weather: Option<WeatherCycle>,
     /// While set, `tick` does not advance and collider adds are queued.
     fold_hold: bool,
     pending_colliders: DeferredQueue<CellPayload>,
     footstep_clock: FootstepClock,
     footsteps: Vec<FootstepEvent>,
+    /// Why the latest refused grab was refused, until taken.
+    grab_refusal: Option<GrabRefusal>,
 }
 
 impl SimWorld {
-    pub fn new(movement: PlayerMovement) -> Self {
+    pub fn new(movement: PlayerMovement, world_clock: WorldClock) -> Self {
         let mut physics = physics::PhysicsContext::new();
         physics.set_water_query(water_physics::test_plane_from_env());
         Self {
@@ -189,10 +216,13 @@ impl SimWorld {
             steps_last_tick: 0,
             warned_substep_clamp: false,
             pipboy: pipboy::PipBoyModel::new(Arc::default()),
+            world_clock,
+            weather: None,
             fold_hold: false,
             pending_colliders: DeferredQueue::new(),
             footstep_clock: FootstepClock::default(),
             footsteps: Vec::new(),
+            grab_refusal: None,
         }
     }
 
@@ -213,9 +243,61 @@ impl SimWorld {
     /// inserted at once, so a bulk load pays no broad-phase fold per cell and
     /// no insert burst in one frame. Releasing lets the next `tick` fold every
     /// insert in one pass before any player query; the player spawn resumes
-    /// from there, still gated on its cell's terrain being resident.
+    /// from there, still gated on its cell's collision being installed.
     pub fn set_fold_hold(&mut self, hold: bool) {
         self.fold_hold = hold;
+    }
+
+    pub fn world_clock(&self) -> &WorldClock {
+        &self.world_clock
+    }
+
+    /// Starts the weather of a climate on the world clock, replacing any weather before. The
+    /// seed fixes the weathers that the climate brings and their order, however the frames are
+    /// paced and whether or not it storms: the rolls and the lightning draw from streams of their
+    /// own.
+    pub fn install_weather(&mut self, table: WeatherRollTable, seed: u64) {
+        self.weather = Some(WeatherCycle::seeded(
+            table,
+            seed,
+            self.world_clock.total_hours(),
+        ));
+    }
+
+    /// The weather as of the last [`advance_world_clock`](Self::advance_world_clock); `None`
+    /// until a climate is installed.
+    pub fn weather_snapshot(&self) -> Option<WeatherSnapshot<'_>> {
+        self.weather.as_ref().map(WeatherCycle::snapshot)
+    }
+
+    /// The seconds of world time a frame of `dt` seconds carries: none while the Pip-Boy is open.
+    pub fn world_dt(&self, dt: f32) -> f32 {
+        if self.pipboy.open { 0.0 } else { dt }
+    }
+
+    /// Advances the world clock and the weather for one frame. The clock runs only in gameplay
+    /// and not while a load holds the simulation; the step is bounded so a hitch cannot jump the
+    /// day, and a negative or NaN step is no step. The weather follows the clock and its
+    /// lightning takes the seconds of the step, so a storm is no faster at a fast clock. Call it
+    /// once a frame, also outside gameplay: the strikes of the weather last one call.
+    #[allow(
+        clippy::manual_clamp,
+        reason = "f32::clamp passes NaN through, max/min turn a NaN frame time into no progress"
+    )]
+    pub fn advance_world_clock(&mut self, frame: ClockFrame) {
+        let seconds = if frame.in_game && !self.fold_hold {
+            let seconds = frame.world_dt.max(0.0).min(MAX_CLOCK_STEP_SECONDS);
+            self.world_clock.advance(seconds);
+            seconds
+        } else {
+            0.0
+        };
+        if let Some(weather) = &mut self.weather {
+            weather.advance(WeatherStep {
+                clock_hours: self.world_clock.total_hours(),
+                world_seconds: seconds,
+            });
+        }
     }
 
     /// Inserts queued collider work in FIFO order until `budget` is spent, at
@@ -325,9 +407,11 @@ impl SimWorld {
                 } else {
                     player::SpawnSnap::Down
                 };
+                self.physics.release(ReleaseReason::Teleported);
                 self.player.request_spawn(pos, snap);
             }
             SimCommand::TeleportPlayer { pos } => {
+                self.physics.release(ReleaseReason::Teleported);
                 self.player.request_spawn(pos, player::SpawnSnap::Down);
             }
             SimCommand::SetPlayerInput(input) => {
@@ -344,6 +428,86 @@ impl SimWorld {
             SimCommand::ReleaseAllKinematicPoses => self.physics.release_all_kinematic_poses(),
             SimCommand::SetRagdollSettings(settings) => self.physics.set_ragdoll_settings(settings),
             SimCommand::PipBoy(action) => self.apply_pipboy(action),
+            SimCommand::SetWorldClock(edit) => self.apply_clock_edit(edit),
+            SimCommand::SetWeather(edit) => self.apply_weather_edit(edit),
+            SimCommand::GrabBody { entity } => self.grab_body(entity),
+            SimCommand::DropCarried => {
+                if !self.physics.release(ReleaseReason::Dropped) {
+                    tracing::debug!("sim: drop ignored, nothing is carried");
+                }
+            }
+            SimCommand::ThrowCarried { charge_secs } => {
+                let velocity = self.view().forward() * carry::throw_speed(charge_secs);
+                if !self.physics.throw_carried(velocity) {
+                    tracing::debug!("sim: throw ignored, nothing is carried");
+                }
+            }
+        }
+    }
+
+    fn grab_body(&mut self, entity: EntityId) {
+        let placed = self.player.spawned && self.player.pending_spawn.is_none();
+        let grabbed = if self.pipboy.open || self.fold_hold {
+            Err(GrabRefusal::SimulationPaused)
+        } else if placed {
+            self.physics.grab(entity, self.player.eye(), self.view())
+        } else {
+            Err(GrabRefusal::PlayerNotPlaced)
+        };
+        if let Err(refusal) = grabbed {
+            self.grab_refusal = Some(refusal);
+        }
+    }
+
+    /// The camera view of the latest player input.
+    fn view(&self) -> carry::View {
+        carry::View {
+            yaw: self.input.yaw,
+            pitch: self.input.pitch,
+        }
+    }
+
+    /// The body the player carries, if any.
+    pub fn carried(&self) -> Option<CarriedInfo> {
+        self.physics.carried()
+    }
+
+    /// Why the body carried last was let go, once per release.
+    pub fn take_release(&mut self) -> Option<ReleaseReason> {
+        self.physics.take_release()
+    }
+
+    /// Why the latest refused [`SimCommand::GrabBody`] was refused, once per refusal.
+    pub fn take_grab_refusal(&mut self) -> Option<GrabRefusal> {
+        self.grab_refusal.take()
+    }
+
+    /// Whether `entity` is a loose body that [`SimCommand::GrabBody`] may pick up, mass aside.
+    pub fn is_grabbable(&self, entity: EntityId) -> bool {
+        self.physics.is_grabbable(entity)
+    }
+
+    fn apply_clock_edit(&mut self, edit: commands::ClockEdit) {
+        let result = match edit {
+            commands::ClockEdit::SetHour(hour) => self.world_clock.set_hour(hour),
+            commands::ClockEdit::SetPaused(paused) => {
+                self.world_clock.set_paused(paused);
+                Ok(())
+            }
+            commands::ClockEdit::SetTimeScale(scale) => self.world_clock.set_time_scale(scale),
+        };
+        if let Err(error) = result {
+            tracing::warn!("sim: world clock edit {edit:?} rejected: {error}");
+        }
+    }
+
+    fn apply_weather_edit(&mut self, edit: commands::WeatherEdit) {
+        let Some(weather) = &mut self.weather else {
+            tracing::warn!("sim: weather edit {edit:?} dropped: no weather is installed");
+            return;
+        };
+        if let Err(error) = weather.apply(edit) {
+            tracing::warn!("sim: weather edit {edit:?} rejected: {error}");
         }
     }
 
@@ -352,6 +516,7 @@ impl SimWorld {
         self.player.heal(effects.heal_hp);
         if self.pipboy.open {
             self.input = self.input.without_movement();
+            self.physics.release(ReleaseReason::MenuOpened);
         }
     }
 
@@ -396,6 +561,12 @@ impl SimWorld {
             // simulate, and stepping 200k+ static colliders per tick was a
             // frame killer (the broad phase re-optimizes its tree per step).
             self.physics.update_water(self.player.pos);
+            self.physics.drive_carried(
+                self.player.eye_after_next_step(FIXED_DT),
+                self.view(),
+                self.input.spin,
+                FIXED_DT,
+            );
             let needs_step = {
                 let _span = tracing::trace_span!("sim_needs_step").entered();
                 self.physics.needs_step()
@@ -421,7 +592,7 @@ impl SimWorld {
             completed: player.step_completed,
             grounded: player.grounded,
             crouching: player.crouching,
-            sprint: self.input.sprint,
+            sprint: self.input.sprint && !self.physics.carry_forces_walk(),
             horizontal_displacement: displacement.length(),
             launched: player.launched,
         };
@@ -447,7 +618,7 @@ impl SimWorld {
 
     /// First-person eye position, interpolated between the last two fixed
     /// steps. `None` until the player has spawned onto the ground, and again
-    /// while a teleport waits for its destination terrain: returning the
+    /// while a teleport waits for its destination collision: returning the
     /// stale pre-teleport position would snap the camera (and with it the
     /// streamer) back to the old cell, unloading the very colliders the
     /// pending ground-snap is waiting on.
@@ -468,7 +639,11 @@ impl SimWorld {
         let eye = self.player_eye()?;
         let height = self.player.height();
         let feet = eye - Vec3::Y * (self.player.eye_above_center() + height * 0.5);
-        Some(PlayerBody { feet, height })
+        Some(PlayerBody {
+            feet,
+            height,
+            radius: player::RADIUS,
+        })
     }
 
     /// Moves the bodies' water entries since the last call into `out`
@@ -577,6 +752,7 @@ impl SimWorld {
         };
         pipboy::PipBoySnapshot {
             model: &self.pipboy,
+            clock: self.world_clock.date(),
             vitals: pipboy::PlayerVitals {
                 hp,
                 hp_max,
@@ -682,6 +858,11 @@ fn apply_collider_work(physics: &mut physics::PhysicsContext, work: Deferred<Cel
 }
 
 #[cfg(test)]
+mod carry_tests;
+#[cfg(test)]
+pub(crate) mod test_world;
+
+#[cfg(test)]
 #[allow(
     clippy::float_cmp,
     reason = "fixture values are exactly representable in f32"
@@ -737,14 +918,14 @@ mod tests {
 
     #[test]
     fn one_fixed_step_of_time_runs_exactly_one_step() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         sim.tick(FIXED_DT);
         assert_eq!(sim.stats().steps_last_tick, 1);
     }
 
     #[test]
     fn partial_steps_accumulate_across_ticks() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         sim.tick(FIXED_DT * 0.6);
         assert_eq!(sim.stats().steps_last_tick, 0);
         sim.tick(FIXED_DT * 0.6);
@@ -753,7 +934,7 @@ mod tests {
 
     #[test]
     fn a_long_frame_is_clamped_to_the_substep_cap() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         sim.tick(10.0);
         assert_eq!(sim.stats().steps_last_tick, MAX_SUBSTEPS_PER_TICK);
         sim.tick(0.0);
@@ -766,7 +947,7 @@ mod tests {
 
     #[test]
     fn negative_frame_time_runs_no_steps() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         sim.tick(-1.0);
         assert_eq!(sim.stats().steps_last_tick, 0);
     }
@@ -777,7 +958,7 @@ mod tests {
 
     #[test]
     fn no_steps_run_while_the_pipboy_is_open() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         pipboy(&mut sim, pipboy::PipBoyAction::Open);
         sim.tick(FIXED_DT * 3.0);
         assert_eq!(sim.stats().steps_last_tick, 0);
@@ -785,7 +966,7 @@ mod tests {
 
     #[test]
     fn closing_the_pipboy_resumes_stepping_without_a_catch_up_burst() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         pipboy(&mut sim, pipboy::PipBoyAction::Open);
         sim.tick(5.0);
         pipboy(&mut sim, pipboy::PipBoyAction::Close);
@@ -795,7 +976,7 @@ mod tests {
 
     #[test]
     fn opening_the_pipboy_clears_the_latched_movement_input() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         sim.apply(SimCommand::SetPlayerInput(PlayerInput {
             move_dir: Vec2::Y,
             jump: true,
@@ -811,7 +992,7 @@ mod tests {
 
     #[test]
     fn a_rejected_pipboy_action_is_recorded_on_the_snapshot_model() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         pipboy(&mut sim, pipboy::PipBoyAction::UseFirstStimpak);
         assert_eq!(
             sim.pipboy_snapshot().model.last_rejection,
@@ -821,7 +1002,7 @@ mod tests {
 
     #[test]
     fn the_snapshot_reports_full_vitals_the_heading_and_no_position_before_spawn() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         sim.apply(SimCommand::SetPlayerInput(PlayerInput {
             yaw: 0.75,
             ..PlayerInput::default()
@@ -834,7 +1015,7 @@ mod tests {
     }
 
     fn sim_with_stimpaks(heal: f32, count: u32) -> SimWorld {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         let mut model = pipboy::PipBoyModel::new(Arc::default());
         model.inventory.insert(pipboy::InventoryItem {
             id: pipboy::ItemId(0),
@@ -879,7 +1060,7 @@ mod tests {
 
     #[test]
     fn a_rejected_use_heals_nothing() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         let hp_max = sim.player.health().1;
         sim.player.set_health(hp_max - 50.0);
         pipboy(&mut sim, pipboy::PipBoyAction::UseFirstStimpak);
@@ -888,7 +1069,7 @@ mod tests {
 
     #[test]
     fn player_input_sent_while_the_pipboy_is_open_keeps_the_heading_but_not_the_movement() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         pipboy(&mut sim, pipboy::PipBoyAction::Open);
         sim.apply(SimCommand::SetPlayerInput(PlayerInput {
             move_dir: Vec2::Y,
@@ -904,7 +1085,7 @@ mod tests {
 
     #[test]
     fn player_input_is_applied_again_once_the_pipboy_closed() {
-        let mut sim = SimWorld::new(PlayerMovement::default());
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         pipboy(&mut sim, pipboy::PipBoyAction::Open);
         pipboy(&mut sim, pipboy::PipBoyAction::Close);
         sim.apply(SimCommand::SetPlayerInput(PlayerInput {
@@ -933,7 +1114,7 @@ mod tests {
         }
 
         fn held_sim() -> SimWorld {
-            let mut sim = SimWorld::new(PlayerMovement::default());
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
             sim.set_fold_hold(true);
             sim
         }
@@ -944,7 +1125,7 @@ mod tests {
 
         #[test]
         fn without_a_hold_and_with_an_empty_queue_an_add_is_inserted_at_once() {
-            let mut sim = SimWorld::new(PlayerMovement::default());
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
             add_ground(&mut sim, SPAWN_GRID);
             assert_eq!(inserted_cells(&sim), 1);
             assert!(!sim.has_pending_colliders());
@@ -990,7 +1171,7 @@ mod tests {
 
         #[test]
         fn removing_a_resident_cell_still_removes_it_while_held() {
-            let mut sim = SimWorld::new(PlayerMovement::default());
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
             add_ground(&mut sim, (0, 0));
             sim.set_fold_hold(true);
             sim.apply(SimCommand::RemoveCellColliders { grid: (0, 0) });
@@ -1070,7 +1251,7 @@ mod tests {
 
         #[test]
         fn a_held_tick_leaves_the_sub_step_remainder_untouched() {
-            let mut sim = SimWorld::new(PlayerMovement::default());
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
             sim.tick(FIXED_DT * 0.5);
             let before = sim.interp_alpha();
             assert!((before - 0.5).abs() < 1e-4, "{before}");
@@ -1134,7 +1315,7 @@ mod tests {
         }
 
         #[test]
-        fn the_player_spawns_only_after_the_hold_is_released_and_the_terrain_is_resident() {
+        fn the_player_spawns_only_after_the_hold_is_released_and_the_collision_is_installed() {
             let mut sim = held_sim();
             sim.apply(SimCommand::SpawnPlayer { pos: SPAWN_AT });
             add_ground(&mut sim, SPAWN_GRID);
@@ -1144,7 +1325,7 @@ mod tests {
             }
             assert!(
                 !sim.player_debug().spawned,
-                "held: terrain resident but no step"
+                "held: collision installed but no step"
             );
             assert!(sim.player_eye().is_none());
             sim.set_fold_hold(false);
@@ -1156,7 +1337,7 @@ mod tests {
         }
 
         #[test]
-        fn a_release_with_terrain_still_queued_keeps_the_player_waiting_instead_of_falling() {
+        fn a_release_with_collision_still_queued_keeps_the_player_waiting_instead_of_falling() {
             let mut sim = held_sim();
             sim.apply(SimCommand::SpawnPlayer { pos: SPAWN_AT });
             add_ground(&mut sim, SPAWN_GRID);
@@ -1175,10 +1356,416 @@ mod tests {
 
     #[test]
     fn there_is_no_eye_and_no_hud_before_the_player_spawns() {
-        let sim = SimWorld::new(PlayerMovement::default());
+        let sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
         assert!(sim.player_eye().is_none());
         let hud = sim.hud_snapshot();
         assert!(!hud.visible);
         assert_eq!(hud.crosshair, CrosshairState::Hidden);
+    }
+
+    mod world_clock_commands {
+        use super::*;
+        use commands::ClockEdit;
+
+        fn edit(sim: &mut SimWorld, edit: ClockEdit) {
+            sim.apply(SimCommand::SetWorldClock(edit));
+        }
+
+        fn frame(sim: &mut SimWorld, in_game: bool, dt: f32) {
+            let world_dt = sim.world_dt(dt);
+            sim.advance_world_clock(ClockFrame { in_game, world_dt });
+        }
+
+        /// Whole quarter-second in-game frames, as exact in f32 as the step itself.
+        fn run_seconds(sim: &mut SimWorld, seconds: f32) {
+            for _ in 0..(seconds / 0.25) as u32 {
+                frame(sim, true, 0.25);
+            }
+        }
+
+        fn minutes_advanced_by(sim: &mut SimWorld, step: impl FnOnce(&mut SimWorld)) -> f64 {
+            let before = sim.world_clock().minute_of_day();
+            step(sim);
+            sim.world_clock().minute_of_day() - before
+        }
+
+        #[test]
+        fn one_in_game_frame_advances_the_clock_exactly_once() {
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let advanced = minutes_advanced_by(&mut sim, |sim| frame(sim, true, 0.15));
+            assert!((advanced - 0.15 * 20.0 / 60.0).abs() < 1e-6, "{advanced}");
+        }
+
+        #[test]
+        fn a_five_second_hitch_advances_a_quarter_second_of_game_time_at_scale_20() {
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let advanced = minutes_advanced_by(&mut sim, |sim| frame(sim, true, 5.0));
+            let quarter_second = 0.25 * 20.0 / 60.0;
+            assert!((advanced - quarter_second).abs() < 1e-6, "{advanced}");
+            assert!(advanced < 5.0 * 20.0 / 60.0 / 10.0);
+        }
+
+        #[test]
+        fn outside_gameplay_the_clock_stands_still() {
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            assert_eq!(
+                minutes_advanced_by(&mut sim, |sim| frame(sim, false, 0.1)),
+                0.0
+            );
+        }
+
+        #[test]
+        fn a_held_load_stops_the_clock_until_released() {
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            sim.set_fold_hold(true);
+            assert_eq!(
+                minutes_advanced_by(&mut sim, |sim| frame(sim, true, 0.1)),
+                0.0
+            );
+            sim.set_fold_hold(false);
+            assert!(minutes_advanced_by(&mut sim, |sim| frame(sim, true, 0.1)) > 0.0);
+        }
+
+        #[test]
+        fn an_open_pipboy_stops_the_clock_and_the_world_time_of_the_frame() {
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            pipboy(&mut sim, pipboy::PipBoyAction::Open);
+            assert_eq!(sim.world_dt(0.1), 0.0);
+            assert_eq!(
+                minutes_advanced_by(&mut sim, |sim| frame(sim, true, 0.1)),
+                0.0
+            );
+            pipboy(&mut sim, pipboy::PipBoyAction::Close);
+            assert_eq!(sim.world_dt(0.1), 0.1);
+            assert!(minutes_advanced_by(&mut sim, |sim| frame(sim, true, 0.1)) > 0.0);
+        }
+
+        #[test]
+        fn a_negative_or_nan_frame_time_does_not_move_the_clock() {
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            for dt in [-1.0, f32::NAN] {
+                assert_eq!(
+                    minutes_advanced_by(&mut sim, |sim| frame(sim, true, dt)),
+                    0.0
+                );
+            }
+        }
+
+        #[test]
+        fn setting_the_hour_moves_the_clock_the_pipboy_shows() {
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            edit(&mut sim, ClockEdit::SetHour(3.5));
+            assert_eq!(sim.world_clock().hour(), 3.5);
+            assert_eq!(sim.pipboy_snapshot().clock.minute_of_day, 3 * 60 + 30);
+        }
+
+        #[test]
+        fn an_invalid_hour_is_rejected_and_the_clock_stays() {
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let before = sim.world_clock().clone();
+            edit(&mut sim, ClockEdit::SetHour(f32::NAN));
+            edit(&mut sim, ClockEdit::SetHour(30.0));
+            assert_eq!(*sim.world_clock(), before);
+        }
+
+        #[test]
+        fn pausing_stops_the_advance_and_resuming_restarts_it() {
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let start = sim.world_clock().minute_of_day();
+            edit(&mut sim, ClockEdit::SetPaused(true));
+            run_seconds(&mut sim, 60.0);
+            assert_eq!(sim.world_clock().minute_of_day(), start);
+            edit(&mut sim, ClockEdit::SetPaused(false));
+            run_seconds(&mut sim, 60.0);
+            assert!((sim.world_clock().minute_of_day() - (start + 20.0)).abs() < 1e-6);
+        }
+
+        #[test]
+        fn a_time_scale_edit_changes_the_rate_and_an_invalid_one_keeps_it() {
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let start = sim.world_clock().minute_of_day();
+            edit(&mut sim, ClockEdit::SetTimeScale(60.0));
+            edit(&mut sim, ClockEdit::SetTimeScale(0.0));
+            run_seconds(&mut sim, 60.0);
+            assert_eq!(sim.world_clock().minute_of_day(), start + 60.0);
+        }
+
+        #[test]
+        fn the_sim_runs_the_clock_it_was_given() {
+            let clock = world_clock::WorldClock::new(world_clock::ClockStart {
+                hour: 6.0,
+                ..world_clock::ClockStart::fixture()
+            })
+            .unwrap();
+            let sim = SimWorld::new(PlayerMovement::default(), clock);
+            assert_eq!(sim.world_clock().hour(), 6.0);
+        }
+    }
+
+    mod weather_cycle {
+        use super::*;
+        use crate::sim::weather::test_support::{A, B, busy_climate, calm, stormy, table};
+        use crate::weather::WeatherId;
+        use commands::{ClockEdit, WeatherEdit};
+
+        /// Two calm weathers in a climate without volatility that always rolls the second: the
+        /// first roll comes 8 game hours after the start, which is 1440 s at the time scale 20.
+        fn calm_climate() -> WeatherRollTable {
+            table(0, vec![calm(); 2], &[0, 1])
+        }
+
+        /// A single storm that rolls itself again and again.
+        fn storm_climate() -> WeatherRollTable {
+            table(0, vec![stormy()], &[1])
+        }
+
+        fn sim_with(table: WeatherRollTable) -> SimWorld {
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            sim.install_weather(table, 7);
+            sim
+        }
+
+        /// A way to stop time in the sim: frames out of gameplay, or a setup that holds the clock.
+        struct Stop {
+            name: &'static str,
+            in_game: bool,
+            setup: fn(&mut SimWorld),
+            /// Whether the seconds of world time stop too, and with them the lightning.
+            stops_world_time: bool,
+        }
+
+        const STOPS: [Stop; 4] = [
+            Stop {
+                name: "the clock is paused",
+                in_game: true,
+                setup: |sim| sim.apply(SimCommand::SetWorldClock(ClockEdit::SetPaused(true))),
+                stops_world_time: false,
+            },
+            Stop {
+                name: "the Pip-Boy is open",
+                in_game: true,
+                setup: |sim| sim.apply(SimCommand::PipBoy(pipboy::PipBoyAction::Open)),
+                stops_world_time: true,
+            },
+            Stop {
+                name: "a load holds the sim",
+                in_game: true,
+                setup: |sim| sim.set_fold_hold(true),
+                stops_world_time: true,
+            },
+            Stop {
+                name: "the game is not running",
+                in_game: false,
+                setup: |_| {},
+                stops_world_time: true,
+            },
+        ];
+
+        fn frame(sim: &mut SimWorld, in_game: bool, dt: f32) {
+            let world_dt = sim.world_dt(dt);
+            sim.advance_world_clock(ClockFrame { in_game, world_dt });
+        }
+
+        /// Whole quarter-second frames, as exact in f32 as the step itself.
+        fn run_seconds(sim: &mut SimWorld, in_game: bool, seconds: f32) {
+            for _ in 0..(seconds / 0.25) as u32 {
+                frame(sim, in_game, 0.25);
+            }
+        }
+
+        fn edit(sim: &mut SimWorld, edit: WeatherEdit) {
+            sim.apply(SimCommand::SetWeather(edit));
+        }
+
+        fn hours_to_next_roll(sim: &SimWorld) -> f32 {
+            sim.weather_snapshot().unwrap().hours_to_next_roll
+        }
+
+        fn strikes_in(sim: &mut SimWorld, in_game: bool, seconds: f32) -> usize {
+            let mut strikes = 0;
+            for _ in 0..(seconds / 0.25) as u32 {
+                frame(sim, in_game, 0.25);
+                strikes += sim.weather_snapshot().unwrap().strikes.len();
+            }
+            strikes
+        }
+
+        fn assert_close(actual: f32, expected: f32, tolerance: f32) {
+            assert!(
+                (actual - expected).abs() < tolerance,
+                "{actual} is not {expected}"
+            );
+        }
+
+        #[test]
+        fn a_sim_without_a_climate_has_no_weather_and_ignores_weather_edits() {
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            edit(&mut sim, WeatherEdit::Force(B));
+            frame(&mut sim, true, 0.25);
+            assert!(sim.weather_snapshot().is_none());
+        }
+
+        #[test]
+        fn an_installed_climate_starts_settled_on_its_initial_weather() {
+            let sim = sim_with(calm_climate());
+            let weather = sim.weather_snapshot().unwrap();
+            assert_eq!((weather.current, weather.previous), (A, None));
+            assert_eq!(weather.progress, 1.0);
+            assert_eq!(weather.hours_to_next_roll, 8.0);
+        }
+
+        #[test]
+        fn the_first_roll_counts_from_the_hour_the_climate_was_installed_at() {
+            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            run_seconds(&mut sim, true, 1500.0);
+            sim.install_weather(calm_climate(), 7);
+            frame(&mut sim, true, 0.0);
+            let weather = sim.weather_snapshot().unwrap();
+            assert_eq!((weather.current, weather.previous), (A, None));
+            assert_eq!(weather.hours_to_next_roll, 8.0);
+        }
+
+        #[test]
+        fn the_weather_rolls_and_transitions_with_the_game_hours_of_the_clock() {
+            let mut sim = sim_with(calm_climate());
+            run_seconds(&mut sim, true, 1000.0);
+            assert_close(hours_to_next_roll(&sim), 8.0 - 1000.0 * 20.0 / 3600.0, 1e-3);
+            run_seconds(&mut sim, true, 500.0);
+            let weather = sim.weather_snapshot().unwrap();
+            assert_eq!((weather.current, weather.previous), (B, Some(A)));
+            let hours_into_transition = 1500.0 * 20.0 / 3600.0 - 8.0;
+            assert_close(weather.progress, hours_into_transition, 1e-3);
+        }
+
+        #[test]
+        fn the_weather_waits_while_the_clock_does() {
+            for stop in STOPS {
+                let mut sim = sim_with(calm_climate());
+                (stop.setup)(&mut sim);
+                run_seconds(&mut sim, stop.in_game, 1500.0);
+                let weather = sim.weather_snapshot().unwrap();
+                assert_eq!(
+                    (
+                        weather.current,
+                        weather.previous,
+                        weather.hours_to_next_roll
+                    ),
+                    (A, None, 8.0),
+                    "{}",
+                    stop.name
+                );
+            }
+        }
+
+        #[test]
+        fn setting_the_hour_back_does_not_rewind_the_weather() {
+            let mut sim = sim_with(calm_climate());
+            run_seconds(&mut sim, true, 1000.0);
+            let before = hours_to_next_roll(&sim);
+            sim.apply(SimCommand::SetWorldClock(ClockEdit::SetHour(3.5)));
+            frame(&mut sim, true, 0.0);
+            assert_eq!(hours_to_next_roll(&sim), before);
+            run_seconds(&mut sim, true, 60.0);
+            assert_close(
+                hours_to_next_roll(&sim),
+                before - 60.0 * 20.0 / 3600.0,
+                1e-3,
+            );
+        }
+
+        #[test]
+        fn setting_the_hour_ahead_counts_as_time_that_passed() {
+            let mut sim = sim_with(calm_climate());
+            sim.apply(SimCommand::SetWorldClock(ClockEdit::SetHour(14.0)));
+            frame(&mut sim, true, 0.0);
+            assert_close(hours_to_next_roll(&sim), 5.0, 1e-4);
+        }
+
+        #[test]
+        fn weather_edits_reach_the_cycle_and_an_invalid_one_leaves_it_as_it_was() {
+            let mut sim = sim_with(calm_climate());
+            edit(&mut sim, WeatherEdit::Force(B));
+            assert_eq!(sim.weather_snapshot().unwrap().current, B);
+            edit(&mut sim, WeatherEdit::Transition(A));
+            edit(&mut sim, WeatherEdit::SetProgress(0.5));
+            edit(&mut sim, WeatherEdit::SetProgress(2.0));
+            edit(&mut sim, WeatherEdit::Force(WeatherId::new(99)));
+            let weather = sim.weather_snapshot().unwrap();
+            assert_eq!((weather.current, weather.previous), (A, Some(B)));
+            assert_eq!(weather.progress, 0.5);
+        }
+
+        #[test]
+        fn a_strike_lasts_one_frame() {
+            let mut sim = sim_with(calm_climate());
+            edit(&mut sim, WeatherEdit::TriggerLightning);
+            frame(&mut sim, true, 0.25);
+            assert_eq!(sim.weather_snapshot().unwrap().strikes.len(), 1);
+            frame(&mut sim, true, 0.25);
+            assert_eq!(sim.weather_snapshot().unwrap().strikes, []);
+        }
+
+        #[test]
+        fn frames_outside_gameplay_do_not_repeat_a_strike() {
+            let mut sim = sim_with(calm_climate());
+            edit(&mut sim, WeatherEdit::TriggerLightning);
+            frame(&mut sim, true, 0.25);
+            frame(&mut sim, false, 0.25);
+            assert_eq!(sim.weather_snapshot().unwrap().strikes, []);
+        }
+
+        /// The weathers that the busy climate brings in 1000 s of world time at the time scale
+        /// 360, in frames of `dt` seconds, each counted as it comes in.
+        fn weathers_in_frames_of(dt: f32) -> Vec<WeatherId> {
+            let mut sim = sim_with(busy_climate());
+            sim.apply(SimCommand::SetWorldClock(ClockEdit::SetTimeScale(360.0)));
+            let mut weathers = vec![sim.weather_snapshot().unwrap().current];
+            for _ in 0..(1000.0 / dt) as u32 {
+                frame(&mut sim, true, dt);
+                let current = sim.weather_snapshot().unwrap().current;
+                if weathers.last() != Some(&current) {
+                    weathers.push(current);
+                }
+            }
+            weathers
+        }
+
+        #[test]
+        fn the_weathers_of_a_seed_do_not_depend_on_the_pacing_of_the_frames() {
+            let weathers = weathers_in_frames_of(0.25);
+            assert!(weathers.len() > 10, "{weathers:?}");
+            assert_eq!(weathers_in_frames_of(0.125), weathers);
+            assert_eq!(weathers_in_frames_of(0.0625), weathers);
+        }
+
+        #[test]
+        fn a_storm_strikes_by_the_seconds_of_the_world_whatever_the_time_scale() {
+            // The most frequent lightning strikes every 5 s on average: about 200 in 1000 s.
+            let mut slow = sim_with(storm_climate());
+            let mut fast = sim_with(storm_climate());
+            fast.apply(SimCommand::SetWorldClock(ClockEdit::SetTimeScale(
+                world_clock::MAX_TIME_SCALE,
+            )));
+            for strikes in [
+                strikes_in(&mut slow, true, 1000.0),
+                strikes_in(&mut fast, true, 1000.0),
+            ] {
+                assert!((150..250).contains(&strikes), "{strikes}");
+            }
+        }
+
+        #[test]
+        fn a_storm_is_quiet_while_the_world_time_stands_still_and_not_while_only_the_clock_does() {
+            for stop in STOPS {
+                let mut sim = sim_with(storm_climate());
+                (stop.setup)(&mut sim);
+                let strikes = strikes_in(&mut sim, stop.in_game, 1000.0);
+                if stop.stops_world_time {
+                    assert_eq!(strikes, 0, "{}", stop.name);
+                } else {
+                    assert!((150..250).contains(&strikes), "{}: {strikes}", stop.name);
+                }
+            }
+        }
     }
 }

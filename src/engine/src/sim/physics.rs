@@ -8,13 +8,14 @@ use glam::Vec3;
 use rapier3d::prelude::*;
 
 use super::bake::{BakedCellColliders, CachedShape, RagdollBake, ShapeKey, build_terrain_shape};
+use super::carry::{ReleaseReason, THROW_MAX_SPEED};
 use super::collider_user_data::{
     ColliderTag, pack_grid, pack_path, pack_ref, unpack_path, unpack_ref,
 };
-use super::collision::{CellColliderBatch, ObjectColliderGroup, Placement};
+use super::collision::{CellColliderBatch, ObjectColliderGroup, Placement, TerrainCollision};
 use super::commands::KinematicPose;
 use super::dynamic_body::{
-    DYN_ANGULAR_DAMPING, DYN_LINEAR_DAMPING, ENGINE_UNITS_PER_METER, GRAVITY_DYN, body_builder,
+    DYN_ANGULAR_DAMPING, DYN_LINEAR_DAMPING, DYN_SOFT_CCD_PREDICTION, GRAVITY_DYN, body_builder,
     clamp_linvel, density_for_mass, sanitize_body, state_is_bounded, within_radius,
 };
 use super::kinematic::KinematicBodies;
@@ -26,16 +27,19 @@ use super::sound_pose::{pose_is_sound, vec_is_sound};
 use super::water_materials::{MaterialBuoyancy, WaterBodyProps};
 use super::water_physics::{WaterBodyState, WaterPhysics, WaterQuery, WaterTarget};
 use super::{CellGrid, DynamicPose, EntityId, FIXED_DT, RayHit, refr_entity_id};
+use crate::bethesda_space::ENGINE_UNITS_PER_METER;
 use crate::footsteps::events::SurfaceMaterial;
 use crate::utils::warn_once;
 
-/// Max speed a player shove may leave on a pushed body. A hard impulse onto a
-/// light prop can impart enough velocity that, in a single 1/60 s step, the
+/// Max speed the player may leave on a body it drives: a shove, the carry servo or a throw. It
+/// is the measured throw plateau, so the fastest throw and the push share one cap. A hard
+/// impulse onto a light prop can impart enough velocity that, in a single 1/60 s step, the
 /// prop travels farther than soft-CCD's prediction window — punching it clean
 /// through a wall before any contact is generated. Capping the push at the
-/// source keeps per-step motion (`PUSH_MAX_LINVEL * FIXED_DT` ≈ 2.5 u) inside
+/// source keeps per-step motion (`PLAYER_DRIVEN_MAX_LINVEL * FIXED_DT` ≈ 2.5 u) inside
 /// `DYN_SOFT_CCD_PREDICTION`, so soft-CCD reliably catches the prop instead.
-const PUSH_MAX_LINVEL: f32 = 150.0;
+const PLAYER_DRIVEN_MAX_LINVEL: f32 = THROW_MAX_SPEED;
+const _: () = assert!(PLAYER_DRIVEN_MAX_LINVEL * FIXED_DT < DYN_SOFT_CCD_PREDICTION);
 /// Fixed steps the world keeps stepping after the player mirror last moved
 /// next to dynamic bodies: one for the kinematic body to reach its target, one
 /// for the narrow phase to see the contact start there and wake the island.
@@ -193,9 +197,10 @@ impl<'a> GroupSlots<'a> {
 pub(crate) struct PhysicsContext {
     pub world: PhysicsWorld,
     cell_colliders: HashMap<CellGrid, Vec<ColliderHandle>>,
-    /// Cells whose terrain collider is registered. The player only moves
-    /// inside ready cells, so it can never fall through unloaded world.
-    terrain_ready: HashSet<CellGrid>,
+    /// Cells whose collision batch is installed with its ground usable: the terrain trimesh is
+    /// registered, or the cell has no terrain at all and stands on its objects. The player only
+    /// moves inside ready cells, so it can never fall through unloaded world.
+    ground_ready: HashSet<CellGrid>,
     /// The terrain colliders; any other collider is attributed through the path registry.
     terrain_colliders: HashSet<ColliderHandle>,
     shape_cache: HashMap<ShapeKey, CacheEntry>,
@@ -212,7 +217,7 @@ pub(crate) struct PhysicsContext {
     plugin_index: HashMap<Arc<str>, u32>,
     /// Interior view active: the world holds one interior cell (object colliders
     /// only, no LAND terrain). The player then grounds against object colliders
-    /// and the per-grid terrain-ready gate is bypassed (see `spawn_ready` and
+    /// and the per-grid ground-ready gate is bypassed (see `spawn_ready` and
     /// `step_player`). Toggled via `SimCommand::SetInteriorMode`.
     interior_mode: bool,
     /// Colliders changed since the last step. With a static-only world the
@@ -252,6 +257,8 @@ pub(crate) struct PhysicsContext {
     ragdolls: RagdollManager,
     /// FO4 water physics for clutter; `None` (the default) costs nothing.
     water: WaterPhysics,
+    /// The body the player carries, if any.
+    carry: carried::Carry,
 }
 
 impl PhysicsContext {
@@ -283,7 +290,7 @@ impl PhysicsContext {
         Self {
             world,
             cell_colliders: HashMap::new(),
-            terrain_ready: HashSet::new(),
+            ground_ready: HashSet::new(),
             terrain_colliders: HashSet::new(),
             shape_cache: HashMap::new(),
             cell_cache_keys: HashMap::new(),
@@ -304,6 +311,7 @@ impl PhysicsContext {
             kinematic: KinematicBodies::default(),
             ragdolls,
             water: WaterPhysics::new(),
+            carry: carried::Carry::default(),
         }
     }
 
@@ -338,7 +346,7 @@ impl PhysicsContext {
     /// What the ray from `origin` along `dir` hits first: mesh path (or
     /// "terrain"), REFR form key when known, and distance.
     pub fn ray_attribution(&self, origin: Vec3, dir: Vec3, max_dist: f32) -> Option<RayHit> {
-        let probe = self.probe(origin, dir, max_dist)?;
+        let probe = self.probe(origin, dir, max_dist, scene_query_filter())?;
         Some(RayHit {
             mesh_path: probe.mesh_path,
             ref_id: probe.ref_id,
@@ -348,9 +356,10 @@ impl PhysicsContext {
 
     /// Surface under `origin` along a straight-down ray. Dynamic bodies are
     /// hit like static colliders (a crate under the foot reports its own
-    /// material); the player's mirror capsule is excluded by the scene filter.
+    /// material); the player's mirror capsule and the carried body are excluded.
     pub(crate) fn ground_surface(&self, origin: Vec3, max_dist: f32) -> SurfaceMaterial {
-        let Some(probe) = self.probe(origin, Vec3::NEG_Y, max_dist) else {
+        let filter = self.player_scene_filter();
+        let Some(probe) = self.probe(origin, Vec3::NEG_Y, max_dist, filter) else {
             return SurfaceMaterial::None;
         };
         if probe.terrain {
@@ -365,11 +374,15 @@ impl PhysicsContext {
         }
     }
 
-    fn probe(&self, origin: Vec3, dir: Vec3, max_dist: f32) -> Option<RayProbe> {
+    fn probe(
+        &self,
+        origin: Vec3,
+        dir: Vec3,
+        max_dist: f32,
+        filter: QueryFilter,
+    ) -> Option<RayProbe> {
         let ray = Ray::new(origin, dir);
-        let (handle, dist) = self
-            .world
-            .cast_ray(&ray, max_dist, true, scene_query_filter())?;
+        let (handle, dist) = self.world.cast_ray(&ray, max_dist, true, filter)?;
         let collider = self.world.colliders.get(handle)?;
         let terrain = self.terrain_colliders.contains(&handle);
         let (mesh_path, material) = if terrain {
@@ -549,22 +562,14 @@ impl PhysicsContext {
         self.interior_mode
     }
 
-    /// Whether the player may spawn/move at `grid` (the spawn ground-snap and
-    /// the per-step ready gate both consult this). In a worldspace it is the
-    /// per-cell terrain-ready gate — the player only stands on streamed-in LAND.
-    /// In an interior there is no LAND, so readiness is "the interior's colliders
-    /// are registered". The grid is intentionally ignored in that branch: the
-    /// streamer freezes its ring and `teardown_resident` clears all residency on
-    /// entry, so the ONLY cell ever resident in interior mode is the interior
-    /// itself — hence a non-empty collider set means exactly "interior loaded",
-    /// true at every grid the player roams to inside it. (Grid-keying this would
-    /// wrongly freeze movement once the player crossed out of the interior's
-    /// anchor grid in a large interior.)
+    /// Whether the player may spawn/move at `grid`: its cell's collision is installed.
+    /// Interiors ignore the grid: the interior is the only resident cell, and a large one
+    /// spans grids other than its anchor, where a per-grid check would freeze the player.
     pub fn spawn_ready(&self, grid: CellGrid) -> bool {
         if self.interior_mode {
-            !self.cell_colliders.is_empty()
+            !self.ground_ready.is_empty()
         } else {
-            self.terrain_ready.contains(&grid)
+            self.ground_ready.contains(&grid)
         }
     }
 
@@ -682,23 +687,29 @@ impl PhysicsContext {
         let mut handles = Vec::new();
         let mut keys = Vec::new();
 
-        if let Some(terrain) = &batch.terrain {
-            let shape = match baked.and_then(|b| b.terrain.clone()) {
-                Some(shape) => Ok(shape),
-                None => build_terrain_shape(terrain),
-            };
-            match shape {
-                Ok(shape) => {
-                    let collider = ColliderBuilder::new(shape).user_data(pack_grid(grid));
-                    let handle = self.world.insert_collider(collider, None);
-                    self.terrain_colliders.insert(handle);
-                    handles.push(handle);
-                    self.terrain_ready.insert(grid);
-                }
-                Err(e) => {
-                    tracing::warn!("collision: terrain trimesh failed for cell {grid:?}: {e}");
+        match &batch.terrain {
+            TerrainCollision::Present(terrain) => {
+                let shape = match baked.and_then(|b| b.terrain.clone()) {
+                    Some(shape) => Ok(shape),
+                    None => build_terrain_shape(terrain),
+                };
+                match shape {
+                    Ok(shape) => {
+                        let collider = ColliderBuilder::new(shape).user_data(pack_grid(grid));
+                        let handle = self.world.insert_collider(collider, None);
+                        self.terrain_colliders.insert(handle);
+                        handles.push(handle);
+                        self.ground_ready.insert(grid);
+                    }
+                    Err(e) => {
+                        tracing::warn!("collision: terrain trimesh failed for cell {grid:?}: {e}");
+                    }
                 }
             }
+            TerrainCollision::Absent => {
+                self.ground_ready.insert(grid);
+            }
+            TerrainCollision::Failed => {}
         }
 
         // (path, scale) -> pre-baked shapes, consulted on shape-cache misses.
@@ -1004,6 +1015,7 @@ impl PhysicsContext {
         // demotion, worldspace switch and interior entry all reach it through
         // RemoveCellColliders.
         if let Some(entities) = self.cell_dyn.remove(&grid) {
+            self.release_if_carried(&entities, ReleaseReason::CellUnloaded);
             for entity in entities {
                 if let Some(db) = self.dyn_bodies.remove(&entity) {
                     self.world.remove_body(db.handle);
@@ -1020,7 +1032,7 @@ impl PhysicsContext {
         if let Some(bounds) = removed_bounds {
             self.ragdolls.wake_near_bounds(&mut self.world, &bounds);
         }
-        self.terrain_ready.remove(&grid);
+        self.ground_ready.remove(&grid);
         if let Some(keys) = self.cell_cache_keys.remove(&grid) {
             for key in keys {
                 if let Some(entry) = self.shape_cache.get_mut(&key) {
@@ -1049,7 +1061,7 @@ impl PhysicsContext {
             Some(point) => rb.apply_impulse_at_point(impulse, point, true),
             None => rb.apply_impulse(impulse, true),
         }
-        clamp_linvel(rb, PUSH_MAX_LINVEL, true);
+        clamp_linvel(rb, PLAYER_DRIVEN_MAX_LINVEL, true);
     }
 
     /// Mirror the player capsule into the rapier world so contact-start wakes
@@ -1132,16 +1144,18 @@ impl PhysicsContext {
 
     /// Flip each body `Dynamic`↔`Fixed` to match the current region. Only bodies
     /// whose membership actually changed are touched; steady state is a cheap
-    /// scan over the (radius-bounded) dynamic set.
+    /// scan over the (radius-bounded) dynamic set. The carried body stays
+    /// `Dynamic` wherever its spawn cell lies.
     fn reconcile_dynamic_radius(&mut self) {
         let r = self.dyn_radius;
         let wake = self.activation == ActivationMode::Wake;
         if self.ragdolls.reconcile(&mut self.world, self.dyn_center, r) {
             self.dirty = true;
         }
-        for db in self.dyn_bodies.values_mut() {
+        let carried = self.carried_entity();
+        for (entity, db) in &mut self.dyn_bodies {
             let in_radius = within_radius(db.grid, self.dyn_center, r);
-            if in_radius == db.active {
+            if in_radius == db.active || carried == Some(*entity) {
                 continue;
             }
             let Some(rb) = self.world.bodies.get_mut(db.handle) else {
@@ -1361,6 +1375,7 @@ fn ragdoll_placement(
 }
 
 mod audit;
+mod carried;
 
 #[cfg(test)]
 pub(super) mod test_support;

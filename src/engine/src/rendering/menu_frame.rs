@@ -22,6 +22,7 @@ impl State {
             MenuScene::Overlay {
                 alpha: 1.0,
                 loading_seconds: None,
+                panel: None,
             },
             MenuScene::List,
         );

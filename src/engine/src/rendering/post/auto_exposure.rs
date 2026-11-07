@@ -14,15 +14,31 @@ const STATE_BYTES: u64 = std::mem::size_of::<ExposureReadout>() as u64;
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct AutoExposureParams {
+    /// The share of the way towards a brighter picture the adapted luminance moves this frame.
     pub adaptation: f32,
-    pub middle_gray: f32,
+    /// The least share of itself the adapted luminance keeps this frame towards a darker picture.
+    pub darkening: f32,
+    /// The luminance times exposure the automatic exposure settles at.
+    pub target_luminance: f32,
     pub min: f32,
     pub max: f32,
     pub ev_scale: f32,
     pub auto: u32,
 }
 
-/// Measures the log-average luminance of the HDR target on the GPU and adapts
+impl AutoExposureParams {
+    /// The same parameters with the eye adapting fully within one frame, as if it had converged.
+    #[must_use]
+    pub fn adapted_at_once(self) -> Self {
+        Self {
+            adaptation: 1.0,
+            darkening: 0.0,
+            ..self
+        }
+    }
+}
+
+/// Measures the mean luminance of the HDR target on the GPU and adapts
 /// the exposure the tonemap reads towards it. `ExposureReadout` doubles as the
 /// layout of the state buffer, which starts zeroed: the first frame snaps.
 pub struct AutoExposure {
@@ -179,3 +195,6 @@ impl AutoExposure {
         })
     }
 }
+
+#[cfg(test)]
+mod gpu_tests;

@@ -154,10 +154,24 @@ namespace InstallerTests.Resources
             int unpacked = 0;
             var payload = Payload(Zip(("game/openfo4.exe", "exe"), ("runtime/python/python.exe", "py"), ("empty/", "")));
 
-            PayloadExtractor.EnsureExtracted(payload, Cache, "1.2.3", new UnpackProgress(counts.Add, () => unpacked++));
+            PayloadExtractor.EnsureExtracted(payload, Cache, "1.2.3", new UnpackProgress(counts.Add, _ => { }, () => unpacked++));
 
             Assert.Equal([2L], counts);
             Assert.Equal(2, unpacked);
+        }
+
+        [Fact]
+        public void TheGameFileCountIsTheNumberOfFilesThePayloadsGameFolderHasOnceUnpacked()
+        {
+            var gameFileCounts = new List<long>();
+            var payload = Payload(Zip(
+                ("game/openfo4.exe", "exe"), ("game/plugins/a.dll", "a"), ("game/plugins/deep/b.dll", "b"), ("game/empty/", ""),
+                ("game.txt", "not in the game folder"), ("gamer/x.dll", "neither"), ("runtime/python/python.exe", "py")));
+
+            string folder = PayloadExtractor.EnsureExtracted(payload, Cache, "1.2.3", new UnpackProgress(_ => { }, gameFileCounts.Add, () => { }));
+
+            Assert.Equal([3L], gameFileCounts);
+            Assert.Equal(3, InstallerResources.ForPayload(folder).Game.Files.Count);
         }
 
         [Fact]

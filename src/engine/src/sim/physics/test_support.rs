@@ -11,9 +11,9 @@ use super::{ActivationMode, PhysicsContext};
 use crate::sim::bake::{BakedCellColliders, ShapeBakeCache};
 use crate::sim::collision::{
     CellColliderBatch, ColShape, ObjectColliderGroup, PartLocal, PartShape, Placement,
-    TerrainColliderSpec,
+    TerrainColliderSpec, TerrainCollision,
 };
-use crate::sim::{CELL_SIZE_WORLD, CellGrid};
+use crate::sim::{CELL_SIZE_WORLD, CellGrid, EntityId};
 
 /// The cell holding the ground quad and, in most tests, the objects.
 pub const GROUND_CELL: CellGrid = (0, 0);
@@ -31,11 +31,19 @@ pub fn ground_batch() -> CellColliderBatch {
         Vec3::new(0.0, 0.0, -depth),
     ];
     CellColliderBatch {
-        terrain: Some(TerrainColliderSpec {
+        terrain: TerrainCollision::Present(TerrainColliderSpec {
             vertices,
             indices: vec![[0, 1, 2], [0, 2, 3]],
         }),
         objects: vec![],
+    }
+}
+
+/// The terrain mesh of a batch built by [`ground_batch`], for tests that corrupt it.
+pub fn terrain_mut(batch: &mut CellColliderBatch) -> &mut TerrainColliderSpec {
+    match &mut batch.terrain {
+        TerrainCollision::Present(spec) => spec,
+        TerrainCollision::Absent | TerrainCollision::Failed => panic!("batch has no terrain mesh"),
     }
 }
 
@@ -158,4 +166,25 @@ pub fn set_mtime(path: &Path, seconds: u64) {
         .unwrap()
         .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
         .unwrap();
+}
+
+/// What a test reads back from one dynamic body.
+pub struct BodyProbe {
+    pub translation: Vec3,
+    pub rotation: Quat,
+    pub linvel: Vec3,
+    pub sleeping: bool,
+    pub dynamic: bool,
+}
+
+/// The current state of the dynamic body of `entity`.
+pub fn body_probe(context: &PhysicsContext, entity: EntityId) -> BodyProbe {
+    let body = &context.world.bodies[context.dyn_bodies[&entity].handle];
+    BodyProbe {
+        translation: body.translation(),
+        rotation: *body.rotation(),
+        linvel: body.linvel(),
+        sleeping: body.is_sleeping(),
+        dynamic: body.is_dynamic(),
+    }
 }

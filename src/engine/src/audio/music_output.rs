@@ -28,20 +28,20 @@ pub struct SoundSettings {
     pub fade_in: Duration,
 }
 
-/// Opens a converted music file for streaming.
-pub fn open_music_stream(
+/// Opens a converted audio file for streaming; the whole file is the loop region when `looped`.
+pub fn open_stream(
     path: &Path,
     looped: bool,
 ) -> Result<StreamingSoundData<FromFileError>, FromFileError> {
     StreamingSoundData::from_file(path).map(|data| if looped { data.loop_region(..) } else { data })
 }
 
-/// `open_music_stream` for a file whose failure to open is fatal to the audio.
+/// `open_stream` for a music file, whose failure to open is fatal to the audio.
 pub fn open_music_file(
     path: &Path,
     looped: bool,
 ) -> Result<StreamingSoundData<FromFileError>, AudioError> {
-    open_music_stream(path, looped).map_err(|source| AudioError::MusicFile {
+    open_stream(path, looped).map_err(|source| AudioError::MusicFile {
         path: path.to_path_buf(),
         source,
     })

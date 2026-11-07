@@ -19,6 +19,7 @@ mod underwater_fog;
 
 pub use crate::water_world::CameraWater;
 pub use config::WaterConfig;
+pub use constants::WaterSetting;
 pub use debug_output::WaterDebugOutput;
 pub use placement::{PlacedWater, WaterPlane};
 pub use settings::{WaterSettings, water_panel};

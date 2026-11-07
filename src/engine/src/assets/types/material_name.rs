@@ -4,7 +4,7 @@ use super::effect_params::{EffectBlend, EffectParams, EnvParams, Falloff, Palett
 use super::water_shader::WaterShaderToken;
 use crate::assets::layout::texture_key;
 use crate::rendering::gpu_driven::{LEGACY_SURFACE, SurfaceParams};
-use crate::rendering::lighting::cell_lighting::srgb_to_linear;
+use crate::rendering::lighting::cell_lighting::srgb8_to_linear;
 
 const DEFAULT_EMISSIVE_COLOR: [u8; 3] = [255, 255, 255];
 const DEFAULT_EMISSIVE_MULT: f32 = 1.0;
@@ -340,8 +340,7 @@ impl Tokens {
             || self.fresnel_power.is_some();
         let emits = self.emissive_color.is_some() || self.emissive_mult.is_some();
         let emissive = if emits {
-            let [r, g, b] = self.emissive_color.unwrap_or(DEFAULT_EMISSIVE_COLOR);
-            Vec3::new(srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b))
+            srgb8_to_linear(self.emissive_color.unwrap_or(DEFAULT_EMISSIVE_COLOR))
                 * self.emissive_mult.unwrap_or(DEFAULT_EMISSIVE_MULT)
         } else {
             Vec3::ZERO

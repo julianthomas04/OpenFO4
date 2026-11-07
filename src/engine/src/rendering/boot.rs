@@ -175,7 +175,8 @@ impl BootContext {
     pub fn create(window: Arc<Window>, start_mode: StartMode) -> Result<Self, StartupError> {
         // Applied before any slow startup work so the cursor is already in its start state
         // (released under freeze, and at the menu) while the engine loads.
-        let freeze_camera = super::camera_frozen(crate::utils::env_flag);
+        let freeze_camera =
+            super::camera_frozen(crate::utils::env_flag) || super::shot::shot_requested();
         let mut mouse_capture = MouseCapture::new(freeze_camera);
         if start_mode == StartMode::Menu {
             mouse_capture.set_locked(false);

@@ -4,15 +4,22 @@ struct FrameUniform {
     camera_pos: vec4<f32>,
     to_sun: vec4<f32>,
     sun_illuminance: vec4<f32>,
-    sun_disc_illuminance: vec4<f32>,
+    // x: the sun's alpha around sunrise and sunset, for the water; it stays the sun's while
+    // to_sun follows the moon at night.
+    daylight: vec4<f32>,
     // Linear ambient colour of each cube face, order +X, -X, +Y, -Y, +Z, -Z (engine axes); w unused.
     ambient_cube: array<vec4<f32>, 6>,
     sky_zenith: vec4<f32>,
     sky_horizon: vec4<f32>,
     sky_ground: vec4<f32>,
+    // The fog, laid out and documented by `fog::FogUniformFields`.
     fog_near_color: vec4<f32>,
     fog_far_color: vec4<f32>,
+    fog_near_high_color: vec4<f32>,
+    fog_far_high_color: vec4<f32>,
     fog_params: vec4<f32>,
+    fog_near_band: vec4<f32>,
+    fog_far_band: vec4<f32>,
     cascade_view_proj: array<mat4x4<f32>, 4>,
     cascade_spheres: array<vec4<f32>, 4>,
     shadow_params: vec4<f32>,
@@ -26,8 +33,12 @@ struct FrameUniform {
     cluster_grid: vec4<u32>,
     // x: first slice far depth, y: cluster far depth, z: log2 scale, w: log2 bias.
     cluster_z: vec4<f32>,
-    // x: tonemap operator, y: white point, z: saturation.
+    // x: tonemap operator, y: the image space's TonemapE, z: the weight of its colour LUT.
     tonemap: vec4<f32>,
+    // x: saturation, y: brightness, z: contrast, w: tint amount.
+    cinematic: vec4<f32>,
+    // rgb: linear tint colour.
+    tint: vec4<f32>,
     // x: texture feedback on, y: frame index, z: pixel sample mask,
     // w: iTexMipMapSkip.
     texture_feedback: vec4<u32>,
@@ -35,30 +46,10 @@ struct FrameUniform {
     // camera, z: 1 while the camera is underwater, w: the share
     // of the near plane's height under the surface (0 to 1).
     time_water: vec4<f32>,
-};
-
-// Mirrors `GpuShadowLamp` in shadows/lamps/table.rs.
-struct ShadowLamp {
-    faces: array<mat4x4<f32>, 6>,
-    // Per face: atlas uv origin (xy) and side (z); z = 0 without a tile.
-    tiles: array<vec4<f32>, 6>,
-    // The lamp basis: forward, up, side.
-    axes: array<vec4<f32>, 3>,
-    // xyz: position, w: near clip.
-    position: vec4<f32>,
-    // x: strength, y: world texel size per unit of face-axis distance,
-    // z: 1 for cube storage, 0 for one spot tile.
-    params: vec4<f32>,
-};
-
-// Mirrors `GpuShadowLampTable` in shadows/lamps/table.rs.
-struct ShadowLampTable {
-    lamps: array<ShadowLamp, MAX_SHADOW_SLOTS>,
-    // Constant, slope and normal-offset bias in texels, w: squared receiver
-    // fade distance.
-    bias: vec4<f32>,
-    // x: PCF taps per axis.
-    filter_taps: vec4<u32>,
+    // xyz: unit direction the sun's shadows are cast from (not the light's direction).
+    to_shadow: vec4<f32>,
+    // x: the share of its dry albedo the landscape keeps in this frame's rain.
+    landscape: vec4<f32>,
 };
 
 @group(1) @binding(0) var<uniform> frame: FrameUniform;

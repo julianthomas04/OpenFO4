@@ -302,6 +302,7 @@ mod tests {
         PlayerBody {
             feet: Vec3::new(0.0, feet_y, 0.0),
             height: 12.6,
+            radius: 2.5,
         }
     }
 

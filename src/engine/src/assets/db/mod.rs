@@ -1,17 +1,22 @@
 pub mod activators;
 pub mod addon_nodes;
 pub mod cells;
+pub mod collision_layers;
+pub mod conditions;
 pub mod containers;
 pub mod doors;
 pub mod flora;
 pub mod footsteps;
 pub mod furniture;
+pub mod game_settings;
+pub mod globals;
 pub mod grass;
 pub mod items;
 pub mod landscape_textures;
 pub mod landscapes;
 pub mod lighting_templates;
 pub mod lights;
+pub mod load_screens;
 pub mod map_markers;
 pub mod material_swaps;
 pub mod material_types;
@@ -21,7 +26,9 @@ pub mod music;
 pub mod navigation_meshes;
 pub mod perks;
 pub mod placed_objects;
+mod rows;
 pub mod schema;
+pub mod sound_catalog;
 pub mod special_attributes;
 pub mod static_collections;
 pub mod statics;
@@ -31,6 +38,8 @@ pub mod water_placement;
 pub mod waters;
 pub mod weapons;
 pub mod weather;
+pub mod weather_library;
+pub mod worldspace_lineage;
 pub mod worldspaces;
 
 use rusqlite::{Connection, OpenFlags};
@@ -59,6 +68,7 @@ use crate::assets::db::{
     water_placement::{CellWater, LodWaterQuad, PlacedWaterRef, WorldspaceWater},
     waters::Water,
     weapons::{ModModelRow, WeaponRow},
+    worldspace_lineage::{ParentLink, owner_index, parent_use, walk_parents},
     worldspaces::Worldspace,
 };
 use crate::navmesh::NavMeshRecord;
@@ -122,6 +132,18 @@ impl DbClient {
         })
     }
 
+    /// The loading screens with their location data, or `None` for a database converted before
+    /// the installer exported them; errors when a screen row is incomplete or malformed.
+    #[instrument(skip(self))]
+    pub fn get_load_screen_catalog(
+        &self,
+    ) -> anyhow::Result<Option<load_screens::LoadScreenCatalog>> {
+        if !self.schema.load_screen_columns_present {
+            return Ok(None);
+        }
+        load_screens::LoadScreenCatalog::from_connection(&self.conn, self.schema).map(Some)
+    }
+
     /// The ambient music tables; errors when the installer has not extracted them.
     #[instrument(skip(self))]
     pub fn get_music_catalog(&self) -> anyhow::Result<music::MusicCatalog> {
@@ -132,6 +154,44 @@ impl DbClient {
     #[instrument(skip(self))]
     pub fn get_footstep_catalog(&self) -> anyhow::Result<footsteps::FootstepCatalog> {
         footsteps::FootstepCatalog::from_connection(&self.conn)
+    }
+
+    /// The sound descriptors reachable from the weather sound descriptors `roots`, with the output
+    /// models and categories they name; errors when the installer has not extracted the sound
+    /// tables, a root is not a sound descriptor or a row is malformed.
+    #[instrument(skip(self, roots))]
+    pub fn get_weather_sound_catalog(
+        &self,
+        roots: impl IntoIterator<Item = String>,
+    ) -> anyhow::Result<sound_catalog::SoundCatalog> {
+        schema::require_weather_sound_tables(&self.conn)?;
+        sound_catalog::SoundCatalog::load_reachable(&self.conn, roots)
+    }
+
+    /// Which layers never touch the player. A database converted before the
+    /// installer extracted the layers, or one lacking a character layer,
+    /// yields a set that keeps every shape solid, after one `error!`.
+    #[instrument(skip(self))]
+    pub fn get_player_collision_layers(
+        &self,
+    ) -> anyhow::Result<collision_layers::PlayerCollisionLayers> {
+        if !self.schema.collision_layer_columns_present {
+            tracing::error!(
+                "collision_layers columns missing (database predates collision layer extraction); every collision shape stays solid, re-run the installer"
+            );
+            return Ok(collision_layers::PlayerCollisionLayers::all_solid());
+        }
+        let rows = collision_layers::CollisionLayerRow::list_all(&self.conn)?;
+        match collision_layers::PlayerCollisionLayers::from_rows(&rows) {
+            Ok(layers) => Ok(layers),
+            Err(error @ collision_layers::PlayerLayersError::CharacterLayerMissing { .. }) => {
+                tracing::error!(
+                    "collision layers unusable ({error}); every collision shape stays solid, re-run the installer"
+                );
+                Ok(collision_layers::PlayerCollisionLayers::all_solid())
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     #[instrument(skip(self))]
@@ -236,6 +296,54 @@ impl DbClient {
         Landscape::get(cell, grid_x, grid_y, &self.conn)
     }
 
+    /// The LAND of an exterior grid cell of a worldspace: its own, else the one
+    /// it inherits from a parent worldspace whose `PNAM` defers land data to it.
+    /// `None` when no worldspace of the chain has LAND for the cell.
+    #[instrument(skip(self))]
+    pub fn get_landscape_at(
+        &self,
+        worldspace: &str,
+        grid_x: i32,
+        grid_y: i32,
+    ) -> anyhow::Result<Option<Landscape>> {
+        if let Some(own) = Landscape::get_in_worldspace(worldspace, grid_x, grid_y, &self.conn)? {
+            return Ok(Some(own));
+        }
+        let lineage = self.worldspace_lineage(worldspace)?;
+        let owner = owner_index(&lineage, parent_use::LAND_DATA);
+        for parent in &lineage[1..=owner] {
+            let inherited =
+                Landscape::get_in_worldspace(&parent.form_key, grid_x, grid_y, &self.conn)?;
+            if inherited.is_some() {
+                return Ok(inherited);
+            }
+        }
+        Ok(None)
+    }
+
+    /// The form key of the worldspace whose LOD data (terrain tiles, LOD water
+    /// form) the worldspace uses: itself, or the nearest parent it does not
+    /// defer its LOD data past.
+    #[instrument(skip(self))]
+    pub fn lod_data_owner(&self, worldspace: &str) -> anyhow::Result<String> {
+        let lineage = self.worldspace_lineage(worldspace)?;
+        let owner = owner_index(&lineage, parent_use::LOD_DATA);
+        Ok(lineage[owner].form_key.clone())
+    }
+
+    /// The worldspace and its parents, nearest first. A database converted
+    /// before the installer extracted `PNAM` defers nothing to any parent.
+    fn worldspace_lineage(&self, worldspace: &str) -> anyhow::Result<Vec<ParentLink>> {
+        walk_parents(worldspace, |form_key| {
+            let water = self.get_worldspace_water(form_key)?;
+            Ok(ParentLink {
+                form_key: form_key.to_owned(),
+                parent: water.parent_worldspace,
+                parent_flags: water.parent_flags.unwrap_or(0),
+            })
+        })
+    }
+
     #[instrument(skip(self, cells))]
     pub fn get_landscapes(&self, cells: &[Cell]) -> anyhow::Result<Vec<Landscape>> {
         Landscape::get_for_cells(cells, &self.conn)
@@ -297,7 +405,13 @@ impl DbClient {
 
     #[instrument(skip(self))]
     pub fn get_placed_teleports(&self) -> anyhow::Result<Vec<teleports::TeleportRecord>> {
-        teleports::get_all(&self.conn)
+        teleports::get_all(&self.conn, self.schema)
+    }
+
+    /// Enabled automatic load doors with their trigger volumes.
+    #[instrument(skip(self))]
+    pub fn get_walk_in_doors(&self) -> anyhow::Result<teleports::WalkInDoors> {
+        teleports::get_walk_in_doors(&self.conn, self.schema)
     }
 
     #[instrument(skip(self))]
@@ -305,7 +419,7 @@ impl DbClient {
         &self,
         cell_form_key: &str,
     ) -> anyhow::Result<Option<teleports::TeleportRecord>> {
-        teleports::get_into_cell(cell_form_key, &self.conn)
+        teleports::get_into_cell(cell_form_key, &self.conn, self.schema)
     }
 
     #[instrument(skip(self))]
@@ -422,16 +536,66 @@ impl DbClient {
         weather::get_climate_data(climate, &self.conn)
     }
 
+    pub fn get_climate_sun_textures(
+        &self,
+        climate: &str,
+    ) -> rusqlite::Result<(Option<String>, Option<String>)> {
+        weather::get_climate_sun_textures(climate, &self.conn)
+    }
+
     pub fn get_image_space_data(&self, form_key: &str) -> rusqlite::Result<Option<String>> {
         weather::get_image_space_data(form_key, &self.conn)
     }
 
+    /// The form key the default object manager assigns to `slot` (`LSIS`, ...); `None` when the
+    /// slot is unassigned or absent.
+    pub fn get_default_object(&self, slot: &str) -> rusqlite::Result<Option<String>> {
+        use rusqlite::OptionalExtension;
+        self.conn
+            .query_row(
+                "SELECT target FROM default_object_slots WHERE slot = ?",
+                rusqlite::params![slot],
+                |row| row.get(0),
+            )
+            .optional()
+            .map(Option::flatten)
+    }
+
     pub fn get_weather(&self, form_key: &str) -> rusqlite::Result<weather::WeatherRow> {
+        let schema = self.schema();
         weather::get_weather(
             form_key,
-            self.schema().weather_fog_column_present,
+            weather::WeatherColumns {
+                fog: schema.weather_fog_column_present,
+                fog_scales: schema.weather_fog_scales_column_present,
+            },
             &self.conn,
         )
+    }
+
+    /// The weather columns of the library; only call when
+    /// [`DbSchema::weather_library_columns_present`] holds.
+    pub fn get_weather_library_row(
+        &self,
+        form_key: &str,
+    ) -> rusqlite::Result<weather_library::WeatherLibraryRow> {
+        weather_library::get_weather_library_row(form_key, &self.conn)
+    }
+
+    pub fn get_particle_geometry(
+        &self,
+        form_key: &str,
+    ) -> rusqlite::Result<weather_library::ParticleGeometryRow> {
+        weather_library::get_particle_geometry(
+            form_key,
+            self.schema().particle_material_data_column_present,
+            &self.conn,
+        )
+    }
+
+    /// `QueryReturnedNoRows` when the climate is unknown.
+    pub fn get_climate_volatility(&self, climate: &str) -> rusqlite::Result<Option<i64>> {
+        weather_library::get_climate_volatility(climate, &self.conn)
     }
 
     #[instrument(skip(self))]
@@ -442,6 +606,18 @@ impl DbClient {
     #[instrument(skip(self))]
     pub fn get_worldspaces(&self) -> anyhow::Result<Vec<Worldspace>> {
         Worldspace::list_all(&self.conn)
+    }
+
+    /// `Ok(None)` when the database has no global with this editor id.
+    #[instrument(skip(self))]
+    pub fn get_global(&self, editor_id: &str) -> anyhow::Result<Option<f32>> {
+        Ok(globals::get_global(editor_id, &self.conn)?)
+    }
+
+    /// `Ok(None)` when the database has no game setting with this editor id.
+    #[instrument(skip(self))]
+    pub fn get_game_setting_number(&self, editor_id: &str) -> anyhow::Result<Option<f32>> {
+        game_settings::get_game_setting_number(editor_id, &self.conn)
     }
 
     #[instrument(skip(self))]
@@ -499,6 +675,11 @@ impl DbClient {
     #[instrument(skip(self))]
     pub fn get_landscape_textures(&self) -> anyhow::Result<Vec<LandscapeTextureDiffuse>> {
         LandscapeTextureDiffuse::get_all(&self.conn)
+    }
+
+    #[instrument(skip(self))]
+    pub fn get_texture_set_diffuse(&self, form_key: &str) -> anyhow::Result<Option<String>> {
+        LandscapeTextureDiffuse::texture_set_diffuse(&self.conn, form_key)
     }
 
     #[instrument(skip(self))]

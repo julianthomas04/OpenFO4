@@ -6,6 +6,7 @@ use crate::rendering::State;
 use crate::rendering::boot::{BootContext, StartupInputs};
 use crate::rendering::fatal_runtime_error::FatalRuntimeError;
 use crate::rendering::pipboy_capture::CaptureConfig;
+use crate::rendering::shot::ShotConfig;
 use crate::startup::{BootState, CancelToken, StartupError, run_startup, spawn_worker};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -57,7 +58,7 @@ impl App {
             phase: None,
             asset_server: AssetServer::from_environment()?,
             start_mode: StartMode::from_env(),
-            capture_window_size: CaptureConfig::from_env()?.map(|capture| capture.window_size),
+            capture_window_size: capture_window_size()?,
             perf_log: crate::utils::env_flag("OPENFO4_PERF_LOG", false),
             startup_toasts,
             cancel_startup: CancelToken::default(),
@@ -168,6 +169,13 @@ impl App {
     }
 }
 
+/// The fixed window size of a screenshot mode; `None` keeps the borderless fullscreen window.
+fn capture_window_size() -> anyhow::Result<Option<PhysicalSize<u32>>> {
+    let pipboy = CaptureConfig::from_env()?.map(|capture| capture.window_size);
+    let shot = ShotConfig::from_env()?.map(|shot| shot.window_size);
+    Ok(pipboy.or(shot))
+}
+
 fn window_icon() -> anyhow::Result<Icon> {
     let icon_image = image::load_from_memory(include_bytes!("placeholder.jpg"))?.into_rgba8();
     let (width, height) = icon_image.dimensions();
@@ -210,6 +218,15 @@ impl ApplicationHandler for App {
         let Some(BootState::Running(state)) = self.phase.as_mut() else {
             return;
         };
+        // Before anything can consume it: the gameplay buttons follow the physical button.
+        if let WindowEvent::MouseInput {
+            state: button_state,
+            button,
+            ..
+        } = event
+        {
+            state.track_mouse_button(button, button_state.is_pressed());
+        }
         // Let the debug ui consume the event first if applicable, else handle it ourselves.
         if debug_ui_takes(&event, state.developer_window_visible()) {
             let response = state.debug_ui.handle_event(&state.window, &event);
@@ -260,6 +277,7 @@ impl ApplicationHandler for App {
                 button: MouseButton::Left,
                 ..
             } => state.handle_pointer_released(),
+            WindowEvent::Focused(false) => state.handle_focus_lost(),
             WindowEvent::MouseWheel { delta, .. } => {
                 let lines = match delta {
                     MouseScrollDelta::LineDelta(_, lines) => lines,
@@ -276,10 +294,11 @@ impl ApplicationHandler for App {
                         repeat,
                         ..
                     },
+                is_synthetic,
                 ..
             } => {
                 if let Some(code) = resolve_key_code(physical_key, logical_key) {
-                    state.handle_key(code, key_state.is_pressed(), repeat);
+                    state.handle_key(code, key_state.is_pressed(), repeat, is_synthetic);
                 }
             }
             _ => {}
