@@ -6,7 +6,7 @@
 .DESCRIPTION
     1. Downloads the pinned Python (embeddable package) and Temurin JRE into build/cache, verifying their SHA-256.
     2. Builds the engine with `cargo build --release --locked` (skipped with -DownloadOnly). Builds FFDec (tools/ffdec/build.ps1) with
-       its matching sources and Librempeg (tools/librempeg/build.ps1, resuming its toolchain in the temp directory when present).
+       its matching sources and Librempeg (tools/librempeg/build.ps1, resuming its toolchain in build/librempeg-work when present).
     3. Stages the payload (game, Python, Java, ffdec, the installer's data files, licence notices) in build/payload and zips it.
     4. Publishes the installer as a self-contained single-file win-x64 exe with the payload embedded.
     The result is build/release/OpenFO4-installer-<Version>.exe. Nothing downloaded or built is committed (build/ is ignored).
@@ -54,8 +54,7 @@ $ReleaseDir = Join-Path $BuildRoot 'release'
 $EngineDir = Join-Path $RepoRoot 'src/engine'
 $InstallerProject = Join-Path $RepoRoot 'src/installer/installer.csproj'
 $SourceStage = Join-Path $BuildRoot 'release-sources'
-# Librempeg's MSYS2 toolchain cannot build below a path with whitespace, so it keeps its toolchain and objects outside the checkout.
-$LibrempegWorkRoot = Join-Path ([IO.Path]::GetTempPath()) 'openfo4-librempeg'
+$LibrempegWorkRoot = Join-Path $BuildRoot 'librempeg-work'
 $LicensingScript = Join-Path $RepoRoot 'tools/licensing/release.py'
 $PythonCommand = Get-Command python -ErrorAction SilentlyContinue
 if (-not $PythonCommand) { throw 'Python 3.11 or later is required for source packaging. Supply it on PATH.' }

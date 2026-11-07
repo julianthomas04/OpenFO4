@@ -18,7 +18,7 @@ def download(url, partial):
 
 def archive_git_commit(url, commit, prefix, partial):
     """Write the deterministic `git archive` tar of one pinned commit, the form its pinned hash was recorded from."""
-    with tempfile.TemporaryDirectory() as repository:
+    with tempfile.TemporaryDirectory(dir=partial.parent, prefix=partial.name + '.git-') as repository:
         for arguments in (['init', '--quiet', '--bare', repository],
                           ['-C', repository, 'fetch', '--quiet', '--depth', '1', url, commit],
                           ['-C', repository, 'archive', '--format=tar', f'--prefix={prefix}/', f'--output={partial}', commit]):

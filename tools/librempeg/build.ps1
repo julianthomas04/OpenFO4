@@ -1,5 +1,5 @@
 param(
-    [string]$WorkRoot = (Join-Path $env:TEMP 'openfo4-librempeg'),
+    [string]$WorkRoot = (Join-Path $PSScriptRoot '../../build/librempeg-work'),
     [string]$LockPath = (Join-Path $PSScriptRoot 'toolchain.lock.json'),
     [int]$Jobs = 4,
     [switch]$ResumeBuild
@@ -9,7 +9,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if ($Jobs -lt 1 -or $Jobs -gt 64) { throw 'Jobs must be between 1 and 64.' }
 $WorkRoot = [IO.Path]::GetFullPath($WorkRoot)
-if ($WorkRoot -match '\s') { throw 'The isolated build directory must not contain whitespace.' }
+if ($WorkRoot -match '\s') { throw "The isolated build directory must not contain whitespace (MSYS2 cannot build below it): $WorkRoot. Pass a whitespace-free -WorkRoot." }
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $cache = Join-Path $WorkRoot 'cache'
 $lock = Get-Content -LiteralPath $LockPath -Raw | ConvertFrom-Json
