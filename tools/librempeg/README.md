@@ -24,7 +24,7 @@ can return a browser challenge instead of an archive.
 
 The lock and cache are immutable inputs to `build.ps1`. It verifies all hashes,
 extracts a fresh toolchain, installs only cached locked packages without refreshing
-repository databases, and builds in a whitespace-free temporary directory. It
+repository databases, and builds in `build/librempeg-work`, which must not contain whitespace. It
 does not download or update dependency packages. The first MSYS2 login may refresh
 its package-signing keys over the network; this does not resolve new dependencies.
 To reproduce elsewhere, restore the exact
