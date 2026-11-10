@@ -13,7 +13,7 @@ pub struct ButtonHintKeys {
     pub key_field: TextKey,
     pub label: TextKey,
     icon_holder: PlacementKey,
-    key_y: LiteralKey,
+    key_y_offset: LiteralKey,
     key_font: LiteralKey,
     key_suffix: LiteralKey,
     icon_holder_x: LiteralKey,
@@ -31,7 +31,11 @@ impl ButtonHintKeys {
             ),
             label: TextKey::new(movie, "[Shared.AS3.BSButtonHint]/textField_tf"),
             icon_holder: PlacementKey::new(movie, "[Shared.AS3.BSButtonHint]/IconHolderInstance"),
-            key_y: LiteralKey::new(movie, "Shared.AS3.BSButtonHint.UpdateIconTextField#$5=", 2),
+            key_y_offset: LiteralKey::new(
+                movie,
+                "Shared.AS3.BSButtonHint.UpdateIconTextField#$5=",
+                2,
+            ),
             key_font: LiteralKey::texts(movie, "Shared.AS3.BSButtonHint.GetExpectedFont#$1=", 3),
             key_suffix: LiteralKey::texts(
                 movie,
@@ -64,11 +68,10 @@ impl ButtonHintKeys {
     pub fn resolve(&self, layout: &UiLayout) -> Result<ButtonHintRules, UiLayoutError> {
         let key_placement = layout.get(&self.key_field)?.placement;
         let holder = layout.get(&self.icon_holder)?;
-        let key_y = layout.lit_number(&self.key_y, 0)? as f32;
         Ok(ButtonHintRules {
             key_suffix: layout.lit_string(&self.key_suffix, 0)?,
             key_font: layout.lit_string(&self.key_font, 0)?,
-            key_y_shift: key_y - key_placement.local.matrix.ty,
+            key_y_offset: layout.lit_number(&self.key_y_offset, 0)? as f32,
             icon_holder_x: layout.lit_number(&self.icon_holder_x, 0)? as f32,
             key_x_in_holder: key_placement.world.matrix.tx - holder.world.matrix.tx,
             label_x: layout.get(&self.label)?.placement.local.matrix.tx,
@@ -83,7 +86,7 @@ key_check_fields!(ButtonHintKeys {
     key_field,
     label,
     icon_holder,
-    key_y,
+    key_y_offset,
     key_font,
     key_suffix,
     icon_holder_x,
@@ -99,8 +102,9 @@ pub struct ButtonHintRules {
     pub key_suffix: String,
     /// The font class the code sets on the key field.
     pub key_font: String,
-    /// How far the code moves the key field down from where it is authored.
-    pub key_y_shift: f32,
+    /// How far the code moves the key field down from where it is authored: the first value of
+    /// the code's list is the PC key's, the second the controller icons'.
+    pub key_y_offset: f32,
     /// The key holder's x as the code sets it, where the key field's box starts inside the
     /// holder, and the label field's authored x, which the code replaces by the holder's width.
     pub icon_holder_x: f32,
@@ -199,17 +203,17 @@ mod tests {
     }
 
     #[test]
-    fn the_key_field_is_moved_to_the_height_the_code_sets() {
+    fn the_key_field_is_moved_by_the_offset_the_code_sets_whatever_its_authored_height() {
         let rules = rules_with(json!({
             "literals": {
-                "Shared.AS3.BSButtonHint.UpdateIconTextField#$5=": {"values": [-1.5, 0]},
+                "Shared.AS3.BSButtonHint.UpdateIconTextField#$5=": {"values": [-1.5, 0.5]},
             },
             "instances": {
                 "[Shared.AS3.BSButtonHint]/IconHolderInstance/IconAnimInstance/Icon_tf":
                     crate::ui_layout::test_support::instance(3, "text", 4.0, 3.0),
             },
         }));
-        assert_close(rules.key_y_shift, -4.5);
+        assert_close(rules.key_y_offset, -1.5);
     }
 
     #[test]

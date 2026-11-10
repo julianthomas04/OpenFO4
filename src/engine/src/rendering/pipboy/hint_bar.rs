@@ -210,7 +210,7 @@ impl HintBarLayout {
             TextAutoSize::None,
             &hint.key_font,
         )?
-        .translated(Vec2::new(0.0, hint.key_y_shift));
+        .translated(Vec2::new(0.0, hint.key_y_offset));
         let label = FieldSpec::resolve(layout, &KEYS.hint.label, TextAutoSize::None)?;
         Ok(Self {
             stage: rect_of(stage.rect),

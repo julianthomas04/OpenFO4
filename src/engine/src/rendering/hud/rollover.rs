@@ -127,7 +127,7 @@ impl RolloverSpec {
                 ..name
             },
             key: TextFace {
-                geometry: key_face.geometry.translated(0.0, hint.key_y_shift),
+                geometry: key_face.geometry.translated(0.0, hint.key_y_offset),
                 ..key_face
             },
             label: TextFace::resolve(layout, &KEYS.hint.label, None)?,
@@ -310,7 +310,7 @@ mod tests {
         })
     }
 
-    /// The key field sits at y 5 in its clip and the code moves it to y 9, a shift of 4; the key is
+    /// The key field sits at y 5 in its clip and the code moves it down by 4; the key is
     /// "K" and its suffix ">", and rows are centred by a divisor of 3.
     fn fixture(variant: Variant) -> Arc<UiLayout> {
         let literal = |values: Value| json!({"values": values});
@@ -338,7 +338,7 @@ mod tests {
                 format!("{setting}bUseShadedBackground="): literal(json!([variant.backdrop])),
                 format!("{hint}.GetExpectedFont#$1="): literal(json!(vec![FIXTURE_REGULAR_CLASS; 3])),
                 format!("{hint}.get:PCKey#_buttonHintData.PCKey+"): literal(json!([">"])),
-                format!("{hint}.UpdateIconTextField#$5="): literal(json!([9, 0])),
+                format!("{hint}.UpdateIconTextField#$5="): literal(json!([4, 0])),
                 format!("{hint}.redrawPrimaryButton#IconHolderInstance.x="): literal(json!([0])),
                 format!("{hint}.redrawTextField#GlobalFunc.SetText(3)"):
                     literal(json!([variant.upper_case_labels])),
@@ -480,7 +480,7 @@ mod tests {
     fn the_key_sits_where_the_code_moves_it_and_the_label_where_it_is_authored() {
         let items = items_at((1280, 720), &prompt("Door", "Open"));
         let (key, label) = (&items[1], &items[2]);
-        assert_close(key.geometry.top, 388.0 + (5.0 - 2.0) + (9.0 - 5.0));
+        assert_close(key.geometry.top, 388.0 + (5.0 - 2.0) + 4.0);
         assert_close(label.geometry.top, 388.0 + (5.0 - 2.0));
     }
 
@@ -558,8 +558,8 @@ mod tests {
         assert!(!update(&mut widget, None, (1280, 720)));
     }
 
-    /// The original's measurements for `COMMONWEALTH` and `E) OPEN` at 1600x900 (stage 1280x720
-    /// scaled by 1.25), in stage units from the crosshair. The ink bounds are inside the line boxes
+    /// The original's measurements for `COMMONWEALTH` and `E) OPEN` measured at 1600x900
+    /// and 2560x1440 (stage 1280x720 scaled by 1.25 and 2), in stage units from the crosshair. The ink bounds are inside the line boxes
     /// by the glyphs' side bearings, up to about two stage units a side, and a frame measures to
     /// about one pixel (0.8 stage units); hence the tolerances below.
     #[test]
@@ -577,7 +577,7 @@ mod tests {
         let install = std::env::var(crate::assets::INSTALL_DIR_VAR).expect("OPENFO4_INSTALL_DIR");
         let fonts = UiFonts::load(&fonts_dir(&format!("{install}/{ASSETS_DIR}"))).unwrap();
         let mut font_system = fonts.font_system();
-        let hud = hud_layout((1600, 900));
+        let hud = hud_layout((2560, 1440));
         let scale = hud.scale();
         let (centre_x, centre_y) = hud.center();
         let items = spec.items(
@@ -621,6 +621,16 @@ mod tests {
             (baselines[0] - 7.0).abs() < MEASURING,
             "the name's baseline {} (capitals span -7.2..7.2)",
             baselines[0]
+        );
+        assert!(
+            (baselines[1] - 51.0).abs() < 0.01 && (baselines[2] - 50.35).abs() <= 0.25,
+            "key baseline {} and label baseline {}",
+            baselines[1],
+            baselines[2]
+        );
+        assert!(
+            (baselines[1] - baselines[2] - 0.65).abs() <= 0.25,
+            "the key lies 0.65 below the label"
         );
         let (band_top, band_bottom) = (36.0, 54.4);
         for (index, box_) in boxes.iter().enumerate().skip(1) {
