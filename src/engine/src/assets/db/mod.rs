@@ -18,6 +18,7 @@ pub mod lighting_templates;
 pub mod lights;
 pub mod load_screens;
 pub mod map_markers;
+pub mod map_regions;
 pub mod material_swaps;
 pub mod material_types;
 pub mod movable_statics;
@@ -234,6 +235,12 @@ impl DbClient {
             return Ok(Vec::new());
         }
         map_markers::MapMarkerRow::list_for_worldspace(worldspace, &self.conn)
+    }
+
+    /// Regions with a map entry; none for a database without the map priority column.
+    #[instrument(skip(self))]
+    pub fn get_map_regions(&self) -> anyhow::Result<Vec<map_regions::MapRegion>> {
+        map_regions::get_all(&self.conn, self.schema)
     }
 
     #[instrument(skip(self))]
@@ -618,6 +625,12 @@ impl DbClient {
     #[instrument(skip(self))]
     pub fn get_game_setting_number(&self, editor_id: &str) -> anyhow::Result<Option<f32>> {
         game_settings::get_game_setting_number(editor_id, &self.conn)
+    }
+
+    /// `Ok(None)` when the database has no game setting with this editor id.
+    #[instrument(skip(self))]
+    pub fn get_game_setting_string(&self, editor_id: &str) -> anyhow::Result<Option<String>> {
+        game_settings::get_game_setting_string(editor_id, &self.conn)
     }
 
     #[instrument(skip(self))]

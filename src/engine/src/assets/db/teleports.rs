@@ -7,7 +7,9 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::Deserialize;
 
 use super::doors::{DoorFlagsError, flags_are_automatic};
-use super::schema::{DbSchema, door_trigger_bounds_select_list, teleport_flags_select_list};
+use super::schema::{
+    DbSchema, cell_name_select_list, door_trigger_bounds_select_list, teleport_flags_select_list,
+};
 
 /// A source load door and the cell/position/rotation it teleports to. Positions
 /// are Bethesda world units and `dest_rot_z` is radians, exactly as stored —
@@ -24,6 +26,16 @@ pub struct TeleportRecord {
     pub dest_cell: String,
     /// The XTEL flags as stored; 0 for a database without the column.
     pub flags: u32,
+    /// The destination cell's display name; NULL when it has none, and for a database without
+    /// the column.
+    pub dest_cell_name: Option<String>,
+    /// The destination worldspace's display name.
+    pub dest_worldspace_name: Option<String>,
+    /// The source door's base record name.
+    pub source_door_name: Option<String>,
+    /// The source door's base record flags, a decimal number as text; NULL when the source ref
+    /// or its base door is not in the database.
+    pub source_door_flags: Option<String>,
 }
 
 const FLAG_NO_LOAD_SCREEN: u32 = 1 << 1;
@@ -34,11 +46,16 @@ fn select_resolved(schema: DbSchema) -> String {
             t.dest_position_x, t.dest_position_y, t.dest_position_z,
             t.dest_rotation_z,
             c.is_interior, c.worldspace, c.form_key,
-            {flags}
+            {flags},
+            {cell_name}, w.name, d.name, d.flags
      FROM placed_teleports t
      JOIN placed_objects po ON po.form_key = t.destination_ref
-     JOIN cells c ON c.form_key = po.cell_form_key",
+     JOIN cells c ON c.form_key = po.cell_form_key
+     LEFT JOIN worldspaces w ON w.form_key = c.worldspace
+     LEFT JOIN placed_objects source_po ON source_po.form_key = t.source_ref
+     LEFT JOIN doors d ON d.form_key = source_po.base_object",
         flags = teleport_flags_select_list(schema, "t."),
+        cell_name = cell_name_select_list(schema, "c."),
     )
 }
 
@@ -59,6 +76,10 @@ impl TeleportRecord {
             worldspace: row.get(6)?,
             dest_cell: row.get(7)?,
             flags: row.get::<_, Option<u32>>(8)?.unwrap_or(0),
+            dest_cell_name: row.get(9)?,
+            dest_worldspace_name: row.get(10)?,
+            source_door_name: row.get(11)?,
+            source_door_flags: row.get(12)?,
         })
     }
 }

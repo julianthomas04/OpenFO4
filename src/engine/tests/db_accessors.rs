@@ -176,6 +176,8 @@ fn detect_reports_every_optional_group_present_on_the_real_schema() {
     assert!(schema.special_attribute_columns_present);
     assert!(schema.map_marker_columns_present);
     assert!(schema.worldspace_map_image_column_present);
+    assert!(schema.cell_name_column_present);
+    assert!(schema.region_map_column_present);
     assert!(schema.weapon_assembly_available());
 }
 
@@ -1388,6 +1390,223 @@ fn teleport_flags_read_as_zero_on_a_database_from_an_older_installer() {
 
     assert_eq!((all[0].flags, all[0].no_load_screen()), (0, false));
     assert_eq!(into_cell.flags, 0);
+}
+
+fn source_door(conn: &Connection, source_ref: &str, door: &str, name: Option<&str>, flags: &str) {
+    let mut placed_door = placed(source_ref, "INT", (0.0, 0.0, 0.0));
+    placed_door.retain(|(column, _)| *column != "base_object");
+    placed_door.push(("base_object", text(door)));
+    insert(conn, "placed_objects", &placed_door);
+    let mut base = vec![("form_key", text(door)), ("flags", text(flags))];
+    if let Some(name) = name {
+        base.push(("name", text(name)));
+    }
+    insert(conn, "doors", &base);
+}
+
+fn name_the_destinations(conn: &Connection) {
+    conn.execute_batch(
+        "UPDATE cells SET name = 'Museum of Freedom' WHERE form_key = 'INT';
+         INSERT INTO worldspaces (form_key, name) VALUES ('WS', 'Commonwealth');",
+    )
+    .unwrap();
+}
+
+#[test]
+fn teleports_carry_the_destination_names_and_the_source_door_base() {
+    let conn = teleport_world();
+    name_the_destinations(&conn);
+    source_door(&conn, "door_in", "DOOR_A", Some("Door"), "66");
+    source_door(&conn, "door_out", "DOOR_B", None, "0");
+    teleport(&conn, "door_in", "dest_int");
+    teleport(&conn, "door_out", "dest_ext");
+    let mut all = client(conn).get_placed_teleports().unwrap();
+    all.sort_by(|a, b| a.source_ref.cmp(&b.source_ref));
+
+    let seen: Vec<_> = all
+        .iter()
+        .map(|t| {
+            (
+                t.dest_cell_name.as_deref(),
+                t.dest_worldspace_name.as_deref(),
+                t.source_door_name.as_deref(),
+                t.source_door_flags.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            (Some("Museum of Freedom"), None, Some("Door"), Some("66")),
+            (None, Some("Commonwealth"), None, Some("0")),
+        ]
+    );
+}
+
+#[test]
+fn teleports_whose_source_ref_has_no_door_are_kept_without_door_data() {
+    let conn = teleport_world();
+    teleport(&conn, "unplaced_source", "dest_int");
+    let db = client(conn);
+
+    let all = db.get_placed_teleports().unwrap();
+    let into_cell = db.get_teleport_into_cell("INT").unwrap().unwrap();
+
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].source_door_name, None);
+    assert_eq!(all[0].source_door_flags, None);
+    assert_eq!(into_cell.source_ref, "unplaced_source");
+}
+
+#[test]
+fn teleports_load_without_cell_names_on_a_database_from_an_older_installer() {
+    let conn = legacy_connection(&[("cells", "name")]);
+    conn.execute_batch("INSERT INTO worldspaces (form_key, name) VALUES ('WS', 'Commonwealth');")
+        .unwrap();
+    insert(
+        &conn,
+        "cells",
+        &[("form_key", text("INT")), ("is_interior", int(1))],
+    );
+    insert(&conn, "cells", &cell_row("EXT", Some("WS"), Some((0, 0))));
+    insert(
+        &conn,
+        "placed_objects",
+        &placed("dest_int", "INT", (0.0, 0.0, 0.0)),
+    );
+    insert(
+        &conn,
+        "placed_objects",
+        &placed("dest_ext", "EXT", (0.0, 0.0, 0.0)),
+    );
+    teleport(&conn, "door_in", "dest_int");
+    teleport(&conn, "door_out", "dest_ext");
+    let db = client(conn);
+    assert!(!db.schema().cell_name_column_present);
+
+    let mut all = db.get_placed_teleports().unwrap();
+    all.sort_by(|a, b| a.source_ref.cmp(&b.source_ref));
+    let into_cell = db.get_teleport_into_cell("INT").unwrap().unwrap();
+
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[0].dest_cell_name, None);
+    assert_eq!(all[1].dest_worldspace_name.as_deref(), Some("Commonwealth"));
+    assert_eq!(into_cell.dest_cell_name, None);
+}
+
+// ---------------------------------------------------------------- map regions
+
+fn region(conn: &Connection, form_key: &str, name: Value, priority: Value, worldspace: Value) {
+    insert(
+        conn,
+        "regions",
+        &[
+            ("form_key", text(form_key)),
+            ("name", name),
+            ("map_priority", priority),
+            ("worldspace", worldspace),
+        ],
+    );
+}
+
+fn region_area(conn: &Connection, region: &str, area: i64, points: &[f32]) {
+    let bytes: Vec<u8> = points.iter().flat_map(|c| c.to_le_bytes()).collect();
+    insert(
+        conn,
+        "region_areas",
+        &[
+            ("region", text(region)),
+            ("area", int(area)),
+            ("points", blob(&bytes)),
+        ],
+    );
+}
+
+#[test]
+fn map_regions_are_read_with_their_polygons_and_regions_without_map_data_are_skipped() {
+    let conn = schema_connection();
+    region(&conn, "R_B", text("Goodneighbor"), int(5), text("WS"));
+    region_area(&conn, "R_B", 1, &[8.0, 8.0, 9.0, 8.0, 9.0, 9.0]);
+    region_area(&conn, "R_B", 0, &[0.0, 0.0, 4.0, 0.0, 4.0, 4.0, 0.0, 4.0]);
+    region(&conn, "R_A", text("Back Bay"), int(2), text("WS"));
+    region(&conn, "R_NO_NAME", Value::Null, int(3), text("WS"));
+    region(&conn, "R_BLANK_NAME", text("  "), int(3), text("WS"));
+    region(
+        &conn,
+        "R_NO_PRIORITY",
+        text("Sound only"),
+        Value::Null,
+        text("WS"),
+    );
+    region(
+        &conn,
+        "R_NO_WORLDSPACE",
+        text("Nowhere"),
+        int(3),
+        Value::Null,
+    );
+    region_area(&conn, "R_NO_NAME", 0, &[0.0, 0.0, 1.0, 0.0, 1.0, 1.0]);
+
+    let regions = client(conn).get_map_regions().unwrap();
+
+    let seen: Vec<_> = regions
+        .iter()
+        .map(|r| {
+            (
+                r.form_key.as_str(),
+                r.name.as_str(),
+                r.priority,
+                r.areas.len(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        vec![("R_A", "Back Bay", 2, 0), ("R_B", "Goodneighbor", 5, 2)]
+    );
+    assert_eq!(regions[1].worldspace, "WS");
+    assert_eq!(
+        regions[1].areas,
+        vec![
+            vec![(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)],
+            vec![(8.0, 8.0), (9.0, 8.0), (9.0, 9.0)],
+        ]
+    );
+}
+
+#[test]
+fn a_malformed_map_region_polygon_is_an_error_naming_the_region() {
+    let conn = schema_connection();
+    region(&conn, "R_BAD", text("Back Bay"), int(2), text("WS"));
+    insert(
+        &conn,
+        "region_areas",
+        &[
+            ("region", text("R_BAD")),
+            ("area", int(0)),
+            ("points", blob(&[0; 12])),
+        ],
+    );
+    let error = client(conn).get_map_regions().unwrap_err();
+    assert!(format!("{error:#}").contains("R_BAD"), "{error:#}");
+}
+
+#[test]
+fn there_are_no_map_regions_on_a_database_from_an_older_installer() {
+    let conn = legacy_connection(&[("regions", "map_priority")]);
+    insert(
+        &conn,
+        "regions",
+        &[
+            ("form_key", text("R_A")),
+            ("name", text("Back Bay")),
+            ("worldspace", text("WS")),
+        ],
+    );
+    let db = client(conn);
+
+    assert!(!db.schema().region_map_column_present);
+    assert_eq!(db.get_map_regions().unwrap(), []);
 }
 
 const LOAD_SCREEN_COLUMNS: [&str; 8] = [
@@ -3693,6 +3912,53 @@ fn a_numeric_game_setting_without_a_value_is_an_error_naming_it() {
         .get_game_setting_number("fSunXExtreme")
         .unwrap_err();
     assert!(format!("{error:#}").contains("fSunXExtreme"), "{error:#}");
+}
+
+fn seed_string_setting(conn: &Connection, editor_id: &str, value: Value) {
+    insert(
+        conn,
+        "game_settings",
+        &[
+            ("form_key", text(&format!("{editor_id}:Fallout4.esm"))),
+            ("editor_id", text(editor_id)),
+            ("value_type", text("string")),
+            ("value_string", value),
+        ],
+    );
+}
+
+#[test]
+fn a_string_game_setting_is_read_by_editor_id() {
+    let conn = schema_connection();
+    seed_string_setting(&conn, "sOpen", text("Open"));
+    assert_eq!(
+        client(conn).get_game_setting_string("sOpen").unwrap(),
+        Some("Open".to_string())
+    );
+}
+
+#[test]
+fn an_unknown_string_game_setting_is_absent_rather_than_an_error() {
+    let db = client(schema_connection());
+    assert_eq!(db.get_game_setting_string("sOpen").unwrap(), None);
+}
+
+#[test]
+fn a_numeric_game_setting_read_as_a_string_is_an_error_naming_it() {
+    let conn = schema_connection();
+    seed_game_setting(&conn, "fSunXExtreme", "float", (Value::Null, real(600.0)));
+    let error = client(conn)
+        .get_game_setting_string("fSunXExtreme")
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("fSunXExtreme"), "{error:#}");
+}
+
+#[test]
+fn a_string_game_setting_without_a_value_is_an_error_naming_it() {
+    let conn = schema_connection();
+    seed_string_setting(&conn, "sOpen", Value::Null);
+    let error = client(conn).get_game_setting_string("sOpen").unwrap_err();
+    assert!(format!("{error:#}").contains("sOpen"), "{error:#}");
 }
 
 // ---------------------------------------------------------------- weather sound catalog
