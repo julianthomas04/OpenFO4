@@ -155,21 +155,8 @@ impl FieldText {
         }
         let mut placed = Vec::with_capacity(items.len() * 2);
         for (index, item) in items.iter().enumerate() {
-            let (left, top) = shape(&mut self.font_system, &mut self.buffers[index], item);
-            if let Some(shadow) = item.shadow {
-                placed.push(Placed {
-                    index,
-                    left: left + shadow.offset,
-                    top: top + shadow.offset,
-                    colour: shadow.colour,
-                });
-            }
-            placed.push(Placed {
-                index,
-                left,
-                top,
-                colour: item.colour,
-            });
+            let origin = shape(&mut self.font_system, &mut self.buffers[index], item);
+            placed.extend(placements(index, origin, item));
         }
 
         let bounds = TextBounds {
@@ -305,10 +292,29 @@ fn shape(font_system: &mut FontSystem, buffer: &mut Buffer, item: &TextItem) -> 
 }
 
 /// The buffer top that lands the first baseline on the pixel row nearest `baseline_y`. glyphon
-/// draws a line at `round(line_y)` below the area's top and the top itself only to a quarter
-/// pixel, so a top of `baseline_y - line_y` would land the baseline up to half a pixel off.
+/// truncates the area's top to a whole pixel and draws a line at `round(line_y)` below it, so the
+/// top is chosen as a whole number of pixels.
 fn snapped_top(baseline_y: f32, line_y: f32) -> f32 {
     baseline_y.round() - line_y.round()
+}
+
+/// The areas `item` is drawn in when its buffer's top-left corner is at `(left, top)`: its shadow,
+/// then the text. glyphon truncates the top to a whole pixel (the left keeps quarter-pixel bins),
+/// so the shadow's vertical offset is rounded or a small one would be lost.
+fn placements(index: usize, (left, top): (f32, f32), item: &TextItem) -> Vec<Placed> {
+    let shadow = item.shadow.map(|shadow| Placed {
+        index,
+        left: left + shadow.offset,
+        top: top + shadow.offset.round(),
+        colour: shadow.colour,
+    });
+    let text = Placed {
+        index,
+        left,
+        top,
+        colour: item.colour,
+    };
+    shadow.into_iter().chain([text]).collect()
 }
 
 /// The rectangle the lines of `item` cover once shaped.
@@ -331,14 +337,18 @@ pub(super) fn extent_of(font_system: &mut FontSystem, item: &TextItem) -> TextEx
     }
 }
 
-/// The framebuffer y of each line's baseline as glyphon draws it once `item` is shaped.
+/// The framebuffer y of each line's baseline as glyphon draws it once `item` is shaped: the
+/// library's own truncation of the area's top plus the line's rounded `line_y`.
 #[cfg(test)]
 pub(super) fn baselines_of(font_system: &mut FontSystem, item: &TextItem) -> Vec<f32> {
     let mut buffer = Buffer::new(font_system, Metrics::new(1.0, 1.0));
     let (_, top) = shape(font_system, &mut buffer, item);
     buffer
         .layout_runs()
-        .map(|run| top + run.line_y.round())
+        .filter_map(|run| {
+            let glyph = run.glyphs.first()?;
+            Some((glyph.physical((0.0, top), 1.0).y + run.line_y.round() as i32) as f32)
+        })
         .collect()
 }
 
@@ -432,7 +442,7 @@ mod tests {
     fn the_extent_of_centred_wrapped_text_spans_its_longest_line() {
         let item = centred(item(Some(COLUMN)));
         let extent = extent(&item);
-        let (_, spans) = laid_out(&item);
+        let spans = line_spans(&item);
         let longest = spans
             .iter()
             .max_by(|a, b| (a.1 - a.0).total_cmp(&(b.1 - b.0)))
@@ -444,28 +454,105 @@ mod tests {
         assert!((extent.left + extent.width - longest.1).abs() < 0.01);
     }
 
+    fn is_floor_or_ceil(value: f32, nominal: f32) -> bool {
+        [nominal.floor(), nominal.ceil()]
+            .iter()
+            .any(|whole| (value - whole).abs() < 1e-4)
+    }
+
+    const SCALES: [f32; 3] = [1.0, 1.25, 2.0];
+    const SIZES: [f32; 3] = [13.0, 16.5, 20.0];
+
+    /// `item` on a framebuffer `scale` times the stage, `origin_y` down, with `size` stage pixels.
+    fn scaled(mut item: TextItem, scale: f32, origin_y: f32, size: f32) -> TextItem {
+        item.map = ScreenMap {
+            origin: (3.7, origin_y),
+            scale,
+        };
+        item.geometry = item.geometry.with_size(size);
+        item
+    }
+
     #[test]
     fn the_first_baseline_is_drawn_on_the_pixel_row_nearest_to_where_the_field_puts_it() {
         let mut font_system = fonts::ui_fonts().font_system();
-        for nudge in [0.0_f32, 0.2, 0.4, 0.5, 0.7, 0.9] {
-            let mut item = item(Some(COLUMN));
-            item.geometry = item.geometry.translated(0.0, nudge);
-            let nominal = item.geometry.first_baseline();
-            let baselines = baselines_of(&mut font_system, &item);
-            assert!(
-                (baselines[0] - nominal.round()).abs() < 1e-4,
-                "nominal {nominal}, drawn {}",
-                baselines[0]
+        for scale in SCALES {
+            for origin_y in [0.0, 13.3] {
+                for size in SIZES {
+                    let top_anchored = scaled(item(Some(COLUMN)), scale, origin_y, size);
+                    let mut bottom = scaled(bottom_anchored("A\nB", 100.0), scale, origin_y, size);
+                    bottom.wrap_width = None;
+                    for (item, stage_baseline) in [
+                        (&top_anchored, top_anchored.geometry.first_baseline()),
+                        (&bottom, expected_first_baseline(&bottom, 2)),
+                    ] {
+                        let nominal = item.map.point(0.0, stage_baseline).1;
+                        let drawn = baselines_of(&mut font_system, item);
+                        assert_eq!(
+                            drawn[0],
+                            nominal.round(),
+                            "scale {scale}, origin {origin_y}, size {size}: nominal {nominal}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn consecutive_baselines_are_a_line_pitch_rounded_down_or_up_apart() {
+        let mut font_system = fonts::ui_fonts().font_system();
+        for scale in SCALES {
+            for size in SIZES {
+                let mut item = scaled(bottom_anchored("A\nB\nC", 100.0), scale, 0.0, size);
+                item.wrap_width = None;
+                let drawn = baselines_of(&mut font_system, &item);
+                assert_eq!(drawn.len(), 3);
+                let pitch = item.geometry.line_pitch() * scale;
+                for pair in drawn.windows(2) {
+                    let apart = pair[1] - pair[0];
+                    assert!(
+                        is_floor_or_ceil(apart, pitch),
+                        "scale {scale}, size {size}: {apart} px apart for a pitch of {pitch}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_buffer_top_is_a_whole_pixel_that_pairs_the_rounded_baseline_with_the_rounded_line_y() {
+        for (baseline_y, line_y, top) in [(50.4, 12.6, 37.0), (50.5, 12.4, 39.0), (7.6, 12.5, -5.0)]
+        {
+            assert_eq!(
+                snapped_top(baseline_y, line_y),
+                top,
+                "{baseline_y} {line_y}"
             );
         }
     }
 
     #[test]
-    fn the_baselines_are_one_line_pitch_apart() {
-        let item = bottom_anchored("First\nSecond", 100.0);
-        let baselines = baselines_of(&mut fonts::ui_fonts().font_system(), &item);
-        assert_eq!(baselines.len(), 2);
-        assert!((baselines[1] - baselines[0] - item.geometry.line_pitch()).abs() <= 1.0);
+    fn the_shadow_moves_down_by_the_rounded_offset_and_right_by_the_exact_one() {
+        for offset in [0.84_f32, 1.4, 1.75, 2.5] {
+            let mut item = item(None);
+            item.shadow = Some(Shadow {
+                offset,
+                colour: [0, 0, 0, 255],
+            });
+            let placed = placements(7, (10.3, 20.0), &item);
+            let [shadow, text] = placed.as_slice() else {
+                panic!("a shadow and the text, got {} areas", placed.len());
+            };
+            assert_eq!(shadow.top - text.top, offset.round(), "offset {offset}");
+            assert!((shadow.left - text.left - offset).abs() < 1e-4);
+            assert_eq!((shadow.index, text.index), (7, 7));
+        }
+    }
+
+    #[test]
+    fn text_without_a_shadow_is_placed_alone() {
+        assert_eq!(placements(0, (1.0, 2.0), &item(None)).len(), 1);
     }
 
     #[test]
@@ -480,20 +567,17 @@ mod tests {
         );
     }
 
-    fn laid_out(item: &TextItem) -> (Vec<f32>, Vec<(f32, f32)>) {
+    fn line_spans(item: &TextItem) -> Vec<(f32, f32)> {
         let mut font_system = fonts::ui_fonts().font_system();
         let mut buffer = Buffer::new(&mut font_system, Metrics::new(1.0, 1.0));
-        let (left, top) = shape(&mut font_system, &mut buffer, item);
-        let runs: Vec<_> = buffer.layout_runs().collect();
-        let baselines = runs.iter().map(|run| top + run.line_y.round()).collect();
-        let spans = runs
-            .iter()
+        let (left, _) = shape(&mut font_system, &mut buffer, item);
+        buffer
+            .layout_runs()
             .map(|run| {
                 let first = run.glyphs.first().map_or(0.0, |glyph| glyph.x);
                 (left + first, left + first + run.line_w)
             })
-            .collect();
-        (baselines, spans)
+            .collect()
     }
 
     fn centred(mut item: TextItem) -> TextItem {
@@ -504,7 +588,7 @@ mod tests {
     #[test]
     fn wrapped_centred_text_is_centred_line_by_line_in_its_width() {
         let item = centred(item(Some(COLUMN)));
-        let (_, spans) = laid_out(&item);
+        let spans = line_spans(&item);
         assert!(spans.len() > 1, "{spans:?}");
         let widths: Vec<f32> = spans.iter().map(|(left, right)| right - left).collect();
         assert!(
@@ -542,19 +626,22 @@ mod tests {
             + geometry.metrics.baseline_offset(geometry.size)
     }
 
+    fn drawn_baselines(item: &TextItem) -> Vec<f32> {
+        baselines_of(&mut fonts::ui_fonts().font_system(), item)
+    }
+
     #[test]
     fn text_anchored_at_the_bottom_ends_one_line_pitch_per_line_above_the_field_bottom() {
         for (text, lines) in [("Short", 1_usize), ("First\nSecond", 2)] {
             let item = bottom_anchored(text, 100.0);
-            let (baselines, _) = laid_out(&item);
+            let baselines = drawn_baselines(&item);
             assert_eq!(baselines.len(), lines);
             let first = expected_first_baseline(&item, lines);
-            for (index, baseline) in baselines.iter().enumerate() {
-                let expected = first + index as f32 * item.geometry.line_pitch();
-                assert!(
-                    (baseline - expected).abs() <= 0.5 + index as f32,
-                    "{baselines:?}"
-                );
+            assert_eq!(baselines[0], first.round());
+            let pitch = item.geometry.line_pitch();
+            for pair in baselines.windows(2) {
+                let apart = pair[1] - pair[0];
+                assert!(is_floor_or_ceil(apart, pitch), "{baselines:?}");
             }
         }
     }
@@ -562,15 +649,19 @@ mod tests {
     #[test]
     fn text_taller_than_its_bottom_anchored_field_keeps_its_top_at_the_field_top() {
         let item = bottom_anchored("One\nTwo\nThree", 20.0);
-        let (baselines, _) = laid_out(&item);
-        assert!((baselines[0] - item.geometry.first_baseline()).abs() <= 0.5);
+        assert_eq!(
+            drawn_baselines(&item)[0],
+            item.geometry.first_baseline().round()
+        );
     }
 
     #[test]
     fn top_anchored_text_starts_at_the_first_baseline_of_the_field() {
         let item = item(Some(COLUMN));
-        let (baselines, _) = laid_out(&item);
-        assert!((baselines[0] - item.geometry.first_baseline()).abs() <= 0.5);
+        assert_eq!(
+            drawn_baselines(&item)[0],
+            item.geometry.first_baseline().round()
+        );
     }
 
     #[test]

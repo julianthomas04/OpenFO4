@@ -558,10 +558,10 @@ mod tests {
         assert!(!update(&mut widget, None, (1280, 720)));
     }
 
-    /// The original's measurements for `COMMONWEALTH` and `E) OPEN` measured at 1600x900
-    /// and 2560x1440 (stage 1280x720 scaled by 1.25 and 2), in stage units from the crosshair. The ink bounds are inside the line boxes
-    /// by the glyphs' side bearings, up to about two stage units a side, and a frame measures to
-    /// about one pixel (0.8 stage units); hence the tolerances below.
+    /// The original's `COMMONWEALTH` and `E) OPEN` as measured at 1600x900 and 2560x1440, in
+    /// stage units from the crosshair. The ink lies inside the line boxes by the glyphs' side
+    /// bearings (up to about two stage units a side) and a frame measures to about one pixel, hence
+    /// the tolerances. Baselines are checked against the pixel row nearest the authored one.
     #[test]
     #[ignore = "needs OPENFO4_INSTALL_DIR with the converted interface and fonts"]
     fn the_installed_movie_resolves_the_rollover_and_lays_it_out_as_the_original_shows_it() {
@@ -571,78 +571,75 @@ mod tests {
 
         const BEARINGS: f32 = 3.5;
         const MEASURING: f32 = 1.0;
+        const NOMINAL_BASELINES: [f32; 3] = [7.0, 51.0, 50.35];
         let layout = Arc::new(super::super::real_install::installed_layout());
         layout.validate(&[&KEYS]).unwrap();
         let spec = RolloverSpec::resolve(&layout).unwrap();
         let install = std::env::var(crate::assets::INSTALL_DIR_VAR).expect("OPENFO4_INSTALL_DIR");
         let fonts = UiFonts::load(&fonts_dir(&format!("{install}/{ASSETS_DIR}"))).unwrap();
         let mut font_system = fonts.font_system();
-        let hud = hud_layout((2560, 1440));
-        let scale = hud.scale();
-        let (centre_x, centre_y) = hud.center();
-        let items = spec.items(
-            &prompt("Commonwealth", "Open"),
-            &layout,
-            &hud,
-            &TINT,
-            |item| extent_of(&mut font_system, item),
-        );
-        let boxes: Vec<[f32; 4]> = items
-            .iter()
-            .map(|item| {
-                let extent = extent_of(&mut font_system, item);
-                [
-                    (extent.left - centre_x) / scale,
-                    (extent.left + extent.width - centre_x) / scale,
-                    (extent.top - centre_y) / scale,
-                    (extent.top + extent.height - centre_y) / scale,
-                ]
-            })
-            .collect();
-        let baselines: Vec<f32> = items
-            .iter()
-            .map(|item| (baselines_of(&mut font_system, item)[0] - centre_y) / scale)
-            .collect();
-        println!("line boxes (x0, x1, y0, y1) {boxes:?} baselines {baselines:?}");
+        for fb in [(1600, 900), (2560, 1440)] {
+            let hud = hud_layout(fb);
+            let scale = hud.scale();
+            let (centre_x, centre_y) = hud.center();
+            let items = spec.items(
+                &prompt("Commonwealth", "Open"),
+                &layout,
+                &hud,
+                &TINT,
+                |item| extent_of(&mut font_system, item),
+            );
+            let boxes: Vec<[f32; 4]> = items
+                .iter()
+                .map(|item| {
+                    let extent = extent_of(&mut font_system, item);
+                    [
+                        (extent.left - centre_x) / scale,
+                        (extent.left + extent.width - centre_x) / scale,
+                        (extent.top - centre_y) / scale,
+                        (extent.top + extent.height - centre_y) / scale,
+                    ]
+                })
+                .collect();
+            let baselines: Vec<f32> = items
+                .iter()
+                .map(|item| (baselines_of(&mut font_system, item)[0] - centre_y) / scale)
+                .collect();
+            println!("{fb:?}: line boxes (x0, x1, y0, y1) {boxes:?} baselines {baselines:?}");
 
-        let within_ink = |x0: f32, x1: f32, ink: [f32; 2]| {
-            assert!(
-                x0 <= ink[0] + MEASURING && x0 >= ink[0] - BEARINGS,
-                "left {x0} against ink {ink:?}"
-            );
-            assert!(
-                x1 >= ink[1] - MEASURING && x1 <= ink[1] + BEARINGS,
-                "right {x1} against ink {ink:?}"
-            );
-        };
-        within_ink(boxes[0][0], boxes[0][1], [186.4, 320.8]);
-        within_ink(boxes[1][0], boxes[2][1], [225.6, 280.8]);
-        assert!(
-            (baselines[0] - 7.0).abs() < MEASURING,
-            "the name's baseline {} (capitals span -7.2..7.2)",
-            baselines[0]
-        );
-        assert!(
-            (baselines[1] - 51.0).abs() < 0.01 && (baselines[2] - 50.35).abs() <= 0.25,
-            "key baseline {} and label baseline {}",
-            baselines[1],
-            baselines[2]
-        );
-        assert!(
-            (baselines[1] - baselines[2] - 0.65).abs() <= 0.25,
-            "the key lies 0.65 below the label"
-        );
-        let (band_top, band_bottom) = (36.0, 54.4);
-        for (index, box_) in boxes.iter().enumerate().skip(1) {
-            assert!(
-                box_[2] <= band_top + MEASURING && box_[3] >= band_bottom - MEASURING,
-                "hint line box {box_:?} against ink {band_top}..{band_bottom}"
-            );
-            assert!(
-                baselines[index] > band_top && baselines[index] < band_bottom,
-                "baseline {} of hint text {index}",
-                baselines[index]
-            );
+            let within_ink = |x0: f32, x1: f32, ink: [f32; 2]| {
+                assert!(
+                    x0 <= ink[0] + MEASURING && x0 >= ink[0] - BEARINGS,
+                    "{fb:?}: left {x0} against ink {ink:?}"
+                );
+                assert!(
+                    x1 >= ink[1] - MEASURING && x1 <= ink[1] + BEARINGS,
+                    "{fb:?}: right {x1} against ink {ink:?}"
+                );
+            };
+            within_ink(boxes[0][0], boxes[0][1], [186.4, 320.8]);
+            within_ink(boxes[1][0], boxes[2][1], [225.6, 280.8]);
+            for (index, nominal) in NOMINAL_BASELINES.into_iter().enumerate() {
+                let row = (centre_y + nominal * scale).round();
+                let expected = (row - centre_y) / scale;
+                assert!(
+                    (baselines[index] - expected).abs() < 1e-3,
+                    "{fb:?}: baseline {index} is {} not {expected} (nominal {nominal})",
+                    baselines[index]
+                );
+            }
+            let (band_top, band_bottom) = (36.0, 54.4);
+            for (index, box_) in boxes.iter().enumerate().skip(1) {
+                assert!(
+                    box_[2] <= band_top + MEASURING && box_[3] >= band_bottom - MEASURING,
+                    "{fb:?}: hint line box {box_:?} against ink {band_top}..{band_bottom}"
+                );
+                assert!(
+                    baselines[index] > band_top && baselines[index] < band_bottom,
+                    "{fb:?}: baseline {} of hint text {index}",
+                    baselines[index]
+                );
+            }
         }
     }
 }

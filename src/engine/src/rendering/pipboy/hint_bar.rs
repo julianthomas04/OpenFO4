@@ -19,7 +19,7 @@ use super::shapes::{Bracket, Shade, alpha_at_frame, rect_of};
 use super::tab::ButtonHint;
 use crate::rendering::game_settings::SafeZone;
 use crate::ui_layout::button_hint::{ButtonHintKeys, ButtonHintRules};
-use crate::ui_layout::scaleform_text::AutoSize;
+use crate::ui_layout::scaleform_text::{AutoSize, FieldGeometry};
 use crate::ui_layout::set_text::{SetTextKeys, SetTextRules};
 use crate::ui_layout::values::{ColorTransform, TrackKey};
 use crate::ui_layout::{
@@ -199,6 +199,12 @@ fn flash_alphas(layout: &UiLayout) -> Result<Vec<f32>, UiLayoutError> {
     ))
 }
 
+/// The top and bottom, relative to the bar, of the band both fields of a hint lie in: what the
+/// backdrop of the bar covers.
+fn row_extent(key: &FieldGeometry, label: &FieldGeometry) -> [f32; 2] {
+    [key.top.min(label.top), key.bottom.max(label.bottom)]
+}
+
 impl HintBarLayout {
     pub fn resolve(layout: &UiLayout) -> Result<Self, UiLayoutError> {
         let stage = layout.get(&KEYS.stage)?;
@@ -219,10 +225,7 @@ impl HintBarLayout {
             right_bracket: Bracket::resolve(layout, &KEYS.right_bracket, false)?,
             key_field,
             hint,
-            row_extent: [
-                key_field.geometry.top.min(label.geometry.top),
-                key_field.geometry.bottom.max(label.geometry.bottom),
-            ],
+            row_extent: row_extent(&key_field.geometry, &label.geometry),
             label,
             flash_alphas: flash_alphas(layout)?,
             fps: stage.fps,
@@ -514,6 +517,51 @@ mod tests {
         let alphas = loop_alphas(&track, &base, 3..5);
         assert_close(alphas[0], 0.75);
         assert_close(alphas[1], 0.7);
+    }
+
+    fn field_at(y: f32, height: f32) -> FieldGeometry {
+        let metrics = crate::ui_layout::scaleform_text::FontMetrics {
+            ascent: 0.9,
+            descent: 0.2,
+        };
+        FieldGeometry::content_box(
+            (0.0, y),
+            10.0,
+            height,
+            16.0,
+            crate::ui_layout::values::Align::Left,
+            metrics,
+        )
+    }
+
+    #[test]
+    fn the_row_extent_spans_both_fields_whichever_reaches_further() {
+        let label = field_at(2.0, 20.0);
+        let lower_key = field_at(10.0, 20.0);
+        let higher_key = field_at(-6.0, 20.0);
+        assert_eq!(
+            row_extent(&lower_key, &label),
+            [label.top, lower_key.bottom]
+        );
+        assert_eq!(
+            row_extent(&higher_key, &label),
+            [higher_key.top, label.bottom]
+        );
+        assert_eq!(row_extent(&label, &label), [label.top, label.bottom]);
+    }
+
+    #[test]
+    #[ignore = "needs OPENFO4_INSTALL_DIR with the converted interface"]
+    fn the_installed_backdrop_band_is_pinned_to_the_authored_fields() {
+        let bar = HintBarLayout::resolve(&crate::ui_layout::test_support::installed_layout())
+            .expect("the installed hint bar resolves");
+        let (key, label) = (&bar.key_field.geometry, &bar.label.geometry);
+        println!(
+            "key {}..{} label {}..{} extent {:?}",
+            key.top, key.bottom, label.top, label.bottom, bar.row_extent
+        );
+        assert_close(bar.row_extent[0], 2.0);
+        assert_close(bar.row_extent[1], 28.85);
     }
 
     #[test]
