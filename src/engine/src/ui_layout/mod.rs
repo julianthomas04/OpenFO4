@@ -1,6 +1,7 @@
 //! The converted game UI layout: documents the installer extracts from the game's interface
 //! movies, typed keys to read them, boot validation, and Scaleform text rules.
 
+pub mod button_hint;
 mod document;
 mod error;
 pub(crate) mod faces;
