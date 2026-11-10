@@ -26,7 +26,7 @@ namespace InstallerTests.Pipeline
             { AssetGroups.Id(AssetGroup.Interface), nameof(FontExtractor), FontExtractor.ExtractorVersion, 1, 1 },
             { AssetGroups.Id(AssetGroup.Interface), nameof(PipboyArtExtractor), PipboyArtExtractor.ExtractorVersion, 4, 1 },
             { AssetGroups.Id(AssetGroup.Interface), nameof(UiDocumentHeader), UiDocumentHeader.ExtractorVersion, 5, 1 },
-            { AssetGroups.Id(AssetGroup.TexturesDatabase), nameof(StringTables), StringTables.ExtractorVersion, 1, 1 },
+            { AssetGroups.Id(AssetGroup.TexturesDatabase), nameof(StringTables), StringTables.ExtractorVersion, 1, 2 },
         };
 
         [Theory]

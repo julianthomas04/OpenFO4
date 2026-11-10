@@ -18,6 +18,10 @@ namespace InstallerTests
     {
         const int DeletedFlag = 0x20;
         public const string ModelOfWall = @"Architecture\Wall01.nif";
+        public const string InteriorName = "Fixture Hall";
+        public const string MapRegionName = "Fixture District";
+        public const int MapRegionPriority = 70;
+        public const int NamelessMapRegionPriority = 5;
 
         static LoadedFixtureDatabase() => DefaultTypeMap.MatchNamesWithUnderscores = true;
 
@@ -136,6 +140,8 @@ namespace InstallerTests
             plugin.AddStatic("WallStatic", ModelOfWall);
             plugin.AddStatic("MarkerStatic", @"Markers\Marker.nif", TinyPlugin.MarkerFlag);
             plugin.AddDoor("DoorBase", @"Doors\Door01.nif");
+            plugin.AddDoor("AutomaticNoTextDoor", @"Doors\Door01.nif").Flags = Door.Flag.Automatic | Door.Flag.NoToText;
+            DescribeRegions(plugin);
             plugin.AddCollisionLayer("LayerStatic", layer => { layer.Index = 1; layer.Flags = CollisionLayer.Flag.TriggerVolume; });
             plugin.AddCollisionLayer("LayerCharacter", layer =>
             {
@@ -510,8 +516,16 @@ namespace InstallerTests
                 landscape.Layers.Add(new AlphaLayer { Header = LayerOf(plugin, Quadrant.TopRight, 1), AlphaLayerData = new byte[] { 1, 2, 3, 4, 5, 6 } });
             });
 
+        static void DescribeRegions(TinyPlugin plugin)
+        {
+            plugin.AddRegion("MapRegion", region => region.Map = new RegionMap { Name = new TranslatedString(Language.English, MapRegionName), Priority = MapRegionPriority });
+            plugin.AddRegion("NamelessMapRegion", region => region.Map = new RegionMap { Name = new TranslatedString(Language.English, ""), Priority = NamelessMapRegionPriority });
+            plugin.AddRegion("RegionWithoutMap", _ => { });
+        }
+
         static void DescribeInterior(TinyPlugin plugin)
         {
+            plugin.Interior.Name = new TranslatedString(Language.English, InteriorName);
             plugin.Interior.Lighting = new CellLighting
             {
                 AmbientColor = TinyPlugin.Rgb(10, 20, 30),

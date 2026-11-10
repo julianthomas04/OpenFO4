@@ -31,7 +31,7 @@ namespace AssetConverter.Pipeline
             new(AssetGroup.Meshes, "meshes", 1, [AssetGroup.Animations, AssetGroup.TexturesDatabase]),
             new(AssetGroup.Collision, "collision", 1, []),
             new(AssetGroup.Animations, "animations", 1, []),
-            new(AssetGroup.TexturesDatabase, "textures-database", 1, []),
+            new(AssetGroup.TexturesDatabase, "textures-database", 2, []),
         ];
 
         private static readonly Dictionary<AssetGroup, Entry> ByGroup = Table.ToDictionary(entry => entry.Group);
