@@ -5,7 +5,7 @@
 
 use super::error::UiLayoutError;
 use super::layout::UiLayout;
-use super::set_text::{SetTextRules, upper_case};
+use super::set_text::SetTextRules;
 use super::{LiteralKey, PlacementKey, TextKey, key_check_fields};
 
 /// The keys of the hint component in one movie.
@@ -125,16 +125,6 @@ impl ButtonHintRules {
         rules.apply(layout, label, self.label_upper_case, false)
     }
 
-    /// A label that is already plain text (a game string, not a translate key) as the hint shows
-    /// it: upper-cased when the component asks for it.
-    pub fn plain_label(&self, label: &str) -> String {
-        if self.label_upper_case {
-            upper_case(label)
-        } else {
-            label.to_owned()
-        }
-    }
-
     /// How far the code moves a hint's label when the key field's box is `key_box_width` wide.
     pub fn label_shift(&self, key_box_width: f32) -> f32 {
         label_shift(
@@ -241,15 +231,5 @@ mod tests {
         };
         assert_eq!(text_rules(true), (true, "OPEN".to_owned()));
         assert_eq!(text_rules(false), (false, "open".to_owned()));
-    }
-
-    #[test]
-    fn a_plain_label_follows_the_same_flag() {
-        let rules = |upper| ButtonHintRules {
-            label_upper_case: upper,
-            ..rules_with(json!({}))
-        };
-        assert_eq!(rules(true).plain_label("Close"), "CLOSE");
-        assert_eq!(rules(false).plain_label("Close"), "Close");
     }
 }

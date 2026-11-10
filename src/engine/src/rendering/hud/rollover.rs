@@ -4,15 +4,17 @@
 //! button hint component. The widget draws neither brackets nor a shaded background: the movie
 //! turns both off for its hint bar, and boot refuses a layout that turns one on.
 
+use std::sync::Arc;
+
 use super::field_text::{ScreenMap, TextExtent, TextItem};
 use super::layout::Layout;
 use super::meters;
-use super::shadow;
+use super::text_face::TextFace;
 use crate::rendering::door_prompt::RolloverPrompt;
 use crate::rendering::ui_colour::UiTint;
 use crate::ui_layout::button_hint::{ButtonHintKeys, ButtonHintRules};
-use crate::ui_layout::scaleform_text::{AutoSize, FieldGeometry, VerticalAlign};
-use crate::ui_layout::set_text::upper_case;
+use crate::ui_layout::scaleform_text::{AutoSize, VerticalAlign};
+use crate::ui_layout::set_text::{SetTextRules, upper_case};
 use crate::ui_layout::{
     LiteralKey, PlacementKey, TextKey, UiLayout, UiLayoutError, key_check_fields,
 };
@@ -86,69 +88,20 @@ fn name_text(name: &str) -> String {
     upper_case(name)
 }
 
-/// A text field's face and place, resolved from the layout.
-#[derive(Debug, Clone, PartialEq)]
-struct Face {
-    family: String,
-    geometry: FieldGeometry,
-    colour: [u8; 3],
-}
-
-impl Face {
-    /// The field `key`, in the font class `font` when the movie's code sets one.
-    fn resolve(
-        layout: &UiLayout,
-        key: &TextKey,
-        font: Option<&str>,
-    ) -> Result<Self, UiLayoutError> {
-        let field = layout.get(key)?;
-        let font = font.unwrap_or(field.font.as_str());
-        let colour = field.color.ok_or_else(|| {
-            UiLayoutError::unresolved(key.movie, key.path, "the text field has no colour")
-        })?;
-        Ok(Self {
-            family: layout.font_family(font)?,
-            geometry: FieldGeometry::of(&field, layout.font_metrics(font)?),
-            colour: [colour[0], colour[1], colour[2]],
-        })
-    }
-
-    fn item(
-        &self,
-        geometry: FieldGeometry,
-        text: String,
-        map: ScreenMap,
-        tint: &UiTint,
-    ) -> TextItem {
-        let [_, _, _, alpha] = tint.text_rgba();
-        let [r, g, b] = tint.apply_to(self.colour);
-        TextItem {
-            text,
-            family: self.family.clone(),
-            geometry,
-            map,
-            shrink: false,
-            colour: [r, g, b, alpha],
-            shadow: Some(shadow::text(geometry.size, map.scale, tint)),
-            wrap_width: None,
-            max_height: None,
-        }
-    }
-}
-
 /// The rollover's values from the layout, resolved once. Positions are stage pixels of the HUD
 /// movie.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RolloverSpec {
     /// The stage point the crosshair sits at.
     centre: (f32, f32),
-    name: Face,
-    key: Face,
-    label: Face,
+    name: TextFace,
+    key: TextFace,
+    label: TextFace,
     /// The registration point of the hint bar.
     bar: (f32, f32),
     key_name: String,
     hint: ButtonHintRules,
+    set_text: SetTextRules,
 }
 
 impl RolloverSpec {
@@ -165,22 +118,23 @@ impl RolloverSpec {
         let hint = KEYS.hint.resolve(layout)?;
         let centre = layout.get(&KEYS.centre)?.world.matrix;
         let bar = layout.get(&KEYS.bar)?.world.matrix;
-        let key_face = Face::resolve(layout, &KEYS.hint.key_field, Some(&hint.key_font))?;
-        let name = Face::resolve(layout, &KEYS.name, None)?;
+        let key_face = TextFace::resolve(layout, &KEYS.hint.key_field, Some(&hint.key_font))?;
+        let name = TextFace::resolve(layout, &KEYS.name, None)?;
         Ok(Self {
             centre: (centre.tx, centre.ty),
-            name: Face {
+            name: TextFace {
                 geometry: name.geometry.with_valign(vertical_align(layout)?),
                 ..name
             },
-            key: Face {
+            key: TextFace {
                 geometry: key_face.geometry.translated(0.0, hint.key_y_shift),
                 ..key_face
             },
-            label: Face::resolve(layout, &KEYS.hint.label, None)?,
+            label: TextFace::resolve(layout, &KEYS.hint.label, None)?,
             bar: (bar.tx, bar.ty),
             key_name: layout.lit_string(&KEYS.key_name, 0)?,
             hint,
+            set_text: meters::SET_TEXT.resolve(layout)?,
         })
     }
 
@@ -194,6 +148,7 @@ impl RolloverSpec {
     fn items(
         &self,
         prompt: &RolloverPrompt,
+        ui: &UiLayout,
         layout: &Layout,
         tint: &UiTint,
         mut measure: impl FnMut(&TextItem) -> TextExtent,
@@ -218,8 +173,8 @@ impl RolloverSpec {
         };
 
         let key_text = self.hint.key_caption(&self.key_name);
-        let label_text = self.hint.plain_label(&prompt.verb);
-        let mut box_width = |face: &Face, text: &str| {
+        let label_text = self.hint.label_text(&self.set_text, ui, &prompt.verb);
+        let mut box_width = |face: &TextFace, text: &str| {
             let item = face.item(face.geometry, text.to_owned(), map, tint);
             let natural = measure(&item).width / scale;
             let sized = face.geometry.auto_sized(AutoSize::Left, natural);
@@ -265,14 +220,16 @@ struct Shown {
 /// The rollover's text items, rebuilt only when the prompt or the framebuffer size changes.
 pub struct RolloverWidget {
     spec: RolloverSpec,
+    ui: Arc<UiLayout>,
     shown: Option<Shown>,
     items: Vec<TextItem>,
 }
 
 impl RolloverWidget {
-    pub fn new(spec: RolloverSpec) -> Self {
+    pub fn new(spec: RolloverSpec, ui: Arc<UiLayout>) -> Self {
         Self {
             spec,
+            ui,
             shown: None,
             items: Vec::new(),
         }
@@ -304,7 +261,7 @@ impl RolloverWidget {
             return false;
         }
         self.items = prompt.map_or_else(Vec::new, |prompt| {
-            self.spec.items(prompt, layout, tint, measure)
+            self.spec.items(prompt, &self.ui, layout, tint, measure)
         });
         self.shown = prompt.map(|prompt| Shown {
             prompt: prompt.clone(),
@@ -318,7 +275,7 @@ impl RolloverWidget {
 mod tests {
     use super::*;
     use crate::ui_layout::test_support::{
-        FIXTURE_REGULAR_CLASS, assert_close, instance, synthesized_layout,
+        FIXTURE_REGULAR_CLASS, assert_close, instance, set_text_parts, synthesized_layout,
     };
     use serde_json::{Value, json};
 
@@ -327,6 +284,23 @@ mod tests {
     const KEY_PATH: &str = "[Shared.AS3.BSButtonHint]/IconHolderInstance/IconAnimInstance/Icon_tf";
     const LABEL_PATH: &str = "[Shared.AS3.BSButtonHint]/textField_tf";
     const CHAR_WIDTH: f32 = 10.0;
+    const FIELD_INSET: f32 = 4.0;
+    const CENTRE_DIVISOR: f32 = 3.0;
+
+    #[derive(Clone, Copy)]
+    struct Variant {
+        brackets: bool,
+        backdrop: bool,
+        upper_case_labels: bool,
+        vertical_align: &'static str,
+    }
+
+    const BASE: Variant = Variant {
+        brackets: false,
+        backdrop: false,
+        upper_case_labels: true,
+        vertical_align: "bottom",
+    };
 
     fn text_character(bounds: [f32; 4], align: &str, wraps: bool) -> Value {
         json!({
@@ -336,7 +310,9 @@ mod tests {
         })
     }
 
-    fn fixture(brackets: bool, upper_case_labels: bool, vertical_align: &str) -> UiLayout {
+    /// The key field sits at y 5 in its clip and the code moves it to y 9, a shift of 4; the key is
+    /// "K" and its suffix ">", and rows are centred by a divisor of 3.
+    fn fixture(variant: Variant) -> Arc<UiLayout> {
         let literal = |values: Value| json!({"values": values});
         let hint = "Shared.AS3.BSButtonHint";
         let bar = "Shared.AS3.BSButtonHintBar.redrawUIComponent#";
@@ -355,26 +331,30 @@ mod tests {
                 LABEL_PATH: instance(12, "text", 2.0, 5.0),
             },
             "literals": {
-                "RolloverWidget.<init>#new BSButtonHintData(1)": literal(json!(["E", "R"])),
+                "RolloverWidget.<init>#new BSButtonHintData(1)": literal(json!(["K", "R"])),
                 "RolloverWidget.<init>#TextFieldEx.setVerticalAlign(1)":
-                    literal(json!([vertical_align])),
-                format!("{setting}bShowBrackets="): literal(json!([brackets])),
-                format!("{setting}bUseShadedBackground="): literal(json!([false])),
+                    literal(json!([variant.vertical_align])),
+                format!("{setting}bShowBrackets="): literal(json!([variant.brackets])),
+                format!("{setting}bUseShadedBackground="): literal(json!([variant.backdrop])),
                 format!("{hint}.GetExpectedFont#$1="): literal(json!(vec![FIXTURE_REGULAR_CLASS; 3])),
-                format!("{hint}.get:PCKey#_buttonHintData.PCKey+"): literal(json!([")"])),
-                format!("{hint}.UpdateIconTextField#$5="): literal(json!([5, 0])),
+                format!("{hint}.get:PCKey#_buttonHintData.PCKey+"): literal(json!([">"])),
+                format!("{hint}.UpdateIconTextField#$5="): literal(json!([9, 0])),
                 format!("{hint}.redrawPrimaryButton#IconHolderInstance.x="): literal(json!([0])),
                 format!("{hint}.redrawTextField#GlobalFunc.SetText(3)"):
-                    literal(json!([upper_case_labels])),
+                    literal(json!([variant.upper_case_labels])),
                 format!("{bar}$6.width+"): literal(json!([20])),
-                format!("{bar}-(ButtonHintBarInternal_mc.width)/"): literal(json!([2])),
+                format!("{bar}-(ButtonHintBarInternal_mc.width)/"):
+                    literal(json!([CENTRE_DIVISOR])),
             },
         });
-        synthesized_layout(&[&KEYS], &[(MOVIE, overlay)])
+        Arc::new(synthesized_layout(
+            &[&KEYS, &meters::SET_TEXT],
+            &[(MOVIE, set_text_parts()), (MOVIE, overlay)],
+        ))
     }
 
-    fn spec() -> RolloverSpec {
-        RolloverSpec::resolve(&fixture(false, true, "bottom")).expect("the fixture resolves")
+    fn spec_of(variant: Variant) -> RolloverSpec {
+        RolloverSpec::resolve(&fixture(variant)).expect("the fixture resolves")
     }
 
     fn prompt(name: &str, verb: &str) -> RolloverPrompt {
@@ -402,24 +382,51 @@ mod tests {
         Layout::for_stage(1280.0, 720.0, fb.0 as f32, fb.1 as f32)
     }
 
+    fn items_of(variant: Variant, fb: (u32, u32), prompt: &RolloverPrompt) -> Vec<TextItem> {
+        spec_of(variant).items(
+            prompt,
+            &fixture(variant),
+            &hud_layout(fb),
+            &TINT,
+            fake_measure,
+        )
+    }
+
     fn items_at(fb: (u32, u32), prompt: &RolloverPrompt) -> Vec<TextItem> {
-        spec().items(prompt, &hud_layout(fb), &TINT, fake_measure)
+        items_of(BASE, fb, prompt)
     }
 
     #[test]
     fn the_spec_reads_the_movie_the_widget_is_authored_in() {
-        let spec = spec();
+        let spec = spec_of(BASE);
         assert_eq!(spec.centre, (640.0, 360.0));
         assert_eq!(spec.bar, (893.0, 388.0));
-        assert_eq!(spec.key_name, "E");
+        assert_eq!(spec.key_name, "K");
         assert_eq!(spec.name.geometry.valign, VerticalAlign::Bottom);
         assert_eq!(spec.key.geometry.valign, VerticalAlign::Top);
     }
 
     #[test]
     fn a_layout_that_draws_brackets_for_the_rollover_is_refused() {
-        let error = RolloverSpec::resolve(&fixture(true, true, "bottom")).unwrap_err();
+        let error = RolloverSpec::resolve(&fixture(Variant {
+            brackets: true,
+            ..BASE
+        }))
+        .unwrap_err();
         assert!(error.to_string().contains("bShowBrackets"), "{error}");
+    }
+
+    #[test]
+    fn a_layout_that_shades_the_rollover_background_is_refused() {
+        let error = RolloverSpec::resolve(&fixture(Variant {
+            backdrop: true,
+            ..BASE
+        }))
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("bUseShadedBackground"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -428,10 +435,17 @@ mod tests {
             ("bottom", VerticalAlign::Bottom),
             ("top", VerticalAlign::Top),
         ] {
-            let spec = RolloverSpec::resolve(&fixture(false, true, literal)).unwrap();
+            let spec = spec_of(Variant {
+                vertical_align: literal,
+                ..BASE
+            });
             assert_eq!(spec.name.geometry.valign, expected);
         }
-        let error = RolloverSpec::resolve(&fixture(false, true, "center")).unwrap_err();
+        let error = RolloverSpec::resolve(&fixture(Variant {
+            vertical_align: "center",
+            ..BASE
+        }))
+        .unwrap_err();
         assert!(error.to_string().contains("center"), "{error}");
     }
 
@@ -450,47 +464,60 @@ mod tests {
     }
 
     #[test]
-    fn the_hint_row_is_centred_on_the_bar() {
+    fn the_hint_row_starts_its_width_over_the_centre_divisor_left_of_the_bar() {
         let items = items_at((1280, 720), &prompt("Door", "Open"));
         let (key, label) = (&items[1], &items[2]);
-        let inset = 4.0;
-        let left = key.geometry.left;
-        let right = label.geometry.left + 4.0 * CHAR_WIDTH + inset;
-        assert_close(f32::midpoint(left, right), 893.0);
+        let key_box = 2.0 * CHAR_WIDTH + FIELD_INSET;
+        let label_box = 4.0 * CHAR_WIDTH + FIELD_INSET;
         assert_close(
-            key.geometry.left + 2.0 * CHAR_WIDTH + inset,
-            label.geometry.left,
+            key.geometry.left,
+            893.0 - (key_box + label_box) / CENTRE_DIVISOR,
         );
-        assert_close(key.geometry.top, 388.0 + 5.0 - 2.0);
+        assert_close(key.geometry.left + key_box, label.geometry.left);
     }
 
     #[test]
-    fn a_longer_verb_moves_the_key_left_to_keep_the_row_centred() {
+    fn the_key_sits_where_the_code_moves_it_and_the_label_where_it_is_authored() {
+        let items = items_at((1280, 720), &prompt("Door", "Open"));
+        let (key, label) = (&items[1], &items[2]);
+        assert_close(key.geometry.top, 388.0 + (5.0 - 2.0) + (9.0 - 5.0));
+        assert_close(label.geometry.top, 388.0 + (5.0 - 2.0));
+    }
+
+    #[test]
+    fn a_longer_verb_moves_the_key_left_by_its_extra_width_over_the_divisor() {
         let short = items_at((1280, 720), &prompt("Door", "Open"));
         let long = items_at((1280, 720), &prompt("Door", "Close it"));
         assert_close(
             short[1].geometry.left - long[1].geometry.left,
-            2.0 * CHAR_WIDTH,
+            4.0 * CHAR_WIDTH / CENTRE_DIVISOR,
         );
     }
 
     #[test]
-    fn name_and_verb_are_upper_case_and_the_key_is_captioned() {
+    fn name_and_verb_are_upper_case_and_the_key_is_captioned_as_the_movie_says() {
         let items = items_at((1280, 720), &prompt("Concord Speakeasy", "Open"));
         let texts: Vec<&str> = items.iter().map(|item| item.text.as_str()).collect();
-        assert_eq!(texts, ["CONCORD SPEAKEASY", "E)", "OPEN"]);
+        assert_eq!(texts, ["CONCORD SPEAKEASY", "K>", "OPEN"]);
     }
 
     #[test]
     fn the_verb_keeps_its_case_when_the_component_does_not_upper_case() {
-        let spec = RolloverSpec::resolve(&fixture(false, false, "bottom")).unwrap();
-        let items = spec.items(
+        let items = items_of(
+            Variant {
+                upper_case_labels: false,
+                ..BASE
+            },
+            (1280, 720),
             &prompt("Door", "Open"),
-            &hud_layout((1280, 720)),
-            &TINT,
-            fake_measure,
         );
         assert_eq!(items[2].text, "Open");
+    }
+
+    #[test]
+    fn a_verb_that_is_a_translate_key_is_translated_like_any_hint_label() {
+        let items = items_at((1280, 720), &prompt("Door", "$FIXTURE_A"));
+        assert_eq!(items[2].text, "Fixture alpha");
     }
 
     fn update(
@@ -501,16 +528,20 @@ mod tests {
         widget.update(prompt, fb, &hud_layout(fb), &TINT, fake_measure)
     }
 
+    fn widget() -> RolloverWidget {
+        RolloverWidget::new(spec_of(BASE), fixture(BASE))
+    }
+
     #[test]
     fn nothing_is_drawn_without_a_prompt() {
-        let mut widget = RolloverWidget::new(spec());
+        let mut widget = widget();
         assert!(!update(&mut widget, None, (1280, 720)));
         assert_eq!(widget.items(), []);
     }
 
     #[test]
     fn items_are_rebuilt_only_when_the_prompt_or_the_framebuffer_changes() {
-        let mut widget = RolloverWidget::new(spec());
+        let mut widget = widget();
         assert!(update(
             &mut widget,
             Some(&prompt("Door", "Open")),
@@ -527,14 +558,20 @@ mod tests {
         assert!(!update(&mut widget, None, (1280, 720)));
     }
 
+    /// The original's measurements for `COMMONWEALTH` and `E) OPEN` at 1600x900 (stage 1280x720
+    /// scaled by 1.25), in stage units from the crosshair. The ink bounds are inside the line boxes
+    /// by the glyphs' side bearings, up to about two stage units a side, and a frame measures to
+    /// about one pixel (0.8 stage units); hence the tolerances below.
     #[test]
     #[ignore = "needs OPENFO4_INSTALL_DIR with the converted interface and fonts"]
     fn the_installed_movie_resolves_the_rollover_and_lays_it_out_as_the_original_shows_it() {
         use crate::assets::layout::{ASSETS_DIR, fonts_dir};
-        use crate::rendering::hud::field_text::extent_of;
+        use crate::rendering::hud::field_text::{baselines_of, extent_of};
         use crate::rendering::ui_fonts::UiFonts;
 
-        let layout = super::super::real_install::installed_layout();
+        const BEARINGS: f32 = 3.5;
+        const MEASURING: f32 = 1.0;
+        let layout = Arc::new(super::super::real_install::installed_layout());
         layout.validate(&[&KEYS]).unwrap();
         let spec = RolloverSpec::resolve(&layout).unwrap();
         let install = std::env::var(crate::assets::INSTALL_DIR_VAR).expect("OPENFO4_INSTALL_DIR");
@@ -543,9 +580,13 @@ mod tests {
         let hud = hud_layout((1600, 900));
         let scale = hud.scale();
         let (centre_x, centre_y) = hud.center();
-        let items = spec.items(&prompt("Commonwealth", "Open"), &hud, &TINT, |item| {
-            extent_of(&mut font_system, item)
-        });
+        let items = spec.items(
+            &prompt("Commonwealth", "Open"),
+            &layout,
+            &hud,
+            &TINT,
+            |item| extent_of(&mut font_system, item),
+        );
         let boxes: Vec<[f32; 4]> = items
             .iter()
             .map(|item| {
@@ -558,17 +599,40 @@ mod tests {
                 ]
             })
             .collect();
-        println!("name, key, label line boxes (x0, x1, y0, y1): {boxes:?}");
-        let name = &items[0];
-        let name_middle = (name.map.point(name.geometry.anchor_x(), 0.0).0 - centre_x) / scale;
+        let baselines: Vec<f32> = items
+            .iter()
+            .map(|item| (baselines_of(&mut font_system, item)[0] - centre_y) / scale)
+            .collect();
+        println!("line boxes (x0, x1, y0, y1) {boxes:?} baselines {baselines:?}");
+
+        let within_ink = |x0: f32, x1: f32, ink: [f32; 2]| {
+            assert!(
+                x0 <= ink[0] + MEASURING && x0 >= ink[0] - BEARINGS,
+                "left {x0} against ink {ink:?}"
+            );
+            assert!(
+                x1 >= ink[1] - MEASURING && x1 <= ink[1] + BEARINGS,
+                "right {x1} against ink {ink:?}"
+            );
+        };
+        within_ink(boxes[0][0], boxes[0][1], [186.4, 320.8]);
+        within_ink(boxes[1][0], boxes[2][1], [225.6, 280.8]);
         assert!(
-            (name_middle - 253.4).abs() < 1.5,
-            "name centre {name_middle}"
+            (baselines[0] - 7.0).abs() < MEASURING,
+            "the name's baseline {} (capitals span -7.2..7.2)",
+            baselines[0]
         );
-        let row = [boxes[1][0], boxes[2][1]];
-        assert!(
-            (f32::midpoint(row[0], row[1]) - 253.2).abs() < 2.0,
-            "hint row {row:?}"
-        );
+        let (band_top, band_bottom) = (36.0, 54.4);
+        for (index, box_) in boxes.iter().enumerate().skip(1) {
+            assert!(
+                box_[2] <= band_top + MEASURING && box_[3] >= band_bottom - MEASURING,
+                "hint line box {box_:?} against ink {band_top}..{band_bottom}"
+            );
+            assert!(
+                baselines[index] > band_top && baselines[index] < band_bottom,
+                "baseline {} of hint text {index}",
+                baselines[index]
+            );
+        }
     }
 }

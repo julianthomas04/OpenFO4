@@ -19,6 +19,9 @@ pub(crate) mod quad;
 mod rollover;
 pub(crate) mod shadow;
 pub(crate) mod shape;
+mod text_face;
+
+use std::sync::Arc;
 
 use crate::rendering::door_prompt::RolloverPrompt;
 use crate::rendering::gpu_profiler::{GpuPass, GpuProfiler, SpanPart};
@@ -114,12 +117,12 @@ impl HudRenderer {
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
         fonts: &UiFonts,
-        layout: &UiLayout,
+        layout: &Arc<UiLayout>,
         tint: UiTint,
     ) -> anyhow::Result<Self> {
         let spec = HudSpec::resolve(layout)?;
         for meter in [&spec.hp, &spec.ap] {
-            fonts.require_family(&meter.label.family)?;
+            fonts.require_family(&meter.label.face.family)?;
         }
         for family in spec.rollover.families() {
             fonts.require_family(family)?;
@@ -139,7 +142,7 @@ impl HudRenderer {
             ap: spec.ap,
             tint,
             crosshair: CrosshairWidget::new(spec.crosshair),
-            rollover: RolloverWidget::new(spec.rollover),
+            rollover: RolloverWidget::new(spec.rollover, Arc::clone(layout)),
             text,
             labels: Vec::new(),
             labels_for: (0, 0),
@@ -358,7 +361,7 @@ pub(crate) mod real_install {
             );
             println!(
                 "fb {fb:?} size {TEXT_SIZE} text {text:?} hp bracket+bar (x,y,w,h) {meter:?} label {:?}",
-                spec.hp.label.geometry
+                spec.hp.label.face.geometry
             );
             let apart = text.x + text.w <= meter.0
                 || meter.0 + meter.2 <= text.x

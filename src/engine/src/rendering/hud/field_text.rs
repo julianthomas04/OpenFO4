@@ -58,8 +58,9 @@ pub struct TextItem {
     pub max_height: Option<f32>,
 }
 
-/// The framebuffer rectangle a text item's lines cover: the left edge of its text area and the
-/// top of its first line, the width of its longest line and the height of all its lines.
+/// The framebuffer rectangle a text item's lines cover: the left edge of its longest line (so
+/// `left + width` is that line's right edge), the top of its first line, the width of its longest
+/// line and the height of all its lines.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextExtent {
     pub left: f32,
@@ -306,21 +307,29 @@ fn shape(font_system: &mut FontSystem, buffer: &mut Buffer, item: &TextItem) -> 
 /// The rectangle the lines of `item` cover once shaped.
 pub(super) fn extent_of(font_system: &mut FontSystem, item: &TextItem) -> TextExtent {
     let mut buffer = Buffer::new(font_system, Metrics::new(1.0, 1.0));
-    let (left, top) = shape(font_system, &mut buffer, item);
-    let (width, height) = buffer
-        .layout_runs()
-        .fold((0.0_f32, 0.0_f32), |(width, height), run| {
-            (
-                width.max(run.line_w),
-                height.max(run.line_top + run.line_height),
-            )
-        });
+    let (buffer_left, top) = shape(font_system, &mut buffer, item);
+    let mut longest = (0.0_f32, 0.0_f32);
+    let mut height = 0.0_f32;
+    for run in buffer.layout_runs() {
+        if run.line_w > longest.0 {
+            longest = (run.line_w, run.glyphs.first().map_or(0.0, |glyph| glyph.x));
+        }
+        height = height.max(run.line_top + run.line_height);
+    }
     TextExtent {
-        left,
+        left: buffer_left + longest.1,
         top,
-        width,
+        width: longest.0,
         height,
     }
+}
+
+/// The framebuffer y of each line's baseline once `item` is shaped.
+#[cfg(test)]
+pub(super) fn baselines_of(font_system: &mut FontSystem, item: &TextItem) -> Vec<f32> {
+    let mut buffer = Buffer::new(font_system, Metrics::new(1.0, 1.0));
+    let (_, top) = shape(font_system, &mut buffer, item);
+    buffer.layout_runs().map(|run| top + run.line_y).collect()
 }
 
 #[cfg(test)]
@@ -407,6 +416,30 @@ mod tests {
             ((wrapped.height / line).round() * line - wrapped.height).abs() < 0.01,
             "whole lines: {wrapped:?}"
         );
+    }
+
+    #[test]
+    fn the_extent_of_centred_wrapped_text_spans_its_longest_line() {
+        let item = centred(item(Some(COLUMN)));
+        let extent = extent(&item);
+        let (_, spans) = laid_out(&item);
+        let longest = spans
+            .iter()
+            .max_by(|a, b| (a.1 - a.0).total_cmp(&(b.1 - b.0)))
+            .unwrap();
+        assert!(
+            (extent.left - longest.0).abs() < 0.01,
+            "{extent:?} {spans:?}"
+        );
+        assert!((extent.left + extent.width - longest.1).abs() < 0.01);
+    }
+
+    #[test]
+    fn the_baselines_are_one_line_pitch_apart() {
+        let item = bottom_anchored("First\nSecond", 100.0);
+        let baselines = baselines_of(&mut fonts::ui_fonts().font_system(), &item);
+        assert_eq!(baselines.len(), 2);
+        assert!((baselines[1] - baselines[0] - item.geometry.line_pitch()).abs() < 0.01);
     }
 
     #[test]
