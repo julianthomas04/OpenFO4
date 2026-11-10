@@ -68,6 +68,32 @@ pub fn rotation_z_from_compass_heading_degrees(degrees: f32) -> f32 {
     degrees.to_radians()
 }
 
+/// Ray casting with the boundary counted as inside.
+pub fn polygon_contains(polygon: &[(f32, f32)], point: (f32, f32)) -> bool {
+    let (px, py) = (f64::from(point.0), f64::from(point.1));
+    let mut inside = false;
+    for (index, &(ax, ay)) in polygon.iter().enumerate() {
+        let (bx, by) = polygon[(index + 1) % polygon.len()];
+        let (ax, ay, bx, by) = (f64::from(ax), f64::from(ay), f64::from(bx), f64::from(by));
+        if on_segment((ax, ay), (bx, by), (px, py)) {
+            return true;
+        }
+        if (ay > py) != (by > py) && px < (bx - ax) * (py - ay) / (by - ay) + ax {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+fn on_segment(a: (f64, f64), b: (f64, f64), p: (f64, f64)) -> bool {
+    let cross = (b.0 - a.0) * (p.1 - a.1) - (b.1 - a.1) * (p.0 - a.0);
+    cross == 0.0
+        && p.0 >= a.0.min(b.0)
+        && p.0 <= a.0.max(b.0)
+        && p.1 >= a.1.min(b.1)
+        && p.1 <= a.1.max(b.1)
+}
+
 #[cfg(test)]
 #[allow(
     clippy::float_cmp,
@@ -200,6 +226,41 @@ mod tests {
             let yaw = yaw_from_rotation_z(rotation_z_from_compass_heading_degrees(degrees));
             assert_eq!(compass_heading_degrees(yaw), degrees);
         }
+    }
+
+    const SQUARE: [(f32, f32); 4] = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)];
+
+    #[test]
+    fn polygon_inside_outside_and_edges() {
+        assert!(polygon_contains(&SQUARE, (50.0, 50.0)));
+        assert!(!polygon_contains(&SQUARE, (150.0, 50.0)));
+        assert!(!polygon_contains(&SQUARE, (50.0, -0.5)));
+        assert!(polygon_contains(&SQUARE, (100.0, 50.0)));
+        assert!(polygon_contains(&SQUARE, (50.0, 0.0)));
+        assert!(polygon_contains(&SQUARE, (0.0, 0.0)));
+    }
+
+    #[test]
+    fn concave_polygon_excludes_its_notch() {
+        let u_shape = [
+            (0.0, 0.0),
+            (30.0, 0.0),
+            (30.0, 70.0),
+            (70.0, 70.0),
+            (70.0, 0.0),
+            (100.0, 0.0),
+            (100.0, 100.0),
+            (0.0, 100.0),
+        ];
+        assert!(!polygon_contains(&u_shape, (50.0, 30.0)));
+        assert!(polygon_contains(&u_shape, (50.0, 85.0)));
+        assert!(polygon_contains(&u_shape, (10.0, 30.0)));
+        assert!(polygon_contains(&u_shape, (90.0, 30.0)));
+    }
+
+    #[test]
+    fn an_empty_polygon_contains_nothing() {
+        assert!(!polygon_contains(&[], (0.0, 0.0)));
     }
 
     #[test]

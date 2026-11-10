@@ -15,6 +15,7 @@ pub mod debug_ui;
 pub mod debug_view;
 pub mod device;
 pub mod device_loss;
+mod door_prompt;
 pub mod effects;
 pub mod egui_pass;
 pub mod fatal_runtime_error;
