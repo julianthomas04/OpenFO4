@@ -2,7 +2,7 @@
 //! maximum extent and a text label. Every geometry value comes from the converted `HUDMenu`
 //! movie; HP fills from the left at the bottom-left, AP from the right at the bottom-right.
 
-use super::field_text::{ScreenMap, Shadow, TextItem};
+use super::field_text::{ScreenMap, TextItem};
 use super::layout::{Anchor, Layout};
 use super::quad::{PxRect, QuadBuilder};
 use super::shadow;
@@ -194,10 +194,7 @@ pub fn label_item(layout: &Layout, spec: &MeterSpec, bar: PxRect, tint: &UiTint)
         },
         shrink: false,
         colour: [r, g, b, alpha],
-        shadow: Some(Shadow {
-            offset: label.geometry.size * scale * shadow::TEXT_OFFSET_EM,
-            colour: [0, 0, 0, tint.shadow_alpha(shadow::TEXT_ALPHA)],
-        }),
+        shadow: Some(shadow::text(label.geometry.size, scale, tint)),
         wrap_width: None,
         max_height: None,
     }

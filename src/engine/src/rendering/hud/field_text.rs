@@ -6,13 +6,14 @@
 
 use std::cell::RefCell;
 
+use glyphon::cosmic_text::Align as LineAlign;
 use glyphon::{
     Attrs, Buffer, Cache, Color, ColorMode, Family, FontSystem, Metrics, Resolution, Shaping,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 
 use crate::rendering::ui_fonts::UiFonts;
-use crate::ui_layout::scaleform_text::{FieldGeometry, fit_size};
+use crate::ui_layout::scaleform_text::{FieldGeometry, VerticalAlign, fit_size};
 use crate::ui_layout::values::Align;
 
 /// Stage pixels to framebuffer pixels: `screen = origin + stage * scale`.
@@ -50,14 +51,15 @@ pub struct TextItem {
     pub shrink: bool,
     pub colour: [u8; 4],
     pub shadow: Option<Shadow>,
-    /// The width in framebuffer pixels the text wraps at, or `None` for a single line.
+    /// The width in framebuffer pixels the text wraps at, or `None` for a single line. Centred
+    /// text is centred line by line within it.
     pub wrap_width: Option<f32>,
     /// The height in framebuffer pixels below which no line is drawn, or `None` for no limit.
     pub max_height: Option<f32>,
 }
 
-/// The framebuffer rectangle a text item's lines cover: the left edge and top of its first
-/// line, the width of its longest line and the height of all its lines.
+/// The framebuffer rectangle a text item's lines cover: the left edge of its text area and the
+/// top of its first line, the width of its longest line and the height of all its lines.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextExtent {
     pub left: f32,
@@ -217,14 +219,15 @@ impl FieldText {
     }
 }
 
-/// The width of the single line in `buffer` after shaping `item.text` at `size` stage pixels,
-/// and the baseline's offset below the buffer's top, both in framebuffer pixels.
+/// The width of the first line in `buffer` after shaping `item.text` at `size` stage pixels,
+/// the first baseline's offset below the buffer's top (both in framebuffer pixels) and the number
+/// of lines.
 fn shape_at(
     font_system: &mut FontSystem,
     buffer: &mut Buffer,
     item: &TextItem,
     geometry: &FieldGeometry,
-) -> (f32, f32) {
+) -> (f32, f32, usize) {
     let scale = item.map.scale;
     let size = geometry.size * scale;
     buffer.set_metrics(Metrics::new(size, geometry.line_pitch() * scale));
@@ -234,12 +237,39 @@ fn shape_at(
     let attrs = Attrs::new()
         .family(Family::Name(&item.family))
         .letter_spacing(geometry.letter_spacing / geometry.size.max(f32::MIN_POSITIVE));
-    buffer.set_text(&item.text, &attrs, Shaping::Advanced, None);
+    buffer.set_text(
+        &item.text,
+        &attrs,
+        Shaping::Advanced,
+        line_alignment(item, geometry),
+    );
     buffer.shape_until_scroll(font_system, false);
-    buffer
+    let first = buffer
         .layout_runs()
         .next()
-        .map_or((0.0, 0.0), |run| (run.line_w, run.line_y))
+        .map_or((0.0, 0.0), |run| (run.line_w, run.line_y));
+    (first.0, first.1, buffer.layout_runs().count())
+}
+
+/// Wrapped centred text is centred line by line inside the wrap width; every other text is placed
+/// by its first line alone.
+fn is_centred_block(item: &TextItem, geometry: &FieldGeometry) -> bool {
+    item.wrap_width.is_some() && geometry.align == Align::Center
+}
+
+fn line_alignment(item: &TextItem, geometry: &FieldGeometry) -> Option<LineAlign> {
+    is_centred_block(item, geometry).then_some(LineAlign::Center)
+}
+
+/// How far down, in stage pixels, a text block of `lines` lines sits below the top of the field's
+/// content box. Text taller than the field keeps its top at the field's top.
+fn block_offset(geometry: &FieldGeometry, lines: usize) -> f32 {
+    match geometry.valign {
+        VerticalAlign::Top => 0.0,
+        VerticalAlign::Bottom => {
+            (geometry.content_height() - lines as f32 * geometry.line_pitch()).max(0.0)
+        }
+    }
 }
 
 /// Shapes `item` into `buffer` at its final size and returns the framebuffer position of the
@@ -257,19 +287,24 @@ fn shape(font_system: &mut FontSystem, buffer: &mut Buffer, item: &TextItem) -> 
         });
         geometry = geometry.with_size(size);
     }
-    let (width, baseline) = shape_at(font_system, buffer, item, &geometry);
+    let (width, baseline, lines) = shape_at(font_system, buffer, item, &geometry);
     let (anchor_x, _) = item.map.point(geometry.anchor_x(), 0.0);
-    let (_, baseline_y) = item.map.point(0.0, geometry.first_baseline());
+    let first_baseline = geometry.first_baseline() + block_offset(&geometry, lines);
+    let (_, baseline_y) = item.map.point(0.0, first_baseline);
+    let text_width = match item.wrap_width {
+        Some(wrap_width) if is_centred_block(item, &geometry) => wrap_width,
+        _ => width,
+    };
     let left = match geometry.align {
         Align::Left | Align::Justify => anchor_x,
-        Align::Center => anchor_x - width / 2.0,
+        Align::Center => anchor_x - text_width / 2.0,
         Align::Right => anchor_x - width,
     };
     (left, baseline_y - baseline)
 }
 
 /// The rectangle the lines of `item` cover once shaped.
-fn extent_of(font_system: &mut FontSystem, item: &TextItem) -> TextExtent {
+pub(super) fn extent_of(font_system: &mut FontSystem, item: &TextItem) -> TextExtent {
     let mut buffer = Buffer::new(font_system, Metrics::new(1.0, 1.0));
     let (left, top) = shape(font_system, &mut buffer, item);
     let (width, height) = buffer
@@ -384,6 +419,96 @@ mod tests {
             extent.top < baseline && baseline < extent.top + extent.height,
             "the first baseline {baseline} lies in the first line of {extent:?}"
         );
+    }
+
+    fn laid_out(item: &TextItem) -> (Vec<f32>, Vec<(f32, f32)>) {
+        let mut font_system = fonts::ui_fonts().font_system();
+        let mut buffer = Buffer::new(&mut font_system, Metrics::new(1.0, 1.0));
+        let (left, top) = shape(&mut font_system, &mut buffer, item);
+        let runs: Vec<_> = buffer.layout_runs().collect();
+        let baselines = runs.iter().map(|run| top + run.line_y).collect();
+        let spans = runs
+            .iter()
+            .map(|run| {
+                let first = run.glyphs.first().map_or(0.0, |glyph| glyph.x);
+                (left + first, left + first + run.line_w)
+            })
+            .collect();
+        (baselines, spans)
+    }
+
+    fn centred(mut item: TextItem) -> TextItem {
+        item.geometry.align = Align::Center;
+        item
+    }
+
+    #[test]
+    fn wrapped_centred_text_is_centred_line_by_line_in_its_width() {
+        let item = centred(item(Some(COLUMN)));
+        let (_, spans) = laid_out(&item);
+        assert!(spans.len() > 1, "{spans:?}");
+        let widths: Vec<f32> = spans.iter().map(|(left, right)| right - left).collect();
+        assert!(
+            widths.iter().any(|width| (width - widths[0]).abs() > 1.0),
+            "lines of different widths: {widths:?}"
+        );
+        for (left, right) in spans {
+            let middle = f32::midpoint(left, right);
+            assert!(
+                (middle - item.geometry.anchor_x()).abs() < 0.5,
+                "{middle} is not the field's middle {}",
+                item.geometry.anchor_x()
+            );
+        }
+    }
+
+    fn bottom_anchored(text: &str, height: f32) -> TextItem {
+        let mut item = item(Some(COLUMN));
+        item.text = text.to_owned();
+        item.geometry = FieldGeometry::content_box(
+            (0.0, 0.0),
+            COLUMN,
+            height,
+            16.0,
+            Align::Left,
+            item.geometry.metrics,
+        )
+        .with_valign(VerticalAlign::Bottom);
+        item
+    }
+
+    fn expected_first_baseline(item: &TextItem, lines: usize) -> f32 {
+        let geometry = &item.geometry;
+        geometry.line_top() + geometry.content_height() - lines as f32 * geometry.line_pitch()
+            + geometry.metrics.baseline_offset(geometry.size)
+    }
+
+    #[test]
+    fn text_anchored_at_the_bottom_ends_one_line_pitch_per_line_above_the_field_bottom() {
+        for (text, lines) in [("Short", 1_usize), ("First\nSecond", 2)] {
+            let item = bottom_anchored(text, 100.0);
+            let (baselines, _) = laid_out(&item);
+            assert_eq!(baselines.len(), lines);
+            let first = expected_first_baseline(&item, lines);
+            for (index, baseline) in baselines.iter().enumerate() {
+                let expected = first + index as f32 * item.geometry.line_pitch();
+                assert!((baseline - expected).abs() < 0.01, "{baselines:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn text_taller_than_its_bottom_anchored_field_keeps_its_top_at_the_field_top() {
+        let item = bottom_anchored("One\nTwo\nThree", 20.0);
+        let (baselines, _) = laid_out(&item);
+        assert!((baselines[0] - item.geometry.first_baseline()).abs() < 0.01);
+    }
+
+    #[test]
+    fn top_anchored_text_starts_at_the_first_baseline_of_the_field() {
+        let item = item(Some(COLUMN));
+        let (baselines, _) = laid_out(&item);
+        assert!((baselines[0] - item.geometry.first_baseline()).abs() < 0.01);
     }
 
     #[test]

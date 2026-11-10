@@ -3985,6 +3985,7 @@ impl State {
         self.hud.update(
             &hud_snapshot,
             hud_activate,
+            None,
             world_dt,
             self.config.width,
             self.config.height,
