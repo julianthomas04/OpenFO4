@@ -6623,6 +6623,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn door_bases_are_doors_with_their_name_unless_it_is_blank_and_other_bases_are_not() {
+        let db = crate::assets::db::test_support::database_with(
+            "INSERT INTO doors (form_key, name, model_path, flags) VALUES
+                 ('DOOR_NAMED', 'Door', 'door.nif', '0'),
+                 ('DOOR_BLANK', '  ', 'door.nif', '0'),
+                 ('DOOR_NULL', NULL, 'door.nif', '0');
+             INSERT INTO containers (form_key, name, model_path) VALUES
+                 ('CHEST', 'Chest', 'chest.nif');",
+        );
+
+        let (lookup, _) = build_base_object_lookup(&db, &[]);
+
+        let named = ActivatorKind::Door {
+            name: Some(Arc::from("Door")),
+        };
+        let nameless = ActivatorKind::Door { name: None };
+        assert_eq!(lookup["DOOR_NAMED"].kind, named);
+        assert_eq!(lookup["DOOR_BLANK"].kind, nameless);
+        assert_eq!(lookup["DOOR_NULL"].kind, nameless);
+        assert_eq!(lookup["CHEST"].kind, ActivatorKind::Other);
+    }
+
+    #[test]
     fn the_bake_cache_is_keyed_by_the_players_layer_table() {
         use crate::assets::db::collision_layers::fixtures::dropping_layer;
         let install = tempfile::tempdir().unwrap();

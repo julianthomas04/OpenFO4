@@ -8,6 +8,7 @@ use super::{
     State, WorldspaceOption, material_buoyancy_table, walk_in::WalkInTriggers, world_streamer,
 };
 use crate::assets::db::DbClient;
+use crate::assets::db::teleports::TeleportRecord;
 use crate::game_flow::{SpawnLocation, StartMode, spawn_locations::resolve_spawn_locations};
 use crate::startup::StartupError;
 
@@ -33,17 +34,28 @@ impl StartupDbReads {
             }
             StartMode::Direct => Vec::new(),
         };
-        let door_prompts = DoorPrompts::load(db_path)?;
+        let db = DbClient::new(db_path).map_err(StartupError::Database)?;
+        let teleport_rows = Self::load_teleport_rows(&db);
+        let door_prompts = DoorPrompts::load(&db, &teleport_rows)?;
         Ok(Self {
             spawn_locations,
             worldspaces: Self::load_worldspaces(db_path),
             interior_lighting: InteriorLightingCatalog::load_or_report(db_path),
             interiors: State::build_interiors(db_path),
-            teleports: State::build_teleports(db_path),
+            teleports: State::build_teleports(&db, &teleport_rows),
             door_prompts,
             walk_in: State::build_walk_in(db_path),
             player_movement: Self::load_player_movement(db_path),
             buoyancy_table: material_buoyancy_table(db_path),
+        })
+    }
+
+    /// The load door rows both the teleport map and the door prompts are built from. A failed read
+    /// is reported once and leaves no load doors.
+    fn load_teleport_rows(db: &DbClient) -> Vec<TeleportRecord> {
+        db.get_placed_teleports().unwrap_or_else(|error| {
+            tracing::warn!("load doors not read ({error:#}); no load door can be used");
+            Vec::new()
         })
     }
 
@@ -92,5 +104,23 @@ impl StartupDbReads {
             movement.sprint_speed
         );
         movement
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unopenable_database_stops_startup_in_every_start_mode() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("missing.db");
+        for mode in [StartMode::Menu, StartMode::Direct] {
+            let result = StartupDbReads::load(missing.to_str().unwrap(), mode);
+            assert!(
+                matches!(result.err(), Some(StartupError::Database(_))),
+                "{mode:?}"
+            );
+        }
     }
 }

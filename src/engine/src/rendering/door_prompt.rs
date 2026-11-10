@@ -194,13 +194,11 @@ impl DoorPrompts {
         Self { labels, verbs }
     }
 
-    /// A missing or unusable verb setting stops startup. The map regions and the teleport rows
-    /// degrade to none when unreadable, reported: doors then show their worldspace's name or
-    /// no name. A database from an older installer lacks cell names and region map entries,
+    /// A missing or unusable verb setting stops startup. Unreadable map regions degrade to none,
+    /// reported: exterior doors then show their worldspace's name. A database from an older installer lacks cell names and region map entries,
     /// which the schema reports once.
-    pub(super) fn load(db_path: &str) -> Result<Self, StartupError> {
-        let db = DbClient::new(db_path).map_err(StartupError::Database)?;
-        let verbs = Self::load_verbs(&db).map_err(StartupError::DoorPromptVerbs)?;
+    pub(super) fn load(db: &DbClient, teleports: &[TeleportRecord]) -> Result<Self, StartupError> {
+        let verbs = Self::load_verbs(db).map_err(StartupError::DoorPromptVerbs)?;
         let regions = match db.get_map_regions() {
             Ok(regions) => MapRegionIndex::new(regions),
             Err(error) => {
@@ -208,13 +206,7 @@ impl DoorPrompts {
                 MapRegionIndex::default()
             }
         };
-        let teleports = db.get_placed_teleports().unwrap_or_else(|error| {
-            tracing::warn!(
-                "door prompt teleports not loaded ({error:#}); no load door shows a name"
-            );
-            Vec::new()
-        });
-        let LoadDoorLabels { labels, rejected } = load_door_labels(&teleports, &regions);
+        let LoadDoorLabels { labels, rejected } = load_door_labels(teleports, &regions);
         if !rejected.is_empty() {
             let refs: Vec<String> = rejected.iter().map(ToString::to_string).collect();
             tracing::warn!(
@@ -689,6 +681,107 @@ mod tests {
             }
             assert_eq!(by_name.len(), 15, "{by_name:?}");
             assert_eq!(by_name.values().sum::<usize>(), 218);
+        }
+    }
+
+    mod loading {
+        use super::*;
+        use crate::assets::db::test_support::database_with;
+
+        const VERBS: &str = "INSERT INTO game_settings (form_key, editor_id, value_type, value_string)
+             VALUES ('1:T.esm', 'sOpen', 'string', 'Open'), ('2:T.esm', 'sClose', 'string', 'Close');";
+
+        const WORLD: &str = "INSERT INTO worldspaces (form_key, name) VALUES ('WS', 'Commonwealth');
+             INSERT INTO cells (form_key, is_interior) VALUES ('INT', 1);
+             INSERT INTO cells (form_key, worldspace, grid_x, grid_y) VALUES ('EXT', 'WS', 0, 0);
+             INSERT INTO placed_objects (form_key, cell_form_key, base_object, object_type,
+                 position_x, position_y, position_z, rotation_x, rotation_y, rotation_z)
+             VALUES ('dest_int', 'INT', 'b', 'PlacedObject', 0, 0, 0, 0, 0, 0),
+                    ('dest_ext', 'EXT', 'b', 'PlacedObject', 0, 0, 0, 0, 0, 0);
+             INSERT INTO placed_teleports (source_ref, destination_ref, dest_position_x,
+                 dest_position_y, dest_position_z, dest_rotation_x, dest_rotation_y, dest_rotation_z)
+             VALUES ('door_in', 'dest_int', 1, 2, 3, 0, 0, 0),
+                    ('door_out', 'dest_ext', 1, 2, 3, 0, 0, 0);";
+
+        fn load(statements: &str) -> Result<DoorPrompts, StartupError> {
+            let db = database_with(statements);
+            let teleports = db.get_placed_teleports().unwrap();
+            DoorPrompts::load(&db, &teleports)
+        }
+
+        fn verb_failure(statements: &str) -> String {
+            match load(statements).err() {
+                Some(error @ StartupError::DoorPromptVerbs(_)) => error.to_string(),
+                other => panic!("expected the verb startup error, got {other:?}"),
+            }
+        }
+
+        fn shown(prompts: &DoorPrompts, source_ref: &str) -> Option<(String, String)> {
+            prompts
+                .prompt_for(Some(source_ref), |_| true, |_| None)
+                .map(|prompt| (prompt.name.to_string(), prompt.verb.to_string()))
+        }
+
+        #[test]
+        fn both_verbs_present_the_doors_are_labelled_and_say_open() {
+            let prompts = load(&format!(
+                "{VERBS}{WORLD} UPDATE cells SET name = 'Museum of Freedom' WHERE form_key = 'INT';"
+            ))
+            .unwrap();
+            assert_eq!(
+                shown(&prompts, "door_in"),
+                Some(("Museum of Freedom".to_string(), "Open".to_string()))
+            );
+            assert_eq!(
+                shown(&prompts, "door_out"),
+                Some(("Commonwealth".to_string(), "Open".to_string()))
+            );
+        }
+
+        #[test]
+        fn a_database_from_an_older_installer_loads_with_worldspace_names_only() {
+            let prompts = load(&format!(
+                "{VERBS}{WORLD}
+                 ALTER TABLE cells DROP COLUMN name;
+                 ALTER TABLE regions DROP COLUMN map_priority;"
+            ))
+            .unwrap();
+            assert_eq!(shown(&prompts, "door_in"), None);
+            assert_eq!(
+                shown(&prompts, "door_out"),
+                Some(("Commonwealth".to_string(), "Open".to_string()))
+            );
+        }
+
+        #[test]
+        fn a_missing_open_setting_stops_startup_naming_it() {
+            let message = verb_failure(
+                "INSERT INTO game_settings (form_key, editor_id, value_type, value_string)
+                 VALUES ('2:T.esm', 'sClose', 'string', 'Close');",
+            );
+            assert!(message.contains("sOpen"), "{message}");
+        }
+
+        #[test]
+        fn a_close_setting_of_the_wrong_type_stops_startup_naming_it() {
+            let message = verb_failure(
+                "INSERT INTO game_settings (form_key, editor_id, value_type, value_string)
+                 VALUES ('1:T.esm', 'sOpen', 'string', 'Open');
+                 INSERT INTO game_settings (form_key, editor_id, value_type, value_float)
+                 VALUES ('2:T.esm', 'sClose', 'float', 1.5);",
+            );
+            assert!(message.contains("sClose"), "{message}");
+        }
+
+        #[test]
+        fn a_verb_without_a_value_or_blank_stops_startup_naming_it() {
+            for value in ["NULL", "''", "'  '"] {
+                let message = verb_failure(&format!(
+                    "INSERT INTO game_settings (form_key, editor_id, value_type, value_string)
+                     VALUES ('1:T.esm', 'sOpen', 'string', {value}), ('2:T.esm', 'sClose', 'string', 'Close');"
+                ));
+                assert!(message.contains("sOpen"), "{value}: {message}");
+            }
         }
     }
 

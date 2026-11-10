@@ -34,6 +34,8 @@ pub mod special_attributes;
 pub mod static_collections;
 pub mod statics;
 pub mod teleports;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod trees;
 pub mod water_placement;
 pub mod waters;

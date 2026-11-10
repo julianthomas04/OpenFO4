@@ -877,25 +877,13 @@ impl State {
 
     /// Build the load-door activation map: every teleport door resolved to its
     /// destination (interior cell or exterior worldspace) with the arrival
-    /// position, grid and facing precomputed in engine space. DB open/query
-    /// failures degrade to an empty map — doors are then simply non-interactible
-    /// and the engine still runs.
-    fn build_teleports(db_path: &str) -> std::collections::HashMap<String, ResolvedTarget> {
-        let db = match crate::assets::db::DbClient::new(db_path) {
-            Ok(db) => db,
-            Err(e) => {
-                tracing::warn!("teleport map DB open failed: {e}");
-                return std::collections::HashMap::new();
-            }
-        };
-        let records = match db.get_placed_teleports() {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!("teleport map query failed: {e}");
-                return std::collections::HashMap::new();
-            }
-        };
-
+    /// position, grid and facing precomputed in engine space. The rows are read
+    /// once at startup (no rows when that failed, reported there): doors are then
+    /// simply non-interactible and the engine still runs.
+    fn build_teleports(
+        db: &crate::assets::db::DbClient,
+        records: &[crate::assets::db::teleports::TeleportRecord],
+    ) -> std::collections::HashMap<String, ResolvedTarget> {
         let mut map = std::collections::HashMap::with_capacity(records.len());
         let mut invalid_pos = 0usize;
         for r in records {
@@ -917,11 +905,11 @@ impl State {
             let grid = WorldStreamer::camera_to_grid(start_pos);
             let no_load_screen = r.no_load_screen();
             map.insert(
-                r.source_ref,
+                r.source_ref.clone(),
                 ResolvedTarget {
                     is_interior: r.is_interior,
-                    worldspace: r.worldspace.unwrap_or_default(),
-                    cell_form_key: r.dest_cell,
+                    worldspace: r.worldspace.clone().unwrap_or_default(),
+                    cell_form_key: r.dest_cell.clone(),
                     start_pos,
                     grid,
                     yaw: Some(crate::bethesda_space::yaw_from_rotation_z(
