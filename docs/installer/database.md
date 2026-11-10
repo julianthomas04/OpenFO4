@@ -29,6 +29,9 @@ layers it collides with (`collides_with`, a JSON array of form keys in the recor
 `doors.trigger_bounds` holds the same JSON for the volume that triggers an automatic door, measured from the editor-marker geometry of its model
 (whole or fractional units); it is NULL for every other door.
 
+`cells.name` is the cell's display name, NULL when it has none. `regions.name` is the region's name on the world
+map, and `regions.map_priority` is its map priority; both are NULL for a region without a map entry.
+
 `climates.data` is JSON with the climate's `Weathers` (each with `Weather`, `Chance` and optional `Global`), the
 `SunriseBegin`, `SunriseEnd`, `SunsetBegin` and `SunsetEnd` times as `HH:MM:SS`, `MoonPhaseLength` (days each of the
 eight moon phases lasts) and `Moons`, which has a boolean for each of `Masser` and `Secunda`. `ModelPath` is the lowercased sky model
