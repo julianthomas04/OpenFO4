@@ -23,9 +23,9 @@ namespace InstallerTests.Pipeline
             { AssetGroups.Id(AssetGroup.Collision), nameof(CollisionSidecars), CollisionSidecars.ExtractorVersion, 2, 1 },
             { AssetGroups.Id(AssetGroup.Audio), nameof(AudioConversion), AudioConversion.ConverterVersion, 1, 1 },
             { AssetGroups.Id(AssetGroup.Video), nameof(VideoConversion), VideoConversion.ConverterVersion, 1, 1 },
-            { AssetGroups.Id(AssetGroup.Interface), nameof(FontExtractor), FontExtractor.ExtractorVersion, 1, 1 },
-            { AssetGroups.Id(AssetGroup.Interface), nameof(PipboyArtExtractor), PipboyArtExtractor.ExtractorVersion, 4, 1 },
-            { AssetGroups.Id(AssetGroup.Interface), nameof(UiDocumentHeader), UiDocumentHeader.ExtractorVersion, 5, 1 },
+            { AssetGroups.Id(AssetGroup.Interface), nameof(FontExtractor), FontExtractor.ExtractorVersion, 1, 2 },
+            { AssetGroups.Id(AssetGroup.Interface), nameof(PipboyArtExtractor), PipboyArtExtractor.ExtractorVersion, 4, 2 },
+            { AssetGroups.Id(AssetGroup.Interface), nameof(UiDocumentHeader), UiDocumentHeader.ExtractorVersion, 6, 2 },
             { AssetGroups.Id(AssetGroup.TexturesDatabase), nameof(StringTables), StringTables.ExtractorVersion, 1, 2 },
         };
 

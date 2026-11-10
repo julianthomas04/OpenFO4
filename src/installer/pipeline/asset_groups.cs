@@ -25,7 +25,7 @@ namespace AssetConverter.Pipeline
         private static readonly Entry[] Table =
         [
             new(AssetGroup.Shaders, "shaders", 1, []),
-            new(AssetGroup.Interface, "interface", 1, []),
+            new(AssetGroup.Interface, "interface", 2, []),
             new(AssetGroup.Audio, "audio", 1, []),
             new(AssetGroup.Video, "video", 1, []),
             new(AssetGroup.Meshes, "meshes", 1, [AssetGroup.Animations, AssetGroup.TexturesDatabase]),

@@ -185,6 +185,65 @@ namespace InstallerTests
             Assert.Equal([-300], map.Literals["Pkg.Widget.frame95#fade(1)"].Values);
         }
 
+        /// <summary>A <c>Pkg.Widget</c> with the given static traits whose method <c>Apply</c> runs <paramref name="body"/>.</summary>
+        private static AbcBuilder WidgetApplying(Func<AbcBuilder, IEnumerable<AbcTraitSpec>> classTraits, Func<AbcBuilder, AbcCode, AbcCode> body)
+        {
+            var abc = new AbcBuilder();
+            int method = abc.Function(body(abc, new AbcCode().GetLocal0().PushScope()).ReturnVoid().ToArray());
+            return Widget(classTraits: classTraits, instanceTraits: a => [new AbcMethodTraitSpec(a.Name("Apply"), method, 1)], into: abc);
+        }
+
+        private static AbcCode FadeWithStatic(AbcBuilder a, AbcCode c, string member) =>
+            c.FindPropStrict(a.Name("fade")).GetLex(a.Name("Widget", "Pkg")).GetProperty(a.Name(member)).CallPropVoid(a.Name("fade"), 1);
+
+        [Fact]
+        public void Literals_StaticConstantAsCallArgument_IsItsValueAtItsPlaceAmongTheOtherConstants()
+        {
+            var map = Extract(WidgetApplying(a => [Const(a, "LIMIT", 42)], (a, c) =>
+                FadeWithStatic(a, c.FindPropStrict(a.Name("fade")).PushByte(7).CallPropVoid(a.Name("fade"), 1), "LIMIT")
+                    .FindPropStrict(a.Name("fade")).PushByte(9).CallPropVoid(a.Name("fade"), 1)));
+
+            Assert.Equal([7, 42, 9], map.Literals["Pkg.Widget.Apply#fade(0)"].Values.Select(v => Convert.ToInt32(v, System.Globalization.CultureInfo.InvariantCulture)));
+        }
+
+        [Fact]
+        public void Literals_StaticConstantAsTheOnlyArgument_CreatesTheKey()
+        {
+            var map = Extract(WidgetApplying(a => [new AbcSlotSpec(a.Name("MODE"), true, a.String("bottom"), AbcBuilder.ConstantUtf8)], (a, c) => FadeWithStatic(a, c, "MODE")));
+
+            Assert.Equal(["bottom"], map.Literals["Pkg.Widget.Apply#fade(0)"].Values);
+        }
+
+        [Fact]
+        public void Literals_StaticWithoutASingleValue_MakesTheKeyUnresolvedNamingTheMember()
+        {
+            var map = Extract(WidgetApplying(a => [Slot(a, "MODE")], (a, c) =>
+                FadeWithStatic(a, c.FindPropStrict(a.Name("fade")).PushByte(7).CallPropVoid(a.Name("fade"), 1), "MODE")));
+
+            Assert.DoesNotContain("Pkg.Widget.Apply#fade(0)", map.Literals.Keys);
+            Assert.Contains("Pkg.Widget.MODE", map.Unresolved["Pkg.Widget.Apply#fade(0)"], StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void Literals_MemberThatIsNoValueOfTheMovie_IsLeftOutAsBefore()
+        {
+            var map = Extract(WidgetApplying(a => [Const(a, "LIMIT", 42)], (a, c) =>
+                c.FindPropStrict(a.Name("fade")).GetLex(a.Name("Math")).GetProperty(a.Name("PI")).CallPropVoid(a.Name("fade"), 1)
+                 .FindPropStrict(a.Name("fade")).PushByte(7).CallPropVoid(a.Name("fade"), 1)));
+
+            Assert.Equal([7], map.Literals["Pkg.Widget.Apply#fade(0)"].Values.Select(v => Convert.ToInt32(v, System.Globalization.CultureInfo.InvariantCulture)));
+            Assert.DoesNotContain("Pkg.Widget.Apply#fade(0)", map.Unresolved.Keys);
+        }
+
+        [Fact]
+        public void Literals_StaticAssignedToAProperty_IsNotACallArgument()
+        {
+            var map = Extract(WidgetApplying(a => [Const(a, "LIMIT", 42)], (a, c) =>
+                c.GetLocal0().GetLex(a.Name("Widget", "Pkg")).GetProperty(a.Name("LIMIT")).SetProperty(a.Name("width"))));
+
+            Assert.DoesNotContain(map.Literals.Keys, k => k.Contains("width", StringComparison.Ordinal));
+        }
+
         [Fact]
         public void Literals_BothArmsOfAConditional_AreListedInBytecodeOrder()
         {
