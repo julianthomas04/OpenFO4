@@ -906,6 +906,9 @@ namespace AssetConverter
             _currentEditorId = editorId;
         }
 
+        /// <summary>A display name that is empty or only whitespace is no name: SQL NULL.</summary>
+        protected static string? NullWhenBlank(string? text) => string.IsNullOrWhiteSpace(text) ? null : text;
+
         // Absent data is SQL NULL. A failed serialization is reported against the
         // record and column (the caller's argument expression) and also stored as
         // NULL, so a broken column is never mistaken for an empty "{}".
@@ -2187,7 +2190,7 @@ namespace AssetConverter
                     var cell = list[ci];
                     cellFormKeys[ci] = cell.FormKey.ToString();
                     cellEditorIds[ci] = cell.EditorID;
-                    cellNames[ci] = cell.Name?.ToString();
+                    cellNames[ci] = NullWhenBlank(cell.Name?.ToString());
                     cellPlugins[ci] = cell.FormKey.ModKey.FileName.ToString();
 
                     bool isInterior = cell.Flags.HasFlag(Cell.Flag.IsInteriorCell);
@@ -3870,7 +3873,7 @@ namespace AssetConverter
             {
                 FormKey = formKey,
                 EditorId = record.EditorID,
-                Name = string.IsNullOrWhiteSpace(mapName) ? null : mapName,
+                Name = NullWhenBlank(mapName),
                 Worldspace = record.Worldspace.IsNull ? (string?)null : record.Worldspace.FormKey.ToString(),
                 Objects = (string?)null,
                 Flags = (string?)null,

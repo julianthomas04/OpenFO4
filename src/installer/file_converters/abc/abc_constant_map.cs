@@ -96,7 +96,7 @@ namespace AssetConverter.Abc
                     referenceLists[key] = names;
             }
             foreach (BlockResult block in blocks)
-                ResolveStatics(block, counts, constants, folded, literals, unresolved);
+                ResolveStatics(block, constants, folded, literals, unresolved);
             foreach (string key in unresolved.Keys)
             {
                 constants.Remove(key);
@@ -113,10 +113,10 @@ namespace AssetConverter.Abc
         /// key unresolved, so the argument is never lost silently. A member that is no value of the movie (a method, a class of the
         /// player) is not a constant argument and adds nothing.
         /// </summary>
-        private static void ResolveStatics(BlockResult block, Dictionary<string, int> counts, SortedDictionary<string, object> constants, SortedSet<string> folded,
+        private static void ResolveStatics(BlockResult block, SortedDictionary<string, object> constants, SortedSet<string> folded,
             SortedDictionary<string, AbcLiteralList> literals, SortedDictionary<string, string> unresolved)
         {
-            foreach ((string key, List<AbcStaticUse> statics) in block.Statics.Where(p => counts[p.Key] == 1 && !unresolved.ContainsKey(p.Key)))
+            foreach ((string key, List<AbcStaticUse> statics) in block.Statics.Where(p => !unresolved.ContainsKey(p.Key)))
             {
                 var entries = new List<(int Origin, object Value, bool Folded)>();
                 if (block.Literals.TryGetValue(key, out AbcLiteralList? own))

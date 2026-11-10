@@ -526,6 +526,7 @@ namespace InstallerTests
         static void DescribeInterior(TinyPlugin plugin)
         {
             plugin.Interior.Name = new TranslatedString(Language.English, InteriorName);
+            plugin.PersistentCell.Name = new TranslatedString(Language.English, "  ");
             plugin.Interior.Lighting = new CellLighting
             {
                 AmbientColor = TinyPlugin.Rgb(10, 20, 30),

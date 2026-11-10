@@ -35,6 +35,12 @@ namespace InstallerTests
         }
 
         [Fact]
+        public void Cell_WithAWhitespaceOnlyName_StoresNull()
+        {
+            Assert.Null(Cell("FixtureWorldTopCell").Name);
+        }
+
+        [Fact]
         public void Cell_WorldspaceTopCell_IsFlaggedPersistentSoGridQueriesCanExcludeIt()
         {
             var cell = Cell("FixtureWorldTopCell");

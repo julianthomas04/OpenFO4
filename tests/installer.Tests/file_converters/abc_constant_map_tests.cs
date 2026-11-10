@@ -235,6 +235,49 @@ namespace InstallerTests
             Assert.DoesNotContain("Pkg.Widget.Apply#fade(0)", map.Unresolved.Keys);
         }
 
+        private static AbcBuilder UserOf(string package, params string[] members)
+        {
+            var abc = new AbcBuilder();
+            int method = abc.Function(members.Aggregate(new AbcCode().GetLocal0().PushScope(),
+                (c, member) => c.FindPropStrict(abc.Name("fade")).GetLex(abc.Name("Widget", package)).GetProperty(abc.Name(member)).CallPropVoid(abc.Name("fade"), 1)).ReturnVoid().ToArray());
+            abc.Class("Pkg", "User", 0, abc.Method(), abc.Method(), instanceTraits: [new AbcMethodTraitSpec(abc.Name("Apply"), method, 1)]);
+            return abc;
+        }
+
+        [Fact]
+        public void Literals_StaticOfAClassDefinedInAnotherBlock_IsItsValue()
+        {
+            var map = Extract(Widget(classTraits: a => [Const(a, "LIMIT", 42)]), UserOf("Pkg", "LIMIT"));
+
+            Assert.Equal([42], map.Literals["Pkg.User.Apply#fade(0)"].Values.Select(v => Convert.ToInt32(v, System.Globalization.CultureInfo.InvariantCulture)));
+        }
+
+        [Fact]
+        public void Literals_ClassesOfTheSameShortNameInOtherPackages_AreToldApartByQualifiedName()
+        {
+            var abc = new AbcBuilder();
+            abc.Class("Pkg", "Widget", 0, abc.Method(), abc.Method(), classTraits: [Const(abc, "LIMIT", 1)]);
+            abc.Class("Other", "Widget", 0, abc.Method(), abc.Method(), classTraits: [Const(abc, "LIMIT", 2)]);
+            int method = abc.Function(new AbcCode().GetLocal0().PushScope()
+                .FindPropStrict(abc.Name("fade")).GetLex(abc.Name("Widget", "Pkg")).GetProperty(abc.Name("LIMIT")).CallPropVoid(abc.Name("fade"), 1)
+                .FindPropStrict(abc.Name("fade")).GetLex(abc.Name("Widget", "Other")).GetProperty(abc.Name("LIMIT")).CallPropVoid(abc.Name("fade"), 1)
+                .ReturnVoid().ToArray());
+            abc.Class("Pkg", "User", 0, abc.Method(), abc.Method(), instanceTraits: [new AbcMethodTraitSpec(abc.Name("Apply"), method, 1)]);
+
+            var map = Extract(abc);
+
+            Assert.Equal([1, 2], map.Literals["Pkg.User.Apply#fade(0)"].Values.Select(v => Convert.ToInt32(v, System.Globalization.CultureInfo.InvariantCulture)));
+        }
+
+        [Fact]
+        public void Literals_KeyInTwoBlocks_IsUnresolvedEvenWhenItsArgumentIsAStatic()
+        {
+            var map = Extract(Widget(classTraits: a => [Const(a, "LIMIT", 42)]), UserOf("Pkg", "LIMIT"), UserOf("Pkg", "LIMIT"));
+
+            Assert.Equal("defined in 2 ABC blocks", map.Unresolved["Pkg.User.Apply#fade(0)"]);
+            Assert.DoesNotContain("Pkg.User.Apply#fade(0)", map.Literals.Keys);
+        }
+
         [Fact]
         public void Literals_StaticAssignedToAProperty_IsNotACallArgument()
         {
