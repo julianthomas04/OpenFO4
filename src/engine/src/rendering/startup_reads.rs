@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use super::door_prompt::DoorPrompts;
 use super::{
     InteriorLightingCatalog, InteriorOption, MaterialBuoyancy, PlayerMovement, ResolvedTarget,
     State, WorldspaceOption, material_buoyancy_table, walk_in::WalkInTriggers, world_streamer,
@@ -16,6 +17,7 @@ pub(super) struct StartupDbReads {
     pub interior_lighting: Option<InteriorLightingCatalog>,
     pub interiors: Vec<InteriorOption>,
     pub teleports: HashMap<String, ResolvedTarget>,
+    pub door_prompts: DoorPrompts,
     pub walk_in: WalkInTriggers,
     pub player_movement: PlayerMovement,
     pub buoyancy_table: Option<MaterialBuoyancy>,
@@ -31,12 +33,14 @@ impl StartupDbReads {
             }
             StartMode::Direct => Vec::new(),
         };
+        let door_prompts = DoorPrompts::load(db_path)?;
         Ok(Self {
             spawn_locations,
             worldspaces: Self::load_worldspaces(db_path),
             interior_lighting: InteriorLightingCatalog::load_or_report(db_path),
             interiors: State::build_interiors(db_path),
             teleports: State::build_teleports(db_path),
+            door_prompts,
             walk_in: State::build_walk_in(db_path),
             player_movement: Self::load_player_movement(db_path),
             buoyancy_table: material_buoyancy_table(db_path),

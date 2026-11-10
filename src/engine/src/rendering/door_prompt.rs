@@ -4,11 +4,15 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use anyhow::Context;
+
 use super::animated_objects::{AnimatedDoor, DoorState};
+use crate::assets::db::DbClient;
 use crate::assets::db::doors::{DoorFlagsError, flags_have_no_to_text};
 use crate::assets::db::map_regions::MapRegion;
 use crate::assets::db::teleports::TeleportRecord;
 use crate::bethesda_space::polygon_contains;
+use crate::startup::StartupError;
 
 pub(super) const OPEN_SETTING: &str = "sOpen";
 pub(super) const CLOSE_SETTING: &str = "sClose";
@@ -177,6 +181,84 @@ pub(super) fn resolve(
         name: Arc::clone(door.name?),
         verb: Arc::clone(verbs.for_target(door.target)),
     })
+}
+
+/// Everything the prompt of an aimed door is made of, resolved once at startup.
+pub(super) struct DoorPrompts {
+    labels: HashMap<String, Arc<str>>,
+    verbs: PromptVerbs,
+}
+
+impl DoorPrompts {
+    pub(super) fn new(labels: HashMap<String, Arc<str>>, verbs: PromptVerbs) -> Self {
+        Self { labels, verbs }
+    }
+
+    /// A missing or unusable verb setting stops startup. The map regions and the teleport rows
+    /// degrade to none when unreadable, reported: doors then show their worldspace's name or
+    /// no name. A database from an older installer lacks cell names and region map entries,
+    /// which the schema reports once.
+    pub(super) fn load(db_path: &str) -> Result<Self, StartupError> {
+        let db = DbClient::new(db_path).map_err(StartupError::Database)?;
+        let verbs = Self::load_verbs(&db).map_err(StartupError::DoorPromptVerbs)?;
+        let regions = match db.get_map_regions() {
+            Ok(regions) => MapRegionIndex::new(regions),
+            Err(error) => {
+                tracing::warn!("map regions not loaded ({error:#}); no door shows a map region");
+                MapRegionIndex::default()
+            }
+        };
+        let teleports = db.get_placed_teleports().unwrap_or_else(|error| {
+            tracing::warn!(
+                "door prompt teleports not loaded ({error:#}); no load door shows a name"
+            );
+            Vec::new()
+        });
+        let LoadDoorLabels { labels, rejected } = load_door_labels(&teleports, &regions);
+        if !rejected.is_empty() {
+            let refs: Vec<String> = rejected.iter().map(ToString::to_string).collect();
+            tracing::warn!(
+                "{} load doors show no name: {}",
+                rejected.len(),
+                refs.join("; ")
+            );
+        }
+        tracing::info!(
+            "door prompts: {} of {} load doors have a name",
+            labels.len(),
+            teleports.len()
+        );
+        Ok(Self::new(labels, verbs))
+    }
+
+    fn load_verbs(db: &DbClient) -> anyhow::Result<PromptVerbs> {
+        let setting = |name: &'static str| {
+            db.get_game_setting_string(name)?
+                .with_context(|| format!("game setting {name} is missing from the database"))
+        };
+        Ok(PromptVerbs::new(
+            &setting(OPEN_SETTING)?,
+            &setting(CLOSE_SETTING)?,
+        )?)
+    }
+
+    /// The prompt of the ref under the crosshair, if any; `is_load_door` and `door` answer for
+    /// that ref.
+    pub(super) fn prompt_for<'a>(
+        &self,
+        aimed_ref: Option<&str>,
+        is_load_door: impl FnOnce(&str) -> bool,
+        door: impl FnOnce(&str) -> Option<AnimatedDoor<'a>>,
+    ) -> Option<RolloverPrompt> {
+        let ref_id = aimed_ref?;
+        resolve(
+            ref_id,
+            is_load_door(ref_id),
+            &self.labels,
+            door(ref_id),
+            &self.verbs,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -608,6 +690,53 @@ mod tests {
             assert_eq!(by_name.len(), 15, "{by_name:?}");
             assert_eq!(by_name.values().sum::<usize>(), 218);
         }
+    }
+
+    fn prompts(entries: &[(&str, &str)]) -> DoorPrompts {
+        DoorPrompts::new(labels_of(entries), verbs())
+    }
+
+    #[test]
+    fn the_aimed_load_door_yields_its_label_with_the_open_verb() {
+        let prompt = prompts(&[("d", "Museum of Freedom")])
+            .prompt_for(Some("d"), |_| true, |_| None)
+            .unwrap();
+        assert_eq!(prompt.name.as_ref(), "Museum of Freedom");
+        assert_eq!(prompt.verb.as_ref(), "Open");
+    }
+
+    #[test]
+    fn an_aimed_animated_door_yields_its_base_name_with_the_verb_by_state() {
+        let name: Arc<str> = Arc::from("Door");
+        let shown = |target| {
+            prompts(&[])
+                .prompt_for(Some("d"), |_| false, |_| Some(door(Some(&name), target)))
+                .unwrap()
+        };
+        assert_eq!(shown(DoorState::Closed).verb.as_ref(), "Open");
+        assert_eq!(shown(DoorState::Open).verb.as_ref(), "Close");
+        assert_eq!(shown(DoorState::Open).name.as_ref(), "Door");
+    }
+
+    #[test]
+    fn an_aimed_load_door_without_a_label_yields_no_prompt_even_though_it_is_activatable() {
+        let name: Arc<str> = Arc::from("Door");
+        let prompt = prompts(&[]).prompt_for(
+            Some("d"),
+            |_| true,
+            |_| Some(door(Some(&name), DoorState::Closed)),
+        );
+        assert_eq!(prompt, None);
+    }
+
+    #[test]
+    fn nothing_aimed_yields_no_prompt_and_asks_nothing() {
+        let prompt = prompts(&[("d", "Cell")]).prompt_for(
+            None,
+            |_| panic!("no ref to ask about"),
+            |_| panic!("no ref to ask about"),
+        );
+        assert_eq!(prompt, None);
     }
 
     #[test]

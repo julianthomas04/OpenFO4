@@ -215,6 +215,7 @@ use auto_anim::AutoAnim;
 use auto_character::AutoCharacters;
 use boot::{BootParts, GpuContext, StartupInputs, StateInputs};
 use cube_array::CubeArray;
+use door_prompt::DoorPrompts;
 use effects::stage::{EffectFrameInputs, EffectStage};
 use grab_input::{
     AimTarget, CarryContext, GrabAction, GrabInput, carry_key_counts, spin_gate_open,
@@ -677,6 +678,8 @@ pub struct State {
     /// boot. Looked up O(1) by the activation raycast (E) and the debug
     /// `is_interactible` readout — no DB query at runtime.
     teleports: std::collections::HashMap<String, ResolvedTarget>,
+    /// The text shown while aiming at a door, resolved at boot.
+    door_prompts: DoorPrompts,
     /// Trigger volumes of the walk-in (automatic) load doors; their sources are keys of
     /// `teleports`.
     walk_in: WalkInTriggers,
@@ -1148,12 +1151,17 @@ impl State {
     /// and (via a precomputed bool) the crosshair and the debug `is_interactible` readout, so all
     /// agree exactly.
     fn aim_target(&self) -> AimTarget {
-        let Some(ref_id) = self.aimed_ref() else {
+        self.aim_target_of(self.aimed_ref().as_deref())
+    }
+
+    /// `aim_target` for a ref that was already cast for, so one frame casts once.
+    fn aim_target_of(&self, aimed_ref: Option<&str>) -> AimTarget {
+        let Some(ref_id) = aimed_ref else {
             return AimTarget::Nothing;
         };
         AimTarget::resolve(
-            activation::resolve(&ref_id, &self.teleports, &self.animated_objects).is_some(),
-            refr_entity_id(&ref_id),
+            activation::resolve(ref_id, &self.teleports, &self.animated_objects).is_some(),
+            refr_entity_id(ref_id),
             |entity| self.sim.is_grabbable(entity),
         )
     }
@@ -1768,6 +1776,7 @@ impl State {
             interior_lighting,
             interiors,
             teleports,
+            door_prompts,
             walk_in,
             player_movement,
             buoyancy_table,
@@ -1992,6 +2001,7 @@ impl State {
             world_mode: DebugWorldMode::Worldspace,
             interior_filter: String::new(),
             teleports,
+            door_prompts,
             walk_in,
             pending_teleport: spawn_target,
             auto_activate: std::env::var("OPENFO4_AUTO_ACTIVATE")
@@ -3978,14 +3988,20 @@ impl State {
         // Build the HUD overlay for this frame. The crosshair state is selected
         // here (render-side): door-aim depends on the camera, which the sim does
         // not own — the sim only supplies the Standard spread radius.
-        self.aimed_door = self.aim_target() == AimTarget::Activatable;
+        let aimed_ref = self.aimed_ref();
+        self.aimed_door = self.aim_target_of(aimed_ref.as_deref()) == AimTarget::Activatable;
         let hud_activate = self.aimed_door;
+        let prompt = self.door_prompts.prompt_for(
+            aimed_ref.as_deref(),
+            |ref_id| self.teleports.contains_key(ref_id),
+            |ref_id| self.animated_objects.door(refr_entity_id(ref_id)),
+        );
         let mut hud_snapshot = self.sim.hud_snapshot();
         hud_snapshot.visible &= self.flow.hud_visible();
         self.hud.update(
             &hud_snapshot,
             hud_activate,
-            None,
+            prompt.as_ref(),
             world_dt,
             self.config.width,
             self.config.height,
