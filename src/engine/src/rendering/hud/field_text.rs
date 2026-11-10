@@ -301,7 +301,14 @@ fn shape(font_system: &mut FontSystem, buffer: &mut Buffer, item: &TextItem) -> 
         Align::Center => anchor_x - text_width / 2.0,
         Align::Right => anchor_x - width,
     };
-    (left, baseline_y - baseline)
+    (left, snapped_top(baseline_y, baseline))
+}
+
+/// The buffer top that lands the first baseline on the pixel row nearest `baseline_y`. glyphon
+/// draws a line at `round(line_y)` below the area's top and the top itself only to a quarter
+/// pixel, so a top of `baseline_y - line_y` would land the baseline up to half a pixel off.
+fn snapped_top(baseline_y: f32, line_y: f32) -> f32 {
+    baseline_y.round() - line_y.round()
 }
 
 /// The rectangle the lines of `item` cover once shaped.
@@ -324,12 +331,15 @@ pub(super) fn extent_of(font_system: &mut FontSystem, item: &TextItem) -> TextEx
     }
 }
 
-/// The framebuffer y of each line's baseline once `item` is shaped.
+/// The framebuffer y of each line's baseline as glyphon draws it once `item` is shaped.
 #[cfg(test)]
 pub(super) fn baselines_of(font_system: &mut FontSystem, item: &TextItem) -> Vec<f32> {
     let mut buffer = Buffer::new(font_system, Metrics::new(1.0, 1.0));
     let (_, top) = shape(font_system, &mut buffer, item);
-    buffer.layout_runs().map(|run| top + run.line_y).collect()
+    buffer
+        .layout_runs()
+        .map(|run| top + run.line_y.round())
+        .collect()
 }
 
 #[cfg(test)]
@@ -435,11 +445,27 @@ mod tests {
     }
 
     #[test]
+    fn the_first_baseline_is_drawn_on_the_pixel_row_nearest_to_where_the_field_puts_it() {
+        let mut font_system = fonts::ui_fonts().font_system();
+        for nudge in [0.0_f32, 0.2, 0.4, 0.5, 0.7, 0.9] {
+            let mut item = item(Some(COLUMN));
+            item.geometry = item.geometry.translated(0.0, nudge);
+            let nominal = item.geometry.first_baseline();
+            let baselines = baselines_of(&mut font_system, &item);
+            assert!(
+                (baselines[0] - nominal.round()).abs() < 1e-4,
+                "nominal {nominal}, drawn {}",
+                baselines[0]
+            );
+        }
+    }
+
+    #[test]
     fn the_baselines_are_one_line_pitch_apart() {
         let item = bottom_anchored("First\nSecond", 100.0);
         let baselines = baselines_of(&mut fonts::ui_fonts().font_system(), &item);
         assert_eq!(baselines.len(), 2);
-        assert!((baselines[1] - baselines[0] - item.geometry.line_pitch()).abs() < 0.01);
+        assert!((baselines[1] - baselines[0] - item.geometry.line_pitch()).abs() <= 1.0);
     }
 
     #[test]
@@ -459,7 +485,7 @@ mod tests {
         let mut buffer = Buffer::new(&mut font_system, Metrics::new(1.0, 1.0));
         let (left, top) = shape(&mut font_system, &mut buffer, item);
         let runs: Vec<_> = buffer.layout_runs().collect();
-        let baselines = runs.iter().map(|run| top + run.line_y).collect();
+        let baselines = runs.iter().map(|run| top + run.line_y.round()).collect();
         let spans = runs
             .iter()
             .map(|run| {
@@ -525,7 +551,10 @@ mod tests {
             let first = expected_first_baseline(&item, lines);
             for (index, baseline) in baselines.iter().enumerate() {
                 let expected = first + index as f32 * item.geometry.line_pitch();
-                assert!((baseline - expected).abs() < 0.01, "{baselines:?}");
+                assert!(
+                    (baseline - expected).abs() <= 0.5 + index as f32,
+                    "{baselines:?}"
+                );
             }
         }
     }
@@ -534,14 +563,14 @@ mod tests {
     fn text_taller_than_its_bottom_anchored_field_keeps_its_top_at_the_field_top() {
         let item = bottom_anchored("One\nTwo\nThree", 20.0);
         let (baselines, _) = laid_out(&item);
-        assert!((baselines[0] - item.geometry.first_baseline()).abs() < 0.01);
+        assert!((baselines[0] - item.geometry.first_baseline()).abs() <= 0.5);
     }
 
     #[test]
     fn top_anchored_text_starts_at_the_first_baseline_of_the_field() {
         let item = item(Some(COLUMN));
         let (baselines, _) = laid_out(&item);
-        assert!((baselines[0] - item.geometry.first_baseline()).abs() < 0.01);
+        assert!((baselines[0] - item.geometry.first_baseline()).abs() <= 0.5);
     }
 
     #[test]
