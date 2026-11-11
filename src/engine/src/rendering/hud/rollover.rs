@@ -172,8 +172,11 @@ impl RolloverSpec {
                 .item(name_geometry, name_text(&prompt.name), map, tint)
         };
 
+        let Some(verb) = &prompt.verb else {
+            return vec![name];
+        };
         let key_text = self.hint.key_caption(&self.key_name);
-        let label_text = self.hint.label_text(&self.set_text, ui, &prompt.verb);
+        let label_text = self.hint.label_text(&self.set_text, ui, verb);
         let mut box_width = |face: &TextFace, text: &str| {
             let item = face.item(face.geometry, text.to_owned(), map, tint);
             let natural = measure(&item).width / scale;
@@ -360,7 +363,14 @@ mod tests {
     fn prompt(name: &str, verb: &str) -> RolloverPrompt {
         RolloverPrompt {
             name: name.into(),
-            verb: verb.into(),
+            verb: Some(verb.into()),
+        }
+    }
+
+    fn name_only(name: &str) -> RolloverPrompt {
+        RolloverPrompt {
+            name: name.into(),
+            verb: None,
         }
     }
 
@@ -537,6 +547,16 @@ mod tests {
         let mut widget = widget();
         assert!(!update(&mut widget, None, (1280, 720)));
         assert_eq!(widget.items(), []);
+    }
+
+    #[test]
+    fn a_prompt_without_a_verb_draws_the_name_line_only() {
+        let mut widget = widget();
+        update(&mut widget, Some(&name_only("Diamond City")), (1280, 720));
+        assert_eq!(widget.items().len(), 1);
+        assert_eq!(widget.items()[0].text, "DIAMOND CITY");
+        let with_verb = items_at((1280, 720), &prompt("Diamond City", "Open"));
+        assert_eq!(widget.items()[0].geometry, with_verb[0].geometry);
     }
 
     #[test]

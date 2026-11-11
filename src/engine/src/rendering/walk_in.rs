@@ -95,6 +95,12 @@ impl Obb {
 /// Separating axes shorter than this (squared) are parallel edges, not directions.
 const AXIS_EPSILON_SQUARED: f32 = 1e-10;
 
+/// Bethesda units from the player's feet to the centre of an entrance's trigger bounds in the
+/// world: the one measure of how near the player is for showing an entrance's name.
+fn entrance_distance_units(feet: Vec3, bounds_centre: Vec3) -> f32 {
+    (feet - bounds_centre).length() * UNITS_FROM_ENGINE
+}
+
 /// The capsule's core segment, bottom and top, in engine space.
 fn core_segment(body: &PlayerBody) -> [Vec3; 2] {
     let lowest = body.radius.min(body.height * 0.5);
@@ -224,6 +230,32 @@ impl WalkInTriggers {
                     && trigger.volume.touches_swept_capsule(&previous, &body)
             })
             .map(|trigger| trigger.source_ref.as_str())
+    }
+
+    /// The source ref of the entrance of `location` nearest to `feet` and closer than
+    /// `within_units` Bethesda units; the first built wins a tie.
+    pub(super) fn nearest_entrance(
+        &self,
+        location: PlayerLocation<'_>,
+        feet: Vec3,
+        within_units: f32,
+    ) -> Option<&str> {
+        let entry = self
+            .locations
+            .iter()
+            .find(|entry| location.is(&entry.location))?;
+        entry
+            .triggers
+            .iter()
+            .map(|trigger| {
+                (
+                    trigger,
+                    entrance_distance_units(feet, trigger.volume.center),
+                )
+            })
+            .filter(|(_, distance)| *distance < within_units)
+            .min_by(|(_, first), (_, second)| first.total_cmp(second))
+            .map(|(trigger, _)| trigger.source_ref.as_str())
     }
 }
 
@@ -545,6 +577,80 @@ mod tests {
         sample(&mut triggers, FAR);
         assert_eq!(triggers.sample(PlayerLocation::Exterior("WS"), None), None);
         assert_eq!(sample(&mut triggers, INSIDE), Some("DOOR"));
+    }
+
+    fn entrance_at(source_ref: &str, x: f64) -> WalkInDoor {
+        WalkInDoor {
+            position: [x, 0.0, 0.0],
+            ..door(source_ref, exterior())
+        }
+    }
+
+    fn nearest(triggers: &WalkInTriggers, feet: Vec3, within: f32) -> Option<String> {
+        triggers
+            .nearest_entrance(PlayerLocation::Exterior("WS"), feet, within)
+            .map(str::to_owned)
+    }
+
+    #[test]
+    fn the_distance_is_measured_to_the_centre_of_the_trigger_bounds_not_the_origin() {
+        let (triggers, _) = WalkInTriggers::build(&[door("a", exterior())]);
+        // Bounds centre is 100 units (10 engine) above the origin.
+        let above = Vec3::new(0.0, 10.0, 0.0);
+        assert_eq!(nearest(&triggers, above, 1.0), Some("a".to_string()));
+        let at_origin = Vec3::ZERO;
+        assert_eq!(nearest(&triggers, at_origin, 99.0), None);
+        assert_eq!(nearest(&triggers, at_origin, 101.0), Some("a".to_string()));
+    }
+
+    #[test]
+    fn the_nearest_entrance_wins() {
+        let doors = [entrance_at("far", 400.0), entrance_at("near", 100.0)];
+        let (triggers, _) = WalkInTriggers::build(&doors);
+        let feet = Vec3::new(10.0, 10.0, 0.0);
+        assert_eq!(nearest(&triggers, feet, 1000.0), Some("near".to_string()));
+    }
+
+    #[test]
+    fn an_entrance_at_or_beyond_the_distance_is_not_selected() {
+        let (triggers, _) = WalkInTriggers::build(&[door("a", exterior())]);
+        let feet = Vec3::new(30.0, 10.0, 0.0);
+        assert_eq!(nearest(&triggers, feet, 300.0), None);
+        assert_eq!(nearest(&triggers, feet, 299.9), None);
+        assert_eq!(nearest(&triggers, feet, 300.1), Some("a".to_string()));
+    }
+
+    /// A quarter turn about X and a scale of 0.89: the bounds centre, 96 units up the door's local
+    /// Z, lands 85.44 units along engine -Z.
+    fn tilted_scaled_door() -> WalkInTriggers {
+        let door = WalkInDoor {
+            rotation: [std::f64::consts::FRAC_PI_2, 0.0, 0.0],
+            scale: 0.89,
+            bounds: DoorTriggerBounds {
+                min: [-64.0, -8.0, 0.0],
+                max: [64.0, 8.0, 192.0],
+            },
+            ..door("a", exterior())
+        };
+        WalkInTriggers::build(&[door]).0
+    }
+
+    #[test]
+    fn the_scaled_and_rotated_bounds_centre_is_the_one_measured_to() {
+        let triggers = tilted_scaled_door();
+        let at_centre = Vec3::new(0.0, 0.0, -8.544);
+        assert_eq!(nearest(&triggers, at_centre, 5.0), Some("a".to_string()));
+        let unscaled_centre = Vec3::new(0.0, 0.0, -9.6);
+        assert_eq!(nearest(&triggers, unscaled_centre, 5.0), None);
+        let unrotated_centre = Vec3::new(0.0, 8.544, 0.0);
+        assert_eq!(nearest(&triggers, unrotated_centre, 100.0), None);
+        assert_eq!(nearest(&triggers, Vec3::ZERO, 5.0), None);
+    }
+
+    #[test]
+    fn entrances_of_another_location_are_not_selected() {
+        let (triggers, _) = WalkInTriggers::build(&[door("a", interior("CELL"))]);
+        assert_eq!(nearest(&triggers, Vec3::Y * 10.0, 1000.0), None);
     }
 
     #[test]

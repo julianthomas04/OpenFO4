@@ -5,8 +5,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Context;
+use glam::Vec3;
 
 use super::animated_objects::{AnimatedDoor, DoorState};
+use super::walk_in::{PlayerLocation, WalkInTriggers};
 use crate::assets::db::DbClient;
 use crate::assets::db::doors::{DoorFlagsError, flags_have_no_to_text};
 use crate::assets::db::map_regions::MapRegion;
@@ -16,11 +18,13 @@ use crate::startup::StartupError;
 
 pub(super) const OPEN_SETTING: &str = "sOpen";
 pub(super) const CLOSE_SETTING: &str = "sClose";
+pub(super) const ENTRANCE_DISPLAY_SETTING: &str = "fAutoDoorDisplayDistance";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RolloverPrompt {
     pub name: Arc<str>,
-    pub verb: Arc<str>,
+    /// `None` for a prompt that is only a name, with no key hint.
+    pub verb: Option<Arc<str>>,
 }
 
 /// The text when it holds more than whitespace.
@@ -173,13 +177,13 @@ pub(super) fn resolve(
     if is_load_door {
         return Some(RolloverPrompt {
             name: Arc::clone(labels.get(ref_id)?),
-            verb: Arc::clone(&verbs.open),
+            verb: Some(Arc::clone(&verbs.open)),
         });
     }
     let door = animated_door?;
     Some(RolloverPrompt {
         name: Arc::clone(door.name?),
-        verb: Arc::clone(verbs.for_target(door.target)),
+        verb: Some(Arc::clone(verbs.for_target(door.target))),
     })
 }
 
@@ -187,18 +191,74 @@ pub(super) fn resolve(
 pub(super) struct DoorPrompts {
     labels: HashMap<String, Arc<str>>,
     verbs: PromptVerbs,
+    /// Bethesda units within which a walk-in entrance shows its name.
+    entrance_display_units: f32,
+}
+
+/// The walk-in entrance the player stands near. It makes the crosshair activatable whether or
+/// not it has a name to show.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct Entrance {
+    pub prompt: Option<RolloverPrompt>,
+}
+
+fn positive_distance(distance: f32) -> anyhow::Result<f32> {
+    anyhow::ensure!(
+        distance.is_finite() && distance > 0.0,
+        "game setting {ENTRANCE_DISPLAY_SETTING} is {distance}, not a positive distance"
+    );
+    Ok(distance)
+}
+
+/// What the HUD shows for the aim and the entrance the player stands near.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct DoorHud {
+    /// The crosshair takes the activate shape.
+    pub activate: bool,
+    pub prompt: Option<RolloverPrompt>,
+}
+
+/// Something activatable aimed at, or an entrance near, turns the crosshair; the prompt is the
+/// aimed ordinary one, else the entrance's.
+pub(super) fn door_hud(
+    aimed_activatable: bool,
+    ordinary: Option<RolloverPrompt>,
+    entrance: Option<&Entrance>,
+) -> DoorHud {
+    DoorHud {
+        activate: aimed_activatable || entrance.is_some(),
+        prompt: shown_prompt(ordinary, entrance),
+    }
+}
+
+/// An aimed ordinary prompt wins over the entrance the player stands near.
+fn shown_prompt(
+    ordinary: Option<RolloverPrompt>,
+    entrance: Option<&Entrance>,
+) -> Option<RolloverPrompt> {
+    ordinary.or_else(|| entrance.and_then(|entrance| entrance.prompt.clone()))
 }
 
 impl DoorPrompts {
-    pub(super) fn new(labels: HashMap<String, Arc<str>>, verbs: PromptVerbs) -> Self {
-        Self { labels, verbs }
+    pub(super) fn new(
+        labels: HashMap<String, Arc<str>>,
+        verbs: PromptVerbs,
+        entrance_display_units: f32,
+    ) -> Self {
+        Self {
+            labels,
+            verbs,
+            entrance_display_units,
+        }
     }
 
-    /// A missing or unusable verb setting stops startup. Unreadable map regions degrade to none,
-    /// reported: exterior doors then show their worldspace's name. A database from an older installer lacks cell names and region map entries,
-    /// which the schema reports once.
+    /// A missing or unusable verb or distance setting stops startup. Unreadable map regions
+    /// degrade to none, reported: exterior doors then show their worldspace's name. A database
+    /// from an older installer lacks cell names and region map entries, which the schema reports
+    /// once.
     pub(super) fn load(db: &DbClient, teleports: &[TeleportRecord]) -> Result<Self, StartupError> {
-        let verbs = Self::load_verbs(db).map_err(StartupError::DoorPromptVerbs)?;
+        let (verbs, entrance_display_units) =
+            Self::load_settings(db).map_err(StartupError::DoorPromptSettings)?;
         let regions = match db.get_map_regions() {
             Ok(regions) => MapRegionIndex::new(regions),
             Err(error) => {
@@ -220,18 +280,37 @@ impl DoorPrompts {
             labels.len(),
             teleports.len()
         );
-        Ok(Self::new(labels, verbs))
+        Ok(Self::new(labels, verbs, entrance_display_units))
     }
 
-    fn load_verbs(db: &DbClient) -> anyhow::Result<PromptVerbs> {
-        let setting = |name: &'static str| {
+    fn load_settings(db: &DbClient) -> anyhow::Result<(PromptVerbs, f32)> {
+        let text = |name: &'static str| {
             db.get_game_setting_string(name)?
                 .with_context(|| format!("game setting {name} is missing from the database"))
         };
-        Ok(PromptVerbs::new(
-            &setting(OPEN_SETTING)?,
-            &setting(CLOSE_SETTING)?,
-        )?)
+        let verbs = PromptVerbs::new(&text(OPEN_SETTING)?, &text(CLOSE_SETTING)?)?;
+        let distance = db
+            .get_game_setting_number(ENTRANCE_DISPLAY_SETTING)?
+            .with_context(|| {
+                format!("game setting {ENTRANCE_DISPLAY_SETTING} is missing from the database")
+            })?;
+        Ok((verbs, positive_distance(distance)?))
+    }
+
+    /// The entrance of the player's location nearest to `feet` within the display distance. Its
+    /// prompt is the name only, no verb; the label lookup is the one place that decides it.
+    pub(super) fn entrance(
+        &self,
+        triggers: &WalkInTriggers,
+        location: PlayerLocation<'_>,
+        feet: Vec3,
+    ) -> Option<Entrance> {
+        let source_ref = triggers.nearest_entrance(location, feet, self.entrance_display_units)?;
+        let prompt = self.labels.get(source_ref).map(|name| RolloverPrompt {
+            name: Arc::clone(name),
+            verb: None,
+        });
+        Some(Entrance { prompt })
     }
 
     /// The prompt of the ref under the crosshair, if any; `is_load_door` and `door` answer for
@@ -513,7 +592,7 @@ mod tests {
                 &verbs(),
             )
             .unwrap();
-            assert_eq!(prompt.verb.as_ref(), "Close", "{target:?}");
+            assert_eq!(prompt.verb.as_deref(), Some("Close"), "{target:?}");
         }
     }
 
@@ -533,7 +612,7 @@ mod tests {
                 prompt,
                 RolloverPrompt {
                     name: Arc::clone(&name),
-                    verb: Arc::from("Open")
+                    verb: Some(Arc::from("Open"))
                 },
                 "{target:?}"
             );
@@ -567,7 +646,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(prompt.name.as_ref(), "Museum of Freedom");
-        assert_eq!(prompt.verb.as_ref(), "Open");
+        assert_eq!(prompt.verb.as_deref(), Some("Open"));
     }
 
     #[test]
@@ -597,6 +676,7 @@ mod tests {
 
         use super::*;
         use crate::assets::db::DbClient;
+        use crate::assets::db::teleports::DoorLocation;
         use crate::assets::layout::data_dir;
         use crate::assets::{AssetRootEnv, resolve_asset_root};
 
@@ -657,6 +737,54 @@ mod tests {
             }
         }
 
+        /// Player feet (`getpos`, Bethesda units) at the Diamond City gate, from the original
+        /// game's `W2_diamondcity_20261110_213031` run. The first two poses showed no prompt there,
+        /// the last two did; the distances are `getdistance` to the door origin (559.94, 540.01,
+        /// 498.26 and, the closest pose without an automatic start, 325.65), while the rule
+        /// measures to the centre of the trigger bounds.
+        const GATE: &str = "12F822:Fallout4.esm";
+        const NO_PROMPT_POSES: [[f32; 3]; 2] = [
+            [-14540.22, -28877.11, 1463.34],
+            [-14530.79, -28858.12, 1463.34],
+        ];
+        const PROMPT_POSES: [[f32; 3]; 2] = [
+            [-14513.11, -28818.99, 1467.88],
+            [-14434.32, -28664.02, 1502.05],
+        ];
+
+        #[test]
+        #[ignore = "needs an installation converted with cell names and region map entries"]
+        fn the_diamond_city_gate_shows_its_name_only_within_the_display_distance() {
+            use crate::bethesda_space::position_to_engine;
+
+            let db = database();
+            let teleports = db.get_placed_teleports().unwrap();
+            let prompts = DoorPrompts::load(&db, &teleports).unwrap();
+            let doors = db.get_walk_in_doors().unwrap().doors;
+            let gate = doors.iter().find(|door| door.source_ref == GATE).unwrap();
+            let DoorLocation::Exterior { worldspace } = &gate.location else {
+                panic!("the gate stands in the open world");
+            };
+            let (triggers, _) = WalkInTriggers::build(&doors);
+            let entrance_at = |[x, y, z]: [f32; 3]| {
+                prompts.entrance(
+                    &triggers,
+                    PlayerLocation::Exterior(worldspace),
+                    position_to_engine(x, y, z),
+                )
+            };
+
+            for pose in NO_PROMPT_POSES {
+                assert_eq!(entrance_at(pose), None, "{pose:?}");
+            }
+            for pose in PROMPT_POSES {
+                let shown = entrance_at(pose).and_then(|entrance| entrance.prompt);
+                let shown = shown.unwrap_or_else(|| panic!("no prompt at {pose:?}"));
+                assert_eq!(shown.name.to_uppercase(), "DIAMOND CITY", "{pose:?}");
+                assert_eq!(shown.verb, None);
+            }
+        }
+
         #[test]
         #[ignore = "needs an installation converted with cell names and region map entries"]
         fn exterior_destination_names_split_into_four_places_and_fifteen_map_regions() {
@@ -690,6 +818,9 @@ mod tests {
 
         const VERBS: &str = "INSERT INTO game_settings (form_key, editor_id, value_type, value_string)
              VALUES ('1:T.esm', 'sOpen', 'string', 'Open'), ('2:T.esm', 'sClose', 'string', 'Close');";
+        const DISTANCE: &str =
+            "INSERT INTO game_settings (form_key, editor_id, value_type, value_float)
+             VALUES ('3:T.esm', 'fAutoDoorDisplayDistance', 'float', 550.0);";
 
         const WORLD: &str = "INSERT INTO worldspaces (form_key, name) VALUES ('WS', 'Commonwealth');
              INSERT INTO cells (form_key, is_interior) VALUES ('INT', 1);
@@ -711,7 +842,7 @@ mod tests {
 
         fn verb_failure(statements: &str) -> String {
             match load(statements).err() {
-                Some(error @ StartupError::DoorPromptVerbs(_)) => error.to_string(),
+                Some(error @ StartupError::DoorPromptSettings(_)) => error.to_string(),
                 other => panic!("expected the verb startup error, got {other:?}"),
             }
         }
@@ -719,13 +850,13 @@ mod tests {
         fn shown(prompts: &DoorPrompts, source_ref: &str) -> Option<(String, String)> {
             prompts
                 .prompt_for(Some(source_ref), |_| true, |_| None)
-                .map(|prompt| (prompt.name.to_string(), prompt.verb.to_string()))
+                .map(|prompt| (prompt.name.to_string(), prompt.verb.unwrap().to_string()))
         }
 
         #[test]
         fn both_verbs_present_the_doors_are_labelled_and_say_open() {
             let prompts = load(&format!(
-                "{VERBS}{WORLD} UPDATE cells SET name = 'Museum of Freedom' WHERE form_key = 'INT';"
+                "{VERBS}{DISTANCE}{WORLD} UPDATE cells SET name = 'Museum of Freedom' WHERE form_key = 'INT';"
             ))
             .unwrap();
             assert_eq!(
@@ -741,7 +872,7 @@ mod tests {
         #[test]
         fn a_database_from_an_older_installer_loads_with_worldspace_names_only() {
             let prompts = load(&format!(
-                "{VERBS}{WORLD}
+                "{VERBS}{DISTANCE}{WORLD}
                  ALTER TABLE cells DROP COLUMN name;
                  ALTER TABLE regions DROP COLUMN map_priority;"
             ))
@@ -751,6 +882,33 @@ mod tests {
                 shown(&prompts, "door_out"),
                 Some(("Commonwealth".to_string(), "Open".to_string()))
             );
+        }
+
+        fn setting_failure(distance: &str) -> String {
+            match load(&format!("{VERBS}{distance}")).err() {
+                Some(error @ StartupError::DoorPromptSettings(_)) => error.to_string(),
+                other => panic!("expected the settings startup error, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn a_missing_or_unusable_display_distance_stops_startup_naming_it() {
+            let cases = [
+                "",
+                "INSERT INTO game_settings (form_key, editor_id, value_type, value_string)
+                 VALUES ('3:T.esm', 'fAutoDoorDisplayDistance', 'string', 'far');",
+                "INSERT INTO game_settings (form_key, editor_id, value_type, value_float)
+                 VALUES ('3:T.esm', 'fAutoDoorDisplayDistance', 'float', 0.0);",
+                "INSERT INTO game_settings (form_key, editor_id, value_type)
+                 VALUES ('3:T.esm', 'fAutoDoorDisplayDistance', 'float');",
+            ];
+            for distance in cases {
+                let message = setting_failure(distance);
+                assert!(
+                    message.contains(ENTRANCE_DISPLAY_SETTING),
+                    "{distance}: {message}"
+                );
+            }
         }
 
         #[test]
@@ -786,7 +944,148 @@ mod tests {
     }
 
     fn prompts(entries: &[(&str, &str)]) -> DoorPrompts {
-        DoorPrompts::new(labels_of(entries), verbs())
+        DoorPrompts::new(labels_of(entries), verbs(), ENTRANCE_UNITS)
+    }
+
+    const ENTRANCE_UNITS: f32 = 550.0;
+
+    fn entrances() -> WalkInTriggers {
+        entrances_at(&[("near", 0.0), ("far", 2000.0)])
+    }
+
+    fn entrances_close_together() -> WalkInTriggers {
+        entrances_at(&[("near", 0.0), ("far", 100.0)])
+    }
+
+    fn entrances_at(placed: &[(&str, f64)]) -> WalkInTriggers {
+        use crate::assets::db::teleports::{DoorLocation, DoorTriggerBounds, WalkInDoor};
+        let entrance_at = |source_ref: &str, x: f64| WalkInDoor {
+            source_ref: source_ref.to_string(),
+            location: DoorLocation::Exterior {
+                worldspace: "WS".to_string(),
+            },
+            position: [x, 0.0, 0.0],
+            rotation: [0.0; 3],
+            scale: 1.0,
+            bounds: DoorTriggerBounds {
+                min: [-64.0, -8.0, 0.0],
+                max: [64.0, 8.0, 192.0],
+            },
+        };
+        let doors: Vec<WalkInDoor> = placed
+            .iter()
+            .map(|(source_ref, x)| entrance_at(source_ref, *x))
+            .collect();
+        WalkInTriggers::build(&doors).0
+    }
+
+    /// Feet `units` Bethesda units from the bounds centre of "near", straight along the ground.
+    fn feet_at(units: f32) -> Vec3 {
+        Vec3::new(units / 10.0, 9.6, 0.0)
+    }
+
+    fn entrance_near(prompts: &DoorPrompts, units: f32) -> Option<Entrance> {
+        prompts.entrance(&entrances(), PlayerLocation::Exterior("WS"), feet_at(units))
+    }
+
+    fn name_only(name: &str) -> RolloverPrompt {
+        RolloverPrompt {
+            name: Arc::from(name),
+            verb: None,
+        }
+    }
+
+    #[test]
+    fn the_nearest_entrance_within_the_distance_shows_its_label_without_a_verb() {
+        let prompts = prompts(&[("near", "Diamond City"), ("far", "Elsewhere")]);
+        assert_eq!(
+            entrance_near(&prompts, 500.0),
+            Some(Entrance {
+                prompt: Some(name_only("Diamond City"))
+            })
+        );
+    }
+
+    #[test]
+    fn an_entrance_outside_the_distance_has_no_prompt_and_no_entrance() {
+        let prompts = prompts(&[("near", "Diamond City")]);
+        assert_eq!(entrance_near(&prompts, 550.1), None);
+        assert!(entrance_near(&prompts, 549.9).is_some());
+    }
+
+    #[test]
+    fn the_nearest_entrance_without_a_label_shows_nothing_even_if_the_next_one_has_one() {
+        let prompts = prompts(&[("far", "Elsewhere")]);
+        let entrance = prompts
+            .entrance(
+                &entrances_close_together(),
+                PlayerLocation::Exterior("WS"),
+                feet_at(0.0),
+            )
+            .unwrap();
+        assert_eq!(entrance.prompt, None);
+    }
+
+    #[test]
+    fn a_distance_must_be_a_positive_finite_number() {
+        for bad in [0.0, -1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let error = positive_distance(bad).unwrap_err().to_string();
+            assert!(error.contains(ENTRANCE_DISPLAY_SETTING), "{bad}: {error}");
+        }
+        assert_eq!(positive_distance(550.0).unwrap(), 550.0);
+    }
+
+    #[test]
+    fn an_entrance_without_a_label_is_still_an_entrance_but_shows_nothing() {
+        let entrance = entrance_near(&prompts(&[]), 100.0).unwrap();
+        assert_eq!(entrance.prompt, None);
+    }
+
+    #[test]
+    fn an_aimed_ordinary_prompt_wins_over_the_entrance() {
+        let entrance = Entrance {
+            prompt: Some(name_only("Diamond City")),
+        };
+        let ordinary = RolloverPrompt {
+            name: Arc::from("Door"),
+            verb: Some(Arc::from("Open")),
+        };
+        assert_eq!(
+            shown_prompt(Some(ordinary.clone()), Some(&entrance)),
+            Some(ordinary)
+        );
+        assert_eq!(
+            shown_prompt(None, Some(&entrance)),
+            Some(name_only("Diamond City"))
+        );
+        assert_eq!(shown_prompt(None, None), None);
+    }
+
+    #[test]
+    fn the_door_hud_combines_the_crosshair_and_the_prompt() {
+        let ordinary = RolloverPrompt {
+            name: Arc::from("Door"),
+            verb: Some(Arc::from("Open")),
+        };
+        let labelled = Entrance {
+            prompt: Some(name_only("Diamond City")),
+        };
+        let unlabelled = Entrance { prompt: None };
+        let hud = |aimed, ordinary: Option<&RolloverPrompt>, entrance| {
+            let hud = door_hud(aimed, ordinary.cloned(), entrance);
+            (hud.activate, hud.prompt)
+        };
+        assert_eq!(
+            hud(true, Some(&ordinary), Some(&labelled)),
+            (true, Some(ordinary.clone()))
+        );
+        assert_eq!(
+            hud(false, None, Some(&labelled)),
+            (true, Some(name_only("Diamond City")))
+        );
+        assert_eq!(hud(false, None, Some(&unlabelled)), (true, None));
+        assert_eq!(hud(true, None, None), (true, None));
+        assert_eq!(hud(false, None, None), (false, None));
     }
 
     #[test]
@@ -795,7 +1094,7 @@ mod tests {
             .prompt_for(Some("d"), |_| true, |_| None)
             .unwrap();
         assert_eq!(prompt.name.as_ref(), "Museum of Freedom");
-        assert_eq!(prompt.verb.as_ref(), "Open");
+        assert_eq!(prompt.verb.as_deref(), Some("Open"));
     }
 
     #[test]
@@ -806,8 +1105,8 @@ mod tests {
                 .prompt_for(Some("d"), |_| false, |_| Some(door(Some(&name), target)))
                 .unwrap()
         };
-        assert_eq!(shown(DoorState::Closed).verb.as_ref(), "Open");
-        assert_eq!(shown(DoorState::Open).verb.as_ref(), "Close");
+        assert_eq!(shown(DoorState::Closed).verb.as_deref(), Some("Open"));
+        assert_eq!(shown(DoorState::Open).verb.as_deref(), Some("Close"));
         assert_eq!(shown(DoorState::Open).name.as_ref(), "Door");
     }
 

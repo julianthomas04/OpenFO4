@@ -215,7 +215,7 @@ use auto_anim::AutoAnim;
 use auto_character::AutoCharacters;
 use boot::{BootParts, GpuContext, StartupInputs, StateInputs};
 use cube_array::CubeArray;
-use door_prompt::DoorPrompts;
+use door_prompt::{DoorPrompts, Entrance, door_hud};
 use effects::stage::{EffectFrameInputs, EffectStage};
 use grab_input::{
     AimTarget, CarryContext, GrabAction, GrabInput, carry_key_counts, spin_gate_open,
@@ -978,16 +978,22 @@ impl State {
         self.sim.apply(SimCommand::TeleportPlayer { pos });
     }
 
+    /// Whether the player's position means anything to walk-in entrances: only while walking in
+    /// play, not while a load runs or fades in. The trigger and the entrance prompt, which
+    /// announces what walking closer starts, share it.
+    fn walk_in_live(&self, pipboy_open: bool) -> bool {
+        self.input_mode == InputMode::Walk
+            && !pipboy_open
+            && self.pending_teleport.is_none()
+            && self.flow.phase() == Phase::InGame
+    }
+
     /// Queues the teleport of the walk-in door the player just entered, if any. Only while
     /// walking in play, not while a load runs or fades in: sampling during a pending teleport
     /// would spend the entering edge on a refused request.
     fn sample_walk_in(&mut self, pipboy_open: bool, dt: f32) {
         self.walk_in_fired = None;
-        if self.input_mode != InputMode::Walk
-            || pipboy_open
-            || self.pending_teleport.is_some()
-            || self.flow.phase() != Phase::InGame
-        {
+        if !self.walk_in_live(pipboy_open) {
             return;
         }
         let body = self.sim.player_body();
@@ -1152,6 +1158,20 @@ impl State {
             refr_entity_id(ref_id),
             |entity| self.sim.is_grabbable(entity),
         )
+    }
+
+    /// The walk-in entrance the player stands near enough to see its name.
+    fn entrance_near_player(&self) -> Option<Entrance> {
+        if !self.walk_in_live(self.pipboy_open()) {
+            return None;
+        }
+        let body = self.sim.player_body()?;
+        let location = match self.streamer.current_interior() {
+            Some(cell) => PlayerLocation::Interior(cell),
+            None => PlayerLocation::Exterior(&self.streamer.worldspace),
+        };
+        self.door_prompts
+            .entrance(&self.walk_in, location, body.feet)
     }
 
     /// The ref id of the object under the crosshair within activation reach.
@@ -3978,18 +3998,22 @@ impl State {
         // not own — the sim only supplies the Standard spread radius.
         let aimed_ref = self.aimed_ref();
         self.aimed_door = self.aim_target_of(aimed_ref.as_deref()) == AimTarget::Activatable;
-        let hud_activate = self.aimed_door;
-        let prompt = self.door_prompts.prompt_for(
-            aimed_ref.as_deref(),
-            |ref_id| self.teleports.contains_key(ref_id),
-            |ref_id| self.animated_objects.door(refr_entity_id(ref_id)),
+        let entrance = self.entrance_near_player();
+        let door_hud = door_hud(
+            self.aimed_door,
+            self.door_prompts.prompt_for(
+                aimed_ref.as_deref(),
+                |ref_id| self.teleports.contains_key(ref_id),
+                |ref_id| self.animated_objects.door(refr_entity_id(ref_id)),
+            ),
+            entrance.as_ref(),
         );
         let mut hud_snapshot = self.sim.hud_snapshot();
         hud_snapshot.visible &= self.flow.hud_visible();
         self.hud.update(
             &hud_snapshot,
-            hud_activate,
-            prompt.as_ref(),
+            door_hud.activate,
+            door_hud.prompt.as_ref(),
             world_dt,
             self.config.width,
             self.config.height,

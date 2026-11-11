@@ -185,12 +185,8 @@ impl HudRenderer {
             self.verts.clear();
             return;
         }
-        let requested = if activate && snapshot.crosshair != CrosshairState::Hidden {
-            CrosshairState::Activate
-        } else {
-            snapshot.crosshair
-        };
-        self.crosshair.update(requested, dt);
+        self.crosshair
+            .update(requested_crosshair(snapshot.crosshair, activate), dt);
 
         let layout = Layout::for_stage(self.stage.0, self.stage.1, fb_w as f32, fb_h as f32);
         let hp_bar = meters::bar_rect(&layout, &self.hp);
@@ -285,6 +281,36 @@ impl HudRenderer {
         }
         // Text (numbers/labels) composited over the bars, in the same pass.
         self.text.render_into(&mut pass);
+    }
+}
+
+/// The crosshair to draw: the activate shape over any visible one when something can be activated.
+fn requested_crosshair(current: CrosshairState, activate: bool) -> CrosshairState {
+    if activate && current != CrosshairState::Hidden {
+        CrosshairState::Activate
+    } else {
+        current
+    }
+}
+
+#[cfg(test)]
+mod crosshair_tests {
+    use super::*;
+
+    #[test]
+    fn something_to_activate_switches_a_visible_crosshair_to_the_activate_shape() {
+        assert_eq!(
+            requested_crosshair(CrosshairState::Dot, true),
+            CrosshairState::Activate
+        );
+        assert_eq!(
+            requested_crosshair(CrosshairState::Dot, false),
+            CrosshairState::Dot
+        );
+        assert_eq!(
+            requested_crosshair(CrosshairState::Hidden, true),
+            CrosshairState::Hidden
+        );
     }
 }
 
