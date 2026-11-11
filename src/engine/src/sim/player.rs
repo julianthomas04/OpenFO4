@@ -1085,6 +1085,22 @@ mod tests {
     }
 
     #[test]
+    fn a_teleported_body_is_unknown_until_it_stands_at_the_new_point() {
+        let mut sim = spawned_at(flat_world(), SPAWN_AT);
+        assert!(sim.player_body().is_some());
+        let target = Vec3::new(50.0, 80.0, -50.0);
+        sim.apply(SimCommand::TeleportPlayer { pos: target });
+        assert!(sim.player_body().is_none());
+        let body = (0..10)
+            .find_map(|_| {
+                tick(&mut sim, 1);
+                sim.player_body()
+            })
+            .expect("the teleport completes");
+        assert_eq!((body.feet.x, body.feet.z), (target.x, target.z));
+    }
+
+    #[test]
     fn walking_into_a_heavy_crate_pushes_it_by_no_more_than_the_push_force_allows() {
         let crate_mass = 15.0;
         let heavy = crate_prop(Vec3::new(215.0, 0.5, -100.0), crate_mass);

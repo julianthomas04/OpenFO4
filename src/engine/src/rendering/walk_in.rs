@@ -1,27 +1,85 @@
-//! Walk-in load doors: automatic DOOR refs teleport the player when the player's capsule
-//! enters their trigger volume. Pure decision logic, no GPU or sim access: edge arming, the
-//! box-versus-capsule test and the location match all live here.
+//! Walk-in entrances: automatic load doors. Near one, the HUD shows where it leads; walking closer
+//! starts its transition. Both rules measure the 3D distance from the player's feet to the door
+//! reference's origin against a radius derived from the game's settings and the reference's
+//! scale. Pure decision logic, no GPU or sim access: the settings, both distance rules, edge
+//! arming and the location match all live here.
 
-use glam::{Quat, Vec3};
+use anyhow::Context;
+use glam::Vec3;
 
+use crate::assets::db::DbClient;
 use crate::assets::db::teleports::{DoorLocation, WalkInDoor};
 use crate::bethesda_space::{
-    UNITS_FROM_ENGINE, UNITS_TO_ENGINE, axes_to_engine, position_from_engine, position_to_engine,
-    rotation_to_engine,
+    UNITS_TO_ENGINE, position_from_engine, position_to_engine, rotation_to_engine,
 };
-use crate::sim::PlayerBody;
 
-/// Smallest trigger half-extent per axis, in engine units: keeps the box well-formed for a reference
-/// scaled so small that even the reach collapses.
-pub(super) const MIN_HALF_EXTENT: f32 = 0.5;
+pub(super) const DISPLAY_SETTING: &str = "fAutoDoorDisplayDistance";
+pub(super) const START_SETTING: &str = "fAutoDoorActivateDistance";
 
-/// How far a door's trigger reaches past its editor-marker box on every side, in Bethesda units at
-/// reference scale 1. The marker box alone fires far too late and is unreachable where a door sits in
-/// rock (the Red Rocket cave exit); in vanilla the Diamond City exit fires 300 units in front of it.
-const TRIGGER_REACH_UNITS: f32 = 300.0;
+/// Bethesda units: the settings for a reference at scale 1, or one reference's radii.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct EntranceDistances {
+    pub display_units: f32,
+    pub start_units: f32,
+}
 
-/// Bethesda units below which a trigger bound extent counts as collapsed.
-const DEGENERATE_EXTENT_UNITS: f64 = 0.01;
+impl EntranceDistances {
+    /// A missing, non-numeric, non-positive or non-finite setting is an error naming it.
+    pub(super) fn load(db: &DbClient) -> anyhow::Result<Self> {
+        let distance = |setting: &'static str| {
+            let value = db
+                .get_game_setting_number(setting)?
+                .with_context(|| format!("game setting {setting} is missing from the database"))?;
+            positive_distance(setting, value)
+        };
+        Ok(Self {
+            display_units: distance(DISPLAY_SETTING)?,
+            start_units: distance(START_SETTING)?,
+        })
+    }
+
+    /// The start sphere scales with the reference; the name shows within the settings' margin
+    /// around it. A display radius below zero never shows.
+    pub(super) fn scaled(self, scale: f32) -> Self {
+        let start_units = self.start_units * scale.abs();
+        Self {
+            display_units: start_units + (self.display_units - self.start_units),
+            start_units,
+        }
+    }
+}
+
+#[cfg(test)]
+pub(super) const TEST_DISTANCES: EntranceDistances = EntranceDistances {
+    display_units: 550.0,
+    start_units: 350.0,
+};
+
+fn positive_distance(setting: &str, distance: f32) -> anyhow::Result<f32> {
+    anyhow::ensure!(
+        distance.is_finite() && distance > 0.0,
+        "game setting {setting} is {distance}, not a positive distance"
+    );
+    Ok(distance)
+}
+
+/// The renderer's view of the player this frame.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PlayState {
+    pub walking: bool,
+    pub in_game: bool,
+    pub pipboy_open: bool,
+    pub teleport_pending: bool,
+}
+
+impl PlayState {
+    /// Whether the player's position means anything to walk-in entrances: only while walking in
+    /// play with the Pip-Boy closed, not while a load is pending, runs or fades in. The start and
+    /// the entrance prompt share it.
+    pub(super) fn walk_in_live(self) -> bool {
+        self.walking && self.in_game && !self.pipboy_open && !self.teleport_pending
+    }
+}
 
 /// Where the player currently is, as the streamer reports it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,426 +103,274 @@ impl PlayerLocation<'_> {
     }
 }
 
-/// An oriented box in engine space.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Obb {
-    center: Vec3,
-    rotation: Quat,
-    half_extents: Vec3,
+struct Entrance {
+    source_ref: String,
+    /// Bethesda units.
+    origin: Vec3,
+    limits: EntranceDistances,
+    /// Engine-space ground direction out of the doorway, for the dev hook's walk line.
+    outward: Vec3,
 }
 
-impl Obb {
-    /// Whether the capsule, moving in a straight line from `from` to `to`, touches the box at any
-    /// point of the way (touching counts). The core segments at both ends span a planar
-    /// quadrilateral, tested against the box grown by the radius with a separating-axis check.
-    /// Corners are treated as square, which errs towards firing by less than the radius.
-    fn touches_swept_capsule(&self, from: &PlayerBody, to: &PlayerBody) -> bool {
-        let inverse = self.rotation.inverse();
-        let [from_bottom, from_top] = core_segment(from);
-        let [to_bottom, to_top] = core_segment(to);
-        let quad =
-            [from_bottom, from_top, to_bottom, to_top].map(|point| inverse * (point - self.center));
-        let half = self.half_extents + Vec3::splat(to.radius);
+impl Entrance {
+    /// `None` for a non-finite position, rotation or scale.
+    fn new(door: &WalkInDoor, distances: EntranceDistances) -> Option<Self> {
+        let finite = door
+            .position
+            .iter()
+            .chain(&door.rotation)
+            .chain([&door.scale])
+            .all(|value| value.is_finite());
+        if !finite {
+            return None;
+        }
+        let [rx, ry, rz] = door.rotation.map(|angle| angle as f32);
+        let facing = rotation_to_engine(rx, ry, rz) * Vec3::Z;
+        Some(Self {
+            source_ref: door.source_ref.clone(),
+            origin: Vec3::from(door.position.map(|v| v as f32)),
+            limits: distances.scaled(door.scale as f32),
+            outward: Vec3::new(facing.x, 0.0, facing.z).normalize_or(Vec3::X),
+        })
+    }
 
-        let up = quad[1] - quad[0];
-        let travel = quad[2] - quad[0];
-        let top_travel = quad[3] - quad[1];
-        let edges = [up, travel, top_travel];
-        let box_axes = [Vec3::X, Vec3::Y, Vec3::Z];
-        let edge_axes = edges.map(|edge| box_axes.map(|box_axis| edge.cross(box_axis)));
-        let plane_normal = [up.cross(travel)];
-        box_axes
-            .into_iter()
-            .chain(plane_normal)
-            .chain(edge_axes.into_iter().flatten())
-            .filter(|axis| axis.length_squared() > AXIS_EPSILON_SQUARED)
-            .all(|axis| {
-                let axis = axis.normalize();
-                let projections = quad.map(|point| point.dot(axis));
-                let lowest = projections.iter().copied().fold(f32::INFINITY, f32::min);
-                let highest = projections
-                    .iter()
-                    .copied()
-                    .fold(f32::NEG_INFINITY, f32::max);
-                let reach = half.x * axis.x.abs() + half.y * axis.y.abs() + half.z * axis.z.abs();
-                lowest <= reach && highest >= -reach
-            })
+    /// The game's `getdistance`; both rules and the order among entrances measure with it.
+    fn distance_units(&self, feet: Vec3) -> f32 {
+        feet.distance(self.origin)
+    }
+
+    fn shows_at(&self, feet: Vec3) -> bool {
+        self.distance_units(feet) <= self.limits.display_units
+    }
+
+    fn starts_at(&self, feet: Vec3) -> bool {
+        self.distance_units(feet) <= self.limits.start_units
+    }
+
+    /// Outside at `previous`, and inside at `feet` or the straight path there touches the start
+    /// sphere, so one long frame cannot jump across a small one.
+    fn entered(&self, previous: Vec3, feet: Vec3) -> bool {
+        !self.starts_at(previous)
+            && (self.starts_at(feet)
+                || self.path_distance_units(previous, feet) <= self.limits.start_units)
+    }
+
+    /// The closest the path from `from` to `to` comes to the origin.
+    fn path_distance_units(&self, from: Vec3, to: Vec3) -> f32 {
+        let path = to - from;
+        let along = (self.origin - from).dot(path) / path.length_squared();
+        let fraction = if along.is_finite() {
+            along.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (from + path * fraction).distance(self.origin)
     }
 }
 
-/// Separating axes shorter than this (squared) are parallel edges, not directions.
-const AXIS_EPSILON_SQUARED: f32 = 1e-10;
-
-/// Bethesda units from the player's feet to the centre of an entrance's trigger bounds in the
-/// world: the one measure of how near the player is for showing an entrance's name.
-fn entrance_distance_units(feet: Vec3, bounds_centre: Vec3) -> f32 {
-    (feet - bounds_centre).length() * UNITS_FROM_ENGINE
-}
-
-/// The capsule's core segment, bottom and top, in engine space.
-fn core_segment(body: &PlayerBody) -> [Vec3; 2] {
-    let lowest = body.radius.min(body.height * 0.5);
-    let highest = (body.height - body.radius).max(body.height * 0.5);
-    [body.feet + Vec3::Y * lowest, body.feet + Vec3::Y * highest]
-}
-
-struct Trigger {
-    source_ref: String,
-    volume: Obb,
-    /// Engine-space position of the door reference (the origin of its local frame).
-    origin: Vec3,
-    /// Door-local trigger corners in Bethesda units, reach included, scaled like the reference.
-    local_min: Vec3,
-    local_max: Vec3,
-}
-
-struct LocationTriggers {
+struct LocationEntrances {
     location: DoorLocation,
-    triggers: Vec<Trigger>,
+    entrances: Vec<Entrance>,
 }
 
-/// Why a door got no usable trigger or a corrected one; reported once at boot.
+/// Doors reported once at boot.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct BuildReport {
-    /// Refs with a collapsed trigger bound axis, which only the reach spans.
-    pub degenerate_bounds: Vec<String>,
-    /// Refs with a non-finite position, rotation, scale or bounds, left without a trigger.
+    /// No entrance: a non-finite position, rotation or scale.
     pub non_finite: Vec<String>,
+    /// The start sphere shrinks to the origin.
+    pub zero_scale: Vec<String>,
 }
 
-/// Every walk-in trigger volume plus the edge state deciding when one fires.
+/// How the player stands relative to an entrance of the current location, for the diagnostic
+/// trace. Distances are Bethesda units.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct EntranceProbe {
+    pub source_ref: String,
+    pub distance_units: f32,
+    pub limits: EntranceDistances,
+    pub shown: bool,
+    pub inside_start: bool,
+    /// Whether the last sample had a previous position to compare with.
+    pub armed: bool,
+}
+
+/// Where a dev hook may put the player to walk into an entrance, engine space.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct WalkLine {
+    /// Outside the start zone, in front of the doorway.
+    pub approach: Vec3,
+    /// The door's origin; a move from `approach` enters the start zone.
+    pub through: Vec3,
+}
+
+/// How far beyond the start zone the approach sits, Bethesda units.
+const WALK_LINE_CLEARANCE_UNITS: f32 = 30.0;
+
+/// Every walk-in entrance plus the edge state deciding when one starts.
 #[derive(Default)]
 pub(super) struct WalkInTriggers {
-    locations: Vec<LocationTriggers>,
-    /// The location index and body of the last valid sample; `None` until a baseline is taken.
-    previous: Option<(usize, PlayerBody)>,
-    /// The body the last sample swept from; `None` when that sample was a baseline.
-    last_sweep_from: Option<PlayerBody>,
+    locations: Vec<LocationEntrances>,
+    /// The location index and feet (Bethesda units) of the last valid sample; `None` until a
+    /// baseline is taken.
+    previous: Option<(usize, Vec3)>,
+    armed: bool,
 }
 
 impl WalkInTriggers {
-    pub(super) fn build(doors: &[WalkInDoor]) -> (Self, BuildReport) {
+    pub(super) fn build(doors: &[WalkInDoor], distances: EntranceDistances) -> (Self, BuildReport) {
         let mut report = BuildReport::default();
-        let mut locations: Vec<LocationTriggers> = Vec::new();
+        let mut locations: Vec<LocationEntrances> = Vec::new();
         for door in doors {
-            let Some((volume, degenerate)) = volume_of(door) else {
+            let Some(entrance) = Entrance::new(door, distances) else {
                 report.non_finite.push(door.source_ref.clone());
                 continue;
             };
-            if degenerate {
-                report.degenerate_bounds.push(door.source_ref.clone());
+            if door.scale == 0.0 {
+                report.zero_scale.push(door.source_ref.clone());
             }
-            let index = locations
-                .iter()
-                .position(|entry| entry.location == door.location)
-                .unwrap_or_else(|| {
-                    locations.push(LocationTriggers {
-                        location: door.location.clone(),
-                        triggers: Vec::new(),
-                    });
-                    locations.len() - 1
-                });
-            let scale = door.scale as f32;
-            let corner = |point: [f64; 3]| Vec3::from(point.map(|v| v as f32)) * scale;
-            let (first, second) = (corner(door.bounds.min), corner(door.bounds.max));
-            let reach = Vec3::splat(TRIGGER_REACH_UNITS * scale.abs());
-            locations[index].triggers.push(Trigger {
-                source_ref: door.source_ref.clone(),
-                volume,
-                origin: position_to_engine(
-                    door.position[0] as f32,
-                    door.position[1] as f32,
-                    door.position[2] as f32,
-                ),
-                local_min: first.min(second) - reach,
-                local_max: first.max(second) + reach,
-            });
+            match locations
+                .iter_mut()
+                .find(|entry| entry.location == door.location)
+            {
+                Some(entry) => entry.entrances.push(entrance),
+                None => locations.push(LocationEntrances {
+                    location: door.location.clone(),
+                    entrances: vec![entrance],
+                }),
+            }
         }
         let triggers = Self {
             locations,
             previous: None,
-            last_sweep_from: None,
+            armed: false,
         };
         (triggers, report)
     }
 
-    /// The next valid sample only records where the player stands and never fires: call after
-    /// anything that puts the player somewhere new, so arriving inside a trigger is not entering it.
+    fn entrances_of(&self, location: PlayerLocation<'_>) -> Option<(usize, &[Entrance])> {
+        self.locations
+            .iter()
+            .enumerate()
+            .find(|(_, entry)| location.is(&entry.location))
+            .map(|(index, entry)| (index, entry.entrances.as_slice()))
+    }
+
+    /// The next valid sample is only a baseline and never starts anything: call after anything
+    /// that puts the player somewhere new, so arriving inside a start zone is not entering it.
     pub(super) fn rearm(&mut self) {
         self.previous = None;
     }
 
-    /// The source ref of the door whose trigger the player just walked into, if any: the
-    /// capsule's path since the previous valid sample touches the trigger while the previous
-    /// position did not, so a fast player cannot tunnel through a thin trigger. `body` is `None`
-    /// while the player is not spawned; such a sample changes nothing. When several triggers are
-    /// entered in one sample the first built wins. A location change takes a baseline: the
-    /// previous position says nothing about this location.
+    /// The source ref of the entrance the player just walked into on the way from the previous
+    /// valid sample to `feet` (engine space). A sample without feet (player not spawned) changes
+    /// nothing. The first sample after [`Self::rearm`] or in a new location is only a
+    /// baseline. When several zones are entered in one sample the first built wins.
     pub(super) fn sample(
         &mut self,
         location: PlayerLocation<'_>,
-        body: Option<&PlayerBody>,
+        feet: Option<Vec3>,
     ) -> Option<&str> {
-        let body = *body?;
-        let Some(index) = self
-            .locations
-            .iter()
-            .position(|entry| location.is(&entry.location))
-        else {
+        let feet = position_from_engine(feet?);
+        let Some((index, _)) = self.entrances_of(location) else {
             self.previous = None;
-            self.last_sweep_from = None;
+            self.armed = false;
             return None;
         };
         let previous = self
             .previous
-            .replace((index, body))
+            .replace((index, feet))
             .filter(|(previous_index, _)| *previous_index == index)
-            .map(|(_, previous_body)| previous_body);
-        self.last_sweep_from = previous;
+            .map(|(_, previous_feet)| previous_feet);
+        self.armed = previous.is_some();
         let previous = previous?;
         self.locations[index]
-            .triggers
+            .entrances
             .iter()
-            .find(|trigger| {
-                !trigger.volume.touches_swept_capsule(&previous, &previous)
-                    && trigger.volume.touches_swept_capsule(&previous, &body)
-            })
-            .map(|trigger| trigger.source_ref.as_str())
+            .find(|entrance| entrance.entered(previous, feet))
+            .map(|entrance| entrance.source_ref.as_str())
     }
 
-    /// The source ref of the entrance of `location` nearest to `feet` and closer than
-    /// `within_units` Bethesda units among those `candidate` accepts; the first built wins a tie.
+    /// The source ref of the entrance of `location` that decides what the HUD shows at `feet`
+    /// (engine space): the nearest one whose display radius contains the feet.
     pub(super) fn nearest_entrance(
         &self,
         location: PlayerLocation<'_>,
         feet: Vec3,
-        within_units: f32,
-        candidate: impl Fn(&str) -> bool,
     ) -> Option<&str> {
-        let entry = self
-            .locations
-            .iter()
-            .find(|entry| location.is(&entry.location))?;
-        entry
-            .triggers
-            .iter()
-            .filter(|trigger| candidate(&trigger.source_ref))
-            .map(|trigger| {
-                (
-                    trigger,
-                    entrance_distance_units(feet, trigger.volume.center),
-                )
-            })
-            .filter(|(_, distance)| *distance < within_units)
-            .min_by(|(_, first), (_, second)| first.total_cmp(second))
-            .map(|(trigger, _)| trigger.source_ref.as_str())
+        let feet = position_from_engine(feet);
+        let entrances = self.entrances_of(location)?.1;
+        shown_entrance(entrances, feet).map(|entrance| entrance.source_ref.as_str())
     }
-}
 
-/// How the player stands relative to the nearest trigger of the current location, for the
-/// diagnostic trace. Local coordinates are door-local Bethesda units, scaled like the reference.
-#[derive(Debug, Clone, PartialEq)]
-pub(super) struct TriggerProbe {
-    pub source_ref: String,
-    pub feet_local: Vec3,
-    pub head_local: Vec3,
-    pub box_min: Vec3,
-    pub box_max: Vec3,
-    /// Distance from the capsule to the trigger box, 0 when touching, in Bethesda units.
-    pub gap_units: f32,
-    /// Whether the sweep of the last sample touched the trigger.
-    pub swept_prev: bool,
-    /// Whether the last sample had a previous position to sweep from.
-    pub armed: bool,
-    /// Unit direction in the ground plane from the capsule to the box centre; zero when above it.
-    pub horizontal_to_center: Vec3,
-    /// Ground-plane distance to the box centre, in engine units.
-    pub horizontal_distance: f32,
-    /// Engine-space ray origins at the capsule's centre, head and feet heights.
-    pub ray_origins: [Vec3; 3],
-}
-
-/// Height of the feet-level blocker ray above the soles, in engine units.
-const FEET_RAY_LIFT: f32 = 0.3;
-/// How far below the top the head-level blocker ray starts, in engine units.
-const HEAD_RAY_DROP: f32 = 0.3;
-
-impl Obb {
-    /// Distance from the capsule's core segment to the box, minus the radius, never negative
-    /// (engine units; round-edged, unlike the square-cornered detector).
-    fn capsule_gap(&self, body: &PlayerBody) -> f32 {
-        let inverse = self.rotation.inverse();
-        let [bottom, top] = core_segment(body).map(|point| inverse * (point - self.center));
-        let distance_at = |t: f32| {
-            (bottom.lerp(top, t).abs() - self.half_extents)
-                .max(Vec3::ZERO)
-                .length()
-        };
-        let (mut low, mut high) = (0.0_f32, 1.0_f32);
-        for _ in 0..40 {
-            let third = (high - low) / 3.0;
-            let (left, right) = (low + third, high - third);
-            if distance_at(left) < distance_at(right) {
-                high = right;
-            } else {
-                low = left;
-            }
-        }
-        (distance_at(f32::midpoint(low, high)) - body.radius).max(0.0)
-    }
-}
-
-impl WalkInTriggers {
-    /// The probe of the trigger nearest to the capsule in `location`; `None` when the location
-    /// has no triggers.
-    pub(super) fn probe(
-        &self,
-        location: PlayerLocation<'_>,
-        body: &PlayerBody,
-    ) -> Option<TriggerProbe> {
-        let entry = self
-            .locations
-            .iter()
-            .find(|entry| location.is(&entry.location))?;
-        let (trigger, gap) = entry
-            .triggers
-            .iter()
-            .map(|trigger| (trigger, trigger.volume.capsule_gap(body)))
-            .min_by(|(_, first), (_, second)| first.total_cmp(second))?;
-        let inverse = trigger.volume.rotation.inverse();
-        let to_local = |point: Vec3| position_from_engine(inverse * (point - trigger.origin));
-        let head = body.feet + Vec3::Y * body.height;
-        let centre_height = body.feet + Vec3::Y * (body.height * 0.5);
-        let across = trigger.volume.center - centre_height;
-        let horizontal = Vec3::new(across.x, 0.0, across.z);
-        Some(TriggerProbe {
-            source_ref: trigger.source_ref.clone(),
-            feet_local: to_local(body.feet),
-            head_local: to_local(head),
-            box_min: trigger.local_min,
-            box_max: trigger.local_max,
-            gap_units: gap * UNITS_FROM_ENGINE,
-            swept_prev: self
-                .last_sweep_from
-                .is_some_and(|from| trigger.volume.touches_swept_capsule(&from, body)),
-            armed: self.last_sweep_from.is_some(),
-            horizontal_to_center: horizontal.normalize_or_zero(),
-            horizontal_distance: horizontal.length(),
-            ray_origins: [
-                centre_height,
-                head - Vec3::Y * HEAD_RAY_DROP,
-                body.feet + Vec3::Y * FEET_RAY_LIFT,
-            ],
+    /// The probe of the entrance that decides the HUD at `feet` (engine space), else of the
+    /// nearest one; `None` when `location` has no entrances.
+    pub(super) fn probe(&self, location: PlayerLocation<'_>, feet: Vec3) -> Option<EntranceProbe> {
+        let feet = position_from_engine(feet);
+        let entrances = self.entrances_of(location)?.1;
+        let shown = shown_entrance(entrances, feet);
+        let entrance = shown.or_else(|| nearest(entrances, feet, |_| true))?;
+        Some(EntranceProbe {
+            source_ref: entrance.source_ref.clone(),
+            distance_units: entrance.distance_units(feet),
+            limits: entrance.limits,
+            shown: shown.is_some(),
+            inside_start: entrance.starts_at(feet),
+            armed: self.armed,
         })
     }
-}
 
-/// Where a dev hook may put the player to walk through a door's trigger.
-#[derive(Debug, Clone, PartialEq)]
-pub(super) struct WalkLine {
-    pub location: DoorLocation,
-    /// Just outside the trigger on one side of its thin axis.
-    pub approach: Vec3,
-    /// Just outside on the other side; a straight move from `approach` crosses the trigger.
-    pub through: Vec3,
-}
-
-/// How far beyond the capsule's reach the line's ends sit, in engine units.
-const WALK_LINE_CLEARANCE: f32 = 3.0;
-
-impl WalkInTriggers {
-    /// The walk line of a door's trigger, for a capsule of `radius`. The thin axis is the
-    /// trigger's local Z (Bethesda local Y, the way through a doorway).
-    pub(super) fn walk_line(&self, source_ref: &str, radius: f32) -> Option<WalkLine> {
-        let (entry, trigger) = self.locations.iter().find_map(|entry| {
-            entry
-                .triggers
-                .iter()
-                .find(|trigger| trigger.source_ref == source_ref)
-                .map(|trigger| (entry, trigger))
-        })?;
-        let volume = trigger.volume;
-        let along =
-            volume.rotation * Vec3::Z * (volume.half_extents.z + radius + WALK_LINE_CLEARANCE);
+    pub(super) fn walk_line(&self, source_ref: &str) -> Option<WalkLine> {
+        let entrance = self
+            .locations
+            .iter()
+            .flat_map(|entry| &entry.entrances)
+            .find(|entrance| entrance.source_ref == source_ref)?;
+        let origin = position_to_engine(entrance.origin.x, entrance.origin.y, entrance.origin.z);
+        let reach = (entrance.limits.start_units + WALK_LINE_CLEARANCE_UNITS) * UNITS_TO_ENGINE;
         Some(WalkLine {
-            location: entry.location.clone(),
-            approach: volume.center + along,
-            through: volume.center - along,
+            approach: origin + entrance.outward * reach,
+            through: origin,
         })
     }
 }
 
-/// The engine-space trigger box of a door, and whether its trigger bound had to be widened. `None` for
-/// non-finite input.
-fn volume_of(door: &WalkInDoor) -> Option<(Obb, bool)> {
-    let finite = door
-        .position
+/// The entrance nearest to `feet` (Bethesda units) among those `accept` takes, the first built
+/// winning a tie.
+fn nearest(
+    entrances: &[Entrance],
+    feet: Vec3,
+    accept: impl Fn(&Entrance) -> bool,
+) -> Option<&Entrance> {
+    entrances
         .iter()
-        .chain(&door.rotation)
-        .chain(&door.bounds.min)
-        .chain(&door.bounds.max)
-        .chain([&door.scale])
-        .all(|value| value.is_finite());
-    if !finite {
-        return None;
-    }
-    let scale = door.scale as f32;
-    let [min, max] = [door.bounds.min, door.bounds.max].map(|point| point.map(|v| v as f32));
-    let local_center = axes_to_engine(
-        f32::midpoint(min[0], max[0]),
-        f32::midpoint(min[1], max[1]),
-        f32::midpoint(min[2], max[2]),
-    ) * (UNITS_TO_ENGINE * scale);
-    let degenerate = (0..3).any(|axis| f64::from(max[axis] - min[axis]) < DEGENERATE_EXTENT_UNITS);
-    let half_extents = (axes_to_engine(
-        (max[0] - min[0]) * 0.5,
-        (max[1] - min[1]) * 0.5,
-        (max[2] - min[2]) * 0.5,
-    )
-    .abs()
-        + Vec3::splat(TRIGGER_REACH_UNITS))
-        * (UNITS_TO_ENGINE * scale.abs());
-    let rotation = rotation_to_engine(
-        door.rotation[0] as f32,
-        door.rotation[1] as f32,
-        door.rotation[2] as f32,
-    );
-    let position = position_to_engine(
-        door.position[0] as f32,
-        door.position[1] as f32,
-        door.position[2] as f32,
-    );
-    Some((
-        Obb {
-            center: position + rotation * local_center,
-            rotation,
-            half_extents: half_extents.max(Vec3::splat(MIN_HALF_EXTENT)),
-        },
-        degenerate,
-    ))
+        .filter(|entrance| accept(entrance))
+        .min_by(|first, second| {
+            first
+                .distance_units(feet)
+                .total_cmp(&second.distance_units(feet))
+        })
+}
+
+/// The one selection the HUD and the trace share: the nearest entrance whose display radius
+/// contains `feet`.
+fn shown_entrance(entrances: &[Entrance], feet: Vec3) -> Option<&Entrance> {
+    nearest(entrances, feet, |entrance| entrance.shows_at(feet))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::db::teleports::DoorTriggerBounds;
 
-    const RADIUS: f32 = 2.5;
-    const HEIGHT: f32 = 12.6;
+    const DISTANCES: EntranceDistances = TEST_DISTANCES;
 
-    /// A 100 x 20 x 200 unit door-local marker at the origin. With the reach its trigger spans engine
-    /// x in [-35, 35], y in [-30, 50] and z in [-31, 31].
-    fn door(source_ref: &str, location: DoorLocation) -> WalkInDoor {
+    fn door_at(source_ref: &str, location: DoorLocation, position: [f64; 3]) -> WalkInDoor {
         WalkInDoor {
             source_ref: source_ref.to_string(),
             location,
-            position: [0.0, 0.0, 0.0],
-            rotation: [0.0, 0.0, 0.0],
+            position,
+            rotation: [0.0; 3],
             scale: 1.0,
-            bounds: DoorTriggerBounds {
-                min: [-50.0, -10.0, 0.0],
-                max: [50.0, 10.0, 200.0],
-            },
         }
     }
 
@@ -480,229 +386,324 @@ mod tests {
         }
     }
 
-    fn body_at(feet: Vec3) -> PlayerBody {
-        PlayerBody {
-            feet,
-            height: HEIGHT,
-            radius: RADIUS,
-        }
+    fn door(source_ref: &str, location: DoorLocation) -> WalkInDoor {
+        door_at(source_ref, location, [0.0; 3])
     }
 
-    const HALF_X: f32 = 35.0;
-    const HALF_Z: f32 = 31.0;
-    const BOTTOM: f32 = -30.0;
-    const TOP: f32 = 50.0;
-    /// Feet just in front of and just behind the trigger along engine Z.
-    const BEFORE: Vec3 = Vec3::new(0.0, 0.0, 40.0);
-    const BEYOND: Vec3 = Vec3::new(0.0, 0.0, -40.0);
-    const FAR: Vec3 = Vec3::new(100.0, 0.0, 0.0);
-    const INSIDE: Vec3 = Vec3::new(0.0, 0.0, 0.0);
+    fn build(doors: &[WalkInDoor]) -> WalkInTriggers {
+        WalkInTriggers::build(doors, DISTANCES).0
+    }
 
     fn one_door() -> WalkInTriggers {
-        WalkInTriggers::build(&[door("DOOR", exterior())]).0
+        build(&[door("DOOR", exterior())])
+    }
+
+    /// Engine-space feet at Bethesda `(x, y, z)`.
+    fn at(x: f32, y: f32, z: f32) -> Vec3 {
+        position_to_engine(x, y, z)
+    }
+
+    const FAR: [f32; 3] = [2000.0, 0.0, 0.0];
+    const INSIDE: [f32; 3] = [100.0, 0.0, 0.0];
+
+    fn sample(triggers: &mut WalkInTriggers, [x, y, z]: [f32; 3]) -> Option<&str> {
+        triggers.sample(PlayerLocation::Exterior("WS"), Some(at(x, y, z)))
     }
 
     /// Baselines at `from`, then samples at `to`: what the player does in one step.
-    fn approach(triggers: &mut WalkInTriggers, from: Vec3, to: Vec3) -> Option<&str> {
+    fn step(triggers: &mut WalkInTriggers, from: [f32; 3], to: [f32; 3]) -> Option<&str> {
         triggers.rearm();
         sample(triggers, from);
         sample(triggers, to)
     }
 
-    fn sample(triggers: &mut WalkInTriggers, feet: Vec3) -> Option<&str> {
-        triggers.sample(PlayerLocation::Exterior("WS"), Some(&body_at(feet)))
-    }
-
-    #[test]
-    fn fires_when_the_player_walks_in() {
-        let mut triggers = one_door();
-        assert_eq!(sample(&mut triggers, FAR), None);
-        assert_eq!(sample(&mut triggers, INSIDE), Some("DOOR"));
-    }
-
-    #[test]
-    fn fires_once_while_the_player_stays_inside() {
-        let mut triggers = one_door();
-        sample(&mut triggers, FAR);
-        assert_eq!(sample(&mut triggers, INSIDE), Some("DOOR"));
-        assert_eq!(sample(&mut triggers, INSIDE), None);
-    }
-
-    #[test]
-    fn a_player_arriving_inside_does_not_fire_until_leaving_and_returning() {
-        let mut triggers = one_door();
-        assert_eq!(sample(&mut triggers, INSIDE), None);
-        assert_eq!(sample(&mut triggers, INSIDE), None);
-        assert_eq!(sample(&mut triggers, FAR), None);
-        assert_eq!(sample(&mut triggers, INSIDE), Some("DOOR"));
-    }
-
-    #[test]
-    fn fires_again_after_exit_and_re_entry() {
-        let mut triggers = one_door();
-        sample(&mut triggers, FAR);
-        assert_eq!(sample(&mut triggers, INSIDE), Some("DOOR"));
-        sample(&mut triggers, FAR);
-        assert_eq!(sample(&mut triggers, INSIDE), Some("DOOR"));
-    }
-
-    #[test]
-    fn rearm_turns_the_next_sample_into_a_baseline_that_never_fires() {
-        let mut triggers = one_door();
-        sample(&mut triggers, FAR);
-        triggers.rearm();
-        assert_eq!(sample(&mut triggers, INSIDE), None);
-        assert_eq!(sample(&mut triggers, INSIDE), None);
-        sample(&mut triggers, FAR);
-        assert_eq!(sample(&mut triggers, INSIDE), Some("DOOR"));
-    }
-
-    #[test]
-    fn rearm_baseline_waits_for_a_valid_sample() {
-        let mut triggers = one_door();
-        triggers.rearm();
-        assert_eq!(triggers.sample(PlayerLocation::Exterior("WS"), None), None);
-        assert_eq!(sample(&mut triggers, INSIDE), None);
-        sample(&mut triggers, FAR);
-        assert_eq!(sample(&mut triggers, INSIDE), Some("DOOR"));
-    }
-
-    #[test]
-    fn a_trigger_built_but_never_sampled_starts_as_a_baseline() {
-        let mut triggers = one_door();
-        assert_eq!(sample(&mut triggers, INSIDE), None);
-    }
-
-    #[test]
-    fn no_body_never_fires_and_keeps_the_previous_edge_state() {
-        let mut triggers = one_door();
-        sample(&mut triggers, FAR);
-        assert_eq!(triggers.sample(PlayerLocation::Exterior("WS"), None), None);
-        assert_eq!(sample(&mut triggers, INSIDE), Some("DOOR"));
-    }
-
-    fn entrance_at(source_ref: &str, x: f64) -> WalkInDoor {
-        WalkInDoor {
-            position: [x, 0.0, 0.0],
-            ..door(source_ref, exterior())
-        }
-    }
-
-    fn nearest(triggers: &WalkInTriggers, feet: Vec3, within: f32) -> Option<String> {
+    fn nearest(triggers: &WalkInTriggers, [x, y, z]: [f32; 3]) -> Option<String> {
         triggers
-            .nearest_entrance(PlayerLocation::Exterior("WS"), feet, within, |_| true)
+            .nearest_entrance(PlayerLocation::Exterior("WS"), at(x, y, z))
             .map(str::to_owned)
     }
 
     #[test]
-    fn the_distance_is_measured_to_the_centre_of_the_trigger_bounds_not_the_origin() {
-        let (triggers, _) = WalkInTriggers::build(&[door("a", exterior())]);
-        // Bounds centre is 100 units (10 engine) above the origin.
-        let above = Vec3::new(0.0, 10.0, 0.0);
-        assert_eq!(nearest(&triggers, above, 1.0), Some("a".to_string()));
-        let at_origin = Vec3::ZERO;
-        assert_eq!(nearest(&triggers, at_origin, 99.0), None);
-        assert_eq!(nearest(&triggers, at_origin, 101.0), Some("a".to_string()));
+    fn entering_the_start_zone_fires() {
+        let mut triggers = one_door();
+        assert_eq!(sample(&mut triggers, FAR), None);
+        assert_eq!(sample(&mut triggers, INSIDE), Some("DOOR"));
     }
 
     #[test]
-    fn the_nearest_entrance_wins() {
-        let doors = [entrance_at("far", 400.0), entrance_at("near", 100.0)];
-        let (triggers, _) = WalkInTriggers::build(&doors);
-        let feet = Vec3::new(10.0, 10.0, 0.0);
-        assert_eq!(nearest(&triggers, feet, 1000.0), Some("near".to_string()));
+    fn staying_inside_fires_once() {
+        let mut triggers = one_door();
+        sample(&mut triggers, FAR);
+        assert_eq!(sample(&mut triggers, INSIDE), Some("DOOR"));
+        assert_eq!(sample(&mut triggers, INSIDE), None);
     }
 
     #[test]
-    fn an_entrance_at_or_beyond_the_distance_is_not_selected() {
-        let (triggers, _) = WalkInTriggers::build(&[door("a", exterior())]);
-        let feet = Vec3::new(30.0, 10.0, 0.0);
-        assert_eq!(nearest(&triggers, feet, 300.0), None);
-        assert_eq!(nearest(&triggers, feet, 299.9), None);
-        assert_eq!(nearest(&triggers, feet, 300.1), Some("a".to_string()));
+    fn starting_inside_does_not_fire_until_leaving_and_returning() {
+        let mut triggers = one_door();
+        assert_eq!(sample(&mut triggers, INSIDE), None);
+        assert_eq!(sample(&mut triggers, INSIDE), None);
+        assert_eq!(sample(&mut triggers, FAR), None);
+        assert_eq!(sample(&mut triggers, INSIDE), Some("DOOR"));
     }
 
-    /// A quarter turn about X and a scale of 0.89: the bounds centre, 96 units up the door's local
-    /// Z, lands 85.44 units along engine -Z.
-    fn tilted_scaled_door() -> WalkInTriggers {
-        let door = WalkInDoor {
-            rotation: [std::f64::consts::FRAC_PI_2, 0.0, 0.0],
-            scale: 0.89,
-            bounds: DoorTriggerBounds {
-                min: [-64.0, -8.0, 0.0],
-                max: [64.0, 8.0, 192.0],
-            },
-            ..door("a", exterior())
+    #[test]
+    fn arriving_inside_after_a_rearm_does_not_start_until_leaving_and_reentering() {
+        let mut triggers = one_door();
+        sample(&mut triggers, FAR);
+        triggers.rearm();
+        assert_eq!(sample(&mut triggers, INSIDE), None);
+        assert_eq!(sample(&mut triggers, INSIDE), None);
+        assert_eq!(sample(&mut triggers, FAR), None);
+        assert_eq!(sample(&mut triggers, INSIDE), Some("DOOR"));
+    }
+
+    fn small_door() -> WalkInTriggers {
+        build(&[WalkInDoor {
+            scale: 0.23,
+            ..door("DOOR", exterior())
+        }])
+    }
+
+    #[test]
+    fn a_path_across_the_start_sphere_starts_once_though_both_ends_lie_outside() {
+        let mut triggers = small_door();
+        sample(&mut triggers, [-300.0, 0.0, 0.0]);
+        assert_eq!(sample(&mut triggers, [300.0, 0.0, 0.0]), Some("DOOR"));
+        assert_eq!(sample(&mut triggers, [300.0, 0.0, 0.0]), None);
+        assert_eq!(sample(&mut triggers, [600.0, 0.0, 0.0]), None);
+    }
+
+    #[test]
+    fn a_path_passing_beside_the_start_sphere_does_not_start() {
+        let mut triggers = small_door();
+        sample(&mut triggers, [-300.0, 81.0, 0.0]);
+        assert_eq!(sample(&mut triggers, [300.0, 81.0, 0.0]), None);
+        sample(&mut triggers, [-300.0, 0.0, 81.0]);
+        assert_eq!(sample(&mut triggers, [300.0, 0.0, 81.0]), None);
+    }
+
+    #[test]
+    fn no_feet_never_fire_and_keep_the_previous_edge_state() {
+        let mut triggers = one_door();
+        sample(&mut triggers, FAR);
+        assert_eq!(triggers.sample(PlayerLocation::Exterior("WS"), None), None);
+        assert_eq!(sample(&mut triggers, INSIDE), Some("DOOR"));
+    }
+
+    #[test]
+    fn the_start_counts_height() {
+        let mut triggers = one_door();
+        assert_eq!(
+            step(&mut triggers, [0.0, 0.0, 2000.0], [0.0, 0.0, 351.0]),
+            None
+        );
+        assert_eq!(step(&mut triggers, FAR, [0.0, 0.0, 349.0]), Some("DOOR"));
+        assert_eq!(step(&mut triggers, FAR, [210.0, 0.0, 279.9]), Some("DOOR"));
+        assert_eq!(step(&mut triggers, FAR, [210.0, 0.0, 280.1]), None);
+    }
+
+    #[test]
+    fn the_display_counts_height() {
+        let triggers = one_door();
+        for shown in [[549.0, 0.0, 0.0], [0.0, 0.0, 549.0], [330.0, 0.0, 439.9]] {
+            assert_eq!(nearest(&triggers, shown), Some("DOOR".into()), "{shown:?}");
+        }
+        for hidden in [[551.0, 0.0, 0.0], [0.0, 0.0, -551.0], [330.0, 440.1, 0.0]] {
+            assert_eq!(nearest(&triggers, hidden), None, "{hidden:?}");
+        }
+    }
+
+    #[test]
+    fn both_limits_count_their_boundary_as_inside() {
+        let entrance = Entrance::new(&door("DOOR", exterior()), DISTANCES).unwrap();
+        assert!(entrance.shows_at(Vec3::new(550.0, 0.0, 0.0)));
+        assert!(!entrance.shows_at(Vec3::new(550.01, 0.0, 0.0)));
+        assert!(entrance.starts_at(Vec3::new(0.0, 0.0, 350.0)));
+        assert!(!entrance.starts_at(Vec3::new(0.0, 0.0, 350.01)));
+    }
+
+    #[test]
+    fn the_start_radius_scales_and_the_display_radius_keeps_the_settings_margin_beyond_it() {
+        for (scale, start, display) in [
+            (1.0, 350.0, 550.0),
+            (0.889_999_985_7, 311.5, 511.5),
+            (0.23, 80.5, 280.5),
+            (-0.5, 175.0, 375.0),
+        ] {
+            let radii = DISTANCES.scaled(scale as f32);
+            assert!(
+                (radii.start_units - start).abs() < 1e-3,
+                "{scale}: {radii:?}"
+            );
+            assert!(
+                (radii.display_units - display).abs() < 1e-3,
+                "{scale}: {radii:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_small_reference_shows_and_starts_within_its_scaled_radii() {
+        let mut triggers = small_door();
+        assert_eq!(nearest(&triggers, [280.0, 0.0, 0.0]), Some("DOOR".into()));
+        assert_eq!(nearest(&triggers, [281.0, 0.0, 0.0]), None);
+        assert_eq!(step(&mut triggers, FAR, [80.0, 0.0, 0.0]), Some("DOOR"));
+        assert_eq!(step(&mut triggers, FAR, [81.0, 0.0, 0.0]), None);
+    }
+
+    #[test]
+    fn a_display_setting_far_below_the_start_setting_never_shows() {
+        let settings = EntranceDistances {
+            display_units: 100.0,
+            start_units: 350.0,
         };
-        WalkInTriggers::build(&[door]).0
+        let half = WalkInDoor {
+            scale: 0.5,
+            ..door("DOOR", exterior())
+        };
+        assert!(settings.scaled(0.5).display_units < 0.0);
+        let (mut triggers, _) = WalkInTriggers::build(&[half], settings);
+        assert_eq!(nearest(&triggers, [0.0; 3]), None);
+        assert_eq!(step(&mut triggers, FAR, INSIDE), Some("DOOR"));
     }
 
     #[test]
-    fn the_scaled_and_rotated_bounds_centre_is_the_one_measured_to() {
-        let triggers = tilted_scaled_door();
-        let at_centre = Vec3::new(0.0, 0.0, -8.544);
-        assert_eq!(nearest(&triggers, at_centre, 5.0), Some("a".to_string()));
-        let unscaled_centre = Vec3::new(0.0, 0.0, -9.6);
-        assert_eq!(nearest(&triggers, unscaled_centre, 5.0), None);
-        let unrotated_centre = Vec3::new(0.0, 8.544, 0.0);
-        assert_eq!(nearest(&triggers, unrotated_centre, 100.0), None);
-        assert_eq!(nearest(&triggers, Vec3::ZERO, 5.0), None);
+    fn a_negative_scale_starts_by_its_size() {
+        let mirrored = WalkInDoor {
+            scale: -0.5,
+            ..door("DOOR", exterior())
+        };
+        let mut triggers = build(&[mirrored]);
+        assert_eq!(step(&mut triggers, FAR, [174.0, 0.0, 0.0]), Some("DOOR"));
+        assert_eq!(step(&mut triggers, FAR, [176.0, 0.0, 0.0]), None);
+        assert_eq!(nearest(&triggers, [374.0, 0.0, 0.0]), Some("DOOR".into()));
+        assert_eq!(nearest(&triggers, [376.0, 0.0, 0.0]), None);
     }
 
     #[test]
-    fn entrances_of_another_location_are_not_selected() {
-        let (triggers, _) = WalkInTriggers::build(&[door("a", interior("CELL"))]);
-        assert_eq!(nearest(&triggers, Vec3::Y * 10.0, 1000.0), None);
+    fn a_zero_scale_is_reported_and_starts_only_on_a_path_that_meets_its_origin() {
+        let flat = WalkInDoor {
+            scale: 0.0,
+            ..door("FLAT", exterior())
+        };
+        let (mut triggers, report) = WalkInTriggers::build(&[flat], DISTANCES);
+        assert_eq!(report.zero_scale, ["FLAT"]);
+        assert_eq!(report.non_finite, Vec::<String>::new());
+        assert_eq!(step(&mut triggers, FAR, [1.0, 0.0, 0.0]), None);
+        assert_eq!(
+            step(&mut triggers, [-100.0, 0.0, 1.0], [100.0, 0.0, 1.0]),
+            None
+        );
+        assert_eq!(step(&mut triggers, FAR, [0.0; 3]), Some("FLAT"));
+        assert_eq!(nearest(&triggers, [199.0, 0.0, 0.0]), Some("FLAT".into()));
+        assert_eq!(nearest(&triggers, [201.0, 0.0, 0.0]), None);
     }
 
     #[test]
-    fn doors_of_other_locations_are_ignored() {
-        let mut triggers = WalkInTriggers::build(&[
+    fn the_rules_measure_from_the_origin_whatever_the_rotation() {
+        let turned = WalkInDoor {
+            rotation: [0.4, 0.0, 1.2],
+            ..door_at("DOOR", exterior(), [1000.0, -500.0, 200.0])
+        };
+        let mut triggers = build(&[turned]);
+        assert_eq!(
+            nearest(&triggers, [1000.0, 49.0, 200.0]),
+            Some("DOOR".into())
+        );
+        assert_eq!(nearest(&triggers, [1000.0, 51.0, 200.0]), None);
+        assert_eq!(
+            step(&mut triggers, FAR, [1000.0, -500.0, -149.0]),
+            Some("DOOR")
+        );
+    }
+
+    #[test]
+    fn the_nearest_entrance_in_3d_shows() {
+        let doors = [
+            door_at("below", exterior(), [0.0, 0.0, -450.0]),
+            door_at("level", exterior(), [400.0, 0.0, 0.0]),
+        ];
+        let triggers = build(&doors);
+        assert_eq!(nearest(&triggers, [0.0; 3]), Some("level".into()));
+    }
+
+    #[test]
+    fn of_equally_near_entrances_the_first_built_shows() {
+        let first = door_at("first", exterior(), [300.0, 0.0, 0.0]);
+        let second = door_at("second", exterior(), [-300.0, 0.0, 0.0]);
+        let built = build(&[first.clone(), second.clone()]);
+        let reversed = build(&[second, first]);
+        assert_eq!(nearest(&built, [0.0; 3]), Some("first".into()));
+        assert_eq!(nearest(&reversed, [0.0; 3]), Some("second".into()));
+    }
+
+    #[test]
+    fn entering_overlapping_start_zones_at_once_starts_the_first_built_only() {
+        let mut triggers = build(&[
+            door("A", exterior()),
+            door_at("B", exterior(), [200.0, 0.0, 0.0]),
+        ]);
+        sample(&mut triggers, FAR);
+        assert_eq!(sample(&mut triggers, [100.0, 0.0, 0.0]), Some("A"));
+        assert_eq!(sample(&mut triggers, [-300.0, 0.0, 0.0]), None);
+        assert_eq!(sample(&mut triggers, [500.0, 0.0, 0.0]), Some("B"));
+    }
+
+    #[test]
+    fn the_nearest_entrance_decides_only_where_its_own_display_radius_reaches() {
+        let small = WalkInDoor {
+            scale: 0.23,
+            ..door_at("small", exterior(), [0.0, 0.0, 0.0])
+        };
+        let triggers = build(&[small, door_at("large", exterior(), [600.0, 0.0, 0.0])]);
+        assert_eq!(nearest(&triggers, [250.0, 0.0, 0.0]), Some("small".into()));
+        assert_eq!(nearest(&triggers, [290.0, 0.0, 0.0]), Some("large".into()));
+    }
+
+    #[test]
+    fn entrances_of_another_location_are_neither_shown_nor_started() {
+        let mut triggers = build(&[
             door("OUT", exterior()),
             door("IN_A", interior("A")),
             door("IN_B", interior("B")),
-        ])
-        .0;
-        let body = body_at(INSIDE);
-        let far = body_at(FAR);
-        triggers.sample(PlayerLocation::Interior("A"), Some(&far));
+        ]);
+        let inside = Some(at(INSIDE[0], INSIDE[1], INSIDE[2]));
+        let far = Some(at(FAR[0], FAR[1], FAR[2]));
+        triggers.sample(PlayerLocation::Interior("A"), far);
         assert_eq!(
-            triggers.sample(PlayerLocation::Interior("A"), Some(&body)),
+            triggers.sample(PlayerLocation::Interior("A"), inside),
             Some("IN_A")
         );
-        triggers.sample(PlayerLocation::Interior("A"), Some(&far));
+        assert_eq!(triggers.sample(PlayerLocation::Interior("C"), inside), None);
         assert_eq!(
-            triggers.sample(PlayerLocation::Exterior("OTHER"), Some(&body)),
-            None
-        );
-        assert_eq!(
-            triggers.sample(PlayerLocation::Interior("C"), Some(&body)),
+            triggers.nearest_entrance(PlayerLocation::Interior("C"), at(0.0, 0.0, 0.0)),
             None
         );
     }
 
     #[test]
-    fn switching_location_takes_a_baseline_instead_of_firing() {
-        let mut triggers =
-            WalkInTriggers::build(&[door("OUT", exterior()), door("IN", interior("A"))]).0;
-        let inside = body_at(INSIDE);
-        triggers.sample(PlayerLocation::Exterior("WS"), Some(&body_at(FAR)));
+    fn arriving_inside_in_another_location_does_not_start_until_leaving_and_reentering() {
+        let mut triggers = build(&[door("OUT", exterior()), door("IN", interior("A"))]);
+        let inside = Some(at(INSIDE[0], INSIDE[1], INSIDE[2]));
+        let far = Some(at(FAR[0], FAR[1], FAR[2]));
+        triggers.sample(PlayerLocation::Exterior("WS"), far);
+        assert_eq!(triggers.sample(PlayerLocation::Interior("A"), inside), None);
+        assert_eq!(triggers.sample(PlayerLocation::Interior("A"), inside), None);
+        assert_eq!(triggers.sample(PlayerLocation::Interior("A"), far), None);
         assert_eq!(
-            triggers.sample(PlayerLocation::Interior("A"), Some(&inside)),
-            None
-        );
-        assert_eq!(
-            triggers.sample(PlayerLocation::Interior("A"), Some(&inside)),
-            None
+            triggers.sample(PlayerLocation::Interior("A"), inside),
+            Some("IN")
         );
     }
 
     #[test]
-    fn each_trigger_keeps_its_own_edge() {
-        let mut second = door("SECOND", exterior());
-        second.position = [0.0, 2000.0, 0.0];
-        let mut triggers = WalkInTriggers::build(&[door("FIRST", exterior()), second]).0;
-        let at_second = Vec3::new(0.0, 0.0, -200.0);
+    fn each_entrance_keeps_its_own_edge() {
+        let mut triggers = build(&[
+            door("FIRST", exterior()),
+            door_at("SECOND", exterior(), [5000.0, 0.0, 0.0]),
+        ]);
+        let at_second = [5100.0, 0.0, 0.0];
         sample(&mut triggers, FAR);
         assert_eq!(sample(&mut triggers, INSIDE), Some("FIRST"));
         assert_eq!(sample(&mut triggers, at_second), Some("SECOND"));
@@ -711,323 +712,264 @@ mod tests {
     }
 
     #[test]
-    fn capsule_touching_the_box_from_the_side_counts() {
-        let mut triggers = one_door();
-        sample(&mut triggers, FAR);
-        assert_eq!(
-            sample(&mut triggers, Vec3::new(HALF_X + RADIUS, 0.0, 0.0)),
-            Some("DOOR")
-        );
-    }
-
-    #[test]
-    fn capsule_just_short_of_the_box_does_not_count() {
-        let mut triggers = one_door();
-        sample(&mut triggers, FAR);
-        assert_eq!(
-            sample(&mut triggers, Vec3::new(HALF_X + RADIUS + 0.01, 0.0, 0.0)),
-            None
-        );
-    }
-
-    #[test]
-    fn capsule_above_or_below_the_box_does_not_count() {
-        let mut triggers = one_door();
-        let level = |y| (Vec3::new(100.0, y, 0.0), Vec3::new(0.0, y, 0.0));
-        let (from, to) = level(TOP + 5.0);
-        assert_eq!(approach(&mut triggers, from, to), None);
-        let (from, to) = level(BOTTOM - HEIGHT - 1.0);
-        assert_eq!(approach(&mut triggers, from, to), None);
-        let (from, to) = level(TOP);
-        assert_eq!(approach(&mut triggers, from, to), Some("DOOR"));
-    }
-
-    #[test]
-    fn a_body_reaching_the_box_with_its_head_only_counts() {
-        let mut triggers = one_door();
-        let feet = BOTTOM - 10.0;
-        let from = Vec3::new(100.0, feet, 0.0);
-        assert_eq!(
-            approach(&mut triggers, from, Vec3::new(0.0, feet, 0.0)),
-            Some("DOOR")
-        );
-    }
-
-    #[test]
-    fn a_step_across_the_trigger_fires_although_both_ends_are_outside() {
-        let mut triggers = one_door();
-        assert_eq!(approach(&mut triggers, BEFORE, BEYOND), Some("DOOR"));
-    }
-
-    #[test]
-    fn a_step_across_in_the_other_direction_fires_too() {
-        let mut triggers = one_door();
-        assert_eq!(approach(&mut triggers, BEYOND, BEFORE), Some("DOOR"));
-    }
-
-    #[test]
-    fn a_long_step_passing_beside_the_trigger_does_not_fire() {
-        let mut triggers = one_door();
-        let beside = Vec3::new(HALF_X + RADIUS + 1.0, 0.0, 0.0);
-        assert_eq!(
-            approach(&mut triggers, BEFORE + beside, BEYOND + beside),
-            None
-        );
-    }
-
-    #[test]
-    fn a_long_step_passing_over_the_trigger_does_not_fire() {
-        let mut triggers = one_door();
-        let over = Vec3::new(0.0, TOP + 1.0, 0.0);
-        assert_eq!(approach(&mut triggers, BEFORE + over, BEYOND + over), None);
-    }
-
-    #[test]
-    fn a_diagonal_step_clipping_the_inflated_corner_region_fires() {
-        let mut triggers = one_door();
-        // x + z = 70 misses the box corner (35, 31) by more than the radius but crosses the
-        // square-cornered inflation reaching (37.5, 33.5).
-        let before = Vec3::new(75.0, 0.0, -5.0);
-        let beyond = Vec3::new(-5.0, 0.0, 75.0);
-        assert_eq!(approach(&mut triggers, before, beyond), Some("DOOR"));
-    }
-
-    #[test]
-    fn a_diagonal_step_beyond_the_inflated_corner_does_not_fire() {
-        let mut triggers = one_door();
-        // x + z = 75 clears the inflated corner (37.5 + 33.5 = 71); only the diagonal axis
-        // separates it, the step's extent overlaps the box on every face axis.
-        let before = Vec3::new(80.0, 0.0, -5.0);
-        let beyond = Vec3::new(-5.0, 0.0, 80.0);
-        assert_eq!(approach(&mut triggers, before, beyond), None);
-    }
-
-    #[test]
-    fn rearm_keeps_a_teleport_from_counting_as_a_sweep() {
-        let mut triggers = one_door();
-        sample(&mut triggers, BEFORE);
-        triggers.rearm();
-        assert_eq!(sample(&mut triggers, BEYOND), None);
-    }
-
-    #[test]
-    fn a_step_into_another_location_is_not_swept_from_the_old_one() {
-        let mut triggers =
-            WalkInTriggers::build(&[door("OUT", exterior()), door("IN", interior("A"))]).0;
-        triggers.sample(PlayerLocation::Exterior("WS"), Some(&body_at(BEFORE)));
-        let across = body_at(BEYOND);
-        assert_eq!(
-            triggers.sample(PlayerLocation::Interior("A"), Some(&across)),
-            None
-        );
-    }
-
-    #[test]
-    fn a_step_with_a_changing_body_height_is_swept_between_both_core_segments() {
-        let mut triggers = one_door();
-        let standing = body_at(Vec3::new(0.0, TOP + 5.0, BEFORE.z));
-        let crouched = PlayerBody {
-            height: 6.3,
-            ..body_at(Vec3::new(0.0, -3.0, BEYOND.z))
-        };
-        triggers.sample(PlayerLocation::Exterior("WS"), Some(&standing));
-        assert_eq!(
-            triggers.sample(PlayerLocation::Exterior("WS"), Some(&crouched)),
-            Some("DOOR")
-        );
-    }
-
-    #[test]
-    fn a_rotated_box_is_tested_along_its_rotated_axes() {
-        // A quarter turn about Bethesda Z swaps the box's engine X and Z extents: the half-width
-        // now runs along Z and the half-depth along X.
-        let mut rotated = door("DOOR", exterior());
-        rotated.rotation = [0.0, 0.0, std::f32::consts::FRAC_PI_2.into()];
-        let mut triggers = WalkInTriggers::build(&[rotated]).0;
-        sample(&mut triggers, FAR);
-        assert_eq!(
-            sample(&mut triggers, Vec3::new(HALF_Z + RADIUS + 1.0, 0.0, 0.0)),
-            None
-        );
-        assert_eq!(
-            sample(&mut triggers, Vec3::new(0.0, 0.0, HALF_Z + RADIUS + 1.0)),
-            Some("DOOR")
-        );
-    }
-
-    #[test]
-    fn position_and_scale_move_and_grow_the_box() {
-        let mut scaled = door("DOOR", exterior());
-        scaled.position = [300.0, -200.0, 100.0];
-        scaled.scale = 2.0;
-        let mut triggers = WalkInTriggers::build(&[scaled]).0;
-        // Bethesda (300, -200, 100) is engine (30, 10, 20). Marker and reach both double: the box
-        // spans x in [-40, 100], the capsule reaches 2.5 further.
-        let left = Vec3::new(-100.0, 10.0, 20.0);
-        assert_eq!(
-            approach(&mut triggers, left, Vec3::new(-42.5, 10.0, 20.0)),
-            Some("DOOR")
-        );
-        assert_eq!(
-            approach(&mut triggers, left, Vec3::new(-42.6, 10.0, 20.0)),
-            None
-        );
-    }
-
-    #[test]
-    fn a_small_door_reaches_proportionally_less() {
-        let mut small = door("DOOR", exterior());
-        small.scale = 0.25;
-        let mut triggers = WalkInTriggers::build(&[small]).0;
-        // (50 + 300) units at a quarter scale is 8.75 engine units, the capsule 2.5 further.
-        assert_eq!(
-            approach(&mut triggers, FAR, Vec3::new(11.25, 0.0, 0.0)),
-            Some("DOOR")
-        );
-        assert_eq!(
-            approach(&mut triggers, FAR, Vec3::new(11.26, 0.0, 0.0)),
-            None
-        );
-    }
-
-    #[test]
-    fn a_collapsed_bound_is_reported_and_still_reaches_past_the_marker() {
-        let mut flat = door("FLAT", exterior());
-        flat.bounds = DoorTriggerBounds {
-            min: [-50.0, 0.0, 0.0],
-            max: [50.0, 0.0, 200.0],
-        };
-        let (mut triggers, report) = WalkInTriggers::build(&[flat, door("FINE", interior("A"))]);
-        assert_eq!(report.degenerate_bounds, ["FLAT"]);
-        assert_eq!(report.non_finite, Vec::<String>::new());
-        sample(&mut triggers, FAR);
-        assert_eq!(sample(&mut triggers, INSIDE), Some("FLAT"));
-        let widened = triggers.locations[0].triggers[0].volume.half_extents;
-        assert!(
-            (widened.z - TRIGGER_REACH_UNITS * UNITS_TO_ENGINE).abs() < 1e-5,
-            "{widened:?}"
-        );
-    }
-
-    #[test]
-    fn a_door_with_non_finite_input_gets_no_trigger() {
-        let mut broken = door("BROKEN", exterior());
-        broken.position = [f64::NAN, 0.0, 0.0];
-        let (mut triggers, report) = WalkInTriggers::build(&[broken]);
+    fn a_door_with_non_finite_input_gets_no_entrance() {
+        let broken = door_at("BROKEN", exterior(), [f64::NAN, 0.0, 0.0]);
+        let (mut triggers, report) = WalkInTriggers::build(&[broken], DISTANCES);
         assert_eq!(report.non_finite, ["BROKEN"]);
         sample(&mut triggers, FAR);
         assert_eq!(sample(&mut triggers, INSIDE), None);
     }
 
     #[test]
-    fn the_walk_line_of_a_rotated_door_crosses_it_and_starts_outside() {
-        let mut rotated = door("DOOR", exterior());
-        rotated.rotation = [0.0, 0.0, 0.7];
-        rotated.position = [300.0, 400.0, 0.0];
-        let mut triggers = WalkInTriggers::build(&[rotated]).0;
-        let line = triggers.walk_line("DOOR", RADIUS).unwrap();
-        assert_eq!(line.location, exterior());
-        assert_eq!(sample(&mut triggers, line.approach), None);
-        assert_eq!(sample(&mut triggers, line.through), Some("DOOR"));
+    fn the_walk_line_starts_outside_and_enters_the_start_zone() {
+        let turned = WalkInDoor {
+            rotation: [0.0, 0.0, 0.7],
+            ..door_at("DOOR", exterior(), [300.0, 400.0, 0.0])
+        };
+        let mut triggers = build(&[turned]);
+        let line = triggers.walk_line("DOOR").unwrap();
+        let location = PlayerLocation::Exterior("WS");
+        triggers.rearm();
+        assert_eq!(triggers.sample(location, Some(line.approach)), None);
+        assert_eq!(triggers.sample(location, Some(line.through)), Some("DOOR"));
+    }
+
+    #[test]
+    fn the_walk_line_approaches_from_the_side_the_door_faces() {
+        let reach = DISTANCES.start_units + WALK_LINE_CLEARANCE_UNITS;
+        for (rotation_z, expected) in [
+            (0.0, Vec3::new(0.0, -reach, 0.0)),
+            (std::f64::consts::FRAC_PI_2, Vec3::new(-reach, 0.0, 0.0)),
+        ] {
+            let facing = WalkInDoor {
+                rotation: [0.0, 0.0, rotation_z],
+                ..door_at("DOOR", exterior(), [300.0, 400.0, 50.0])
+            };
+            let line = build(&[facing]).walk_line("DOOR").unwrap();
+            let offset = position_from_engine(line.approach) - Vec3::new(300.0, 400.0, 50.0);
+            assert!(
+                offset.distance(expected) < 0.05,
+                "{rotation_z}: {offset} != {expected}"
+            );
+            assert!(
+                position_from_engine(line.through).distance(Vec3::new(300.0, 400.0, 50.0)) < 0.05
+            );
+        }
     }
 
     #[test]
     fn an_unknown_door_has_no_walk_line() {
-        assert_eq!(one_door().walk_line("NOPE", RADIUS), None);
+        assert_eq!(one_door().walk_line("NOPE"), None);
+    }
+
+    fn probe_at(triggers: &WalkInTriggers, [x, y, z]: [f32; 3]) -> Option<EntranceProbe> {
+        triggers.probe(PlayerLocation::Exterior("WS"), at(x, y, z))
+    }
+
+    /// A half-size door above the ground (radii 375 and 175) and one far away.
+    fn half_size_door_above() -> WalkInTriggers {
+        let half = WalkInDoor {
+            scale: 0.5,
+            ..door_at("NEAR", exterior(), [0.0, 0.0, 300.0])
+        };
+        build(&[half, door_at("FAR", exterior(), [3000.0, 0.0, 0.0])])
     }
 
     #[test]
-    fn the_probe_reports_the_gap_in_bethesda_units_and_zero_when_touching() {
-        let triggers = one_door();
-        let location = PlayerLocation::Exterior("WS");
-        // Feet 2.5 engine units past where the capsule touches.
-        let probe = triggers
-            .probe(
-                location,
-                &body_at(Vec3::new(HALF_X + RADIUS + 2.5, 0.0, 0.0)),
-            )
-            .unwrap();
-        assert!((probe.gap_units - 25.0).abs() < 0.01, "{}", probe.gap_units);
-        let touching = triggers
-            .probe(location, &body_at(Vec3::new(HALF_X + RADIUS, 0.0, 0.0)))
-            .unwrap();
-        assert!(touching.gap_units.abs() < 0.01, "{}", touching.gap_units);
-        let inside = triggers.probe(location, &body_at(INSIDE)).unwrap();
-        assert_eq!(inside.gap_units, 0.0);
-    }
-
-    #[test]
-    fn the_probe_gives_door_local_bethesda_coordinates_of_feet_and_head() {
-        let mut moved = door("DOOR", exterior());
-        moved.position = [300.0, 400.0, 0.0];
-        moved.rotation = [0.0, 0.0, 0.7];
-        let triggers = WalkInTriggers::build(&[moved]).0;
-        // The door origin in engine space is (30, 0, -40); standing there puts the feet at the
-        // local origin and the head 12.6 engine units (126 Bethesda units) straight up.
-        let probe = triggers
-            .probe(
-                PlayerLocation::Exterior("WS"),
-                &body_at(Vec3::new(30.0, 0.0, -40.0)),
-            )
-            .unwrap();
-        assert!(
-            probe.feet_local.abs().max_element() < 1e-3,
-            "{:?}",
-            probe.feet_local
-        );
-        assert!(
-            (probe.head_local - Vec3::new(0.0, 0.0, 126.0))
-                .abs()
-                .max_element()
-                < 1e-3
-        );
-        assert_eq!(probe.box_min, Vec3::new(-350.0, -310.0, -300.0));
-        assert_eq!(probe.box_max, Vec3::new(350.0, 310.0, 500.0));
-    }
-
-    #[test]
-    fn the_probe_picks_the_nearest_trigger_and_ignores_other_locations() {
-        let mut far = door("FAR", exterior());
-        far.position = [3000.0, 0.0, 0.0];
-        let triggers =
-            WalkInTriggers::build(&[far, door("NEAR", exterior()), door("IN", interior("A"))]).0;
-        let body = body_at(Vec3::new(20.0, 0.0, 0.0));
+    fn the_probe_reports_the_3d_distance_and_the_radii_of_the_reference() {
+        let probe = probe_at(&half_size_door_above(), [400.0, 0.0, 0.0]).unwrap();
+        assert_eq!(probe.source_ref, "NEAR");
+        assert!((probe.distance_units - 500.0).abs() < 0.01, "{probe:?}");
         assert_eq!(
-            triggers
-                .probe(PlayerLocation::Exterior("WS"), &body)
-                .unwrap()
-                .source_ref,
-            "NEAR"
+            probe.limits,
+            EntranceDistances {
+                display_units: 375.0,
+                start_units: 175.0,
+            }
         );
-        assert_eq!(
-            triggers
-                .probe(PlayerLocation::Interior("A"), &body)
-                .unwrap()
-                .source_ref,
-            "IN"
-        );
-        assert_eq!(triggers.probe(PlayerLocation::Interior("B"), &body), None);
     }
 
     #[test]
-    fn the_probe_reports_whether_the_last_sweep_touched_and_whether_it_was_armed() {
-        let mut triggers = one_door();
-        let location = PlayerLocation::Exterior("WS");
-        let before = body_at(Vec3::new(0.0, 0.0, 20.0));
-        let beyond = body_at(Vec3::new(0.0, 0.0, -20.0));
-        triggers.sample(location, Some(&before));
-        let baseline = triggers.probe(location, &before).unwrap();
-        assert!(!baseline.armed);
-        assert!(!baseline.swept_prev);
-        triggers.sample(location, Some(&beyond));
-        let swept = triggers.probe(location, &beyond).unwrap();
-        assert!(swept.armed);
-        assert!(swept.swept_prev);
+    fn the_probe_reports_whether_the_entrance_shows() {
+        let triggers = half_size_door_above();
+        assert!(!probe_at(&triggers, [400.0, 0.0, 0.0]).unwrap().shown);
+        assert!(probe_at(&triggers, [200.0, 0.0, 0.0]).unwrap().shown);
+    }
+
+    #[test]
+    fn the_probe_reports_whether_the_feet_are_inside_the_start_zone() {
+        let triggers = half_size_door_above();
+        assert!(!probe_at(&triggers, [200.0, 0.0, 0.0]).unwrap().inside_start);
+        assert!(
+            probe_at(&triggers, [100.0, 0.0, 300.0])
+                .unwrap()
+                .inside_start
+        );
+    }
+
+    #[test]
+    fn the_probe_reports_whether_the_last_sample_was_armed() {
+        let mut triggers = half_size_door_above();
+        sample(&mut triggers, FAR);
+        assert!(!probe_at(&triggers, FAR).unwrap().armed);
+        sample(&mut triggers, [400.0, 0.0, 0.0]);
+        assert!(probe_at(&triggers, [400.0, 0.0, 0.0]).unwrap().armed);
+    }
+
+    #[test]
+    fn the_probe_takes_the_entrance_the_hud_shows_over_a_nearer_one_out_of_its_reach() {
+        let small = WalkInDoor {
+            scale: 0.23,
+            ..door_at("small", exterior(), [0.0, 0.0, 0.0])
+        };
+        let triggers = build(&[small, door_at("large", exterior(), [600.0, 0.0, 0.0])]);
+        let probe = probe_at(&triggers, [290.0, 0.0, 0.0]).unwrap();
+        assert_eq!(probe.source_ref, "large");
+        assert!(probe.shown);
+    }
+
+    #[test]
+    fn with_nothing_shown_the_probe_reports_the_nearest_entrance() {
+        let probe = probe_at(&half_size_door_above(), [-1000.0, 0.0, 0.0]).unwrap();
+        assert_eq!(probe.source_ref, "NEAR");
+        assert!(!probe.shown);
+    }
+
+    #[test]
+    fn a_location_without_entrances_has_no_probe() {
+        assert_eq!(
+            half_size_door_above().probe(PlayerLocation::Interior("A"), Vec3::ZERO),
+            None
+        );
+    }
+
+    #[test]
+    fn walk_in_is_live_only_while_walking_in_game_with_the_pipboy_closed_and_no_teleport_pending() {
+        let live = PlayState {
+            walking: true,
+            in_game: true,
+            pipboy_open: false,
+            teleport_pending: false,
+        };
+        assert!(live.walk_in_live());
+        for blocked in [
+            PlayState {
+                walking: false,
+                ..live
+            },
+            PlayState {
+                in_game: false,
+                ..live
+            },
+            PlayState {
+                pipboy_open: true,
+                ..live
+            },
+            PlayState {
+                teleport_pending: true,
+                ..live
+            },
+        ] {
+            assert!(!blocked.walk_in_live(), "{blocked:?}");
+        }
     }
 
     #[test]
     fn no_doors_never_fire() {
         let mut triggers = WalkInTriggers::default();
         assert_eq!(sample(&mut triggers, INSIDE), None);
+    }
+
+    mod real_install {
+        use super::*;
+        use crate::assets::db::test_support::installed_database;
+
+        /// The HUD lets the nearest entrance decide; which of two entrances in range wins cannot be
+        /// observed while no two display spheres of one space overlap.
+        #[test]
+        #[ignore = "needs a converted installation (OPENFO4_INSTALL_DIR or OPENFO4_DB)"]
+        fn no_two_entrances_of_one_space_have_overlapping_display_spheres() {
+            let db = installed_database();
+            let doors = db.get_walk_in_doors().unwrap().doors;
+            let distances = EntranceDistances::load(&db).unwrap();
+            let (triggers, _) = WalkInTriggers::build(&doors, distances);
+            let mut overlapping = Vec::new();
+            for entry in &triggers.locations {
+                for (index, first) in entry.entrances.iter().enumerate() {
+                    for second in &entry.entrances[index + 1..] {
+                        let reach = first.limits.display_units.max(0.0)
+                            + second.limits.display_units.max(0.0);
+                        if first.origin.distance(second.origin) <= reach {
+                            overlapping.push((first.source_ref.clone(), second.source_ref.clone()));
+                        }
+                    }
+                }
+            }
+            assert_eq!(overlapping, Vec::<(String, String)>::new());
+        }
+    }
+
+    mod settings {
+        use super::*;
+        use crate::assets::db::test_support::database_with;
+
+        fn setting(editor_id: &str, value: &str) -> String {
+            format!(
+                "INSERT INTO game_settings (form_key, editor_id, value_type, value_float)
+                 VALUES ('{editor_id}:T.esm', '{editor_id}', 'float', {value});"
+            )
+        }
+
+        fn load(statements: &str) -> anyhow::Result<EntranceDistances> {
+            EntranceDistances::load(&database_with(statements))
+        }
+
+        #[test]
+        fn both_settings_are_read() {
+            let distances = load(&format!(
+                "{}{}",
+                setting(DISPLAY_SETTING, "550.0"),
+                setting(START_SETTING, "350.0")
+            ))
+            .unwrap();
+            assert_eq!(distances, DISTANCES);
+        }
+
+        #[test]
+        fn a_missing_or_unusable_setting_is_an_error_naming_it() {
+            for (name, other) in [
+                (DISPLAY_SETTING, START_SETTING),
+                (START_SETTING, DISPLAY_SETTING),
+            ] {
+                let usable = setting(other, "400.0");
+                let cases = [
+                    String::new(),
+                    format!(
+                        "INSERT INTO game_settings (form_key, editor_id, value_type, value_string)
+                         VALUES ('x:T.esm', '{name}', 'string', 'far');"
+                    ),
+                    setting(name, "0.0"),
+                    setting(name, "-5.0"),
+                    format!(
+                        "INSERT INTO game_settings (form_key, editor_id, value_type)
+                         VALUES ('x:T.esm', '{name}', 'float');"
+                    ),
+                ];
+                for case in cases {
+                    let message = format!("{:#}", load(&format!("{usable}{case}")).unwrap_err());
+                    assert!(message.contains(name), "{case}: {message}");
+                }
+            }
+        }
+
+        #[test]
+        fn a_non_finite_distance_is_rejected() {
+            for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                let error = positive_distance(START_SETTING, bad)
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.contains(START_SETTING), "{bad}: {error}");
+            }
+        }
     }
 }

@@ -89,7 +89,6 @@ const PIPBOY_TABLES_FIX: &str =
     "esm-only --tables worldspaces,map_markers,perks,perk_chart,special_attributes";
 const WEAPON_DEFAULT_MODS_COLUMNS: &[&str] = &["default_mods"];
 const OBJECT_MOD_MODEL_COLUMNS: &[&str] = &["model_path", "attach_point_name"];
-const DOOR_TRIGGER_BOUNDS_COLUMNS: &[&str] = &["trigger_bounds"];
 const LOAD_SCREEN_COLUMNS: &[&str] = &[
     "tip",
     "model",
@@ -173,7 +172,6 @@ pub enum ColumnGroup {
     ObjectModModel,
     Navmesh,
     CollisionLayer,
-    DoorTriggerBounds,
     LoadScreen,
     LoadScreenCondition,
     Transform,
@@ -211,7 +209,6 @@ impl std::fmt::Display for ColumnGroup {
             Self::ObjectModModel => "object modification model",
             Self::Navmesh => "navmesh",
             Self::CollisionLayer => "collision layer",
-            Self::DoorTriggerBounds => "door trigger bounds",
             Self::LoadScreen => "load screen",
             Self::LoadScreenCondition => "load screen condition",
             Self::Transform => "transform",
@@ -442,7 +439,6 @@ pub struct DbSchema {
     pub object_mod_model_columns_present: bool,
     pub navmesh_columns_present: bool,
     pub collision_layer_columns_present: bool,
-    pub door_trigger_bounds_column_present: bool,
     /// The load screen, load screen condition and transform tables the loading screen catalog
     /// reads, all or none.
     pub load_screen_columns_present: bool,
@@ -601,12 +597,6 @@ impl DbSchema {
                 ColumnGroup::CollisionLayer,
                 "collision_layers",
                 COLLISION_LAYER_COLUMNS,
-            )?,
-            door_trigger_bounds_column_present: column_group_present(
-                conn,
-                ColumnGroup::DoorTriggerBounds,
-                "doors",
-                DOOR_TRIGGER_BOUNDS_COLUMNS,
             )?,
             load_screen_columns_present: load_screen_tables_present(conn)?,
             teleport_flags_column_present: column_group_present(
@@ -786,14 +776,6 @@ pub fn activator_water_select_list(schema: DbSchema, prefix: &str) -> String {
     select_list(
         ACTIVATOR_WATER_COLUMNS,
         schema.activator_water_column_present,
-        prefix,
-    )
-}
-
-pub fn door_trigger_bounds_select_list(schema: DbSchema, prefix: &str) -> String {
-    select_list(
-        DOOR_TRIGGER_BOUNDS_COLUMNS,
-        schema.door_trigger_bounds_column_present,
         prefix,
     )
 }

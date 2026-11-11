@@ -19,7 +19,6 @@ use crate::startup::StartupError;
 
 pub(super) const OPEN_SETTING: &str = "sOpen";
 pub(super) const CLOSE_SETTING: &str = "sClose";
-pub(super) const ENTRANCE_DISPLAY_SETTING: &str = "fAutoDoorDisplayDistance";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RolloverPrompt {
@@ -126,7 +125,8 @@ fn destination_name<'a>(
 /// What a load door shows, aimed at or stood near.
 #[derive(Debug, PartialEq, Eq)]
 enum LoadDoorText {
-    /// Its base carries the no-to-text flag: no text, and as a walk-in entrance it is not one.
+    /// Its base carries the no-to-text flag: it shows no text, aimed at or stood near. Walking
+    /// in still starts it.
     Silent,
     /// The destination's name; `None` when it is blank.
     Destination(Option<Arc<str>>),
@@ -203,23 +203,13 @@ pub(super) struct DoorPrompts {
     labels: HashMap<String, Arc<str>>,
     silent: HashSet<String>,
     verbs: PromptVerbs,
-    /// Bethesda units within which a walk-in entrance shows its name.
-    entrance_display_units: f32,
 }
 
-/// The walk-in entrance the player stands near, never a silent one. It makes the crosshair
-/// activatable whether or not it has a name to show.
+/// What the walk-in entrance that decides the HUD shows: it makes the crosshair activatable
+/// whether or not it has a name. A silent entrance decides too, but shows nothing at all.
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct Entrance {
+pub(super) struct ShownEntrance {
     pub prompt: Option<RolloverPrompt>,
-}
-
-fn positive_distance(distance: f32) -> anyhow::Result<f32> {
-    anyhow::ensure!(
-        distance.is_finite() && distance > 0.0,
-        "game setting {ENTRANCE_DISPLAY_SETTING} is {distance}, not a positive distance"
-    );
-    Ok(distance)
 }
 
 /// What the HUD shows for the aim and the entrance the player stands near.
@@ -235,7 +225,7 @@ pub(super) struct DoorHud {
 pub(super) fn door_hud(
     aimed_activatable: bool,
     ordinary: Option<RolloverPrompt>,
-    entrance: Option<&Entrance>,
+    entrance: Option<&ShownEntrance>,
 ) -> DoorHud {
     DoorHud {
         activate: aimed_activatable || entrance.is_some(),
@@ -246,7 +236,7 @@ pub(super) fn door_hud(
 /// An aimed ordinary prompt wins over the entrance the player stands near.
 fn shown_prompt(
     ordinary: Option<RolloverPrompt>,
-    entrance: Option<&Entrance>,
+    entrance: Option<&ShownEntrance>,
 ) -> Option<RolloverPrompt> {
     ordinary.or_else(|| entrance.and_then(|entrance| entrance.prompt.clone()))
 }
@@ -256,13 +246,11 @@ impl DoorPrompts {
         labels: HashMap<String, Arc<str>>,
         silent: HashSet<String>,
         verbs: PromptVerbs,
-        entrance_display_units: f32,
     ) -> Self {
         Self {
             labels,
             silent,
             verbs,
-            entrance_display_units,
         }
     }
 
@@ -271,13 +259,12 @@ impl DoorPrompts {
         self.silent.contains(ref_id)
     }
 
-    /// A missing or unusable verb or distance setting stops startup. Unreadable map regions
+    /// A missing or unusable verb setting stops startup. Unreadable map regions
     /// degrade to none, reported: exterior doors then show their worldspace's name. A database
     /// from an older installer lacks cell names and region map entries, which the schema reports
     /// once.
     pub(super) fn load(db: &DbClient, teleports: &[TeleportRecord]) -> Result<Self, StartupError> {
-        let (verbs, entrance_display_units) =
-            Self::load_settings(db).map_err(StartupError::DoorPromptSettings)?;
+        let verbs = Self::load_verbs(db).map_err(StartupError::DoorPromptSettings)?;
         let regions = match db.get_map_regions() {
             Ok(regions) => MapRegionIndex::new(regions),
             Err(error) => {
@@ -304,43 +291,37 @@ impl DoorPrompts {
             teleports.len(),
             silent.len()
         );
-        Ok(Self::new(labels, silent, verbs, entrance_display_units))
+        Ok(Self::new(labels, silent, verbs))
     }
 
-    fn load_settings(db: &DbClient) -> anyhow::Result<(PromptVerbs, f32)> {
+    fn load_verbs(db: &DbClient) -> anyhow::Result<PromptVerbs> {
         let text = |name: &'static str| {
             db.get_game_setting_string(name)?
                 .with_context(|| format!("game setting {name} is missing from the database"))
         };
-        let verbs = PromptVerbs::new(&text(OPEN_SETTING)?, &text(CLOSE_SETTING)?)?;
-        let distance = db
-            .get_game_setting_number(ENTRANCE_DISPLAY_SETTING)?
-            .with_context(|| {
-                format!("game setting {ENTRANCE_DISPLAY_SETTING} is missing from the database")
-            })?;
-        Ok((verbs, positive_distance(distance)?))
+        Ok(PromptVerbs::new(
+            &text(OPEN_SETTING)?,
+            &text(CLOSE_SETTING)?,
+        )?)
     }
 
-    /// The entrance of the player's location nearest to `feet` within the display distance,
-    /// silent ones left out. Its prompt is the name only, no verb; the label lookup is the one
-    /// place that decides it.
+    /// What the entrance the walk-in rules pick at `feet` shows: nothing when it is silent, else
+    /// its name only, no verb.
     pub(super) fn entrance(
         &self,
         triggers: &WalkInTriggers,
         location: PlayerLocation<'_>,
         feet: Vec3,
-    ) -> Option<Entrance> {
-        let source_ref = triggers.nearest_entrance(
-            location,
-            feet,
-            self.entrance_display_units,
-            |source_ref| !self.is_silent(source_ref),
-        )?;
+    ) -> Option<ShownEntrance> {
+        let source_ref = triggers.nearest_entrance(location, feet)?;
+        if self.is_silent(source_ref) {
+            return None;
+        }
         let prompt = self.labels.get(source_ref).map(|name| RolloverPrompt {
             name: Arc::clone(name),
             verb: None,
         });
-        Some(Entrance { prompt })
+        Some(ShownEntrance { prompt })
     }
 
     /// The prompt of the ref under the crosshair, if any; `is_load_door` and `door` answer for
@@ -365,6 +346,8 @@ impl DoorPrompts {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bethesda_space::position_to_engine;
+    use crate::rendering::walk_in::{EntranceDistances, TEST_DISTANCES};
 
     const WORLD: &str = "WS";
     const SQUARE: [(f32, f32); 4] = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)];
@@ -705,13 +688,11 @@ mod tests {
 
     mod real_install {
         use std::collections::BTreeMap;
-        use std::path::{Path, PathBuf};
 
         use super::*;
         use crate::assets::db::DbClient;
-        use crate::assets::db::teleports::DoorLocation;
-        use crate::assets::layout::data_dir;
-        use crate::assets::{AssetRootEnv, resolve_asset_root};
+        use crate::assets::db::teleports::{DoorLocation, WalkInDoor};
+        use crate::assets::db::test_support::installed_database as database;
 
         const ORIGINAL_LABELS: [(&str, &str); 19] = [
             ("0788F7", "COMMONWEALTH"),
@@ -734,21 +715,6 @@ mod tests {
             ("0B250F", ""),
             ("0F99FB", ""),
         ];
-
-        fn database() -> DbClient {
-            let path = std::env::var_os("OPENFO4_DB").map_or_else(
-                || {
-                    let root = resolve_asset_root(
-                        &AssetRootEnv::from_process(),
-                        Path::new(env!("CARGO_MANIFEST_DIR")),
-                    )
-                    .expect("set OPENFO4_INSTALL_DIR to a converted installation");
-                    PathBuf::from(format!("{}/data.db", data_dir(root.to_str().unwrap())))
-                },
-                PathBuf::from,
-            );
-            DbClient::new(path.to_str().unwrap()).unwrap()
-        }
 
         #[test]
         #[ignore = "needs an installation converted with cell names and region map entries"]
@@ -775,8 +741,7 @@ mod tests {
             }
         }
 
-        /// The placed refs of `AutoloadDoorNoText` (flags 0x42, named "Auto Door"), the walk-in
-        /// entrances of the Vault 111 elevator. The original game shows no text near them.
+        /// `AutoloadDoorNoText`: the Vault 111 elevator.
         const NO_TEXT_ENTRANCES: [&str; 4] = [
             "01F180:Fallout4.esm",
             "0998E3:Fallout4.esm",
@@ -803,52 +768,432 @@ mod tests {
             }
         }
 
-        /// Player feet (`getpos`, Bethesda units) at the Diamond City gate, from the original
-        /// game's `W2_diamondcity_20261110_213031` run. The first two poses showed no prompt there,
-        /// the last two did; the distances are `getdistance` to the door origin (559.94, 540.01,
-        /// 498.26 and, the closest pose without an automatic start, 325.65), while the rule
-        /// measures to the centre of the trigger bounds.
-        const GATE: &str = "12F822:Fallout4.esm";
-        const NO_PROMPT_POSES: [[f32; 3]; 2] = [
-            [-14540.22, -28877.11, 1463.34],
-            [-14530.79, -28858.12, 1463.34],
+        /// A pose of the original game: feet from `getpos`, Bethesda units.
+        struct Observed {
+            label: &'static str,
+            door: &'static str,
+            feet: [f32; 3],
+            shown: Option<&'static str>,
+        }
+
+        const fn observed(
+            label: &'static str,
+            door: &'static str,
+            feet: [f32; 3],
+            shown: Option<&'static str>,
+        ) -> Observed {
+            Observed {
+                label,
+                door,
+                feet,
+                shown,
+            }
+        }
+
+        const DIAMOND_CITY: Option<&str> = Some("DIAMOND CITY");
+        const VIRGIL: Option<&str> = Some("VIRGIL'S LABORATORY");
+        const MOLE_RAT_DEN: Option<&str> = Some("MOLE RAT DEN");
+
+        /// From `walkins_openfo4_compare.json`. At `C_W2p_gate` the aimed gate's own prompt
+        /// covered the entrance's name, which the rule still selects there.
+        const OBSERVED: [Observed; 17] = [
+            observed("C_W2_d560", "12F822", [-14540.22, -28877.11, 1463.34], None),
+            observed("C_W2_d540", "12F822", [-14530.79, -28858.12, 1463.34], None),
+            observed(
+                "C_W2_d500",
+                "12F822",
+                [-14513.11, -28818.99, 1467.88],
+                DIAMOND_CITY,
+            ),
+            observed(
+                "C_W2_d450_turned180",
+                "12F822",
+                [-14490.12, -28769.68, 1471.13],
+                DIAMOND_CITY,
+            ),
+            observed(
+                "C_W2_d330",
+                "12F822",
+                [-14434.32, -28664.02, 1502.05],
+                DIAMOND_CITY,
+            ),
+            observed(
+                "C_W2p_gate",
+                "12F822",
+                [-14513.11, -28818.99, 1467.88],
+                DIAMOND_CITY,
+            ),
+            observed(
+                "C_W2s_start_pose",
+                "12F822",
+                [-14433.26, -28666.57, 1499.93],
+                DIAMOND_CITY,
+            ),
+            observed(
+                "C_W2s_walk1_last_no_start",
+                "12F822",
+                [-14429.44, -28657.96, 1506.44],
+                DIAMOND_CITY,
+            ),
+            observed(
+                "C_W3_last_none",
+                "15A1CB",
+                [-116_454.96, -136_942.34, 9944.76],
+                None,
+            ),
+            observed(
+                "C_W3_first_prompt",
+                "15A1CB",
+                [-116_463.77, -136_941.06, 9942.02],
+                VIRGIL,
+            ),
+            observed(
+                "C_W3_last_no_start",
+                "15A1CB",
+                [-116_575.52, -137_102.52, 9933.68],
+                VIRGIL,
+            ),
+            observed(
+                "C_W1_last_none",
+                "08EB65",
+                [-69779.81, 77141.68, 6997.22],
+                None,
+            ),
+            observed(
+                "C_W1_A552_none",
+                "08EB65",
+                [-69775.13, 77160.03, 6992.6],
+                None,
+            ),
+            observed(
+                "C_W1_A545_none",
+                "08EB65",
+                [-69771.81, 77166.43, 6990.58],
+                None,
+            ),
+            observed(
+                "C_W1_A356_none",
+                "08EB65",
+                [-69725.05, 77356.13, 6976.94],
+                None,
+            ),
+            observed(
+                "C_W1_A344_none",
+                "08EB65",
+                [-69721.7, 77369.2, 6975.71],
+                None,
+            ),
+            observed(
+                "C_W1_B141_prompt",
+                "08EB65",
+                [-69675.53, 77546.68, 6912.9],
+                MOLE_RAT_DEN,
+            ),
         ];
-        const PROMPT_POSES: [[f32; 3]; 2] = [
-            [-14513.11, -28818.99, 1467.88],
-            [-14434.32, -28664.02, 1502.05],
+
+        /// From `display_boundary_probes.json`: per site and line, the last pose that showed the
+        /// name and the first that did not.
+        const DISPLAY_BOUNDARY: [Observed; 34] = [
+            observed(
+                "Z_W1_up_last_shown",
+                "08EB65",
+                [-69646.37, 77664.3, 7187.5],
+                MOLE_RAT_DEN,
+            ),
+            observed(
+                "Z_W1_up_first_none",
+                "08EB65",
+                [-69646.37, 77664.3, 7188.76],
+                None,
+            ),
+            observed(
+                "Z_W1_clear_air_last_shown",
+                "08EB65",
+                [-69710.62, 77412.7, 7011.78],
+                MOLE_RAT_DEN,
+            ),
+            observed(
+                "Z_W1_clear_air_first_none",
+                "08EB65",
+                [-69710.98, 77411.29, 7012.36],
+                None,
+            ),
+            observed(
+                "Z_W1_down_last_shown",
+                "08EB65",
+                [-69646.37, 77664.3, 6628.31],
+                MOLE_RAT_DEN,
+            ),
+            observed(
+                "Z_W1_down_first_none",
+                "08EB65",
+                [-69646.37, 77664.3, 6627.05],
+                None,
+            ),
+            observed(
+                "Z_W1_plus_y_last_shown",
+                "08EB65",
+                [-69715.54, 77393.41, 6907.9],
+                MOLE_RAT_DEN,
+            ),
+            observed(
+                "Z_W1_plus_y_first_none",
+                "08EB65",
+                [-69715.85, 77392.19, 6907.9],
+                None,
+            ),
+            observed(
+                "Z_W1_plus_x_last_shown",
+                "08EB65",
+                [-69917.27, 77733.48, 6907.9],
+                MOLE_RAT_DEN,
+            ),
+            observed(
+                "Z_W1_plus_x_first_none",
+                "08EB65",
+                [-69918.48, 77733.79, 6907.9],
+                None,
+            ),
+            observed(
+                "Z_W1_yz_up45_last_shown",
+                "08EB65",
+                [-69695.28, 77472.75, 7105.61],
+                MOLE_RAT_DEN,
+            ),
+            observed(
+                "Z_W1_yz_up45_first_none",
+                "08EB65",
+                [-69695.5, 77471.88, 7106.5],
+                None,
+            ),
+            observed(
+                "Z_W1_yz_down45_last_shown",
+                "08EB65",
+                [-69695.28, 77472.75, 6710.2],
+                MOLE_RAT_DEN,
+            ),
+            observed(
+                "Z_W1_yz_down45_first_none",
+                "08EB65",
+                [-69696.16, 77469.3, 6706.64],
+                None,
+            ),
+            observed(
+                "Z_W2_up_last_shown",
+                "12F822",
+                [-14317.12, -28398.68, 2160.64],
+                DIAMOND_CITY,
+            ),
+            observed(
+                "Z_W2_up_first_none",
+                "12F822",
+                [-14317.12, -28398.68, 2162.74],
+                None,
+            ),
+            observed(
+                "Z_W2_down_last_shown",
+                "12F822",
+                [-14317.12, -28398.68, 1140.05],
+                DIAMOND_CITY,
+            ),
+            observed(
+                "Z_W2_down_first_none",
+                "12F822",
+                [-14317.12, -28398.68, 1136.54],
+                None,
+            ),
+            observed(
+                "Z_W2_plus_y_last_shown",
+                "12F822",
+                [-14533.2, -28862.07, 1650.06],
+                DIAMOND_CITY,
+            ),
+            observed(
+                "Z_W2_plus_y_first_none",
+                "12F822",
+                [-14534.76, -28865.42, 1650.06],
+                None,
+            ),
+            observed(
+                "Z_W2_yz_up45_last_shown",
+                "12F822",
+                [-14469.67, -28725.82, 2011.02],
+                DIAMOND_CITY,
+            ),
+            observed(
+                "Z_W2_yz_up45_first_none",
+                "12F822",
+                [-14470.28, -28727.13, 2012.46],
+                None,
+            ),
+            observed(
+                "Z_W3_up_last_shown",
+                "15A1CB",
+                [-116_853.8, -137_324.72, 10474.36],
+                VIRGIL,
+            ),
+            observed(
+                "Z_W3_up_first_none",
+                "15A1CB",
+                [-116_853.8, -137_324.72, 10476.39],
+                None,
+            ),
+            observed(
+                "Z_W3_down_last_shown",
+                "15A1CB",
+                [-116_853.8, -137_324.72, 9377.27],
+                VIRGIL,
+            ),
+            observed(
+                "Z_W3_down_first_none",
+                "15A1CB",
+                [-116_853.8, -137_324.72, 9374.64],
+                None,
+            ),
+            observed(
+                "Z_W3_yz_up45_last_shown",
+                "15A1CB",
+                [-116_565.62, -137_065.67, 10313.13],
+                VIRGIL,
+            ),
+            observed(
+                "Z_W3_yz_up45_first_none",
+                "15A1CB",
+                [-116_564.44, -137_064.61, 10314.73],
+                None,
+            ),
+            observed(
+                "Z_W3_plus_x_last_shown",
+                "15A1CB",
+                [-116_486.74, -137_733.05, 9925.64],
+                VIRGIL,
+            ),
+            observed(
+                "Z_W3_plus_x_first_none",
+                "15A1CB",
+                [-116_484.09, -137_736.0, 9925.64],
+                None,
+            ),
+            observed(
+                "Z_W3_minus_y_last_shown",
+                "15A1CB",
+                [-117_261.98, -137_691.64, 9925.64],
+                VIRGIL,
+            ),
+            observed(
+                "Z_W3_minus_y_first_none",
+                "15A1CB",
+                [-117_264.9, -137_694.27, 9925.64],
+                None,
+            ),
+            observed(
+                "Z_W3_xy_diag_last_shown",
+                "15A1CB",
+                [-116_307.31, -137_353.81, 9925.64],
+                VIRGIL,
+            ),
+            observed(
+                "Z_W3_xy_diag_first_none",
+                "15A1CB",
+                [-116_303.72, -137_354.0, 9925.64],
+                None,
+            ),
         ];
+
+        const NO_START: [&str; 6] = [
+            "C_W2_d330",
+            "C_W2s_start_pose",
+            "C_W2s_walk1_last_no_start",
+            "C_W3_last_no_start",
+            "C_W1_A344_none",
+            "C_W1_B141_prompt",
+        ];
+
+        /// Feet where the original started the Vault 111 elevator.
+        const VAULT_ELEVATOR: &str = "01F180:Fallout4.esm";
+        const VAULT_ELEVATOR_START: [f32; 3] = [-5461.1, -266.6, 1460.2];
+
+        fn door_of<'a>(doors: &'a [WalkInDoor], source_ref: &str) -> &'a WalkInDoor {
+            doors
+                .iter()
+                .find(|door| door.source_ref == source_ref)
+                .unwrap_or_else(|| panic!("{source_ref} is not a walk-in entrance"))
+        }
+
+        fn location_of<'a>(doors: &'a [WalkInDoor], source_ref: &str) -> PlayerLocation<'a> {
+            match &door_of(doors, source_ref).location {
+                DoorLocation::Interior { cell } => PlayerLocation::Interior(cell),
+                DoorLocation::Exterior { worldspace } => PlayerLocation::Exterior(worldspace),
+            }
+        }
+
+        fn engine_feet([x, y, z]: [f32; 3]) -> Vec3 {
+            position_to_engine(x, y, z)
+        }
+
+        /// What starts when the player walks straight from far out to `feet`, on the line from the
+        /// door's origin through `feet`, so the path comes no closer to the origin than `feet`.
+        fn started_on_arrival(
+            triggers: &mut WalkInTriggers,
+            doors: &[WalkInDoor],
+            source_ref: &str,
+            feet: [f32; 3],
+        ) -> Option<String> {
+            let location = location_of(doors, source_ref);
+            let origin = Vec3::from(door_of(doors, source_ref).position.map(|v| v as f32));
+            let feet = Vec3::from(feet);
+            let far_out = origin + (feet - origin) * 100.0;
+            triggers.rearm();
+            triggers.sample(location, Some(engine_feet(far_out.to_array())));
+            triggers
+                .sample(location, Some(engine_feet(feet.to_array())))
+                .map(str::to_owned)
+        }
+
+        fn walk_ins(db: &DbClient) -> (Vec<WalkInDoor>, WalkInTriggers) {
+            let doors = db.get_walk_in_doors().unwrap().doors;
+            let distances = EntranceDistances::load(db).unwrap();
+            let (triggers, report) = WalkInTriggers::build(&doors, distances);
+            assert!(report.non_finite.is_empty(), "{report:?}");
+            (doors, triggers)
+        }
 
         #[test]
         #[ignore = "needs an installation converted with cell names and region map entries"]
-        fn the_diamond_city_gate_shows_its_name_only_within_the_display_distance() {
-            use crate::bethesda_space::position_to_engine;
-
+        fn entrances_show_their_names_where_the_original_did() {
             let db = database();
             let teleports = db.get_placed_teleports().unwrap();
             let prompts = DoorPrompts::load(&db, &teleports).unwrap();
-            let doors = db.get_walk_in_doors().unwrap().doors;
-            let gate = doors.iter().find(|door| door.source_ref == GATE).unwrap();
-            let DoorLocation::Exterior { worldspace } = &gate.location else {
-                panic!("the gate stands in the open world");
-            };
-            let (triggers, _) = WalkInTriggers::build(&doors);
-            let entrance_at = |[x, y, z]: [f32; 3]| {
-                prompts.entrance(
-                    &triggers,
-                    PlayerLocation::Exterior(worldspace),
-                    position_to_engine(x, y, z),
-                )
-            };
+            let (doors, triggers) = walk_ins(&db);
+            for pose in OBSERVED.iter().chain(&DISPLAY_BOUNDARY) {
+                let location = location_of(&doors, &format!("{}:Fallout4.esm", pose.door));
+                let shown = prompts
+                    .entrance(&triggers, location, engine_feet(pose.feet))
+                    .map(|entrance| entrance.prompt.map(|prompt| prompt.name.to_uppercase()));
+                let expected = pose.shown.map(|name| Some(name.to_string()));
+                assert_eq!(shown, expected, "{}", pose.label);
+            }
+        }
 
-            for pose in NO_PROMPT_POSES {
-                assert_eq!(entrance_at(pose), None, "{pose:?}");
+        #[test]
+        #[ignore = "needs an installation converted with cell names and region map entries"]
+        fn entrances_start_where_the_original_did() {
+            let db = database();
+            let (doors, mut triggers) = walk_ins(&db);
+
+            for label in NO_START {
+                let pose = OBSERVED.iter().find(|pose| pose.label == label).unwrap();
+                let source_ref = format!("{}:Fallout4.esm", pose.door);
+                assert_eq!(
+                    started_on_arrival(&mut triggers, &doors, &source_ref, pose.feet),
+                    None,
+                    "{label}"
+                );
             }
-            for pose in PROMPT_POSES {
-                let shown = entrance_at(pose).and_then(|entrance| entrance.prompt);
-                let shown = shown.unwrap_or_else(|| panic!("no prompt at {pose:?}"));
-                assert_eq!(shown.name.to_uppercase(), "DIAMOND CITY", "{pose:?}");
-                assert_eq!(shown.verb, None);
-            }
+            assert_eq!(
+                started_on_arrival(&mut triggers, &doors, VAULT_ELEVATOR, VAULT_ELEVATOR_START),
+                Some(VAULT_ELEVATOR.to_string())
+            );
         }
 
         #[test]
@@ -884,9 +1229,6 @@ mod tests {
 
         const VERBS: &str = "INSERT INTO game_settings (form_key, editor_id, value_type, value_string)
              VALUES ('1:T.esm', 'sOpen', 'string', 'Open'), ('2:T.esm', 'sClose', 'string', 'Close');";
-        const DISTANCE: &str =
-            "INSERT INTO game_settings (form_key, editor_id, value_type, value_float)
-             VALUES ('3:T.esm', 'fAutoDoorDisplayDistance', 'float', 550.0);";
 
         const WORLD: &str = "INSERT INTO worldspaces (form_key, name) VALUES ('WS', 'Commonwealth');
              INSERT INTO cells (form_key, is_interior) VALUES ('INT', 1);
@@ -922,7 +1264,7 @@ mod tests {
         #[test]
         fn both_verbs_present_the_doors_are_labelled_and_say_open() {
             let prompts = load(&format!(
-                "{VERBS}{DISTANCE}{WORLD} UPDATE cells SET name = 'Museum of Freedom' WHERE form_key = 'INT';"
+                "{VERBS}{WORLD} UPDATE cells SET name = 'Museum of Freedom' WHERE form_key = 'INT';"
             ))
             .unwrap();
             assert_eq!(
@@ -938,7 +1280,7 @@ mod tests {
         #[test]
         fn a_load_door_of_a_named_base_with_no_to_text_shows_no_text() {
             let prompts = load(&format!(
-                "{VERBS}{DISTANCE}{WORLD}
+                "{VERBS}{WORLD}
                  UPDATE cells SET name = 'Museum of Freedom' WHERE form_key = 'INT';
                  INSERT INTO doors (form_key, name, flags) VALUES ('auto', 'Auto Door', '66');
                  INSERT INTO placed_objects (form_key, cell_form_key, base_object, object_type,
@@ -956,7 +1298,7 @@ mod tests {
         #[test]
         fn a_database_from_an_older_installer_loads_with_worldspace_names_only() {
             let prompts = load(&format!(
-                "{VERBS}{DISTANCE}{WORLD}
+                "{VERBS}{WORLD}
                  ALTER TABLE cells DROP COLUMN name;
                  ALTER TABLE regions DROP COLUMN map_priority;"
             ))
@@ -966,33 +1308,6 @@ mod tests {
                 shown(&prompts, "door_out"),
                 Some(("Commonwealth".to_string(), "Open".to_string()))
             );
-        }
-
-        fn setting_failure(distance: &str) -> String {
-            match load(&format!("{VERBS}{distance}")).err() {
-                Some(error @ StartupError::DoorPromptSettings(_)) => error.to_string(),
-                other => panic!("expected the settings startup error, got {other:?}"),
-            }
-        }
-
-        #[test]
-        fn a_missing_or_unusable_display_distance_stops_startup_naming_it() {
-            let cases = [
-                "",
-                "INSERT INTO game_settings (form_key, editor_id, value_type, value_string)
-                 VALUES ('3:T.esm', 'fAutoDoorDisplayDistance', 'string', 'far');",
-                "INSERT INTO game_settings (form_key, editor_id, value_type, value_float)
-                 VALUES ('3:T.esm', 'fAutoDoorDisplayDistance', 'float', 0.0);",
-                "INSERT INTO game_settings (form_key, editor_id, value_type)
-                 VALUES ('3:T.esm', 'fAutoDoorDisplayDistance', 'float');",
-            ];
-            for distance in cases {
-                let message = setting_failure(distance);
-                assert!(
-                    message.contains(ENTRANCE_DISPLAY_SETTING),
-                    "{distance}: {message}"
-                );
-            }
         }
 
         #[test]
@@ -1033,10 +1348,8 @@ mod tests {
 
     fn prompts_with_silent(entries: &[(&str, &str)], silent: &[&str]) -> DoorPrompts {
         let silent = silent.iter().map(|source| (*source).to_string()).collect();
-        DoorPrompts::new(labels_of(entries), silent, verbs(), ENTRANCE_UNITS)
+        DoorPrompts::new(labels_of(entries), silent, verbs())
     }
-
-    const ENTRANCE_UNITS: f32 = 550.0;
 
     fn entrances() -> WalkInTriggers {
         entrances_at(&[("near", 0.0), ("far", 2000.0)])
@@ -1047,7 +1360,7 @@ mod tests {
     }
 
     fn entrances_at(placed: &[(&str, f64)]) -> WalkInTriggers {
-        use crate::assets::db::teleports::{DoorLocation, DoorTriggerBounds, WalkInDoor};
+        use crate::assets::db::teleports::{DoorLocation, WalkInDoor};
         let entrance_at = |source_ref: &str, x: f64| WalkInDoor {
             source_ref: source_ref.to_string(),
             location: DoorLocation::Exterior {
@@ -1056,24 +1369,20 @@ mod tests {
             position: [x, 0.0, 0.0],
             rotation: [0.0; 3],
             scale: 1.0,
-            bounds: DoorTriggerBounds {
-                min: [-64.0, -8.0, 0.0],
-                max: [64.0, 8.0, 192.0],
-            },
         };
         let doors: Vec<WalkInDoor> = placed
             .iter()
             .map(|(source_ref, x)| entrance_at(source_ref, *x))
             .collect();
-        WalkInTriggers::build(&doors).0
+        WalkInTriggers::build(&doors, TEST_DISTANCES).0
     }
 
-    /// Feet `units` Bethesda units from the bounds centre of "near", straight along the ground.
+    /// Feet `units` Bethesda units from the origin of "near", straight along the ground.
     fn feet_at(units: f32) -> Vec3 {
-        Vec3::new(units / 10.0, 9.6, 0.0)
+        position_to_engine(units, 0.0, 0.0)
     }
 
-    fn entrance_near(prompts: &DoorPrompts, units: f32) -> Option<Entrance> {
+    fn entrance_near(prompts: &DoorPrompts, units: f32) -> Option<ShownEntrance> {
         prompts.entrance(&entrances(), PlayerLocation::Exterior("WS"), feet_at(units))
     }
 
@@ -1089,7 +1398,7 @@ mod tests {
         let prompts = prompts(&[("near", "Diamond City"), ("far", "Elsewhere")]);
         assert_eq!(
             entrance_near(&prompts, 500.0),
-            Some(Entrance {
+            Some(ShownEntrance {
                 prompt: Some(name_only("Diamond City"))
             })
         );
@@ -1116,7 +1425,7 @@ mod tests {
     }
 
     #[test]
-    fn a_silent_entrance_alone_is_no_entrance_and_leaves_the_dot() {
+    fn a_silent_entrance_shows_nothing_and_leaves_the_dot() {
         let prompts = prompts_with_silent(&[], &["near"]);
         let entrance = entrance_near(&prompts, 100.0);
         assert_eq!(entrance, None);
@@ -1130,28 +1439,28 @@ mod tests {
     }
 
     #[test]
-    fn a_nearer_silent_entrance_does_not_hide_a_farther_one() {
+    fn a_nearer_silent_entrance_decides_and_shows_nothing_though_a_farther_one_is_in_range() {
         let prompts = prompts_with_silent(&[("far", "Elsewhere")], &["near"]);
         let entrance = prompts.entrance(
             &entrances_close_together(),
             PlayerLocation::Exterior("WS"),
             feet_at(0.0),
         );
-        assert_eq!(
-            entrance,
-            Some(Entrance {
-                prompt: Some(name_only("Elsewhere"))
-            })
-        );
+        assert_eq!(entrance, None);
+        assert!(!door_hud(false, None, entrance.as_ref()).activate);
     }
 
     #[test]
-    fn a_distance_must_be_a_positive_finite_number() {
-        for bad in [0.0, -1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-            let error = positive_distance(bad).unwrap_err().to_string();
-            assert!(error.contains(ENTRANCE_DISPLAY_SETTING), "{bad}: {error}");
-        }
-        assert_eq!(positive_distance(550.0).unwrap(), 550.0);
+    fn a_silent_entrance_shows_nothing_but_walking_in_still_starts_it() {
+        let prompts = prompts_with_silent(&[], &["near"]);
+        let mut triggers = entrances();
+        let location = PlayerLocation::Exterior("WS");
+        assert_eq!(prompts.entrance(&triggers, location, feet_at(100.0)), None);
+        triggers.sample(location, Some(feet_at(-1000.0)));
+        assert_eq!(
+            triggers.sample(location, Some(feet_at(100.0))),
+            Some("near")
+        );
     }
 
     #[test]
@@ -1162,7 +1471,7 @@ mod tests {
 
     #[test]
     fn an_aimed_ordinary_prompt_wins_over_the_entrance() {
-        let entrance = Entrance {
+        let entrance = ShownEntrance {
             prompt: Some(name_only("Diamond City")),
         };
         let ordinary = RolloverPrompt {
@@ -1186,10 +1495,10 @@ mod tests {
             name: Arc::from("Door"),
             verb: Some(Arc::from("Open")),
         };
-        let labelled = Entrance {
+        let labelled = ShownEntrance {
             prompt: Some(name_only("Diamond City")),
         };
-        let unlabelled = Entrance { prompt: None };
+        let unlabelled = ShownEntrance { prompt: None };
         let hud = |aimed, ordinary: Option<&RolloverPrompt>, entrance| {
             let hud = door_hud(aimed, ordinary.cloned(), entrance);
             (hud.activate, hud.prompt)

@@ -1741,59 +1741,15 @@ fn a_migrated_stub_screen_makes_the_catalog_fail_naming_the_screen() {
 
 // ---------------------------------------------------------- walk-in doors
 
-const BOUNDS_JSON: &str = r#"{"Min":{"X":-64,"Y":-8,"Z":0},"Max":{"X":64,"Y":8,"Z":192}}"#;
-
-/// The schema file gains `doors.trigger_bounds` with the installer; this keeps the tests valid
-/// either side of that change.
-fn with_trigger_bounds_column(conn: Connection, present: bool) -> Connection {
-    let has_column: bool = conn
-        .query_row(
-            "SELECT count(*) > 0 FROM pragma_table_info('doors') WHERE name = 'trigger_bounds'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    match (has_column, present) {
-        (false, true) => conn
-            .execute_batch("ALTER TABLE doors ADD COLUMN trigger_bounds TEXT;")
-            .unwrap(),
-        (true, false) => conn
-            .execute_batch("ALTER TABLE doors DROP COLUMN trigger_bounds;")
-            .unwrap(),
-        _ => {}
-    }
-    conn
-}
-
 fn walk_in_world() -> Connection {
-    let conn = with_trigger_bounds_column(teleport_world(), true);
-    insert(
-        &conn,
-        "doors",
-        &[
-            ("form_key", text("AUTO")),
-            ("flags", text("2")),
-            ("trigger_bounds", text(BOUNDS_JSON)),
-        ],
-    );
-    insert(
-        &conn,
-        "doors",
-        &[
-            ("form_key", text("AUTO_NO_TEXT")),
-            ("flags", text("66")),
-            ("trigger_bounds", text(BOUNDS_JSON)),
-        ],
-    );
-    insert(
-        &conn,
-        "doors",
-        &[
-            ("form_key", text("PLAIN")),
-            ("flags", text("0")),
-            ("trigger_bounds", text(BOUNDS_JSON)),
-        ],
-    );
+    let conn = teleport_world();
+    for (form_key, flags) in [("AUTO", "2"), ("AUTO_NO_TEXT", "66"), ("PLAIN", "0")] {
+        insert(
+            &conn,
+            "doors",
+            &[("form_key", text(form_key)), ("flags", text(flags))],
+        );
+    }
     conn
 }
 
@@ -1815,7 +1771,7 @@ fn placed_door(
 }
 
 #[test]
-fn walk_in_doors_are_the_automatic_doors_with_location_pose_and_bounds() {
+fn walk_in_doors_are_the_automatic_doors_with_location_and_pose() {
     let conn = walk_in_world();
     placed_door(
         &conn,
@@ -1828,7 +1784,6 @@ fn walk_in_doors_are_the_automatic_doors_with_location_pose_and_bounds() {
     placed_door(&conn, "ordinary", "EXT", "PLAIN", &[]);
     let doors = client(conn).get_walk_in_doors().unwrap();
 
-    assert_eq!(doors.without_bounds, Vec::<String>::new());
     assert!(doors.rejected.is_empty(), "{:?}", doors.rejected);
     assert_eq!(doors.doors.len(), 2);
     let indoor = &doors.doors[0];
@@ -1848,8 +1803,6 @@ fn walk_in_doors_are_the_automatic_doors_with_location_pose_and_bounds() {
     assert_eq!(outdoor.position, [10.0, 20.0, 30.0]);
     assert_eq!(outdoor.rotation, [0.0, 0.0, 0.5]);
     assert_eq!(outdoor.scale, 1.5);
-    assert_eq!(outdoor.bounds.min, [-64.0, -8.0, 0.0]);
-    assert_eq!(outdoor.bounds.max, [64.0, 8.0, 192.0]);
 }
 
 #[test]
@@ -1875,46 +1828,6 @@ fn walk_in_doors_exclude_refs_that_start_disabled_or_hidden() {
     assert_eq!(refs, ["on"]);
 }
 
-#[test]
-fn walk_in_doors_without_trigger_bounds_are_reported_not_defaulted() {
-    let conn = walk_in_world();
-    conn.execute(
-        "UPDATE doors SET trigger_bounds = NULL WHERE form_key = 'AUTO'",
-        [],
-    )
-    .unwrap();
-    placed_door(&conn, "nobounds", "EXT", "AUTO", &[]);
-    placed_door(&conn, "fine", "EXT", "AUTO_NO_TEXT", &[]);
-    let doors = client(conn).get_walk_in_doors().unwrap();
-    assert_eq!(doors.without_bounds, ["nobounds"]);
-    assert_eq!(doors.doors.len(), 1);
-    assert_eq!(doors.doors[0].source_ref, "fine");
-}
-
-#[test]
-fn walk_in_doors_from_a_database_without_the_trigger_bounds_column_report_every_ref() {
-    let conn = with_trigger_bounds_column(schema_connection(), false);
-    insert(
-        &conn,
-        "cells",
-        &[("form_key", text("INT")), ("is_interior", int(1))],
-    );
-    insert(
-        &conn,
-        "placed_objects",
-        &placed("dest_int", "INT", (0.0, 0.0, 0.0)),
-    );
-    insert(
-        &conn,
-        "doors",
-        &[("form_key", text("AUTO")), ("flags", text("2"))],
-    );
-    placed_door(&conn, "legacy", "INT", "AUTO", &[]);
-    let doors = client(conn).get_walk_in_doors().unwrap();
-    assert_eq!(doors.doors.len(), 0);
-    assert_eq!(doors.without_bounds, ["legacy"]);
-}
-
 fn rejected_refs(doors: &WalkInDoors) -> Vec<String> {
     doors.rejected.iter().map(ToString::to_string).collect()
 }
@@ -1924,7 +1837,7 @@ fn walk_in_refs(doors: &WalkInDoors) -> Vec<&str> {
 }
 
 #[test]
-fn walk_in_doors_with_malformed_flags_or_bounds_are_rejected_alone_naming_the_ref() {
+fn walk_in_doors_with_malformed_flags_are_rejected_alone_naming_the_ref() {
     let conn = walk_in_world();
     conn.execute("UPDATE doors SET flags = 'x' WHERE form_key = 'PLAIN'", [])
         .unwrap();
@@ -1934,22 +1847,6 @@ fn walk_in_doors_with_malformed_flags_or_bounds_are_rejected_alone_naming_the_re
     let rejected = rejected_refs(&doors);
     assert!(
         rejected.len() == 1 && rejected[0].contains("badflags"),
-        "{rejected:?}"
-    );
-    assert_eq!(walk_in_refs(&doors), ["fine"]);
-
-    let conn = walk_in_world();
-    conn.execute(
-        "UPDATE doors SET trigger_bounds = '{\"Min\":1}' WHERE form_key = 'AUTO'",
-        [],
-    )
-    .unwrap();
-    placed_door(&conn, "badbounds", "EXT", "AUTO", &[]);
-    placed_door(&conn, "fine", "EXT", "AUTO_NO_TEXT", &[]);
-    let doors = client(conn).get_walk_in_doors().unwrap();
-    let rejected = rejected_refs(&doors);
-    assert!(
-        rejected.len() == 1 && rejected[0].contains("badbounds"),
         "{rejected:?}"
     );
     assert_eq!(walk_in_refs(&doors), ["fine"]);

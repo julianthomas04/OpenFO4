@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use super::door_prompt::DoorPrompts;
 use super::{
     InteriorLightingCatalog, InteriorOption, MaterialBuoyancy, PlayerMovement, ResolvedTarget,
-    State, WorldspaceOption, material_buoyancy_table, walk_in::WalkInTriggers, world_streamer,
+    State, WorldspaceOption, material_buoyancy_table,
+    walk_in::{EntranceDistances, WalkInTriggers},
+    world_streamer,
 };
 use crate::assets::db::DbClient;
 use crate::assets::db::teleports::TeleportRecord;
@@ -25,8 +27,8 @@ pub(super) struct StartupDbReads {
 }
 
 impl StartupDbReads {
-    /// Every read except the spawn locations degrades to an empty or default value on failure and
-    /// reports it; the engine still runs.
+    /// Every read except the spawn locations and the door prompt and walk-in settings degrades to
+    /// an empty or default value on failure and reports it; the engine still runs.
     pub(super) fn load(db_path: &str, start_mode: StartMode) -> Result<Self, StartupError> {
         let spawn_locations = match start_mode {
             StartMode::Menu => {
@@ -37,6 +39,8 @@ impl StartupDbReads {
         let db = DbClient::new(db_path).map_err(StartupError::Database)?;
         let teleport_rows = Self::load_teleport_rows(&db);
         let door_prompts = DoorPrompts::load(&db, &teleport_rows)?;
+        let entrance_distances =
+            EntranceDistances::load(&db).map_err(StartupError::WalkInSettings)?;
         Ok(Self {
             spawn_locations,
             worldspaces: Self::load_worldspaces(db_path),
@@ -44,7 +48,7 @@ impl StartupDbReads {
             interiors: State::build_interiors(db_path),
             teleports: State::build_teleports(&db, &teleport_rows),
             door_prompts,
-            walk_in: State::build_walk_in(db_path),
+            walk_in: State::build_walk_in(&db, entrance_distances),
             player_movement: Self::load_player_movement(db_path),
             buoyancy_table: material_buoyancy_table(db_path),
         })

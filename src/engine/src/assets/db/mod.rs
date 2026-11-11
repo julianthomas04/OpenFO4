@@ -417,10 +417,10 @@ impl DbClient {
         teleports::get_all(&self.conn, self.schema)
     }
 
-    /// Enabled automatic load doors with their trigger volumes.
+    /// Enabled automatic load doors with their placements.
     #[instrument(skip(self))]
     pub fn get_walk_in_doors(&self) -> anyhow::Result<teleports::WalkInDoors> {
-        teleports::get_walk_in_doors(&self.conn, self.schema)
+        teleports::get_walk_in_doors(&self.conn)
     }
 
     #[instrument(skip(self))]
