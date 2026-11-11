@@ -1,7 +1,7 @@
 /// DOOR record flag "Automatic": touching the door loads its destination.
 const FLAG_AUTOMATIC: u32 = 0x02;
 
-/// DOOR record flag "No To Text": the door shows its own name even when it is a load door.
+/// DOOR record flag "No To Text": a load door of this base shows no rollover text.
 const FLAG_NO_TO_TEXT: u32 = 0x40;
 
 #[derive(Debug, thiserror::Error)]

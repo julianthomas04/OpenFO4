@@ -1392,16 +1392,16 @@ fn teleport_flags_read_as_zero_on_a_database_from_an_older_installer() {
     assert_eq!(into_cell.flags, 0);
 }
 
-fn source_door(conn: &Connection, source_ref: &str, door: &str, name: Option<&str>, flags: &str) {
+fn source_door(conn: &Connection, source_ref: &str, door: &str, flags: &str) {
     let mut placed_door = placed(source_ref, "INT", (0.0, 0.0, 0.0));
     placed_door.retain(|(column, _)| *column != "base_object");
     placed_door.push(("base_object", text(door)));
     insert(conn, "placed_objects", &placed_door);
-    let mut base = vec![("form_key", text(door)), ("flags", text(flags))];
-    if let Some(name) = name {
-        base.push(("name", text(name)));
-    }
-    insert(conn, "doors", &base);
+    insert(
+        conn,
+        "doors",
+        &[("form_key", text(door)), ("flags", text(flags))],
+    );
 }
 
 fn name_the_destinations(conn: &Connection) {
@@ -1413,11 +1413,11 @@ fn name_the_destinations(conn: &Connection) {
 }
 
 #[test]
-fn teleports_carry_the_destination_names_and_the_source_door_base() {
+fn teleports_carry_the_destination_names_and_the_source_door_flags() {
     let conn = teleport_world();
     name_the_destinations(&conn);
-    source_door(&conn, "door_in", "DOOR_A", Some("Door"), "66");
-    source_door(&conn, "door_out", "DOOR_B", None, "0");
+    source_door(&conn, "door_in", "DOOR_A", "66");
+    source_door(&conn, "door_out", "DOOR_B", "0");
     teleport(&conn, "door_in", "dest_int");
     teleport(&conn, "door_out", "dest_ext");
     let mut all = client(conn).get_placed_teleports().unwrap();
@@ -1429,7 +1429,6 @@ fn teleports_carry_the_destination_names_and_the_source_door_base() {
             (
                 t.dest_cell_name.as_deref(),
                 t.dest_worldspace_name.as_deref(),
-                t.source_door_name.as_deref(),
                 t.source_door_flags.as_deref(),
             )
         })
@@ -1437,8 +1436,8 @@ fn teleports_carry_the_destination_names_and_the_source_door_base() {
     assert_eq!(
         seen,
         vec![
-            (Some("Museum of Freedom"), None, Some("Door"), Some("66")),
-            (None, Some("Commonwealth"), None, Some("0")),
+            (Some("Museum of Freedom"), None, Some("66")),
+            (None, Some("Commonwealth"), Some("0")),
         ]
     );
 }
@@ -1453,7 +1452,6 @@ fn teleports_whose_source_ref_has_no_door_are_kept_without_door_data() {
     let into_cell = db.get_teleport_into_cell("INT").unwrap().unwrap();
 
     assert_eq!(all.len(), 1);
-    assert_eq!(all[0].source_door_name, None);
     assert_eq!(all[0].source_door_flags, None);
     assert_eq!(into_cell.source_ref, "unplaced_source");
 }

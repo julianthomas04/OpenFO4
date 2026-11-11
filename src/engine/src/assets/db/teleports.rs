@@ -31,8 +31,6 @@ pub struct TeleportRecord {
     pub dest_cell_name: Option<String>,
     /// The destination worldspace's display name.
     pub dest_worldspace_name: Option<String>,
-    /// The source door's base record name.
-    pub source_door_name: Option<String>,
     /// The source door's base record flags, a decimal number as text; NULL when the source ref
     /// or its base door is not in the database.
     pub source_door_flags: Option<String>,
@@ -47,7 +45,7 @@ fn select_resolved(schema: DbSchema) -> String {
             t.dest_rotation_z,
             c.is_interior, c.worldspace, c.form_key,
             {flags},
-            {cell_name}, w.name, d.name, d.flags
+            {cell_name}, w.name, d.flags
      FROM placed_teleports t
      JOIN placed_objects po ON po.form_key = t.destination_ref
      JOIN cells c ON c.form_key = po.cell_form_key
@@ -78,8 +76,7 @@ impl TeleportRecord {
             flags: row.get::<_, Option<u32>>(8)?.unwrap_or(0),
             dest_cell_name: row.get(9)?,
             dest_worldspace_name: row.get(10)?,
-            source_door_name: row.get(11)?,
-            source_door_flags: row.get(12)?,
+            source_door_flags: row.get(11)?,
         })
     }
 }

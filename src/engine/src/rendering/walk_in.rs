@@ -233,12 +233,13 @@ impl WalkInTriggers {
     }
 
     /// The source ref of the entrance of `location` nearest to `feet` and closer than
-    /// `within_units` Bethesda units; the first built wins a tie.
+    /// `within_units` Bethesda units among those `candidate` accepts; the first built wins a tie.
     pub(super) fn nearest_entrance(
         &self,
         location: PlayerLocation<'_>,
         feet: Vec3,
         within_units: f32,
+        candidate: impl Fn(&str) -> bool,
     ) -> Option<&str> {
         let entry = self
             .locations
@@ -247,6 +248,7 @@ impl WalkInTriggers {
         entry
             .triggers
             .iter()
+            .filter(|trigger| candidate(&trigger.source_ref))
             .map(|trigger| {
                 (
                     trigger,
@@ -588,7 +590,7 @@ mod tests {
 
     fn nearest(triggers: &WalkInTriggers, feet: Vec3, within: f32) -> Option<String> {
         triggers
-            .nearest_entrance(PlayerLocation::Exterior("WS"), feet, within)
+            .nearest_entrance(PlayerLocation::Exterior("WS"), feet, within, |_| true)
             .map(str::to_owned)
     }
 

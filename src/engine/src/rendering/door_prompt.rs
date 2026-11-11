@@ -1,7 +1,8 @@
-//! Text shown while aiming at a door: the name of the place a load door leads to (or the door's
-//! own name) and the verb of the activation. Pure rules; the callers own the data loading.
+//! Text shown while aiming at a door: the name of the place a load door leads to and the verb of
+//! the activation. A load door whose base asks for no text shows nothing at all. Pure rules; the
+//! callers own the data loading.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -122,29 +123,36 @@ fn destination_name<'a>(
     region.or_else(|| non_blank(teleport.dest_worldspace_name.as_deref()))
 }
 
-/// What the load door shows: its own name when its base carries the no-to-text flag, else the
-/// destination's name. `None` when that name is empty.
-fn load_door_label(
+/// What a load door shows, aimed at or stood near.
+#[derive(Debug, PartialEq, Eq)]
+enum LoadDoorText {
+    /// Its base carries the no-to-text flag: no text, and as a walk-in entrance it is not one.
+    Silent,
+    /// The destination's name; `None` when it is blank.
+    Destination(Option<Arc<str>>),
+}
+
+fn load_door_text(
     teleport: &TeleportRecord,
     regions: &MapRegionIndex,
-) -> Result<Option<Arc<str>>, DoorFlagsError> {
-    let shows_own_name = match teleport.source_door_flags.as_deref() {
+) -> Result<LoadDoorText, DoorFlagsError> {
+    let silent = match teleport.source_door_flags.as_deref() {
         None => false,
         flags => flags_have_no_to_text(&format!("door ref {}", teleport.source_ref), flags)?,
     };
-    let name = if shows_own_name {
-        non_blank(teleport.source_door_name.as_deref())
+    Ok(if silent {
+        LoadDoorText::Silent
     } else {
-        destination_name(teleport, regions)
-    };
-    Ok(name.map(Arc::from))
+        LoadDoorText::Destination(destination_name(teleport, regions).map(Arc::from))
+    })
 }
 
-/// The labels of the load doors that show one, by source ref, plus the doors whose flags could
-/// not be read (they get no label).
+/// The labels of the load doors that show one and the silent load doors, by source ref, plus the
+/// doors whose flags could not be read (they get no label and are not silent).
 #[derive(Default)]
 pub(super) struct LoadDoorLabels {
     pub labels: HashMap<String, Arc<str>>,
+    pub silent: HashSet<String>,
     pub rejected: Vec<DoorFlagsError>,
 }
 
@@ -154,11 +162,14 @@ pub(super) fn load_door_labels(
 ) -> LoadDoorLabels {
     let mut result = LoadDoorLabels::default();
     for teleport in teleports {
-        match load_door_label(teleport, regions) {
-            Ok(Some(label)) => {
+        match load_door_text(teleport, regions) {
+            Ok(LoadDoorText::Destination(Some(label))) => {
                 result.labels.insert(teleport.source_ref.clone(), label);
             }
-            Ok(None) => {}
+            Ok(LoadDoorText::Destination(None)) => {}
+            Ok(LoadDoorText::Silent) => {
+                result.silent.insert(teleport.source_ref.clone());
+            }
             Err(error) => result.rejected.push(error),
         }
     }
@@ -190,13 +201,14 @@ pub(super) fn resolve(
 /// Everything the prompt of an aimed door is made of, resolved once at startup.
 pub(super) struct DoorPrompts {
     labels: HashMap<String, Arc<str>>,
+    silent: HashSet<String>,
     verbs: PromptVerbs,
     /// Bethesda units within which a walk-in entrance shows its name.
     entrance_display_units: f32,
 }
 
-/// The walk-in entrance the player stands near. It makes the crosshair activatable whether or
-/// not it has a name to show.
+/// The walk-in entrance the player stands near, never a silent one. It makes the crosshair
+/// activatable whether or not it has a name to show.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct Entrance {
     pub prompt: Option<RolloverPrompt>,
@@ -242,14 +254,21 @@ fn shown_prompt(
 impl DoorPrompts {
     pub(super) fn new(
         labels: HashMap<String, Arc<str>>,
+        silent: HashSet<String>,
         verbs: PromptVerbs,
         entrance_display_units: f32,
     ) -> Self {
         Self {
             labels,
+            silent,
             verbs,
             entrance_display_units,
         }
+    }
+
+    /// Whether the ref is a load door whose base asks for no text.
+    fn is_silent(&self, ref_id: &str) -> bool {
+        self.silent.contains(ref_id)
     }
 
     /// A missing or unusable verb or distance setting stops startup. Unreadable map regions
@@ -266,7 +285,11 @@ impl DoorPrompts {
                 MapRegionIndex::default()
             }
         };
-        let LoadDoorLabels { labels, rejected } = load_door_labels(teleports, &regions);
+        let LoadDoorLabels {
+            labels,
+            silent,
+            rejected,
+        } = load_door_labels(teleports, &regions);
         if !rejected.is_empty() {
             let refs: Vec<String> = rejected.iter().map(ToString::to_string).collect();
             tracing::warn!(
@@ -276,11 +299,12 @@ impl DoorPrompts {
             );
         }
         tracing::info!(
-            "door prompts: {} of {} load doors have a name",
+            "door prompts: {} of {} load doors have a name, {} show no text",
             labels.len(),
-            teleports.len()
+            teleports.len(),
+            silent.len()
         );
-        Ok(Self::new(labels, verbs, entrance_display_units))
+        Ok(Self::new(labels, silent, verbs, entrance_display_units))
     }
 
     fn load_settings(db: &DbClient) -> anyhow::Result<(PromptVerbs, f32)> {
@@ -297,15 +321,21 @@ impl DoorPrompts {
         Ok((verbs, positive_distance(distance)?))
     }
 
-    /// The entrance of the player's location nearest to `feet` within the display distance. Its
-    /// prompt is the name only, no verb; the label lookup is the one place that decides it.
+    /// The entrance of the player's location nearest to `feet` within the display distance,
+    /// silent ones left out. Its prompt is the name only, no verb; the label lookup is the one
+    /// place that decides it.
     pub(super) fn entrance(
         &self,
         triggers: &WalkInTriggers,
         location: PlayerLocation<'_>,
         feet: Vec3,
     ) -> Option<Entrance> {
-        let source_ref = triggers.nearest_entrance(location, feet, self.entrance_display_units)?;
+        let source_ref = triggers.nearest_entrance(
+            location,
+            feet,
+            self.entrance_display_units,
+            |source_ref| !self.is_silent(source_ref),
+        )?;
         let prompt = self.labels.get(source_ref).map(|name| RolloverPrompt {
             name: Arc::clone(name),
             verb: None,
@@ -362,7 +392,6 @@ mod tests {
             flags: 0,
             dest_cell_name: None,
             dest_worldspace_name: Some("Commonwealth".to_string()),
-            source_door_name: Some("Door".to_string()),
             source_door_flags: Some("0".to_string()),
         }
     }
@@ -377,16 +406,20 @@ mod tests {
         }
     }
 
-    fn flagged(mut teleport: TeleportRecord, name: Option<&str>) -> TeleportRecord {
-        teleport.source_door_flags = Some("64".to_string());
-        teleport.source_door_name = name.map(str::to_string);
+    fn with_base_flags(mut teleport: TeleportRecord, flags: &str) -> TeleportRecord {
+        teleport.source_door_flags = Some(flags.to_string());
         teleport
     }
 
+    fn text(teleport: &TeleportRecord, regions: Vec<MapRegion>) -> LoadDoorText {
+        load_door_text(teleport, &MapRegionIndex::new(regions)).unwrap()
+    }
+
     fn label(teleport: &TeleportRecord, regions: Vec<MapRegion>) -> Option<String> {
-        load_door_label(teleport, &MapRegionIndex::new(regions))
-            .unwrap()
-            .map(|label| label.to_string())
+        match text(teleport, regions) {
+            LoadDoorText::Destination(label) => label.map(|label| label.to_string()),
+            LoadDoorText::Silent => panic!("{} is silent", teleport.source_ref),
+        }
     }
 
     fn verbs() -> PromptVerbs {
@@ -509,38 +542,34 @@ mod tests {
         let mut teleport = exterior(500.0, 50.0);
         teleport.dest_worldspace_name = Some(" \t".to_string());
         assert_eq!(label(&teleport, Vec::new()), None);
-        assert_eq!(
-            label(&flagged(interior(Some("Cell")), Some("  ")), Vec::new()),
-            None
-        );
     }
 
     #[test]
-    fn a_flagged_load_door_shows_its_base_name_instead_of_the_destination() {
-        let teleport = flagged(interior(Some("Museum of Freedom")), Some("Hatch"));
-        assert_eq!(label(&teleport, Vec::new()), Some("Hatch".to_string()));
+    fn a_load_door_whose_base_has_no_to_text_is_silent_whatever_its_destination() {
+        for flags in ["64", "66", "72"] {
+            let named = with_base_flags(interior(Some("Museum of Freedom")), flags);
+            assert_eq!(text(&named, Vec::new()), LoadDoorText::Silent, "{flags}");
+            let regions = vec![region("R1", WORLD, "Back Bay", 1)];
+            let exterior = with_base_flags(exterior(50.0, 50.0), flags);
+            assert_eq!(text(&exterior, regions), LoadDoorText::Silent, "{flags}");
+        }
     }
 
     #[test]
-    fn a_nameless_flagged_load_door_has_no_label() {
-        let teleport = flagged(interior(Some("Museum of Freedom")), None);
-        assert_eq!(label(&teleport, Vec::new()), None);
-    }
-
-    #[test]
-    fn a_nameless_load_door_without_the_flag_still_shows_its_destination() {
-        let mut teleport = interior(Some("Museum of Freedom"));
-        teleport.source_door_name = None;
-        assert_eq!(
-            label(&teleport, Vec::new()),
-            Some("Museum of Freedom".to_string())
-        );
+    fn a_load_door_whose_base_lacks_no_to_text_shows_its_destination() {
+        for flags in ["0", "2", "191"] {
+            let teleport = with_base_flags(interior(Some("Museum of Freedom")), flags);
+            assert_eq!(
+                label(&teleport, Vec::new()),
+                Some("Museum of Freedom".to_string()),
+                "{flags}"
+            );
+        }
     }
 
     #[test]
     fn a_load_door_without_a_base_record_shows_its_destination() {
         let mut teleport = interior(Some("Museum of Freedom"));
-        teleport.source_door_name = None;
         teleport.source_door_flags = None;
         assert_eq!(
             label(&teleport, Vec::new()),
@@ -569,15 +598,19 @@ mod tests {
     }
 
     #[test]
-    fn doors_without_a_label_are_absent_from_the_label_map() {
+    fn only_labelled_doors_enter_the_label_map_and_only_flagged_ones_are_silent() {
         let mut nameless = interior(None);
         nameless.source_ref = "nameless".to_string();
         let mut named = interior(Some("Cell"));
         named.source_ref = "named".to_string();
+        let mut silent = with_base_flags(interior(Some("Cell")), "66");
+        silent.source_ref = "silent".to_string();
 
-        let result = load_door_labels(&[nameless, named], &MapRegionIndex::default());
+        let result = load_door_labels(&[nameless, named, silent], &MapRegionIndex::default());
 
         assert_eq!(result.labels.keys().collect::<Vec<_>>(), ["named"]);
+        assert_eq!(result.silent, HashSet::from(["silent".to_string()]));
+        assert!(result.rejected.is_empty());
     }
 
     #[test]
@@ -733,7 +766,40 @@ mod tests {
                     .get(&source_ref)
                     .map(|label| label.to_uppercase());
                 let expected = (!expected.is_empty()).then(|| expected.to_string());
+                assert_eq!(
+                    result.silent.contains(&source_ref),
+                    expected.is_none(),
+                    "{source_ref}"
+                );
                 assert_eq!(shown, expected, "{source_ref}");
+            }
+        }
+
+        /// The placed refs of `AutoloadDoorNoText` (flags 0x42, named "Auto Door"), the walk-in
+        /// entrances of the Vault 111 elevator. The original game shows no text near them.
+        const NO_TEXT_ENTRANCES: [&str; 4] = [
+            "01F180:Fallout4.esm",
+            "0998E3:Fallout4.esm",
+            "0CA2AF:Fallout4.esm",
+            "0CA858:Fallout4.esm",
+        ];
+
+        #[test]
+        #[ignore = "needs an installation converted with cell names and region map entries"]
+        fn the_no_text_entrances_have_no_label_and_are_silent() {
+            let db = database();
+            let teleports = db.get_placed_teleports().unwrap();
+            let regions = MapRegionIndex::new(db.get_map_regions().unwrap());
+            let result = load_door_labels(&teleports, &regions);
+            let walk_ins = db.get_walk_in_doors().unwrap().doors;
+
+            for source_ref in NO_TEXT_ENTRANCES {
+                assert!(
+                    walk_ins.iter().any(|door| door.source_ref == source_ref),
+                    "{source_ref} is not a walk-in entrance"
+                );
+                assert_eq!(result.labels.get(source_ref), None, "{source_ref}");
+                assert!(result.silent.contains(source_ref), "{source_ref}");
             }
         }
 
@@ -870,6 +936,24 @@ mod tests {
         }
 
         #[test]
+        fn a_load_door_of_a_named_base_with_no_to_text_shows_no_text() {
+            let prompts = load(&format!(
+                "{VERBS}{DISTANCE}{WORLD}
+                 UPDATE cells SET name = 'Museum of Freedom' WHERE form_key = 'INT';
+                 INSERT INTO doors (form_key, name, flags) VALUES ('auto', 'Auto Door', '66');
+                 INSERT INTO placed_objects (form_key, cell_form_key, base_object, object_type,
+                     position_x, position_y, position_z, rotation_x, rotation_y, rotation_z)
+                 VALUES ('door_in', 'EXT', 'auto', 'PlacedObject', 0, 0, 0, 0, 0, 0);"
+            ))
+            .unwrap();
+            assert_eq!(shown(&prompts, "door_in"), None);
+            assert_eq!(
+                shown(&prompts, "door_out"),
+                Some(("Commonwealth".to_string(), "Open".to_string()))
+            );
+        }
+
+        #[test]
         fn a_database_from_an_older_installer_loads_with_worldspace_names_only() {
             let prompts = load(&format!(
                 "{VERBS}{DISTANCE}{WORLD}
@@ -944,7 +1028,12 @@ mod tests {
     }
 
     fn prompts(entries: &[(&str, &str)]) -> DoorPrompts {
-        DoorPrompts::new(labels_of(entries), verbs(), ENTRANCE_UNITS)
+        prompts_with_silent(entries, &[])
+    }
+
+    fn prompts_with_silent(entries: &[(&str, &str)], silent: &[&str]) -> DoorPrompts {
+        let silent = silent.iter().map(|source| (*source).to_string()).collect();
+        DoorPrompts::new(labels_of(entries), silent, verbs(), ENTRANCE_UNITS)
     }
 
     const ENTRANCE_UNITS: f32 = 550.0;
@@ -1024,6 +1113,36 @@ mod tests {
             )
             .unwrap();
         assert_eq!(entrance.prompt, None);
+    }
+
+    #[test]
+    fn a_silent_entrance_alone_is_no_entrance_and_leaves_the_dot() {
+        let prompts = prompts_with_silent(&[], &["near"]);
+        let entrance = entrance_near(&prompts, 100.0);
+        assert_eq!(entrance, None);
+        assert_eq!(
+            door_hud(false, None, entrance.as_ref()),
+            DoorHud {
+                activate: false,
+                prompt: None
+            }
+        );
+    }
+
+    #[test]
+    fn a_nearer_silent_entrance_does_not_hide_a_farther_one() {
+        let prompts = prompts_with_silent(&[("far", "Elsewhere")], &["near"]);
+        let entrance = prompts.entrance(
+            &entrances_close_together(),
+            PlayerLocation::Exterior("WS"),
+            feet_at(0.0),
+        );
+        assert_eq!(
+            entrance,
+            Some(Entrance {
+                prompt: Some(name_only("Elsewhere"))
+            })
+        );
     }
 
     #[test]
@@ -1119,6 +1238,23 @@ mod tests {
             |_| Some(door(Some(&name), DoorState::Closed)),
         );
         assert_eq!(prompt, None);
+    }
+
+    #[test]
+    fn an_aimed_silent_load_door_shows_no_text_but_keeps_the_activate_crosshair() {
+        let name: Arc<str> = Arc::from("Door");
+        let prompt = prompts_with_silent(&[], &["d"]).prompt_for(
+            Some("d"),
+            |_| true,
+            |_| Some(door(Some(&name), DoorState::Closed)),
+        );
+        assert_eq!(
+            door_hud(true, prompt, None),
+            DoorHud {
+                activate: true,
+                prompt: None
+            }
+        );
     }
 
     #[test]
