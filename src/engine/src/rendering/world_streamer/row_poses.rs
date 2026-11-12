@@ -115,10 +115,6 @@ impl WorldStreamer {
     }
 
     /// Whether `remove_world_item` queued a hide that `apply_pending_hides` has not written yet.
-    #[expect(
-        dead_code,
-        reason = "lane E1 wires item pickup into the frame in rendering/mod.rs"
-    )]
     pub(crate) fn has_pending_hides(&self) -> bool {
         !self.pending_hides.is_empty()
     }
@@ -126,10 +122,6 @@ impl WorldStreamer {
     /// Hides the rows of every item removed since the last call (CPU mirror and, once the cell
     /// has a slab range, the slab; rows are never deleted), then forgets the entities' rows. A
     /// hide whose cell left or was reloaded since has nothing left to hide.
-    #[expect(
-        dead_code,
-        reason = "lane E1 wires item pickup into the frame in rendering/mod.rs"
-    )]
     pub(crate) fn apply_pending_hides(&mut self, targets: &mut StreamTargets) {
         let _span = info_span!("apply_pending_hides").entered();
         let mut hides = std::mem::take(&mut self.pending_hides);

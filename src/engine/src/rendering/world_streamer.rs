@@ -2806,10 +2806,6 @@ impl WorldStreamer {
     }
 
     /// The placed item behind `entity`, in the drawn or staged full-detail cell that holds it.
-    #[expect(
-        dead_code,
-        reason = "lane E1 wires item pickup into the frame in rendering/mod.rs"
-    )]
     pub(crate) fn world_item(&self, entity: EntityId) -> Option<&PlacedItem> {
         let grid = self.entity_cell.get(&entity)?;
         self.full_cell(*grid)?.items.get(&entity)
@@ -2818,10 +2814,6 @@ impl WorldStreamer {
     /// Takes the item out of the world: out of its cell's items, into the cell's removed set
     /// (so a later registration of the cell never builds its body), and queues the hide of its
     /// rows. The entity keeps its rows until `apply_pending_hides` has written them.
-    #[expect(
-        dead_code,
-        reason = "lane E1 wires item pickup into the frame in rendering/mod.rs"
-    )]
     pub(crate) fn remove_world_item(
         &mut self,
         entity: EntityId,

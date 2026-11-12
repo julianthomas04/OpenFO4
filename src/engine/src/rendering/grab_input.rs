@@ -19,23 +19,50 @@ pub(super) enum AimTarget {
     Activatable,
     /// A loose body the player may try to grab.
     Grabbable(EntityId),
+    /// A placed item. `grabbable`: the sim says it can be carried (dynamic, mass within the
+    /// limit).
+    Item {
+        entity: EntityId,
+        grabbable: bool,
+    },
 }
 
 impl AimTarget {
-    /// A door or animated object wins over a loose body, so its activation never waits for the
-    /// grab hold.
+    /// A door or animated object wins over an item, an item over a loose body, so a door's
+    /// activation never waits for the grab hold. Only the closures of the branches taken run.
     pub(super) fn resolve(
         activatable: bool,
         entity: EntityId,
+        is_item: impl FnOnce(EntityId) -> bool,
         is_grabbable: impl FnOnce(EntityId) -> bool,
+        can_carry: impl FnOnce(EntityId) -> bool,
     ) -> Self {
         if activatable {
             Self::Activatable
+        } else if is_item(entity) {
+            Self::Item {
+                entity,
+                grabbable: can_carry(entity),
+            }
         } else if is_grabbable(entity) {
             Self::Grabbable(entity)
         } else {
             Self::Nothing
         }
+    }
+
+    /// While a body is carried the crosshair ray hits that body, so an item or loose body under
+    /// it is no target; a door still is.
+    pub(super) fn while_carrying(self, carrying: bool) -> Self {
+        match self {
+            Self::Item { .. } | Self::Grabbable(_) if carrying => Self::Nothing,
+            other => other,
+        }
+    }
+
+    /// Whether this is the placed item `entity`.
+    fn is_item(self, entity: EntityId) -> bool {
+        matches!(self, Self::Item { entity: aimed, .. } if aimed == entity)
     }
 }
 
@@ -45,6 +72,8 @@ pub(super) enum GrabAction {
     /// Activate the aimed door or animated object.
     Activate,
     Carry(CarryCommand),
+    /// Take the placed item into the inventory.
+    PickUp(EntityId),
 }
 
 /// A command for the carried body, sent to the sim as is.
@@ -109,12 +138,35 @@ pub(super) fn spin_gate_open(controls_live: bool, mouse_captured: bool, carrying
 enum ActivateKey {
     #[default]
     Up,
-    /// Down on a loose body since `since`, counting towards the grab of that body.
-    Holding { entity: EntityId, since: Instant },
+    /// Down on a loose body or an item since `since`, counting towards the grab of that body or
+    /// the pickup of that item.
+    Holding {
+        entity: EntityId,
+        since: Instant,
+        target: HeldTarget,
+    },
     /// Pressed while carrying: its release drops the body.
     Dropping,
     /// Down with its press already spent: its release does nothing.
     Spent,
+}
+
+/// What E went down on.
+#[derive(Copy, Clone, PartialEq, Debug)]
+enum HeldTarget {
+    /// A loose body: a hold grabs it, a tap does nothing.
+    Body,
+    /// An item that can be carried: a tap picks it up, a hold grabs it.
+    GrabbableItem,
+    /// An item that cannot be carried (too heavy or pinned): its release picks it up, however
+    /// long E was down.
+    FixedItem,
+}
+
+impl HeldTarget {
+    fn grabs_on_hold(self) -> bool {
+        !matches!(self, Self::FixedItem)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -142,19 +194,44 @@ impl GrabInput {
         self.activate = ActivateKey::Spent;
         match aim {
             AimTarget::Activatable => Some(GrabAction::Activate),
-            AimTarget::Grabbable(entity) => {
-                self.activate = ActivateKey::Holding { entity, since: now };
-                None
-            }
+            AimTarget::Grabbable(entity) => self.hold(entity, HeldTarget::Body, now),
+            AimTarget::Item {
+                entity,
+                grabbable: true,
+            } => self.hold(entity, HeldTarget::GrabbableItem, now),
+            AimTarget::Item {
+                entity,
+                grabbable: false,
+            } => self.hold(entity, HeldTarget::FixedItem, now),
             AimTarget::Nothing => None,
         }
     }
 
-    /// E was let go at `now`. A press on a loose body let go before the grab hold does nothing:
-    /// vanilla picks the item up there, and there is no inventory yet.
-    pub fn activate_released(&mut self, carrying: bool, now: Instant) -> Option<GrabAction> {
+    fn hold(&mut self, entity: EntityId, target: HeldTarget, now: Instant) -> Option<GrabAction> {
+        self.activate = ActivateKey::Holding {
+            entity,
+            since: now,
+            target,
+        };
+        None
+    }
+
+    /// E was let go at `now`, with `aimed` under the crosshair. A press on a loose body let go
+    /// before the grab hold does nothing. A press on an item picks it up when let go before the
+    /// grab hold, or at any time when the item cannot be carried, provided the crosshair still
+    /// rests on that item. A hold that reached the grab hold grabs and never picks up.
+    pub fn activate_released(
+        &mut self,
+        carrying: bool,
+        now: Instant,
+        aimed: AimTarget,
+    ) -> Option<GrabAction> {
         match std::mem::take(&mut self.activate) {
-            ActivateKey::Holding { entity, since } => grab_if_held(entity, since, now),
+            ActivateKey::Holding {
+                entity,
+                since,
+                target,
+            } => release_after_hold(entity, since, target, now, aimed),
             ActivateKey::Dropping => carrying.then_some(GrabAction::Carry(CarryCommand::Drop)),
             ActivateKey::Up | ActivateKey::Spent => None,
         }
@@ -182,12 +259,20 @@ impl GrabInput {
         }
     }
 
-    /// Grabs the body E went down on once E has been down for the grab hold at `now`. The
-    /// target is the one aimed at on the press; the sim validates it again.
+    /// Grabs the body or carriable item E went down on once E has been down for the grab hold at
+    /// `now`. The target is the one aimed at on the press; the sim validates it again.
     pub fn advance(&mut self, now: Instant) -> Option<GrabAction> {
-        let ActivateKey::Holding { entity, since } = self.activate else {
+        let ActivateKey::Holding {
+            entity,
+            since,
+            target,
+        } = self.activate
+        else {
             return None;
         };
+        if !target.grabs_on_hold() {
+            return None;
+        }
         let grab = grab_if_held(entity, since, now);
         if grab.is_some() {
             self.activate = ActivateKey::Spent;
@@ -222,6 +307,21 @@ fn grab_if_held(entity: EntityId, since: Instant, now: Instant) -> Option<GrabAc
         .then_some(GrabAction::Carry(CarryCommand::Grab(entity)))
 }
 
+fn release_after_hold(
+    entity: EntityId,
+    since: Instant,
+    target: HeldTarget,
+    now: Instant,
+    aimed: AimTarget,
+) -> Option<GrabAction> {
+    let pick_up = || aimed.is_item(entity).then_some(GrabAction::PickUp(entity));
+    match target {
+        HeldTarget::Body => grab_if_held(entity, since, now),
+        HeldTarget::GrabbableItem => grab_if_held(entity, since, now).or_else(pick_up),
+        HeldTarget::FixedItem => pick_up(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,7 +353,10 @@ mod tests {
         let mut input = GrabInput::default();
         input.activate_pressed(AimTarget::Grabbable(BODY), false, clock.at(0));
         assert_eq!(input.advance(clock.at(200)), GRAB_BODY);
-        assert_eq!(input.activate_released(true, clock.at(300)), None);
+        assert_eq!(
+            input.activate_released(true, clock.at(300), AimTarget::Nothing),
+            None
+        );
         input
     }
 
@@ -264,7 +367,10 @@ mod tests {
         input.activate_pressed(AimTarget::Grabbable(BODY), false, clock.at(0));
         assert_eq!(input.advance(clock.at(100)), None);
         assert_eq!(input.advance(clock.at(150)), None);
-        assert_eq!(input.activate_released(false, clock.at(150)), None);
+        assert_eq!(
+            input.activate_released(false, clock.at(150), AimTarget::Nothing),
+            None
+        );
     }
 
     #[test]
@@ -274,7 +380,10 @@ mod tests {
         input.activate_pressed(AimTarget::Grabbable(BODY), false, clock.at(0));
         assert_eq!(input.advance(clock.at(170)), GRAB_BODY);
         assert_eq!(input.advance(clock.at(500)), None);
-        assert_eq!(input.activate_released(false, clock.at(600)), None);
+        assert_eq!(
+            input.activate_released(false, clock.at(600), AimTarget::Nothing),
+            None
+        );
     }
 
     #[test]
@@ -283,7 +392,10 @@ mod tests {
         let mut input = GrabInput::default();
         input.activate_pressed(AimTarget::Grabbable(BODY), false, clock.at(250));
         assert_eq!(input.advance(clock.at(260)), None);
-        assert_eq!(input.activate_released(false, clock.at(390)), None);
+        assert_eq!(
+            input.activate_released(false, clock.at(390), AimTarget::Nothing),
+            None
+        );
     }
 
     #[test]
@@ -291,7 +403,10 @@ mod tests {
         let clock = Clock::new();
         let mut input = GrabInput::default();
         input.activate_pressed(AimTarget::Grabbable(BODY), false, clock.at(0));
-        assert_eq!(input.activate_released(false, clock.at(400)), GRAB_BODY);
+        assert_eq!(
+            input.activate_released(false, clock.at(400), AimTarget::Nothing),
+            GRAB_BODY
+        );
     }
 
     #[test]
@@ -300,7 +415,10 @@ mod tests {
         let mut input = GrabInput::default();
         input.activate_pressed(AimTarget::Grabbable(BODY), false, clock.at(0));
         input.advance(clock.at(200));
-        assert_eq!(input.activate_released(true, clock.at(1000)), None);
+        assert_eq!(
+            input.activate_released(true, clock.at(1000), AimTarget::Nothing),
+            None
+        );
     }
 
     #[test]
@@ -312,7 +430,10 @@ mod tests {
             None
         );
         assert_eq!(input.advance(clock.at(1400)), None);
-        assert_eq!(input.activate_released(true, clock.at(1500)), DROP);
+        assert_eq!(
+            input.activate_released(true, clock.at(1500), AimTarget::Nothing),
+            DROP
+        );
     }
 
     #[test]
@@ -323,7 +444,10 @@ mod tests {
             input.activate_pressed(AimTarget::Activatable, true, clock.at(400)),
             None
         );
-        assert_eq!(input.activate_released(true, clock.at(500)), DROP);
+        assert_eq!(
+            input.activate_released(true, clock.at(500), AimTarget::Nothing),
+            DROP
+        );
     }
 
     #[test]
@@ -331,7 +455,10 @@ mod tests {
         let clock = Clock::new();
         let mut input = carrying_input(&clock);
         input.activate_pressed(AimTarget::Nothing, true, clock.at(400));
-        assert_eq!(input.activate_released(false, clock.at(500)), None);
+        assert_eq!(
+            input.activate_released(false, clock.at(500), AimTarget::Nothing),
+            None
+        );
     }
 
     #[test]
@@ -343,7 +470,10 @@ mod tests {
             Some(GrabAction::Activate)
         );
         assert_eq!(input.advance(clock.at(1000)), None);
-        assert_eq!(input.activate_released(false, clock.at(1000)), None);
+        assert_eq!(
+            input.activate_released(false, clock.at(1000), AimTarget::Nothing),
+            None
+        );
     }
 
     #[test]
@@ -355,7 +485,10 @@ mod tests {
             None
         );
         assert_eq!(input.advance(clock.at(1000)), None);
-        assert_eq!(input.activate_released(false, clock.at(1000)), None);
+        assert_eq!(
+            input.activate_released(false, clock.at(1000), AimTarget::Nothing),
+            None
+        );
     }
 
     #[test]
@@ -375,20 +508,173 @@ mod tests {
         assert_eq!(body.advance(clock.at(1160)), GRAB_OTHER_BODY);
     }
 
+    const NEVER: fn(EntityId) -> bool = |_| panic!("a closure of a branch not taken ran");
+
     #[test]
-    fn a_door_wins_over_a_grabbable_body_and_only_a_grabbable_body_is_grabbable() {
+    fn a_door_wins_over_an_item_and_an_item_over_a_grabbable_body() {
         assert_eq!(
-            AimTarget::resolve(true, BODY, |_| true),
+            AimTarget::resolve(true, BODY, NEVER, NEVER, NEVER),
             AimTarget::Activatable
         );
         assert_eq!(
-            AimTarget::resolve(false, BODY, |entity| entity == BODY),
+            AimTarget::resolve(false, BODY, |_| true, NEVER, |_| true),
+            AimTarget::Item {
+                entity: BODY,
+                grabbable: true
+            }
+        );
+        assert_eq!(
+            AimTarget::resolve(false, BODY, |_| false, |entity| entity == BODY, NEVER),
             AimTarget::Grabbable(BODY)
         );
         assert_eq!(
-            AimTarget::resolve(false, BODY, |_| false),
+            AimTarget::resolve(false, BODY, |_| false, |_| false, NEVER),
             AimTarget::Nothing
         );
+    }
+
+    #[test]
+    fn an_item_the_sim_cannot_carry_is_still_an_item_and_is_not_a_grabbable_body() {
+        assert_eq!(
+            AimTarget::resolve(false, BODY, |_| true, |_| true, |_| false),
+            AimTarget::Item {
+                entity: BODY,
+                grabbable: false
+            }
+        );
+    }
+
+    #[test]
+    fn while_a_body_is_carried_no_item_or_body_is_aimed_at_but_a_door_still_is() {
+        for aim in [ITEM, HEAVY_ITEM, AimTarget::Grabbable(BODY)] {
+            assert_eq!(aim.while_carrying(true), AimTarget::Nothing, "{aim:?}");
+            assert_eq!(aim.while_carrying(false), aim, "{aim:?}");
+        }
+        for aim in [AimTarget::Activatable, AimTarget::Nothing] {
+            assert_eq!(aim.while_carrying(true), aim, "{aim:?}");
+        }
+    }
+
+    const ITEM: AimTarget = AimTarget::Item {
+        entity: BODY,
+        grabbable: true,
+    };
+    const HEAVY_ITEM: AimTarget = AimTarget::Item {
+        entity: BODY,
+        grabbable: false,
+    };
+    const OTHER_ITEM: AimTarget = AimTarget::Item {
+        entity: OTHER_BODY,
+        grabbable: true,
+    };
+    const PICK_UP: Option<GrabAction> = Some(GrabAction::PickUp(BODY));
+
+    fn pressed_on(aim: AimTarget, clock: &Clock) -> GrabInput {
+        let mut input = GrabInput::default();
+        assert_eq!(input.activate_pressed(aim, false, clock.at(0)), None);
+        input
+    }
+
+    #[test]
+    fn a_tap_on_a_carriable_item_picks_it_up_on_release() {
+        let clock = Clock::new();
+        let mut input = pressed_on(ITEM, &clock);
+        assert_eq!(input.advance(clock.at(100)), None);
+        assert_eq!(input.activate_released(false, clock.at(150), ITEM), PICK_UP);
+        assert_eq!(input.activate_released(false, clock.at(160), ITEM), None);
+    }
+
+    #[test]
+    fn a_tap_picks_up_only_when_the_pressed_item_is_still_aimed_at() {
+        let clock = Clock::new();
+        for aimed in [
+            AimTarget::Nothing,
+            AimTarget::Activatable,
+            AimTarget::Grabbable(BODY),
+            OTHER_ITEM,
+        ] {
+            let mut input = pressed_on(ITEM, &clock);
+            assert_eq!(
+                input.activate_released(false, clock.at(100), aimed),
+                None,
+                "{aimed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_tap_on_an_item_that_became_too_heavy_to_carry_still_picks_it_up() {
+        let clock = Clock::new();
+        let mut input = pressed_on(ITEM, &clock);
+        assert_eq!(
+            input.activate_released(false, clock.at(100), HEAVY_ITEM),
+            PICK_UP
+        );
+    }
+
+    #[test]
+    fn holding_a_carriable_item_grabs_it_once_and_a_later_release_does_nothing() {
+        let clock = Clock::new();
+        let mut input = pressed_on(ITEM, &clock);
+        assert_eq!(input.advance(clock.at(159)), None);
+        assert_eq!(input.advance(clock.at(160)), GRAB_BODY);
+        assert_eq!(input.advance(clock.at(500)), None);
+        assert_eq!(input.activate_released(true, clock.at(600), ITEM), None);
+    }
+
+    #[test]
+    fn a_hold_that_reached_the_grab_hold_unseen_grabs_on_release_and_never_picks_up() {
+        let clock = Clock::new();
+        let mut input = pressed_on(ITEM, &clock);
+        assert_eq!(
+            input.activate_released(false, clock.at(160), ITEM),
+            GRAB_BODY
+        );
+    }
+
+    #[test]
+    fn an_item_that_cannot_be_carried_is_picked_up_on_release_whatever_the_duration() {
+        let clock = Clock::new();
+        for released_at in [10, 159, 160, 161, 5000] {
+            let mut input = pressed_on(HEAVY_ITEM, &clock);
+            assert_eq!(input.advance(clock.at(released_at)), None, "{released_at}");
+            assert_eq!(
+                input.activate_released(false, clock.at(released_at), HEAVY_ITEM),
+                PICK_UP,
+                "{released_at}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_item_that_cannot_be_carried_is_not_picked_up_when_the_aim_moved_off_it() {
+        let clock = Clock::new();
+        for aimed in [AimTarget::Nothing, OTHER_ITEM] {
+            let mut input = pressed_on(HEAVY_ITEM, &clock);
+            assert_eq!(
+                input.activate_released(false, clock.at(2000), aimed),
+                None,
+                "{aimed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_menu_opening_while_e_is_held_on_an_item_leaves_the_release_without_effect() {
+        let clock = Clock::new();
+        for aim in [ITEM, HEAVY_ITEM] {
+            let mut input = pressed_on(aim, &clock);
+            input.release_keys();
+            assert_eq!(input.advance(clock.at(1000)), None);
+            assert_eq!(input.activate_released(false, clock.at(1000), aim), None);
+        }
+    }
+
+    #[test]
+    fn a_tap_on_a_loose_body_never_picks_it_up_even_when_an_item_is_aimed_at() {
+        let clock = Clock::new();
+        let mut input = pressed_on(AimTarget::Grabbable(BODY), &clock);
+        assert_eq!(input.activate_released(false, clock.at(100), ITEM), None);
     }
 
     #[test]
@@ -488,14 +774,20 @@ mod tests {
         holding.activate_pressed(AimTarget::Grabbable(BODY), false, clock.at(0));
         holding.release_keys();
         assert_eq!(holding.advance(clock.at(1000)), None);
-        assert_eq!(holding.activate_released(false, clock.at(1000)), None);
+        assert_eq!(
+            holding.activate_released(false, clock.at(1000), AimTarget::Nothing),
+            None
+        );
 
         let mut carrying = carrying_input(&clock);
         carrying.throw_pressed(true, clock.at(1000));
         carrying.activate_pressed(AimTarget::Nothing, true, clock.at(1000));
         carrying.release_keys();
         assert_eq!(carrying.throw_released(true, clock.at(1500)), None);
-        assert_eq!(carrying.activate_released(true, clock.at(1500)), None);
+        assert_eq!(
+            carrying.activate_released(true, clock.at(1500), AimTarget::Nothing),
+            None
+        );
     }
 
     #[test]

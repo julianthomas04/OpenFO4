@@ -23,8 +23,8 @@ mod text_face;
 
 use std::sync::Arc;
 
-use crate::rendering::door_prompt::RolloverPrompt;
 use crate::rendering::gpu_profiler::{GpuPass, GpuProfiler, SpanPart};
+use crate::rendering::rollover_prompt::RolloverPrompt;
 use crate::rendering::ui_colour::UiTint;
 use crate::rendering::ui_fonts::UiFonts;
 use crate::sim::{CrosshairState, HudSnapshot};

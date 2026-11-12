@@ -61,6 +61,10 @@ pub enum StartupError {
     SkySettings(anyhow::Error),
     #[error("cannot load the door prompt settings: {0:#}")]
     DoorPromptSettings(anyhow::Error),
+    #[error("cannot load the item prompt settings: {0:#}")]
+    ItemPromptSettings(anyhow::Error),
+    #[error("cannot load the player's owner keys: {0:#}")]
+    PlayerOwners(anyhow::Error),
     #[error("cannot load the walk-in entrance settings: {0:#}")]
     WalkInSettings(anyhow::Error),
     #[error("Pip-Boy world map: {0}")]

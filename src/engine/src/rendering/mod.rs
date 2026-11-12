@@ -39,6 +39,8 @@ pub mod grass_streaming;
 pub mod hiz;
 pub mod hud;
 pub mod instance;
+mod item_pickup;
+mod item_prompt;
 pub mod light_anim;
 pub mod lighting;
 mod line_buffer;
@@ -66,6 +68,7 @@ pub mod readback_ring;
 pub mod refraction;
 pub mod render_pipelines;
 mod reveal_texture_check;
+mod rollover_prompt;
 pub(crate) mod row_pose;
 pub mod scene_copy;
 pub mod scene_overrides;
@@ -200,8 +203,8 @@ use crate::rendering::{
 use crate::sim::commands::{ClockEdit, WeatherEdit};
 use crate::sim::pipboy::PipBoyAction;
 use crate::sim::{
-    ClockFrame, DynamicPose, MaterialBuoyancy, PlayerInput, PlayerMovement, SimCommand, SimWorld,
-    refr_entity_id, water_physics,
+    ClockFrame, DynamicPose, EntityId, InventoryEvent, MaterialBuoyancy, PlayerInput,
+    PlayerMovement, SimCommand, SimWorld, refr_entity_id, water_physics,
 };
 use crate::spawn_cell::SpawnCellTarget;
 use crate::startup::{StartupError, StartupTimer};
@@ -215,11 +218,13 @@ use auto_anim::AutoAnim;
 use auto_character::AutoCharacters;
 use boot::{BootParts, GpuContext, StartupInputs, StateInputs};
 use cube_array::CubeArray;
-use door_prompt::{DoorPrompts, ShownEntrance, door_hud};
+use door_prompt::{DoorPrompts, ShownEntrance, aim_hud};
 use effects::stage::{EffectFrameInputs, EffectStage};
 use grab_input::{
     AimTarget, CarryContext, GrabAction, GrabInput, carry_key_counts, spin_gate_open,
 };
+use item_pickup::plan_pickup;
+use item_prompt::{ItemPromptCache, ItemPrompts, PlayerOwners, catalog_item_prompt};
 use light_anim::LightAnimator;
 use lighting::frame_uniform::FrameUniform;
 use load_transition::{
@@ -233,6 +238,7 @@ use particles::CameraBasis;
 use ragdoll_objects::RagdollObjects;
 use refraction::{RefractionFrameInputs, RefractionStage};
 use reveal_texture_check::{Draw, RevealTextureCheck};
+use rollover_prompt::RolloverPrompt;
 use shaders::startup::EffectValidation;
 use startup_reads::StartupDbReads;
 use ui_colour::UiColourSet;
@@ -688,6 +694,14 @@ pub struct State {
     teleports: std::collections::HashMap<String, ResolvedTarget>,
     /// The text shown while aiming at a door, resolved at boot.
     door_prompts: DoorPrompts,
+    /// The verbs shown while aiming at a placed item, resolved at boot.
+    item_prompts: ItemPrompts,
+    /// The owners that make taking an item no theft, resolved at boot.
+    player_owners: PlayerOwners,
+    /// The same catalog the sim holds, so the item prompt never goes through the Pip-Boy.
+    pipboy_catalog: Arc<crate::sim::pipboy::PipBoyCatalog>,
+    /// The prompt of the item aimed at, built once per aimed entity.
+    item_prompt_cache: ItemPromptCache,
     /// The entrances of the walk-in (automatic) load doors; their sources are keys of
     /// `teleports`.
     walk_in: WalkInTriggers,
@@ -1114,8 +1128,25 @@ impl State {
         AimTarget::resolve(
             activation::resolve(ref_id, &self.teleports, &self.animated_objects).is_some(),
             refr_entity_id(ref_id),
+            |entity| self.streamer.world_item(entity).is_some(),
             |entity| self.sim.is_grabbable(entity),
+            |entity| self.sim.can_carry(entity),
         )
+        .while_carrying(self.sim.carried().is_some())
+    }
+
+    /// The rollover of the placed item aimed at, none when its base has no catalog entry.
+    fn item_prompt_of(&mut self, entity: EntityId) -> Option<RolloverPrompt> {
+        self.item_prompt_cache
+            .get_or_build(entity, || {
+                catalog_item_prompt(
+                    self.streamer.world_item(entity)?,
+                    &self.pipboy_catalog,
+                    &self.item_prompts,
+                    &self.player_owners,
+                )
+            })
+            .cloned()
     }
 
     /// What the walk-in entrance the player stands near shows. `pipboy_open` is the value the
@@ -1199,11 +1230,11 @@ impl State {
         }
         let carrying = self.sim.carried().is_some();
         let now = Instant::now();
+        let aim = self.aim_target();
         let action = if is_pressed {
-            let aim = self.aim_target();
             self.grab_input.activate_pressed(aim, carrying, now)
         } else {
-            self.grab_input.activate_released(carrying, now)
+            self.grab_input.activate_released(carrying, now, aim)
         };
         self.apply_grab_action(action);
     }
@@ -1238,6 +1269,48 @@ impl State {
             Some(GrabAction::Carry(command)) => {
                 self.sim.apply(command.into_sim_command());
                 self.follow_carry_outcome();
+            }
+            Some(GrabAction::PickUp(entity)) => self.pick_up_item(entity),
+        }
+    }
+
+    /// Takes the placed item into the inventory: the lookup and the plan change nothing, the sim
+    /// grants the units (nothing changed on failure), then the streamer takes the item out of
+    /// the world. A second request for the same entity ends at the lookup.
+    fn pick_up_item(&mut self, entity: EntityId) {
+        let Some(item) = self.streamer.world_item(entity) else {
+            tracing::warn!("pickup of {entity:?} refused: it is not a placed item");
+            return;
+        };
+        let plan = match plan_pickup(item, &self.pipboy_catalog) {
+            Ok(plan) => plan,
+            Err(error) => {
+                tracing::warn!("pickup of {entity:?} refused: {error}");
+                return;
+            }
+        };
+        if let Err(error) = self.sim.pick_up_item(plan.entity, &plan.base, plan.count) {
+            tracing::error!("pickup of {entity:?} failed, nothing changed: {error}");
+            return;
+        }
+        if let Err(error) = self.streamer.remove_world_item(entity) {
+            tracing::error!(
+                "pickup of {entity:?} was granted but the item stays in the world: {error}"
+            );
+        }
+    }
+
+    /// The consumer of the sim's inventory events; the pickup sound and the HUD message
+    /// arrive with their own milestone.
+    fn drain_inventory_events(&mut self) {
+        for event in self.sim.drain_inventory_events() {
+            match event {
+                InventoryEvent::Added { form_key, count } => {
+                    tracing::debug!("inventory: added {count} x {form_key}");
+                }
+                InventoryEvent::Dropped { form_key, count } => {
+                    tracing::debug!("inventory: dropped {count} x {form_key}");
+                }
             }
         }
     }
@@ -1741,6 +1814,8 @@ impl State {
             interiors,
             teleports,
             door_prompts,
+            item_prompts,
+            player_owners,
             walk_in,
             player_movement,
             buoyancy_table,
@@ -1847,7 +1922,8 @@ impl State {
             pipboy.require_marker_art(map.markers.iter().map(|marker| marker.marker_type))?;
         }
         pipboy.load_perk_grid(&device, &queue, surface_format)?;
-        sim.set_pipboy_catalog(std::sync::Arc::new(pipboy_catalog));
+        let pipboy_catalog = Arc::new(pipboy_catalog);
+        sim.set_pipboy_catalog(Arc::clone(&pipboy_catalog));
 
         let cull_stats = CullStatsReadback::new(&device);
         let gpu_profiler = GpuProfiler::new(&device, &queue);
@@ -1966,6 +2042,10 @@ impl State {
             interior_filter: String::new(),
             teleports,
             door_prompts,
+            item_prompts,
+            player_owners,
+            pipboy_catalog,
+            item_prompt_cache: ItemPromptCache::default(),
             walk_in,
             pending_teleport: spawn_target,
             auto_activate: std::env::var("OPENFO4_AUTO_ACTIVATE")
@@ -3949,23 +4029,30 @@ impl State {
         // here (render-side): door-aim depends on the camera, which the sim does
         // not own — the sim only supplies the Standard spread radius.
         let aimed_ref = self.aimed_ref();
-        self.aimed_door = self.aim_target_of(aimed_ref.as_deref()) == AimTarget::Activatable;
+        let aim = self.aim_target_of(aimed_ref.as_deref());
+        self.aimed_door = aim == AimTarget::Activatable;
         let entrance = self.entrance_near_player(pipboy_open);
-        let door_hud = door_hud(
-            self.aimed_door,
+        let ordinary = if let AimTarget::Item { entity, .. } = aim {
+            self.item_prompt_of(entity)
+        } else {
+            self.item_prompt_cache.clear();
             self.door_prompts.prompt_for(
                 aimed_ref.as_deref(),
                 |ref_id| self.teleports.contains_key(ref_id),
                 |ref_id| self.animated_objects.door(refr_entity_id(ref_id)),
-            ),
+            )
+        };
+        let aim_hud = aim_hud(
+            self.aimed_door || matches!(aim, AimTarget::Item { .. }),
+            ordinary,
             entrance.as_ref(),
         );
         let mut hud_snapshot = self.sim.hud_snapshot();
         hud_snapshot.visible &= self.flow.hud_visible();
         self.hud.update(
             &hud_snapshot,
-            door_hud.activate,
-            door_hud.prompt.as_ref(),
+            aim_hud.activate,
+            aim_hud.prompt.as_ref(),
             world_dt,
             self.config.width,
             self.config.height,
@@ -4176,6 +4263,12 @@ impl State {
             });
         }
         self.dynamic_poses = dyn_poses;
+        if self.streamer.has_pending_hides() {
+            self.with_stream_targets(asset_server, |streamer, targets| {
+                streamer.apply_pending_hides(targets);
+            });
+        }
+        self.drain_inventory_events();
         self.write_animated_rows(asset_server);
         self.update_ragdolls(asset_server);
 

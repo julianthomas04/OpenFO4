@@ -10,7 +10,7 @@ use super::field_text::{ScreenMap, TextExtent, TextItem};
 use super::layout::Layout;
 use super::meters;
 use super::text_face::TextFace;
-use crate::rendering::door_prompt::RolloverPrompt;
+use crate::rendering::rollover_prompt::{RolloverPrompt, VerbTone};
 use crate::rendering::ui_colour::UiTint;
 use crate::ui_layout::button_hint::{ButtonHintKeys, ButtonHintRules};
 use crate::ui_layout::scaleform_text::{AutoSize, VerticalAlign};
@@ -21,6 +21,11 @@ use crate::ui_layout::{
 
 const MOVIE: &str = meters::MOVIE;
 const BAR_PATH: &str = "CenterGroup_mc/RolloverWidget_mc/ButtonHintBar_mc";
+
+/// The 8-bit sRGB colour both rollover lines take for a warning verb. Measured on screen in the
+/// original (about RGB 255, 94, 60), not read from game data: no converted layout carries it.
+/// Awaits confirmation from more captured frames.
+const WARNING_RGB: [u8; 3] = [255, 94, 60];
 
 pub struct RolloverKeys {
     centre: PlacementKey,
@@ -143,9 +148,29 @@ impl RolloverSpec {
         [&self.name.family, &self.key.family, &self.label.family].map(String::as_str)
     }
 
-    /// The text items of `prompt` on a framebuffer laid out by `layout`. `measure` reports how
-    /// much room a text takes, which the hint row needs to centre itself.
+    /// The text items of `prompt` on a framebuffer laid out by `layout`, every line in the
+    /// warning colour when the verb is a warning. `measure` reports how much room a text takes,
+    /// which the hint row needs to centre itself.
     fn items(
+        &self,
+        prompt: &RolloverPrompt,
+        ui: &UiLayout,
+        layout: &Layout,
+        tint: &UiTint,
+        measure: impl FnMut(&TextItem) -> TextExtent,
+    ) -> Vec<TextItem> {
+        let mut items = self.laid_out_items(prompt, ui, layout, tint, measure);
+        if prompt.verb.as_ref().map(|verb| verb.tone) == Some(VerbTone::Warning) {
+            for item in &mut items {
+                let [_, _, _, alpha] = item.colour;
+                let [r, g, b] = WARNING_RGB;
+                item.colour = [r, g, b, alpha];
+            }
+        }
+        items
+    }
+
+    fn laid_out_items(
         &self,
         prompt: &RolloverPrompt,
         ui: &UiLayout,
@@ -176,7 +201,7 @@ impl RolloverSpec {
             return vec![name];
         };
         let key_text = self.hint.key_caption(&self.key_name);
-        let label_text = self.hint.label_text(&self.set_text, ui, verb);
+        let label_text = self.hint.label_text(&self.set_text, ui, &verb.text);
         let mut box_width = |face: &TextFace, text: &str| {
             let item = face.item(face.geometry, text.to_owned(), map, tint);
             let natural = measure(&item).width / scale;
@@ -276,6 +301,7 @@ impl RolloverWidget {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rendering::rollover_prompt::Verb;
     use crate::ui_layout::test_support::{
         FIXTURE_REGULAR_CLASS, assert_close, instance, set_text_parts, synthesized_layout,
     };
@@ -362,7 +388,14 @@ mod tests {
     fn prompt(name: &str, verb: &str) -> RolloverPrompt {
         RolloverPrompt {
             name: name.into(),
-            verb: Some(verb.into()),
+            verb: Some(Verb::normal(verb.into())),
+        }
+    }
+
+    fn warning_prompt(name: &str, verb: &str) -> RolloverPrompt {
+        RolloverPrompt {
+            name: name.into(),
+            verb: Some(Verb::warning(verb.into())),
         }
     }
 
@@ -521,6 +554,42 @@ mod tests {
             &prompt("Door", "Open"),
         );
         assert_eq!(items[2].text, "Open");
+    }
+
+    #[test]
+    fn a_warning_verb_colours_the_name_and_both_hint_texts_and_keeps_the_hud_opacity() {
+        let faded = UiTint {
+            opacity: 0.5,
+            ..TINT
+        };
+        let items = spec_of(BASE).items(
+            &warning_prompt("Kitchen Scale", "Steal"),
+            &fixture(BASE),
+            &hud_layout((1280, 720)),
+            &faded,
+            fake_measure,
+        );
+        assert_eq!(items.len(), 3);
+        for item in &items {
+            assert_eq!(item.colour, [255, 94, 60, 128], "{}", item.text);
+        }
+    }
+
+    #[test]
+    fn a_normal_verb_keeps_every_line_in_the_hud_tint() {
+        for item in items_at((1280, 720), &prompt("Kitchen Scale", "Take")) {
+            assert_eq!(item.colour, TINT.text_rgba(), "{}", item.text);
+        }
+    }
+
+    #[test]
+    fn a_prompt_changing_only_its_tone_is_rebuilt() {
+        let mut widget = widget();
+        let normal = prompt("Scale", "Take");
+        assert!(update(&mut widget, Some(&normal), (1280, 720)));
+        let warning = warning_prompt("Scale", "Take");
+        assert!(update(&mut widget, Some(&warning), (1280, 720)));
+        assert_eq!(widget.items()[0].colour[..3], WARNING_RGB);
     }
 
     #[test]

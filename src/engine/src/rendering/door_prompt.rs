@@ -9,6 +9,7 @@ use anyhow::Context;
 use glam::Vec3;
 
 use super::animated_objects::{AnimatedDoor, DoorState};
+use super::rollover_prompt::{RolloverPrompt, Verb};
 use super::walk_in::{PlayerLocation, WalkInTriggers};
 use crate::assets::db::DbClient;
 use crate::assets::db::doors::{DoorFlagsError, flags_have_no_to_text};
@@ -20,11 +21,10 @@ use crate::startup::StartupError;
 pub(super) const OPEN_SETTING: &str = "sOpen";
 pub(super) const CLOSE_SETTING: &str = "sClose";
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct RolloverPrompt {
-    pub name: Arc<str>,
-    /// `None` for a prompt that is only a name, with no key hint.
-    pub verb: Option<Arc<str>>,
+/// The text of a game setting the engine cannot run without; a missing setting is an error.
+pub(super) fn required_setting_text(db: &DbClient, name: &'static str) -> anyhow::Result<String> {
+    db.get_game_setting_string(name)?
+        .with_context(|| format!("game setting {name} is missing from the database"))
 }
 
 /// The text when it holds more than whitespace.
@@ -188,13 +188,13 @@ pub(super) fn resolve(
     if is_load_door {
         return Some(RolloverPrompt {
             name: Arc::clone(labels.get(ref_id)?),
-            verb: Some(Arc::clone(&verbs.open)),
+            verb: Some(Verb::normal(Arc::clone(&verbs.open))),
         });
     }
     let door = animated_door?;
     Some(RolloverPrompt {
         name: Arc::clone(door.name?),
-        verb: Some(Arc::clone(verbs.for_target(door.target))),
+        verb: Some(Verb::normal(Arc::clone(verbs.for_target(door.target)))),
     })
 }
 
@@ -214,7 +214,7 @@ pub(super) struct ShownEntrance {
 
 /// What the HUD shows for the aim and the entrance the player stands near.
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct DoorHud {
+pub(super) struct AimHud {
     /// The crosshair takes the activate shape.
     pub activate: bool,
     pub prompt: Option<RolloverPrompt>,
@@ -222,12 +222,12 @@ pub(super) struct DoorHud {
 
 /// Something activatable aimed at, or an entrance near, turns the crosshair; the prompt is the
 /// aimed ordinary one, else the entrance's.
-pub(super) fn door_hud(
+pub(super) fn aim_hud(
     aimed_activatable: bool,
     ordinary: Option<RolloverPrompt>,
     entrance: Option<&ShownEntrance>,
-) -> DoorHud {
-    DoorHud {
+) -> AimHud {
+    AimHud {
         activate: aimed_activatable || entrance.is_some(),
         prompt: shown_prompt(ordinary, entrance),
     }
@@ -295,13 +295,9 @@ impl DoorPrompts {
     }
 
     fn load_verbs(db: &DbClient) -> anyhow::Result<PromptVerbs> {
-        let text = |name: &'static str| {
-            db.get_game_setting_string(name)?
-                .with_context(|| format!("game setting {name} is missing from the database"))
-        };
         Ok(PromptVerbs::new(
-            &text(OPEN_SETTING)?,
-            &text(CLOSE_SETTING)?,
+            &required_setting_text(db, OPEN_SETTING)?,
+            &required_setting_text(db, CLOSE_SETTING)?,
         )?)
     }
 
@@ -608,7 +604,11 @@ mod tests {
                 &verbs(),
             )
             .unwrap();
-            assert_eq!(prompt.verb.as_deref(), Some("Close"), "{target:?}");
+            assert_eq!(
+                prompt.verb,
+                Some(Verb::normal("Close".into())),
+                "{target:?}"
+            );
         }
     }
 
@@ -628,7 +628,7 @@ mod tests {
                 prompt,
                 RolloverPrompt {
                     name: Arc::clone(&name),
-                    verb: Some(Arc::from("Open"))
+                    verb: Some(Verb::normal("Open".into()))
                 },
                 "{target:?}"
             );
@@ -662,7 +662,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(prompt.name.as_ref(), "Museum of Freedom");
-        assert_eq!(prompt.verb.as_deref(), Some("Open"));
+        assert_eq!(prompt.verb, Some(Verb::normal("Open".into())));
     }
 
     #[test]
@@ -1261,7 +1261,12 @@ mod tests {
         fn shown(prompts: &DoorPrompts, source_ref: &str) -> Option<(String, String)> {
             prompts
                 .prompt_for(Some(source_ref), |_| true, |_| None)
-                .map(|prompt| (prompt.name.to_string(), prompt.verb.unwrap().to_string()))
+                .map(|prompt| {
+                    (
+                        prompt.name.to_string(),
+                        prompt.verb.unwrap().text.to_string(),
+                    )
+                })
         }
 
         #[test]
@@ -1446,8 +1451,8 @@ mod tests {
         let entrance = entrance_near(&prompts, 100.0);
         assert_eq!(entrance, None);
         assert_eq!(
-            door_hud(false, None, entrance.as_ref()),
-            DoorHud {
+            aim_hud(false, None, entrance.as_ref()),
+            AimHud {
                 activate: false,
                 prompt: None
             }
@@ -1463,7 +1468,7 @@ mod tests {
             feet_at(0.0),
         );
         assert_eq!(entrance, None);
-        assert!(!door_hud(false, None, entrance.as_ref()).activate);
+        assert!(!aim_hud(false, None, entrance.as_ref()).activate);
     }
 
     #[test]
@@ -1509,7 +1514,7 @@ mod tests {
         };
         let ordinary = RolloverPrompt {
             name: Arc::from("Door"),
-            verb: Some(Arc::from("Open")),
+            verb: Some(Verb::normal("Open".into())),
         };
         assert_eq!(
             shown_prompt(Some(ordinary.clone()), Some(&entrance)),
@@ -1526,14 +1531,14 @@ mod tests {
     fn the_door_hud_combines_the_crosshair_and_the_prompt() {
         let ordinary = RolloverPrompt {
             name: Arc::from("Door"),
-            verb: Some(Arc::from("Open")),
+            verb: Some(Verb::normal("Open".into())),
         };
         let labelled = ShownEntrance {
             prompt: Some(name_only("Diamond City")),
         };
         let unlabelled = ShownEntrance { prompt: None };
         let hud = |aimed, ordinary: Option<&RolloverPrompt>, entrance| {
-            let hud = door_hud(aimed, ordinary.cloned(), entrance);
+            let hud = aim_hud(aimed, ordinary.cloned(), entrance);
             (hud.activate, hud.prompt)
         };
         assert_eq!(
@@ -1555,7 +1560,7 @@ mod tests {
             .prompt_for(Some("d"), |_| true, |_| None)
             .unwrap();
         assert_eq!(prompt.name.as_ref(), "Museum of Freedom");
-        assert_eq!(prompt.verb.as_deref(), Some("Open"));
+        assert_eq!(prompt.verb, Some(Verb::normal("Open".into())));
     }
 
     #[test]
@@ -1566,8 +1571,14 @@ mod tests {
                 .prompt_for(Some("d"), |_| false, |_| Some(door(Some(&name), target)))
                 .unwrap()
         };
-        assert_eq!(shown(DoorState::Closed).verb.as_deref(), Some("Open"));
-        assert_eq!(shown(DoorState::Open).verb.as_deref(), Some("Close"));
+        assert_eq!(
+            shown(DoorState::Closed).verb,
+            Some(Verb::normal("Open".into()))
+        );
+        assert_eq!(
+            shown(DoorState::Open).verb,
+            Some(Verb::normal("Close".into()))
+        );
         assert_eq!(shown(DoorState::Open).name.as_ref(), "Door");
     }
 
@@ -1591,8 +1602,8 @@ mod tests {
             |_| Some(door(Some(&name), DoorState::Closed)),
         );
         assert_eq!(
-            door_hud(true, prompt, None),
-            DoorHud {
+            aim_hud(true, prompt, None),
+            AimHud {
                 activate: true,
                 prompt: None
             }
