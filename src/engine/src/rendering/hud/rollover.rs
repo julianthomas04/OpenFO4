@@ -186,14 +186,13 @@ impl RolloverSpec {
         let key_box = box_width(&self.key, &key_text);
         let label_box = box_width(&self.label, &label_text);
         let label_shift = self.hint.label_shift(key_box);
-        let left = self
-            .key
-            .geometry
-            .left
-            .min(self.label.geometry.left + label_shift);
-        let right = (self.key.geometry.left + key_box)
-            .max(self.label.geometry.left + label_shift + label_box);
-        let row_x = self.bar.0 - (right - left) / self.hint.centre_divisor;
+        let bounds = self.hint.row_bounds(
+            self.key.geometry.left,
+            key_box,
+            self.label.geometry.left,
+            label_box,
+        );
+        let row_x = self.hint.centred_origin(self.bar.0, bounds.width());
         vec![
             name,
             self.key.item(

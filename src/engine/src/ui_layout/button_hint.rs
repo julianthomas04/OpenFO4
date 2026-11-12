@@ -137,6 +137,40 @@ impl ButtonHintRules {
             self.label_x,
         )
     }
+
+    /// The horizontal extent of one hint relative to its registration point, given the authored
+    /// left edges of the key and label fields and their sized box widths.
+    pub fn row_bounds(
+        &self,
+        key_left: f32,
+        key_box_width: f32,
+        label_left: f32,
+        label_box_width: f32,
+    ) -> HintBounds {
+        let label_left = label_left + self.label_shift(key_box_width);
+        HintBounds {
+            left: key_left.min(label_left),
+            right: (key_left + key_box_width).max(label_left + label_box_width),
+        }
+    }
+
+    /// The x a row `width` wide starts at when it is centred on `centre_x`.
+    pub fn centred_origin(&self, centre_x: f32, width: f32) -> f32 {
+        centre_x - width / self.centre_divisor
+    }
+}
+
+/// The horizontal extent of a hint relative to its registration point.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HintBounds {
+    pub left: f32,
+    pub right: f32,
+}
+
+impl HintBounds {
+    pub fn width(&self) -> f32 {
+        self.right - self.left
+    }
 }
 
 /// How far the code moves a hint's label: it sets the label's x to the key holder's width, which
@@ -168,6 +202,45 @@ mod tests {
         let key_box = 30.0;
         assert_close(label_shift(0.0, key_x_in_holder + key_box, 2.0), 30.0);
         assert_close(label_shift(5.0, key_x_in_holder + key_box, 2.0), 35.0);
+    }
+
+    fn plain_rules() -> ButtonHintRules {
+        ButtonHintRules {
+            key_suffix: String::new(),
+            key_font: String::new(),
+            key_y_offset: 0.0,
+            icon_holder_x: 0.0,
+            key_x_in_holder: 2.0,
+            label_x: 2.0,
+            gap: 0.0,
+            centre_divisor: 2.0,
+            label_upper_case: false,
+        }
+    }
+
+    #[test]
+    fn a_row_spans_from_the_key_to_the_end_of_the_shifted_label() {
+        let bounds = plain_rules().row_bounds(1.0, 30.0, 4.0, 50.0);
+        assert_close(bounds.left, 1.0);
+        assert_close(bounds.right, 4.0 + 30.0 + 50.0);
+        assert_close(bounds.width(), 83.0);
+    }
+
+    #[test]
+    fn a_row_reaches_the_key_when_it_ends_after_the_label() {
+        let bounds = plain_rules().row_bounds(1.0, 30.0, 4.0, 0.0);
+        assert_close(bounds.right, 34.0);
+    }
+
+    #[test]
+    fn a_row_starts_at_the_label_when_it_lies_left_of_the_key() {
+        let bounds = plain_rules().row_bounds(10.0, 30.0, -20.0, 5.0);
+        assert_close(bounds.left, 10.0_f32.min(-20.0 + 30.0));
+    }
+
+    #[test]
+    fn a_row_is_centred_by_its_width_over_the_divisor() {
+        assert_close(plain_rules().centred_origin(100.0, 40.0), 80.0);
     }
 
     #[test]

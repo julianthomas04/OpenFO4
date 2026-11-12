@@ -268,19 +268,18 @@ impl HintBarLayout {
         let key_box = Self::sized_width(painter, &self.key_field, &key);
         let label_box = Self::sized_width(painter, &self.label, &label);
         let label_shift = self.hint.label_shift(key_box);
-        let left = self
-            .key_field
-            .geometry
-            .left
-            .min(self.label.geometry.left + label_shift);
-        let right = (self.key_field.geometry.left + key_box)
-            .max(self.label.geometry.left + label_shift + label_box);
+        let bounds = self.hint.row_bounds(
+            self.key_field.geometry.left,
+            key_box,
+            self.label.geometry.left,
+            label_box,
+        );
         HintRow {
             key,
             label,
             label_shift,
-            left,
-            right,
+            left: bounds.left,
+            right: bounds.right,
         }
     }
 
@@ -359,7 +358,7 @@ impl HintBarLayout {
         };
         let last_x = positions[positions.len() - 1];
         let width = last_x + last.right - first.left;
-        let internal_x = bar.x - width / self.hint.centre_divisor;
+        let internal_x = self.hint.centred_origin(bar.x, width);
         let left = internal_x + first.left;
         let right = internal_x + last_x + last.right;
         let left_origin = Pos2::new(left - self.left_bracket.bounds().width(), bar.y);

@@ -71,10 +71,6 @@ impl Door {
         flags_are_automatic(self.subject(), self.flags.as_deref())
     }
 
-    pub fn has_no_to_text(&self) -> Result<bool, DoorFlagsError> {
-        flags_have_no_to_text(self.subject(), self.flags.as_deref())
-    }
-
     pub fn get(form_key: &str, conn: &rusqlite::Connection) -> anyhow::Result<Self> {
         Ok(conn.query_row(
             "SELECT form_key, editor_id, name, model_path,
