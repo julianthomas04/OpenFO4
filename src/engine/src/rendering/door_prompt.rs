@@ -347,7 +347,7 @@ impl DoorPrompts {
 mod tests {
     use super::*;
     use crate::bethesda_space::position_to_engine;
-    use crate::rendering::walk_in::{EntranceDistances, TEST_DISTANCES};
+    use crate::rendering::walk_in::{EntranceDistances, LIVE_PLAY, TEST_DISTANCES};
 
     const WORLD: &str = "WS";
     const SQUARE: [(f32, f32); 4] = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)];
@@ -1145,9 +1145,9 @@ mod tests {
             let feet = Vec3::from(feet);
             let far_out = origin + (feet - origin) * 100.0;
             triggers.rearm();
-            triggers.sample(location, Some(engine_feet(far_out.to_array())));
+            triggers.step(LIVE_PLAY, location, Some(engine_feet(far_out.to_array())));
             triggers
-                .sample(location, Some(engine_feet(feet.to_array())))
+                .step(LIVE_PLAY, location, Some(engine_feet(feet.to_array())))
                 .map(str::to_owned)
         }
 
@@ -1389,8 +1389,8 @@ mod tests {
     fn walked_to(mut triggers: WalkInTriggers, units: f32) -> WalkInTriggers {
         let location = PlayerLocation::Exterior("WS");
         triggers.rearm();
-        triggers.sample(location, Some(feet_at(-1000.0)));
-        triggers.sample(location, Some(feet_at(units)));
+        triggers.step(LIVE_PLAY, location, Some(feet_at(-1000.0)));
+        triggers.step(LIVE_PLAY, location, Some(feet_at(units)));
         triggers
     }
 
@@ -1471,9 +1471,9 @@ mod tests {
         let prompts = prompts_with_silent(&[], &["near"]);
         let mut triggers = entrances();
         let location = PlayerLocation::Exterior("WS");
-        triggers.sample(location, Some(feet_at(-1000.0)));
+        triggers.step(LIVE_PLAY, location, Some(feet_at(-1000.0)));
         assert_eq!(
-            triggers.sample(location, Some(feet_at(100.0))),
+            triggers.step(LIVE_PLAY, location, Some(feet_at(100.0))),
             Some("near")
         );
         assert_eq!(prompts.entrance(&triggers, location, feet_at(100.0)), None);
@@ -1484,10 +1484,10 @@ mod tests {
         let prompts = prompts(&[("near", "Diamond City")]);
         let location = PlayerLocation::Exterior("WS");
         let mut triggers = entrances();
-        triggers.sample(location, Some(feet_at(100.0)));
+        triggers.step(LIVE_PLAY, location, Some(feet_at(100.0)));
         assert_eq!(prompts.entrance(&triggers, location, feet_at(100.0)), None);
-        triggers.sample(location, Some(feet_at(-1000.0)));
-        triggers.sample(location, Some(feet_at(100.0)));
+        triggers.step(LIVE_PLAY, location, Some(feet_at(-1000.0)));
+        triggers.step(LIVE_PLAY, location, Some(feet_at(100.0)));
         assert_eq!(
             prompts.entrance(&triggers, location, feet_at(100.0)),
             Some(ShownEntrance {

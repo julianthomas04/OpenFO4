@@ -980,28 +980,27 @@ impl State {
         self.sim.apply(SimCommand::TeleportPlayer { pos });
     }
 
-    fn walk_in_live(&self, pipboy_open: bool) -> bool {
+    fn walk_in_play_state(&self, pipboy_open: bool) -> PlayState {
         PlayState {
             walking: self.input_mode == InputMode::Walk,
-            in_game: self.flow.phase() == Phase::InGame,
+            phase: self.flow.phase(),
             pipboy_open,
             teleport_pending: self.pending_teleport.is_some(),
         }
-        .walk_in_live()
     }
 
-    /// Queues the teleport of the walk-in door the player just entered, if any. Only while
-    /// walking in play, not while a load runs or fades in: sampling during a pending teleport
-    /// would spend the entering edge on a refused request.
+    fn walk_in_live(&self, pipboy_open: bool) -> bool {
+        self.walk_in_play_state(pipboy_open).walk_in_live()
+    }
+
+    /// Queues the teleport of the walk-in door the player entered, if any.
     fn sample_walk_in(&mut self, pipboy_open: bool, dt: f32) {
         self.walk_in_fired = None;
-        if !self.walk_in_live(pipboy_open) {
-            return;
-        }
+        let play = self.walk_in_play_state(pipboy_open);
         let feet = self.sim.player_body().map(|body| body.feet);
         let location = player_location(&self.streamer);
-        let fired = self.walk_in.sample(location, feet).map(str::to_owned);
-        self.trace_walk_in(dt, fired.as_deref());
+        let fired = self.walk_in.step(play, location, feet).map(str::to_owned);
+        self.trace_walk_in(dt, fired.as_deref(), play.walk_in_live());
         let Some(source_ref) = fired else {
             return;
         };
@@ -1018,7 +1017,7 @@ impl State {
 
     /// The `OPENFO4_WALK_IN_TRACE` lines: how far the player stands from the entrance that
     /// decides the HUD, else the nearest one.
-    fn trace_walk_in(&mut self, dt: f32, fired: Option<&str>) {
+    fn trace_walk_in(&mut self, dt: f32, fired: Option<&str>, live: bool) {
         let Some(trace) = self.walk_in_trace.as_mut() else {
             return;
         };
@@ -1030,7 +1029,7 @@ impl State {
             return;
         };
         if trace.should_log(dt, &probe, fired.is_some()) {
-            tracing::info!("{}", trace_line(&probe, fired.is_some()));
+            tracing::info!("{}", trace_line(&probe, fired.is_some(), live));
         }
     }
 

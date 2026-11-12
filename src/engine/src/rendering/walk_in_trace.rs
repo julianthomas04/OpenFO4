@@ -46,9 +46,9 @@ impl WalkInTrace {
     }
 }
 
-pub(super) fn trace_line(probe: &EntranceProbe, fired: bool) -> String {
+pub(super) fn trace_line(probe: &EntranceProbe, fired: bool, live: bool) -> String {
     format!(
-        "WALK_IN_TRACE ref={} distance={:.1} display_limit={:.1} start_limit={:.1} shown={} inside_start={} armed={} fired={fired}",
+        "WALK_IN_TRACE ref={} distance={:.1} display_limit={:.1} start_limit={:.1} shown={} inside_start={} armed={} fired={fired} live={live}",
         probe.source_ref,
         probe.distance_units,
         probe.limits.display_units,
@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn the_line_names_every_diagnostic_field() {
-        let line = trace_line(&probe("12F822:Fallout4.esm", true), true);
+        let line = trace_line(&probe("12F822:Fallout4.esm", true), true, false);
         for part in [
             "WALK_IN_TRACE ref=12F822:Fallout4.esm",
             "distance=340.0",
@@ -143,5 +143,6 @@ mod tests {
         ] {
             assert!(line.contains(part), "{part} missing in {line}");
         }
+        assert!(line.ends_with("fired=true live=false"), "{line}");
     }
 }

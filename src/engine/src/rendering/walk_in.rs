@@ -13,6 +13,7 @@ use crate::assets::db::teleports::{DoorLocation, WalkInDoor};
 use crate::bethesda_space::{
     UNITS_TO_ENGINE, position_from_engine, position_to_engine, rotation_to_engine,
 };
+use crate::game_flow::Phase;
 
 pub(super) const DISPLAY_SETTING: &str = "fAutoDoorDisplayDistance";
 pub(super) const START_SETTING: &str = "fAutoDoorActivateDistance";
@@ -56,6 +57,14 @@ pub(super) const TEST_DISTANCES: EntranceDistances = EntranceDistances {
     start_units: 350.0,
 };
 
+#[cfg(test)]
+pub(super) const LIVE_PLAY: PlayState = PlayState {
+    walking: true,
+    phase: Phase::InGame,
+    pipboy_open: false,
+    teleport_pending: false,
+};
+
 fn positive_distance(setting: &str, distance: f32) -> anyhow::Result<f32> {
     anyhow::ensure!(
         distance.is_finite() && distance > 0.0,
@@ -68,17 +77,20 @@ fn positive_distance(setting: &str, distance: f32) -> anyhow::Result<f32> {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct PlayState {
     pub walking: bool,
-    pub in_game: bool,
+    pub phase: Phase,
     pub pipboy_open: bool,
     pub teleport_pending: bool,
 }
 
 impl PlayState {
-    /// Whether the player's position means anything to walk-in entrances: only while walking in
-    /// play with the Pip-Boy closed, not while a load is pending, runs or fades in. The start and
-    /// the entrance prompt share it.
+    /// Whether moves count for the edges: also while a load runs or fades in.
+    pub(super) fn tracks_position(self) -> bool {
+        self.walking && !self.phase.shows_menu() && !self.pipboy_open
+    }
+
+    /// Whether a start may be queued and the prompt shown: only in play, no load pending.
     pub(super) fn walk_in_live(self) -> bool {
-        self.walking && self.in_game && !self.pipboy_open && !self.teleport_pending
+        self.tracks_position() && self.phase == Phase::InGame && !self.teleport_pending
     }
 }
 
@@ -112,6 +124,8 @@ struct Entrance {
     /// Edge state: whether the name shows, as of the last sample. Meaningful only while
     /// [`WalkInTriggers`] holds a baseline in this entrance's location.
     showing: bool,
+    /// Entered since the baseline, still inside, not yet taken.
+    start_owed: bool,
     /// Engine-space ground direction out of the doorway, for the dev hook's walk line.
     outward: Vec3,
 }
@@ -135,6 +149,7 @@ impl Entrance {
             origin: Vec3::from(door.position.map(|v| v as f32)),
             limits: distances.scaled(door.scale as f32),
             showing: false,
+            start_owed: false,
             outward: Vec3::new(facing.x, 0.0, facing.z).normalize_or(Vec3::X),
         })
     }
@@ -308,21 +323,48 @@ impl WalkInTriggers {
         self.previous = None;
     }
 
-    /// The source ref of the entrance the player just walked into on the way from the previous
-    /// valid sample to `feet` (engine space), and the update of which names show. A sample
-    /// without feet (player not spawned) changes nothing. The first sample after [`Self::rearm`]
-    /// or in a new location is only a baseline. When several zones are entered in one sample the
-    /// first built wins.
-    pub(super) fn sample(
+    /// One frame: follows the move while `play` tracks positions, and returns the source ref of
+    /// an entrance whose start is owed once `play` is live. A start edge is owed while the
+    /// player stays inside its sphere; one that may not start yet waits for the first live step.
+    pub(super) fn step(
         &mut self,
+        play: PlayState,
         location: PlayerLocation<'_>,
         feet: Option<Vec3>,
     ) -> Option<&str> {
-        let feet = position_from_engine(feet?);
+        if !play.tracks_position() {
+            return None;
+        }
+        self.observe(location, feet);
+        if play.walk_in_live() {
+            self.take_start()
+        } else {
+            None
+        }
+    }
+
+    /// The first built entrance with a start owed; every owed start of the location is spent.
+    fn take_start(&mut self) -> Option<&str> {
+        let index = self.previous.as_ref()?.location_index;
+        let entrances = &mut self.locations[index].entrances;
+        let first = entrances.iter().position(|entrance| entrance.start_owed)?;
+        for entrance in entrances.iter_mut() {
+            entrance.start_owed = false;
+        }
+        Some(entrances[first].source_ref.as_str())
+    }
+
+    /// Advances which names show and which starts are owed over the move from the previous valid
+    /// sample to `feet` (engine space). A sample without feet (player not spawned) changes
+    /// nothing. The first sample after [`Self::rearm`] or in a new location is only a baseline.
+    fn observe(&mut self, location: PlayerLocation<'_>, feet: Option<Vec3>) {
+        let Some(feet) = feet.map(position_from_engine) else {
+            return;
+        };
         let Some((index, _)) = self.entrances_of(location) else {
             self.previous = None;
             self.armed = false;
-            return None;
+            return;
         };
         let entrances = &mut self.locations[index].entrances;
         let baseline = Baseline {
@@ -337,16 +379,15 @@ impl WalkInTriggers {
         let Some(before) = before else {
             for entrance in entrances.iter_mut() {
                 entrance.showing = false;
+                entrance.start_owed = false;
             }
-            return None;
+            return;
         };
         for entrance in entrances.iter_mut() {
             entrance.track_display(before.feet, feet);
+            entrance.start_owed = entrance.entered(before.feet, feet)
+                || (entrance.start_owed && entrance.starts_at(feet));
         }
-        entrances
-            .iter()
-            .find(|entrance| entrance.entered(before.feet, feet))
-            .map(|entrance| entrance.source_ref.as_str())
     }
 
     /// The source ref of the entrance of `location` that decides what the HUD shows at `feet`
@@ -451,7 +492,7 @@ mod tests {
     const INSIDE: [f32; 3] = [100.0, 0.0, 0.0];
 
     fn sample(triggers: &mut WalkInTriggers, [x, y, z]: [f32; 3]) -> Option<&str> {
-        triggers.sample(PlayerLocation::Exterior("WS"), Some(at(x, y, z)))
+        triggers.step(LIVE_PLAY, PlayerLocation::Exterior("WS"), Some(at(x, y, z)))
     }
 
     /// Baselines at `from`, then samples at `to`: what the player does in one step.
@@ -537,7 +578,10 @@ mod tests {
     fn no_feet_never_fire_and_keep_the_previous_edge_state() {
         let mut triggers = one_door();
         sample(&mut triggers, FAR);
-        assert_eq!(triggers.sample(PlayerLocation::Exterior("WS"), None), None);
+        assert_eq!(
+            triggers.step(LIVE_PLAY, PlayerLocation::Exterior("WS"), None),
+            None
+        );
         assert_eq!(sample(&mut triggers, INSIDE), Some("DOOR"));
     }
 
@@ -653,7 +697,7 @@ mod tests {
         let mut triggers = one_door();
         sample(&mut triggers, FAR);
         sample(&mut triggers, INSIDE);
-        triggers.sample(PlayerLocation::Exterior("WS"), None);
+        triggers.step(LIVE_PLAY, PlayerLocation::Exterior("WS"), None);
         assert_eq!(nearest(&triggers, INSIDE), Some("DOOR".into()));
     }
 
@@ -661,7 +705,7 @@ mod tests {
     fn a_sample_without_feet_keeps_an_arrival_inside_silent() {
         let mut triggers = one_door();
         sample(&mut triggers, INSIDE);
-        triggers.sample(PlayerLocation::Exterior("WS"), None);
+        triggers.step(LIVE_PLAY, PlayerLocation::Exterior("WS"), None);
         sample(&mut triggers, INSIDE);
         assert_eq!(nearest(&triggers, INSIDE), None);
     }
@@ -705,13 +749,13 @@ mod tests {
         };
         for (position, shown) in [(FAR, None), (INSIDE, Some("OUT".to_string()))] {
             let (location, feet) = exterior_at(position);
-            triggers.sample(location, feet);
+            triggers.step(LIVE_PLAY, location, feet);
             assert_eq!(nearest(&triggers, position), shown);
         }
         let (location, feet) = interior_at(FAR);
-        triggers.sample(location, feet);
+        triggers.step(LIVE_PLAY, location, feet);
         let (location, feet) = exterior_at(INSIDE);
-        triggers.sample(location, feet);
+        triggers.step(LIVE_PLAY, location, feet);
         assert_eq!(nearest(&triggers, INSIDE), None);
         sample(&mut triggers, FAR);
         sample(&mut triggers, INSIDE);
@@ -724,7 +768,11 @@ mod tests {
         sample(&mut triggers, FAR);
         sample(&mut triggers, INSIDE);
         assert_eq!(nearest(&triggers, INSIDE), Some("DOOR".into()));
-        triggers.sample(PlayerLocation::Interior("NONE"), Some(at(0.0, 0.0, 0.0)));
+        triggers.step(
+            LIVE_PLAY,
+            PlayerLocation::Interior("NONE"),
+            Some(at(0.0, 0.0, 0.0)),
+        );
         sample(&mut triggers, INSIDE);
         assert_eq!(nearest(&triggers, INSIDE), None);
         sample(&mut triggers, FAR);
@@ -747,7 +795,7 @@ mod tests {
         let inside = Some(at(INSIDE[0], INSIDE[1], INSIDE[2]));
         sample(&mut triggers, FAR);
         sample(&mut triggers, INSIDE);
-        triggers.sample(PlayerLocation::Interior("A"), inside);
+        triggers.step(LIVE_PLAY, PlayerLocation::Interior("A"), inside);
         assert_eq!(nearest(&triggers, INSIDE), None);
     }
 
@@ -904,6 +952,7 @@ mod tests {
         ]);
         sample(&mut triggers, FAR);
         assert_eq!(sample(&mut triggers, [100.0, 0.0, 0.0]), Some("A"));
+        assert_eq!(sample(&mut triggers, [100.0, 0.0, 0.0]), None);
         assert_eq!(sample(&mut triggers, [-300.0, 0.0, 0.0]), None);
         assert_eq!(sample(&mut triggers, [500.0, 0.0, 0.0]), Some("B"));
     }
@@ -934,12 +983,15 @@ mod tests {
         ]);
         let inside = Some(at(INSIDE[0], INSIDE[1], INSIDE[2]));
         let far = Some(at(FAR[0], FAR[1], FAR[2]));
-        triggers.sample(PlayerLocation::Interior("A"), far);
+        triggers.step(LIVE_PLAY, PlayerLocation::Interior("A"), far);
         assert_eq!(
-            triggers.sample(PlayerLocation::Interior("A"), inside),
+            triggers.step(LIVE_PLAY, PlayerLocation::Interior("A"), inside),
             Some("IN_A")
         );
-        assert_eq!(triggers.sample(PlayerLocation::Interior("C"), inside), None);
+        assert_eq!(
+            triggers.step(LIVE_PLAY, PlayerLocation::Interior("C"), inside),
+            None
+        );
         assert_eq!(
             triggers.nearest_entrance(PlayerLocation::Interior("C"), at(0.0, 0.0, 0.0)),
             None
@@ -951,12 +1003,21 @@ mod tests {
         let mut triggers = build(&[door("OUT", exterior()), door("IN", interior("A"))]);
         let inside = Some(at(INSIDE[0], INSIDE[1], INSIDE[2]));
         let far = Some(at(FAR[0], FAR[1], FAR[2]));
-        triggers.sample(PlayerLocation::Exterior("WS"), far);
-        assert_eq!(triggers.sample(PlayerLocation::Interior("A"), inside), None);
-        assert_eq!(triggers.sample(PlayerLocation::Interior("A"), inside), None);
-        assert_eq!(triggers.sample(PlayerLocation::Interior("A"), far), None);
+        triggers.step(LIVE_PLAY, PlayerLocation::Exterior("WS"), far);
         assert_eq!(
-            triggers.sample(PlayerLocation::Interior("A"), inside),
+            triggers.step(LIVE_PLAY, PlayerLocation::Interior("A"), inside),
+            None
+        );
+        assert_eq!(
+            triggers.step(LIVE_PLAY, PlayerLocation::Interior("A"), inside),
+            None
+        );
+        assert_eq!(
+            triggers.step(LIVE_PLAY, PlayerLocation::Interior("A"), far),
+            None
+        );
+        assert_eq!(
+            triggers.step(LIVE_PLAY, PlayerLocation::Interior("A"), inside),
             Some("IN")
         );
     }
@@ -994,8 +1055,14 @@ mod tests {
         let line = triggers.walk_line("DOOR").unwrap();
         let location = PlayerLocation::Exterior("WS");
         triggers.rearm();
-        assert_eq!(triggers.sample(location, Some(line.approach)), None);
-        assert_eq!(triggers.sample(location, Some(line.through)), Some("DOOR"));
+        assert_eq!(
+            triggers.step(LIVE_PLAY, location, Some(line.approach)),
+            None
+        );
+        assert_eq!(
+            triggers.step(LIVE_PLAY, location, Some(line.through)),
+            Some("DOOR")
+        );
     }
 
     #[test]
@@ -1120,12 +1187,7 @@ mod tests {
 
     #[test]
     fn walk_in_is_live_only_while_walking_in_game_with_the_pipboy_closed_and_no_teleport_pending() {
-        let live = PlayState {
-            walking: true,
-            in_game: true,
-            pipboy_open: false,
-            teleport_pending: false,
-        };
+        let live = LIVE_PLAY;
         assert!(live.walk_in_live());
         for blocked in [
             PlayState {
@@ -1133,7 +1195,15 @@ mod tests {
                 ..live
             },
             PlayState {
-                in_game: false,
+                phase: Phase::Loading,
+                ..live
+            },
+            PlayState {
+                phase: Phase::Revealing,
+                ..live
+            },
+            PlayState {
+                phase: Phase::MainMenu,
                 ..live
             },
             PlayState {
@@ -1147,6 +1217,160 @@ mod tests {
         ] {
             assert!(!blocked.walk_in_live(), "{blocked:?}");
         }
+    }
+
+    #[test]
+    fn positions_count_while_a_load_runs_or_fades_in_but_not_behind_the_menus_or_the_pipboy() {
+        let tracking = LIVE_PLAY;
+        for counted in [
+            tracking,
+            PlayState {
+                phase: Phase::Loading,
+                ..tracking
+            },
+            PlayState {
+                phase: Phase::Revealing,
+                ..tracking
+            },
+            PlayState {
+                teleport_pending: true,
+                ..tracking
+            },
+        ] {
+            assert!(counted.tracks_position(), "{counted:?}");
+        }
+        for ignored in [
+            PlayState {
+                walking: false,
+                ..tracking
+            },
+            PlayState {
+                phase: Phase::MainMenu,
+                ..tracking
+            },
+            PlayState {
+                phase: Phase::SpawnSelect,
+                ..tracking
+            },
+            PlayState {
+                pipboy_open: true,
+                ..tracking
+            },
+        ] {
+            assert!(!ignored.tracks_position(), "{ignored:?}");
+        }
+    }
+
+    fn step_in(triggers: &mut WalkInTriggers, phase: Phase, [x, y, z]: [f32; 3]) -> Option<&str> {
+        let play = PlayState { phase, ..LIVE_PLAY };
+        triggers.step(play, PlayerLocation::Exterior("WS"), Some(at(x, y, z)))
+    }
+
+    #[test]
+    fn entering_the_display_sphere_while_fading_in_shows_the_name_once_in_game() {
+        let mut triggers = one_door();
+        triggers.rearm();
+        step_in(&mut triggers, Phase::Revealing, [600.0, 0.0, 0.0]);
+        step_in(&mut triggers, Phase::Revealing, [540.0, 0.0, 0.0]);
+        step_in(&mut triggers, Phase::InGame, [540.0, 0.0, 0.0]);
+        assert_eq!(nearest(&triggers, [540.0, 0.0, 0.0]), Some("DOOR".into()));
+    }
+
+    #[test]
+    fn arriving_inside_and_standing_still_while_fading_in_shows_nothing_in_game() {
+        let mut triggers = one_door();
+        triggers.rearm();
+        step_in(&mut triggers, Phase::Revealing, INSIDE);
+        step_in(&mut triggers, Phase::Revealing, INSIDE);
+        assert_eq!(step_in(&mut triggers, Phase::InGame, INSIDE), None);
+        assert_eq!(nearest(&triggers, INSIDE), None);
+    }
+
+    #[test]
+    fn entering_the_start_sphere_while_fading_in_starts_on_the_first_step_in_game_only() {
+        let mut triggers = one_door();
+        triggers.rearm();
+        assert_eq!(step_in(&mut triggers, Phase::Revealing, FAR), None);
+        assert_eq!(step_in(&mut triggers, Phase::Revealing, INSIDE), None);
+        assert_eq!(step_in(&mut triggers, Phase::Revealing, INSIDE), None);
+        assert_eq!(step_in(&mut triggers, Phase::InGame, INSIDE), Some("DOOR"));
+        assert_eq!(step_in(&mut triggers, Phase::InGame, INSIDE), None);
+    }
+
+    #[test]
+    fn entering_and_leaving_the_start_sphere_while_fading_in_starts_nothing() {
+        let mut triggers = one_door();
+        triggers.rearm();
+        step_in(&mut triggers, Phase::Revealing, FAR);
+        step_in(&mut triggers, Phase::Revealing, INSIDE);
+        step_in(&mut triggers, Phase::Revealing, FAR);
+        assert_eq!(step_in(&mut triggers, Phase::InGame, FAR), None);
+        assert_eq!(step_in(&mut triggers, Phase::InGame, INSIDE), Some("DOOR"));
+    }
+
+    #[test]
+    fn two_starts_owed_while_fading_in_start_the_first_built_only_in_game() {
+        let mut triggers = build(&[
+            door("A", exterior()),
+            door_at("B", exterior(), [200.0, 0.0, 0.0]),
+        ]);
+        triggers.rearm();
+        step_in(&mut triggers, Phase::Revealing, FAR);
+        step_in(&mut triggers, Phase::Revealing, INSIDE);
+        assert_eq!(step_in(&mut triggers, Phase::InGame, INSIDE), Some("A"));
+        assert_eq!(step_in(&mut triggers, Phase::InGame, INSIDE), None);
+    }
+
+    #[test]
+    fn an_arrival_drops_a_start_owed_from_before_it() {
+        let mut triggers = one_door();
+        step_in(&mut triggers, Phase::Revealing, FAR);
+        step_in(&mut triggers, Phase::Revealing, INSIDE);
+        triggers.rearm();
+        assert_eq!(step_in(&mut triggers, Phase::InGame, INSIDE), None);
+    }
+
+    #[test]
+    fn a_start_owed_in_one_location_is_not_started_from_another() {
+        let mut triggers = build(&[door("OUT", exterior()), door("IN", interior("A"))]);
+        step_in(&mut triggers, Phase::Revealing, FAR);
+        step_in(&mut triggers, Phase::Revealing, INSIDE);
+        let play = PlayState {
+            phase: Phase::InGame,
+            ..LIVE_PLAY
+        };
+        let origin = Some(at(0.0, 0.0, 0.0));
+        assert_eq!(
+            triggers.step(play, PlayerLocation::Interior("A"), origin),
+            None
+        );
+        assert_eq!(
+            triggers.step(play, PlayerLocation::Interior("NONE"), origin),
+            None
+        );
+    }
+
+    #[test]
+    fn moves_behind_the_menus_do_not_count() {
+        let mut triggers = one_door();
+        triggers.rearm();
+        step_in(&mut triggers, Phase::MainMenu, FAR);
+        step_in(&mut triggers, Phase::MainMenu, INSIDE);
+        assert_eq!(step_in(&mut triggers, Phase::InGame, INSIDE), None);
+    }
+
+    #[test]
+    fn entering_a_start_sphere_while_a_teleport_is_pending_starts_on_the_first_live_step() {
+        let mut triggers = one_door();
+        triggers.rearm();
+        let pending = PlayState {
+            teleport_pending: true,
+            ..LIVE_PLAY
+        };
+        let location = PlayerLocation::Exterior("WS");
+        triggers.step(pending, location, Some(at(FAR[0], FAR[1], FAR[2])));
+        triggers.step(pending, location, Some(at(INSIDE[0], INSIDE[1], INSIDE[2])));
+        assert_eq!(step_in(&mut triggers, Phase::InGame, INSIDE), Some("DOOR"));
     }
 
     #[test]
