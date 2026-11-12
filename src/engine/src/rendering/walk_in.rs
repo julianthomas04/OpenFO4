@@ -1,7 +1,8 @@
-//! Walk-in entrances: automatic load doors. Near one, the HUD shows where it leads; walking closer
-//! starts its transition. Both rules measure the 3D distance from the player's feet to the door
-//! reference's origin against a radius derived from the game's settings and the reference's
-//! scale. Pure decision logic, no GPU or sim access: the settings, both distance rules, edge
+//! Walk-in entrances: automatic load doors. Walking into the display sphere of one makes the HUD
+//! show where it leads; walking into its start sphere starts its transition. Both rules measure
+//! the 3D distance from the player's feet to the door reference's origin against a radius derived
+//! from the game's settings and the reference's scale, and both fire on entering, never on being
+//! inside. Pure decision logic, no GPU or sim access: the settings, both distance rules, edge
 //! arming and the location match all live here.
 
 use anyhow::Context;
@@ -147,6 +148,12 @@ impl Entrance {
         self.distance_units(feet) <= self.limits.start_units
     }
 
+    /// Whether the name shows at `feet` after the move from `previous`: inside the display sphere
+    /// now, and either shown already or outside it before. Only the end point matters.
+    fn shown_after(&self, was_shown: bool, previous: Vec3, feet: Vec3) -> bool {
+        self.shows_at(feet) && (was_shown || !self.shows_at(previous))
+    }
+
     /// Outside at `previous`, and inside at `feet` or the straight path there touches the start
     /// sphere, so one long frame cannot jump across a small one.
     fn entered(&self, previous: Vec3, feet: Vec3) -> bool {
@@ -207,13 +214,22 @@ pub(super) struct WalkLine {
 /// How far beyond the start zone the approach sits, Bethesda units.
 const WALK_LINE_CLEARANCE_UNITS: f32 = 30.0;
 
-/// Every walk-in entrance plus the edge state deciding when one starts.
+/// What the last valid sample left behind: where the player was and which entrances show.
+struct LastSample {
+    location_index: usize,
+    /// Bethesda units.
+    feet: Vec3,
+    /// Per entrance of the location, in build order.
+    shown: Vec<bool>,
+}
+
+/// Every walk-in entrance plus the edge state deciding when one shows and starts.
 #[derive(Default)]
 pub(super) struct WalkInTriggers {
     locations: Vec<LocationEntrances>,
-    /// The location index and feet (Bethesda units) of the last valid sample; `None` until a
-    /// baseline is taken.
-    previous: Option<(usize, Vec3)>,
+    /// `None` until a baseline is taken: after [`Self::rearm`], in a new location, or without
+    /// entrances. Nothing shows then.
+    previous: Option<LastSample>,
     armed: bool,
 }
 
@@ -256,16 +272,33 @@ impl WalkInTriggers {
             .map(|(index, entry)| (index, entry.entrances.as_slice()))
     }
 
-    /// The next valid sample is only a baseline and never starts anything: call after anything
-    /// that puts the player somewhere new, so arriving inside a start zone is not entering it.
+    /// The entrances of `location` with whether each shows its name as of the last sample; none
+    /// shows without a baseline taken in `location`.
+    fn entrances_with_display(
+        &self,
+        location: PlayerLocation<'_>,
+    ) -> Option<(&[Entrance], &[bool])> {
+        let (index, entrances) = self.entrances_of(location)?;
+        let shown = self
+            .previous
+            .as_ref()
+            .filter(|last| last.location_index == index)
+            .map_or(&[][..], |last| last.shown.as_slice());
+        Some((entrances, shown))
+    }
+
+    /// The next valid sample is only a baseline and never starts or shows anything: call after
+    /// anything that puts the player somewhere new, so arriving inside a start or display zone is
+    /// not entering it.
     pub(super) fn rearm(&mut self) {
         self.previous = None;
     }
 
     /// The source ref of the entrance the player just walked into on the way from the previous
-    /// valid sample to `feet` (engine space). A sample without feet (player not spawned) changes
-    /// nothing. The first sample after [`Self::rearm`] or in a new location is only a
-    /// baseline. When several zones are entered in one sample the first built wins.
+    /// valid sample to `feet` (engine space), and the update of which names show. A sample
+    /// without feet (player not spawned) changes nothing. The first sample after [`Self::rearm`]
+    /// or in a new location is only a baseline. When several zones are entered in one sample the
+    /// first built wins.
     pub(super) fn sample(
         &mut self,
         location: PlayerLocation<'_>,
@@ -277,39 +310,52 @@ impl WalkInTriggers {
             self.armed = false;
             return None;
         };
-        let previous = self
+        let entrances = &self.locations[index].entrances;
+        let before = self
             .previous
-            .replace((index, feet))
-            .filter(|(previous_index, _)| *previous_index == index)
-            .map(|(_, previous_feet)| previous_feet);
-        self.armed = previous.is_some();
-        let previous = previous?;
-        self.locations[index]
-            .entrances
-            .iter()
-            .find(|entrance| entrance.entered(previous, feet))
-            .map(|entrance| entrance.source_ref.as_str())
+            .take()
+            .filter(|last| last.location_index == index);
+        self.armed = before.is_some();
+        let shown = match &before {
+            Some(last) => entrances
+                .iter()
+                .zip(&last.shown)
+                .map(|(entrance, was_shown)| entrance.shown_after(*was_shown, last.feet, feet))
+                .collect(),
+            None => vec![false; entrances.len()],
+        };
+        let started = before.and_then(|last| {
+            entrances
+                .iter()
+                .find(|entrance| entrance.entered(last.feet, feet))
+        });
+        self.previous = Some(LastSample {
+            location_index: index,
+            feet,
+            shown,
+        });
+        started.map(|entrance| entrance.source_ref.as_str())
     }
 
     /// The source ref of the entrance of `location` that decides what the HUD shows at `feet`
-    /// (engine space): the nearest one whose display radius contains the feet.
+    /// (engine space): the nearest one showing its name as of the last sample.
     pub(super) fn nearest_entrance(
         &self,
         location: PlayerLocation<'_>,
         feet: Vec3,
     ) -> Option<&str> {
         let feet = position_from_engine(feet);
-        let entrances = self.entrances_of(location)?.1;
-        shown_entrance(entrances, feet).map(|entrance| entrance.source_ref.as_str())
+        let (entrances, shown) = self.entrances_with_display(location)?;
+        shown_entrance(entrances, shown, feet).map(|entrance| entrance.source_ref.as_str())
     }
 
     /// The probe of the entrance that decides the HUD at `feet` (engine space), else of the
     /// nearest one; `None` when `location` has no entrances.
     pub(super) fn probe(&self, location: PlayerLocation<'_>, feet: Vec3) -> Option<EntranceProbe> {
         let feet = position_from_engine(feet);
-        let entrances = self.entrances_of(location)?.1;
-        let shown = shown_entrance(entrances, feet);
-        let entrance = shown.or_else(|| nearest(entrances, feet, |_| true))?;
+        let (entrances, shown) = self.entrances_with_display(location)?;
+        let shown = shown_entrance(entrances, shown, feet);
+        let entrance = shown.or_else(|| nearest(entrances.iter(), feet))?;
         Some(EntranceProbe {
             source_ref: entrance.source_ref.clone(),
             distance_units: entrance.distance_units(feet),
@@ -335,27 +381,27 @@ impl WalkInTriggers {
     }
 }
 
-/// The entrance nearest to `feet` (Bethesda units) among those `accept` takes, the first built
-/// winning a tie.
-fn nearest(
-    entrances: &[Entrance],
-    feet: Vec3,
-    accept: impl Fn(&Entrance) -> bool,
-) -> Option<&Entrance> {
-    entrances
-        .iter()
-        .filter(|entrance| accept(entrance))
-        .min_by(|first, second| {
-            first
-                .distance_units(feet)
-                .total_cmp(&second.distance_units(feet))
-        })
+/// The entrance nearest to `feet` (Bethesda units) among `candidates`, the first built winning a
+/// tie.
+fn nearest<'a>(candidates: impl Iterator<Item = &'a Entrance>, feet: Vec3) -> Option<&'a Entrance> {
+    candidates.min_by(|first, second| {
+        first
+            .distance_units(feet)
+            .total_cmp(&second.distance_units(feet))
+    })
 }
 
-/// The one selection the HUD and the trace share: the nearest entrance whose display radius
-/// contains `feet`.
-fn shown_entrance(entrances: &[Entrance], feet: Vec3) -> Option<&Entrance> {
-    nearest(entrances, feet, |entrance| entrance.shows_at(feet))
+/// The one selection the HUD and the trace share: the nearest entrance among those showing.
+fn shown_entrance<'a>(
+    entrances: &'a [Entrance],
+    shown: &[bool],
+    feet: Vec3,
+) -> Option<&'a Entrance> {
+    let showing = entrances
+        .iter()
+        .zip(shown)
+        .filter_map(|(entrance, is_shown)| is_shown.then_some(entrance));
+    nearest(showing, feet)
 }
 
 #[cfg(test)]
@@ -421,6 +467,12 @@ mod tests {
         triggers
             .nearest_entrance(PlayerLocation::Exterior("WS"), at(x, y, z))
             .map(str::to_owned)
+    }
+
+    /// What shows at `to` after walking there from far outside every sphere.
+    fn shown_on_entering(triggers: &mut WalkInTriggers, to: [f32; 3]) -> Option<String> {
+        step(triggers, FAR, to);
+        nearest(triggers, to)
     }
 
     #[test]
@@ -505,13 +557,136 @@ mod tests {
 
     #[test]
     fn the_display_counts_height() {
-        let triggers = one_door();
+        let mut triggers = one_door();
         for shown in [[549.0, 0.0, 0.0], [0.0, 0.0, 549.0], [330.0, 0.0, 439.9]] {
-            assert_eq!(nearest(&triggers, shown), Some("DOOR".into()), "{shown:?}");
+            assert_eq!(
+                shown_on_entering(&mut triggers, shown),
+                Some("DOOR".into()),
+                "{shown:?}"
+            );
         }
         for hidden in [[551.0, 0.0, 0.0], [0.0, 0.0, -551.0], [330.0, 440.1, 0.0]] {
-            assert_eq!(nearest(&triggers, hidden), None, "{hidden:?}");
+            assert_eq!(shown_on_entering(&mut triggers, hidden), None, "{hidden:?}");
         }
+    }
+
+    #[test]
+    fn walking_into_the_display_sphere_shows_the_name() {
+        let mut triggers = one_door();
+        sample(&mut triggers, FAR);
+        assert_eq!(nearest(&triggers, FAR), None);
+        sample(&mut triggers, [540.0, 0.0, 0.0]);
+        assert_eq!(nearest(&triggers, [540.0, 0.0, 0.0]), Some("DOOR".into()));
+    }
+
+    #[test]
+    fn the_name_stays_while_the_player_remains_inside_the_display_sphere() {
+        let mut triggers = one_door();
+        sample(&mut triggers, FAR);
+        for inside in [
+            [540.0, 0.0, 0.0],
+            [540.0, 0.0, 0.0],
+            [400.0, 0.0, 0.0],
+            INSIDE,
+        ] {
+            sample(&mut triggers, inside);
+            assert_eq!(
+                nearest(&triggers, inside),
+                Some("DOOR".into()),
+                "{inside:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn leaving_the_display_sphere_hides_the_name_and_reentering_shows_it_again() {
+        let mut triggers = one_door();
+        sample(&mut triggers, FAR);
+        sample(&mut triggers, [540.0, 0.0, 0.0]);
+        sample(&mut triggers, [560.0, 0.0, 0.0]);
+        assert_eq!(nearest(&triggers, [560.0, 0.0, 0.0]), None);
+        sample(&mut triggers, [540.0, 0.0, 0.0]);
+        assert_eq!(nearest(&triggers, [540.0, 0.0, 0.0]), Some("DOOR".into()));
+    }
+
+    #[test]
+    fn arriving_inside_the_display_sphere_shows_nothing_until_leaving_and_reentering() {
+        let mut triggers = one_door();
+        sample(&mut triggers, FAR);
+        triggers.rearm();
+        for inside in [INSIDE, INSIDE, [400.0, 0.0, 0.0]] {
+            sample(&mut triggers, inside);
+            assert_eq!(nearest(&triggers, inside), None, "{inside:?}");
+        }
+        sample(&mut triggers, FAR);
+        sample(&mut triggers, INSIDE);
+        assert_eq!(nearest(&triggers, INSIDE), Some("DOOR".into()));
+    }
+
+    #[test]
+    fn the_first_sample_of_a_fresh_trigger_set_inside_the_display_sphere_shows_nothing() {
+        let mut triggers = one_door();
+        sample(&mut triggers, INSIDE);
+        assert_eq!(nearest(&triggers, INSIDE), None);
+    }
+
+    #[test]
+    fn nothing_shows_between_a_rearm_and_the_next_sample() {
+        let mut triggers = one_door();
+        sample(&mut triggers, FAR);
+        sample(&mut triggers, INSIDE);
+        triggers.rearm();
+        assert_eq!(nearest(&triggers, INSIDE), None);
+    }
+
+    #[test]
+    fn a_sample_without_feet_keeps_what_shows() {
+        let mut triggers = one_door();
+        sample(&mut triggers, FAR);
+        sample(&mut triggers, INSIDE);
+        triggers.sample(PlayerLocation::Exterior("WS"), None);
+        assert_eq!(nearest(&triggers, INSIDE), Some("DOOR".into()));
+    }
+
+    #[test]
+    fn a_sample_without_feet_keeps_an_arrival_inside_silent() {
+        let mut triggers = one_door();
+        sample(&mut triggers, INSIDE);
+        triggers.sample(PlayerLocation::Exterior("WS"), None);
+        sample(&mut triggers, INSIDE);
+        assert_eq!(nearest(&triggers, INSIDE), None);
+    }
+
+    #[test]
+    fn only_the_end_of_a_move_decides_the_display() {
+        let mut triggers = small_door();
+        sample(&mut triggers, [-300.0, 0.0, 0.0]);
+        sample(&mut triggers, [300.0, 0.0, 0.0]);
+        assert_eq!(nearest(&triggers, [300.0, 0.0, 0.0]), None);
+    }
+
+    #[test]
+    fn each_entrance_keeps_its_own_display_edge_where_the_spheres_overlap() {
+        let mut triggers = build(&[
+            door("A", exterior()),
+            door_at("B", exterior(), [600.0, 0.0, 0.0]),
+        ]);
+        let in_both = [300.0, 0.0, 0.0];
+        let in_a_only = [0.0, 0.0, 0.0];
+        sample(&mut triggers, in_both);
+        sample(&mut triggers, in_a_only);
+        sample(&mut triggers, in_both);
+        assert_eq!(nearest(&triggers, in_both), Some("B".into()));
+    }
+
+    #[test]
+    fn a_sample_in_another_location_hides_the_names_of_the_previous_one() {
+        let mut triggers = build(&[door("OUT", exterior()), door("IN", interior("A"))]);
+        let inside = Some(at(INSIDE[0], INSIDE[1], INSIDE[2]));
+        sample(&mut triggers, FAR);
+        sample(&mut triggers, INSIDE);
+        triggers.sample(PlayerLocation::Interior("A"), inside);
+        assert_eq!(nearest(&triggers, INSIDE), None);
     }
 
     #[test]
@@ -546,8 +721,11 @@ mod tests {
     #[test]
     fn a_small_reference_shows_and_starts_within_its_scaled_radii() {
         let mut triggers = small_door();
-        assert_eq!(nearest(&triggers, [280.0, 0.0, 0.0]), Some("DOOR".into()));
-        assert_eq!(nearest(&triggers, [281.0, 0.0, 0.0]), None);
+        assert_eq!(
+            shown_on_entering(&mut triggers, [280.0, 0.0, 0.0]),
+            Some("DOOR".into())
+        );
+        assert_eq!(shown_on_entering(&mut triggers, [281.0, 0.0, 0.0]), None);
         assert_eq!(step(&mut triggers, FAR, [80.0, 0.0, 0.0]), Some("DOOR"));
         assert_eq!(step(&mut triggers, FAR, [81.0, 0.0, 0.0]), None);
     }
@@ -564,7 +742,7 @@ mod tests {
         };
         assert!(settings.scaled(0.5).display_units < 0.0);
         let (mut triggers, _) = WalkInTriggers::build(&[half], settings);
-        assert_eq!(nearest(&triggers, [0.0; 3]), None);
+        assert_eq!(shown_on_entering(&mut triggers, [0.0; 3]), None);
         assert_eq!(step(&mut triggers, FAR, INSIDE), Some("DOOR"));
     }
 
@@ -577,8 +755,11 @@ mod tests {
         let mut triggers = build(&[mirrored]);
         assert_eq!(step(&mut triggers, FAR, [174.0, 0.0, 0.0]), Some("DOOR"));
         assert_eq!(step(&mut triggers, FAR, [176.0, 0.0, 0.0]), None);
-        assert_eq!(nearest(&triggers, [374.0, 0.0, 0.0]), Some("DOOR".into()));
-        assert_eq!(nearest(&triggers, [376.0, 0.0, 0.0]), None);
+        assert_eq!(
+            shown_on_entering(&mut triggers, [374.0, 0.0, 0.0]),
+            Some("DOOR".into())
+        );
+        assert_eq!(shown_on_entering(&mut triggers, [376.0, 0.0, 0.0]), None);
     }
 
     #[test]
@@ -596,8 +777,11 @@ mod tests {
             None
         );
         assert_eq!(step(&mut triggers, FAR, [0.0; 3]), Some("FLAT"));
-        assert_eq!(nearest(&triggers, [199.0, 0.0, 0.0]), Some("FLAT".into()));
-        assert_eq!(nearest(&triggers, [201.0, 0.0, 0.0]), None);
+        assert_eq!(
+            shown_on_entering(&mut triggers, [199.0, 0.0, 0.0]),
+            Some("FLAT".into())
+        );
+        assert_eq!(shown_on_entering(&mut triggers, [201.0, 0.0, 0.0]), None);
     }
 
     #[test]
@@ -608,10 +792,13 @@ mod tests {
         };
         let mut triggers = build(&[turned]);
         assert_eq!(
-            nearest(&triggers, [1000.0, 49.0, 200.0]),
+            shown_on_entering(&mut triggers, [1000.0, 49.0, 200.0]),
             Some("DOOR".into())
         );
-        assert_eq!(nearest(&triggers, [1000.0, 51.0, 200.0]), None);
+        assert_eq!(
+            shown_on_entering(&mut triggers, [1000.0, 51.0, 200.0]),
+            None
+        );
         assert_eq!(
             step(&mut triggers, FAR, [1000.0, -500.0, -149.0]),
             Some("DOOR")
@@ -624,18 +811,27 @@ mod tests {
             door_at("below", exterior(), [0.0, 0.0, -450.0]),
             door_at("level", exterior(), [400.0, 0.0, 0.0]),
         ];
-        let triggers = build(&doors);
-        assert_eq!(nearest(&triggers, [0.0; 3]), Some("level".into()));
+        let mut triggers = build(&doors);
+        assert_eq!(
+            shown_on_entering(&mut triggers, [0.0; 3]),
+            Some("level".into())
+        );
     }
 
     #[test]
     fn of_equally_near_entrances_the_first_built_shows() {
         let first = door_at("first", exterior(), [300.0, 0.0, 0.0]);
         let second = door_at("second", exterior(), [-300.0, 0.0, 0.0]);
-        let built = build(&[first.clone(), second.clone()]);
-        let reversed = build(&[second, first]);
-        assert_eq!(nearest(&built, [0.0; 3]), Some("first".into()));
-        assert_eq!(nearest(&reversed, [0.0; 3]), Some("second".into()));
+        let mut built = build(&[first.clone(), second.clone()]);
+        let mut reversed = build(&[second, first]);
+        assert_eq!(
+            shown_on_entering(&mut built, [0.0; 3]),
+            Some("first".into())
+        );
+        assert_eq!(
+            shown_on_entering(&mut reversed, [0.0; 3]),
+            Some("second".into())
+        );
     }
 
     #[test]
@@ -656,9 +852,15 @@ mod tests {
             scale: 0.23,
             ..door_at("small", exterior(), [0.0, 0.0, 0.0])
         };
-        let triggers = build(&[small, door_at("large", exterior(), [600.0, 0.0, 0.0])]);
-        assert_eq!(nearest(&triggers, [250.0, 0.0, 0.0]), Some("small".into()));
-        assert_eq!(nearest(&triggers, [290.0, 0.0, 0.0]), Some("large".into()));
+        let mut triggers = build(&[small, door_at("large", exterior(), [600.0, 0.0, 0.0])]);
+        assert_eq!(
+            shown_on_entering(&mut triggers, [250.0, 0.0, 0.0]),
+            Some("small".into())
+        );
+        assert_eq!(
+            shown_on_entering(&mut triggers, [290.0, 0.0, 0.0]),
+            Some("large".into())
+        );
     }
 
     #[test]
@@ -791,9 +993,19 @@ mod tests {
 
     #[test]
     fn the_probe_reports_whether_the_entrance_shows() {
-        let triggers = half_size_door_above();
+        let mut triggers = half_size_door_above();
+        step(&mut triggers, FAR, [400.0, 0.0, 0.0]);
         assert!(!probe_at(&triggers, [400.0, 0.0, 0.0]).unwrap().shown);
+        step(&mut triggers, FAR, [200.0, 0.0, 0.0]);
         assert!(probe_at(&triggers, [200.0, 0.0, 0.0]).unwrap().shown);
+    }
+
+    #[test]
+    fn the_probe_reports_an_entrance_arrived_inside_of_as_not_shown() {
+        let mut triggers = half_size_door_above();
+        triggers.rearm();
+        sample(&mut triggers, [200.0, 0.0, 0.0]);
+        assert!(!probe_at(&triggers, [200.0, 0.0, 0.0]).unwrap().shown);
     }
 
     #[test]
@@ -822,7 +1034,8 @@ mod tests {
             scale: 0.23,
             ..door_at("small", exterior(), [0.0, 0.0, 0.0])
         };
-        let triggers = build(&[small, door_at("large", exterior(), [600.0, 0.0, 0.0])]);
+        let mut triggers = build(&[small, door_at("large", exterior(), [600.0, 0.0, 0.0])]);
+        step(&mut triggers, FAR, [290.0, 0.0, 0.0]);
         let probe = probe_at(&triggers, [290.0, 0.0, 0.0]).unwrap();
         assert_eq!(probe.source_ref, "large");
         assert!(probe.shown);

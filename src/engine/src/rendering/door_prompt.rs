@@ -1133,7 +1133,8 @@ mod tests {
 
         /// What starts when the player walks straight from far out to `feet`, on the line from the
         /// door's origin through `feet`, so the path comes no closer to the origin than `feet`.
-        fn started_on_arrival(
+        /// Leaves `triggers` as that walk left them, which decides what shows at `feet`.
+        fn walked_straight_to(
             triggers: &mut WalkInTriggers,
             doors: &[WalkInDoor],
             source_ref: &str,
@@ -1164,9 +1165,11 @@ mod tests {
             let db = database();
             let teleports = db.get_placed_teleports().unwrap();
             let prompts = DoorPrompts::load(&db, &teleports).unwrap();
-            let (doors, triggers) = walk_ins(&db);
+            let (doors, mut triggers) = walk_ins(&db);
             for pose in OBSERVED.iter().chain(&DISPLAY_BOUNDARY) {
-                let location = location_of(&doors, &format!("{}:Fallout4.esm", pose.door));
+                let source_ref = format!("{}:Fallout4.esm", pose.door);
+                walked_straight_to(&mut triggers, &doors, &source_ref, pose.feet);
+                let location = location_of(&doors, &source_ref);
                 let shown = prompts
                     .entrance(&triggers, location, engine_feet(pose.feet))
                     .map(|entrance| entrance.prompt.map(|prompt| prompt.name.to_uppercase()));
@@ -1185,13 +1188,13 @@ mod tests {
                 let pose = OBSERVED.iter().find(|pose| pose.label == label).unwrap();
                 let source_ref = format!("{}:Fallout4.esm", pose.door);
                 assert_eq!(
-                    started_on_arrival(&mut triggers, &doors, &source_ref, pose.feet),
+                    walked_straight_to(&mut triggers, &doors, &source_ref, pose.feet),
                     None,
                     "{label}"
                 );
             }
             assert_eq!(
-                started_on_arrival(&mut triggers, &doors, VAULT_ELEVATOR, VAULT_ELEVATOR_START),
+                walked_straight_to(&mut triggers, &doors, VAULT_ELEVATOR, VAULT_ELEVATOR_START),
                 Some(VAULT_ELEVATOR.to_string())
             );
         }
@@ -1382,8 +1385,21 @@ mod tests {
         position_to_engine(units, 0.0, 0.0)
     }
 
+    /// `triggers` after the player walked in from far outside to `units` from "near".
+    fn walked_to(mut triggers: WalkInTriggers, units: f32) -> WalkInTriggers {
+        let location = PlayerLocation::Exterior("WS");
+        triggers.rearm();
+        triggers.sample(location, Some(feet_at(-1000.0)));
+        triggers.sample(location, Some(feet_at(units)));
+        triggers
+    }
+
     fn entrance_near(prompts: &DoorPrompts, units: f32) -> Option<ShownEntrance> {
-        prompts.entrance(&entrances(), PlayerLocation::Exterior("WS"), feet_at(units))
+        prompts.entrance(
+            &walked_to(entrances(), units),
+            PlayerLocation::Exterior("WS"),
+            feet_at(units),
+        )
     }
 
     fn name_only(name: &str) -> RolloverPrompt {
@@ -1416,7 +1432,7 @@ mod tests {
         let prompts = prompts(&[("far", "Elsewhere")]);
         let entrance = prompts
             .entrance(
-                &entrances_close_together(),
+                &walked_to(entrances_close_together(), 0.0),
                 PlayerLocation::Exterior("WS"),
                 feet_at(0.0),
             )
@@ -1442,7 +1458,7 @@ mod tests {
     fn a_nearer_silent_entrance_decides_and_shows_nothing_though_a_farther_one_is_in_range() {
         let prompts = prompts_with_silent(&[("far", "Elsewhere")], &["near"]);
         let entrance = prompts.entrance(
-            &entrances_close_together(),
+            &walked_to(entrances_close_together(), 0.0),
             PlayerLocation::Exterior("WS"),
             feet_at(0.0),
         );
@@ -1455,11 +1471,28 @@ mod tests {
         let prompts = prompts_with_silent(&[], &["near"]);
         let mut triggers = entrances();
         let location = PlayerLocation::Exterior("WS");
-        assert_eq!(prompts.entrance(&triggers, location, feet_at(100.0)), None);
         triggers.sample(location, Some(feet_at(-1000.0)));
         assert_eq!(
             triggers.sample(location, Some(feet_at(100.0))),
             Some("near")
+        );
+        assert_eq!(prompts.entrance(&triggers, location, feet_at(100.0)), None);
+    }
+
+    #[test]
+    fn an_entrance_shows_its_label_only_after_the_player_walked_into_its_display_sphere() {
+        let prompts = prompts(&[("near", "Diamond City")]);
+        let location = PlayerLocation::Exterior("WS");
+        let mut triggers = entrances();
+        triggers.sample(location, Some(feet_at(100.0)));
+        assert_eq!(prompts.entrance(&triggers, location, feet_at(100.0)), None);
+        triggers.sample(location, Some(feet_at(-1000.0)));
+        triggers.sample(location, Some(feet_at(100.0)));
+        assert_eq!(
+            prompts.entrance(&triggers, location, feet_at(100.0)),
+            Some(ShownEntrance {
+                prompt: Some(name_only("Diamond City"))
+            })
         );
     }
 
