@@ -38,6 +38,9 @@ namespace InstallerTests
         public double? LightVolumetricIntensity { get; init; }
         public long? RecordFlags { get; init; }
         public byte[]? RagdollPose { get; init; }
+        public long? ItemCount { get; init; }
+        public string? Owner { get; init; }
+        public string? LeveledItem { get; init; }
     }
 
     public sealed class CellRow
