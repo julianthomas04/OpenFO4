@@ -13,7 +13,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use super::sound_mix::{LayerMix, MixError, is_looping};
+use super::sound_mix::{LayerMix, MixError, SourcePlacement, is_looping};
 use crate::assets::db::sound_catalog::{
     COMPOUND_DESCRIPTOR, STANDARD_DESCRIPTOR_TYPE, SoundCatalog, SoundDescriptor, SoundOutputModel,
 };
@@ -94,8 +94,19 @@ pub fn resolve_one_shot(
     missing_files: &HashSet<String>,
     rng: &mut dyn RandomSource,
 ) -> Result<Option<LayerPlay>, SoundError> {
+    resolve_one_shot_placed(sounds, key, missing_files, SourcePlacement::Speakers, rng)
+}
+
+/// `resolve_one_shot` for a source with the stated placement.
+pub fn resolve_one_shot_placed(
+    sounds: &SoundCatalog,
+    key: &str,
+    missing_files: &HashSet<String>,
+    placement: SourcePlacement,
+    rng: &mut dyn RandomSource,
+) -> Result<Option<LayerPlay>, SoundError> {
     let descriptor = standard_descriptor(sounds, key)?;
-    one_shot_layer(sounds, descriptor, missing_files, rng)
+    one_shot_layer_placed(sounds, descriptor, missing_files, placement, rng)
 }
 
 /// The sound the standard descriptor `key` plays in a loop: its file, at the constant pitch and
@@ -125,6 +136,23 @@ pub fn one_shot_layer(
     missing_files: &HashSet<String>,
     rng: &mut dyn RandomSource,
 ) -> Result<Option<LayerPlay>, SoundError> {
+    one_shot_layer_placed(
+        sounds,
+        descriptor,
+        missing_files,
+        SourcePlacement::Speakers,
+        rng,
+    )
+}
+
+/// `one_shot_layer` for a source with the stated placement.
+pub fn one_shot_layer_placed(
+    sounds: &SoundCatalog,
+    descriptor: &SoundDescriptor,
+    missing_files: &HashSet<String>,
+    placement: SourcePlacement,
+    rng: &mut dyn RandomSource,
+) -> Result<Option<LayerPlay>, SoundError> {
     if is_looping(descriptor) {
         return Err(SoundError::Looping(descriptor.form_key.clone()));
     }
@@ -132,7 +160,7 @@ pub fn one_shot_layer(
     let Some(file_key) = pick_file(descriptor, missing_files, rng)? else {
         return Ok(None);
     };
-    let mix = LayerMix::draw(descriptor, model, &sounds.categories, rng)
+    let mix = LayerMix::draw_placed(descriptor, model, &sounds.categories, placement, rng)
         .map_err(|source| mix_error(descriptor, source))?;
     Ok(Some(LayerPlay { file_key, mix }))
 }
@@ -326,6 +354,48 @@ mod tests {
         missing: &HashSet<String>,
     ) -> Result<Option<LayerPlay>, SoundError> {
         resolve_loop(sounds, key, missing, &mut SplitMix64::new(SEED))
+    }
+
+    fn with_positional_model() -> SoundCatalog {
+        let mut sounds = sounds();
+        sounds.output_models.get_mut("model").unwrap().output_type = 0;
+        sounds
+            .output_models
+            .get_mut("model")
+            .unwrap()
+            .channels
+            .clear();
+        sounds
+    }
+
+    #[test]
+    fn a_positional_model_is_an_error_for_a_caller_that_states_no_placement() {
+        let error = one_shot(&with_positional_model(), "stone_sound").unwrap_err();
+
+        assert!(
+            matches!(
+                &error,
+                SoundError::Mix {
+                    source: MixError::MissingChannel { .. },
+                    ..
+                }
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_positional_model_plays_for_a_source_stated_to_be_at_the_listener() {
+        let play = resolve_one_shot_placed(
+            &with_positional_model(),
+            "stone_sound",
+            &HashSet::new(),
+            SourcePlacement::AtListener,
+            &mut SplitMix64::new(SEED),
+        )
+        .unwrap();
+
+        assert!(play.is_some());
     }
 
     #[test]

@@ -5,6 +5,7 @@ mod audio_files;
 pub mod catalog;
 mod flac;
 pub mod footsteps;
+pub mod item_sounds;
 mod log_capture;
 mod meter;
 mod mock_audio;

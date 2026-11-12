@@ -12,9 +12,11 @@ pub mod game_settings;
 pub mod globals;
 pub mod grass;
 pub mod item_components;
+pub mod item_sounds;
 pub mod items;
 pub mod landscape_textures;
 pub mod landscapes;
+pub mod leveled_items;
 pub mod lighting_templates;
 pub mod lights;
 pub mod load_screens;
@@ -159,6 +161,14 @@ impl DbClient {
     #[instrument(skip(self))]
     pub fn get_footstep_catalog(&self) -> anyhow::Result<footsteps::FootstepCatalog> {
         footsteps::FootstepCatalog::from_connection(&self.conn)
+    }
+
+    /// The pick-up and put-down sound descriptors of the items and the default-object slots they fall
+    /// back on, with the sound tables they reach; errors when a slot is unassigned or a descriptor is
+    /// missing.
+    #[instrument(skip(self))]
+    pub fn get_item_sound_catalog(&self) -> anyhow::Result<item_sounds::ItemSoundCatalog> {
+        item_sounds::ItemSoundCatalog::from_connection(&self.conn)
     }
 
     /// The sound descriptors reachable from the weather sound descriptors `roots`, with the output
@@ -602,15 +612,12 @@ impl DbClient {
     /// The form key the default object manager assigns to `slot` (`LSIS`, ...); `None` when the
     /// slot is unassigned or absent.
     pub fn get_default_object(&self, slot: &str) -> rusqlite::Result<Option<String>> {
-        use rusqlite::OptionalExtension;
-        self.conn
-            .query_row(
-                "SELECT target FROM default_object_slots WHERE slot = ?",
-                rusqlite::params![slot],
-                |row| row.get(0),
-            )
-            .optional()
-            .map(Option::flatten)
+        rows::default_object_slot(&self.conn, slot).map(Option::flatten)
+    }
+
+    /// Every leveled item list; errors on the first malformed row, naming the list.
+    pub fn get_leveled_items(&self) -> anyhow::Result<Vec<leveled_items::LeveledItemRow>> {
+        leveled_items::LeveledItemRow::list_all(&self.conn)
     }
 
     pub fn get_weather(&self, form_key: &str) -> rusqlite::Result<weather::WeatherRow> {

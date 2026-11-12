@@ -27,6 +27,21 @@ pub(super) fn real32(value: f64) -> f32 {
     value as f32
 }
 
+/// The target of the default object slot: `None` when no row names the slot, `Some(None)` when
+/// the slot is empty.
+pub(super) fn default_object_slot(
+    conn: &Connection,
+    slot: &str,
+) -> rusqlite::Result<Option<Option<String>>> {
+    use rusqlite::OptionalExtension;
+    conn.query_row(
+        "SELECT target FROM default_object_slots WHERE slot = ?",
+        rusqlite::params![slot],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
 pub(super) fn collect_rows<T>(
     conn: &Connection,
     sql: &str,
