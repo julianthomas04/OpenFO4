@@ -78,11 +78,13 @@ use crate::rendering::water::PlacedWater;
 
 mod one_shot;
 mod staging;
+use crate::assets::pipboy_catalog::item_kind_of;
 use crate::shared_cache::SharedCache;
 use crate::sim::collision::{
     CellColliderBatch, CollisionMeta, ObjectColliderGroup, PartShape, Placement, SidecarData,
     TerrainColliderSpec, TerrainCollision, load_manifest, load_sidecar_file, manifest_key,
 };
+use crate::sim::pipboy::ItemKind;
 use crate::sim::{EntityId, SimCommand, refr_entity_id};
 use crate::water_world::{LoadedCell, VolumeShapes};
 use one_shot::OneShot;
@@ -103,11 +105,17 @@ pub(crate) use fire_hooks::{LightKey, ModelLight, ParticleHost};
 mod load_pacing;
 mod row_poses;
 mod weapons;
+mod world_edits;
 use load_pacing::{IntegrationProgress, LoadFrameMeter, integration_must_stop};
 use weapons::{
     WeaponAssemblies, WeaponBase, WeaponRecords, WeaponRefr, WeaponSinks, add_weapon_parts,
     trace_enabled,
 };
+use world_edits::{
+    CellEdits, ItemBaseRole, PendingHide, PendingHides, item_base_role, placed_item,
+    register_command, take_item,
+};
+pub(crate) use world_edits::{PlacedItem, WorldItemError};
 
 const CELL_SIZE_BETH: f32 = 4096.0;
 pub(crate) const SCALE: f32 = bethesda_space::UNITS_TO_ENGINE;
@@ -205,6 +213,8 @@ struct BaseObjectInfo {
     /// Set for a weapon: the REFR draws and collides as the assembly of its
     /// default mods instead of the single model at `model_path`.
     weapon: Option<Arc<WeaponBase>>,
+    /// An item base the player can take: its placed references become `PlacedItem`s.
+    pickable: bool,
 }
 
 /// The texture cache key of a terrain layer diffuse, which is also its path below the
@@ -651,6 +661,8 @@ struct CellLoadResult {
     /// Why a LOD cell's data could not be read; the main thread reports it as broken. Always
     /// `None` for full and interior cells, and for a grid the worldspace has no cell at.
     load_failure: Option<String>,
+    /// Pick-upable placed references that got a body. Always empty for LOD cells.
+    items: Vec<PlacedItem>,
 }
 
 /// All placed instances of one mega-buffer slot within a cell. Keeping the
@@ -903,10 +915,7 @@ struct CellResources {
     /// full-detail residency so the collision ring can register/deregister
     /// it any number of times without rebuilding shapes. `None` for LOD
     /// cells and cells whose load produced no colliders.
-    collider_payload: Option<(
-        Arc<CellColliderBatch>,
-        Option<crate::sim::bake::BakedCellColliders>,
-    )>,
+    collider_payload: Option<world_edits::AuthoredColliders>,
     /// Dynamic-clutter instance rows keyed by REFR entity id. Empty for cells
     /// with no Havok-dynamic placements. The per-frame pose readback writes
     /// through these into both the CPU mirror (`object_groups`) and the GPU
@@ -924,6 +933,10 @@ struct CellResources {
     /// The navigation meshes this cell added to the nav world, withdrawn when it
     /// retires.
     nav_meshes: CellNavmeshes,
+    /// The placed items still in the world. Empty for LOD cells.
+    items: HashMap<EntityId, PlacedItem>,
+    /// What the player changed in this cell; forgotten with the cell.
+    edits: CellEdits,
 }
 
 /// Per-frame time budget for releasing cells that left the rings.
@@ -1218,6 +1231,8 @@ pub struct WorldStreamer {
     /// Scratch for grouping this frame's poses by cell (cell, index into poses).
     pose_order: Vec<((i32, i32), usize)>,
     pose_run: Vec<GpuInstance>,
+    /// Items taken out of the world whose rows `apply_pending_hides` has not hidden yet.
+    pending_hides: PendingHides,
     /// A cell's slab allocation failed (instance buffer at the device cap):
     /// repack at the end of the update to recover it.
     needs_repack: bool,
@@ -1517,6 +1532,7 @@ impl WorldStreamer {
             pose_writes: Vec::new(),
             pose_order: Vec::new(),
             pose_run: Vec::new(),
+            pending_hides: PendingHides::default(),
             needs_repack: false,
             shadow_invalidations: ShadowInvalidations::default(),
             integrated_since_rebind: Vec::new(),
@@ -2452,6 +2468,11 @@ impl WorldStreamer {
                 .colliders
                 .take()
                 .map(|batch| (batch, result.baked_colliders.take())),
+            items: result
+                .items
+                .drain(..)
+                .map(|item| (item.entity, item))
+                .collect(),
             ..CellResources::default()
         };
 
@@ -2774,6 +2795,51 @@ impl WorldStreamer {
             .or_else(|| self.staging.get(Ring::Full, grid).map(|cell| &cell.res))
     }
 
+    fn full_cell_mut(&mut self, grid: (i32, i32)) -> Option<&mut CellResources> {
+        match self.loaded.get_mut(&grid) {
+            Some(res) => Some(res),
+            None => self
+                .staging
+                .get_mut(Ring::Full, grid)
+                .map(|cell| &mut cell.res),
+        }
+    }
+
+    /// The placed item behind `entity`, in the drawn or staged full-detail cell that holds it.
+    #[expect(
+        dead_code,
+        reason = "lane E1 wires item pickup into the frame in rendering/mod.rs"
+    )]
+    pub(crate) fn world_item(&self, entity: EntityId) -> Option<&PlacedItem> {
+        let grid = self.entity_cell.get(&entity)?;
+        self.full_cell(*grid)?.items.get(&entity)
+    }
+
+    /// Takes the item out of the world: out of its cell's items, into the cell's removed set
+    /// (so a later registration of the cell never builds its body), and queues the hide of its
+    /// rows. The entity keeps its rows until `apply_pending_hides` has written them.
+    #[expect(
+        dead_code,
+        reason = "lane E1 wires item pickup into the frame in rendering/mod.rs"
+    )]
+    pub(crate) fn remove_world_item(
+        &mut self,
+        entity: EntityId,
+    ) -> Result<PlacedItem, WorldItemError> {
+        let not_an_item = || WorldItemError::NotAnItem(entity);
+        let grid = *self.entity_cell.get(&entity).ok_or_else(not_an_item)?;
+        let res = self.full_cell_mut(grid).ok_or_else(not_an_item)?;
+        let item = take_item(&mut res.items, &mut res.edits, entity).ok_or_else(not_an_item)?;
+        let residency = res.residency;
+        self.pending_hides.push(PendingHide {
+            entity,
+            grid,
+            residency,
+            at: item.position,
+        });
+        Ok(item)
+    }
+
     /// Register/deregister cell colliders so exactly the resident full cells
     /// within the collision ring of the player are in the rapier world, and
     /// move the sim's dynamic-physics center/radius. The ring is
@@ -2828,14 +2894,11 @@ impl WorldStreamer {
                 let Some(res) = self.full_cell(grid) else {
                     continue;
                 };
-                let Some((batch, baked)) = &res.collider_payload else {
+                let Some(authored) = &res.collider_payload else {
                     continue;
                 };
-                self.sim_commands.push(SimCommand::AddCellColliders {
-                    grid,
-                    batch: batch.clone(),
-                    baked: baked.clone(),
-                });
+                self.sim_commands
+                    .push(register_command(grid, authored, &res.edits));
                 self.collision_registered.insert(grid);
                 ring_changed = true;
             }
@@ -3933,6 +3996,7 @@ impl WorldStreamer {
         // despawns the bodies via the RemoveCellColliders pushed above. Reset the
         // physics-center tracker so the new content's first ring sync re-pushes.
         self.entity_cell.clear();
+        self.pending_hides.clear();
         self.animated_events.clear();
         self.animated_events.push(AnimatedObjectEvent::Cleared);
         self.ragdoll_events.clear();
@@ -5134,6 +5198,7 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
         textures: HashMap::new(),
         navmeshes: Vec::new(),
         load_failure: None,
+        items: Vec::new(),
     };
     let fail_lod = |result: &mut CellLoadResult, reason: String| {
         if is_lod {
@@ -5480,30 +5545,46 @@ fn load_cell_navmeshes(db: &DbClient, cell_form_key: &str) -> Vec<NavMesh> {
     outcome.meshes
 }
 
-/// The REFR's world matrix: position, rotation and uniform scale.
-fn refr_world(obj: &PlacedObject) -> Mat4 {
-    let position = bethesda_space::position_to_engine(
+/// The REFR origin in engine space.
+fn refr_position(obj: &PlacedObject) -> Vec3 {
+    bethesda_space::position_to_engine(
         obj.position_x as f32,
         obj.position_y as f32,
         obj.position_z as f32,
-    );
-    Mat4::from_translation(position)
+    )
+}
+
+/// The REFR's world matrix: position, rotation and uniform scale.
+fn refr_world(obj: &PlacedObject) -> Mat4 {
+    Mat4::from_translation(refr_position(obj))
         * placement_rotation(obj)
         * Mat4::from_scale(Vec3::splat(obj.scale as f32))
 }
 
+/// The item record of a placed reference of an item base.
+fn placed_item_of(obj: &PlacedObject, form_key: &str, base: &str) -> PlacedItem {
+    placed_item(
+        refr_entity_id(form_key),
+        base,
+        obj.item_count,
+        obj.owner.as_deref(),
+        refr_position(obj),
+    )
+}
+
 /// Expands a weapon REFR into one mesh group entry and one collision placement
 /// per assembled part. All parts carry the REFR's pose, scale and entity id,
-/// so they render and simulate as one object.
+/// so they render and simulate as one object. Returns whether the REFR got a
+/// dynamic body.
 fn expand_weapon_refr(
     obj: &PlacedObject,
     weapon: &WeaponBase,
     info: &BaseObjectInfo,
     shared: &WorkerShared,
     sinks: &mut WeaponSinks,
-) {
+) -> bool {
     if !sinks.claim(obj.form_key.as_deref()) {
-        return;
+        return false;
     }
     let placed = shared
         .weapons
@@ -5515,7 +5596,7 @@ fn expand_weapon_refr(
         );
     }
     if placed.skip.is_some() {
-        return;
+        return false;
     }
     add_weapon_parts(
         &placed,
@@ -5526,6 +5607,7 @@ fn expand_weapon_refr(
         },
         sinks,
     );
+    placed.has_dynamic_body()
 }
 
 /// Resolve placements -> render mesh groups + collider batch + preloaded DDS,
@@ -5561,6 +5643,11 @@ fn assemble_cell_payload<'a>(
     // (and everything skipped before the transform is built) collide
     // exactly as much as they render: not at all.
     let mut placements_by_path: HashMap<String, Vec<Placement>> = HashMap::new();
+    // Placements of pick-upable item references, apart from `placements_by_path`: a
+    // static-only item mesh becomes a pinned body, never the plain refs sharing its path.
+    let mut item_placements_by_path: HashMap<String, Vec<Placement>> = HashMap::new();
+    // Item records of those references with their mesh path; kept once the path collides.
+    let mut item_candidates: Vec<(String, PlacedItem)> = Vec::new();
     let mut expanded_weapon_refs: HashSet<String> = HashSet::new();
     // Full-detail placements of doors/containers/activators/furniture; the ones
     // whose model turns out animated become activatable objects.
@@ -5611,8 +5698,8 @@ fn assemble_cell_payload<'a>(
             };
 
             if let Some(weapon) = &info.weapon {
-                if !is_lod {
-                    expand_weapon_refr(
+                if !is_lod
+                    && expand_weapon_refr(
                         obj,
                         weapon,
                         info,
@@ -5622,7 +5709,11 @@ fn assemble_cell_payload<'a>(
                             groups_by_key: &mut groups_by_key,
                             expanded_refs: &mut expanded_weapon_refs,
                         },
-                    );
+                    )
+                    && info.pickable
+                    && let Some(form_key) = obj.form_key.as_deref()
+                {
+                    result.items.push(placed_item_of(obj, form_key, base_key));
                 }
                 continue;
             }
@@ -5686,17 +5777,28 @@ fn assemble_cell_payload<'a>(
                 // carry no scale, so it travels separately and is baked
                 // into the shape data at collider build time.
                 let (_, rotation, translation) = transform.to_scale_rotation_translation();
-                placements_by_path
+                let placement = Placement {
+                    translation,
+                    rotation,
+                    scale,
+                    ref_key: obj.form_key.clone(),
+                    ragdoll_pose: obj.ragdoll_pose.as_deref().map(Arc::from),
+                    part_local: None,
+                };
+                let item_ref = obj.form_key.as_deref().filter(|_| info.pickable);
+                if let Some(form_key) = item_ref {
+                    item_candidates
+                        .push((mesh_path.clone(), placed_item_of(obj, form_key, base_key)));
+                }
+                let collision_paths = if item_ref.is_some() {
+                    &mut item_placements_by_path
+                } else {
+                    &mut placements_by_path
+                };
+                collision_paths
                     .entry(mesh_path.clone())
                     .or_default()
-                    .push(Placement {
-                        translation,
-                        rotation,
-                        scale,
-                        ref_key: obj.form_key.clone(),
-                        ragdoll_pose: obj.ragdoll_pose.as_deref().map(Arc::from),
-                        part_local: None,
-                    });
+                    .push(placement);
             }
 
             if let (false, Some(form_key)) = (is_lod, obj.form_key.as_deref()) {
@@ -5747,6 +5849,11 @@ fn assemble_cell_payload<'a>(
         // Mesh paths whose sidecar describes a ragdoll: their placements track
         // entities (row hiding, skinned replacement) like animated objects.
         let mut ragdoll_paths: HashSet<String> = HashSet::new();
+        // Static-only item meshes: their item placements are pinned bodies, whose rows track
+        // entities like dynamic ones so a taken item can be hidden.
+        let mut pinned_paths: HashSet<String> = HashSet::new();
+        // Item meshes that collide: only their references hold a body and are items.
+        let mut item_collision_paths: HashSet<String> = HashSet::new();
 
         // Assemble the cell's collision batch from .col.json sidecars
         // only. No sidecar means the vanilla NIF has no Havok collision
@@ -5755,18 +5862,36 @@ fn assemble_cell_payload<'a>(
         // placements into invisible walls.
         if !is_lod {
             let mut objects = Vec::new();
-            if !placements_by_path.is_empty() {
+            if !placements_by_path.is_empty() || !item_placements_by_path.is_empty() {
                 // Decide which meshes collide and which are dynamic from the
                 // in-memory manifest — no filesystem access. A manifest entry
                 // exists iff the mesh has a `.col.json` (the installer indexes
                 // only meshes with collision); the shapes themselves load lazily
                 // at bake time, only on a cold `.colbin` miss.
-                let _load_span =
-                    info_span!("load_collision", paths = placements_by_path.len()).entered();
-                for (path, placements) in placements_by_path.drain() {
+                let _load_span = info_span!(
+                    "load_collision",
+                    paths = placements_by_path.len() + item_placements_by_path.len()
+                )
+                .entered();
+                let groups = placements_by_path
+                    .drain()
+                    .map(|(path, placements)| (path, placements, false))
+                    .chain(
+                        item_placements_by_path
+                            .drain()
+                            .map(|(path, placements)| (path, placements, true)),
+                    );
+                for (path, placements, items) in groups {
                     if let Some(meta) = shared.collision_manifest.get(&manifest_key(&path)) {
+                        let pinned = items && !meta.dynamic;
                         if meta.dynamic {
                             dynamic_paths.insert(path.clone());
+                        }
+                        if pinned {
+                            pinned_paths.insert(path.clone());
+                        }
+                        if items {
+                            item_collision_paths.insert(path.clone());
                         }
                         let ragdoll_sidecar = meta
                             .ragdoll
@@ -5782,10 +5907,17 @@ fn assemble_cell_payload<'a>(
                             mass: meta.mass,
                             ragdoll_sidecar,
                             water: meta.water.clone(),
+                            pinned,
                         });
                     }
                 }
             }
+            result.items.extend(
+                item_candidates
+                    .drain(..)
+                    .filter(|(path, _)| item_collision_paths.contains(path))
+                    .map(|(_, item)| item),
+            );
             let batch = Arc::new(CellColliderBatch {
                 terrain: terrain_collider,
                 objects,
@@ -5811,7 +5943,8 @@ fn assemble_cell_payload<'a>(
             },
         ) in groups_by_key
         {
-            let dynamic = weapon_part || dynamic_paths.contains(&path);
+            let dynamic =
+                weapon_part || dynamic_paths.contains(&path) || pinned_paths.contains(&path);
             if let Some(submeshes) = resolved.get(&path) {
                 if submeshes.has_content() {
                     let ragdoll = ragdoll_paths.contains(&path);
@@ -6422,6 +6555,7 @@ fn build_base_object_lookup(
                     kind: ActivatorKind::Other,
                     water_type: None,
                     weapon: None,
+                    pickable: false,
                 },
             );
         }
@@ -6565,8 +6699,91 @@ fn build_base_object_lookup(
             info.water_type = Some(water_type);
         }
     }
-    let weapon_mods = add_weapon_bases(db, &mut map);
+    let weapon_mods = add_item_bases(db, &mut map);
     (map, weapon_mods)
+}
+
+/// Registers the weapon bases (`add_weapon_bases`) and, on a database that knows which items
+/// are CK-only markers, every other item base with a model that is not one. Without that
+/// knowledge no other item base is registered (a marker would draw and get a body) and no
+/// weapon is pick-upable; weapons draw as before either way. Returns the weapon mod rows.
+fn add_item_bases(
+    db: &DbClient,
+    map: &mut HashMap<String, BaseObjectInfo>,
+) -> HashMap<String, ModRow> {
+    let weapon_mods = add_weapon_bases(db, map);
+    if !db.schema().item_marker_column_present {
+        warn!(
+            "the database has no items.is_marker column: placed items other than weapons are \
+             not drawn and nothing can be picked up; reconvert the database"
+        );
+        return weapon_mods;
+    }
+    let rows = match db.get_items() {
+        Ok(rows) => rows,
+        Err(e) => {
+            warn!("get_items failed, placed items other than weapons will not be drawn: {e:#}");
+            return weapon_mods;
+        }
+    };
+    for row in rows {
+        let Some(kind) = item_kind_of(&row.item_type) else {
+            continue;
+        };
+        let role = item_base_role(row.is_marker, row.name.as_deref());
+        if kind == ItemKind::Weapon {
+            register_weapon_role(map, &row.form_key, role);
+        } else if let Some(model_path) = row.model_path.filter(|path| !path.trim().is_empty()) {
+            register_item_base(map, row.form_key, model_path, role);
+        }
+    }
+    weapon_mods
+}
+
+fn register_weapon_role(
+    map: &mut HashMap<String, BaseObjectInfo>,
+    form_key: &str,
+    role: ItemBaseRole,
+) {
+    match role {
+        ItemBaseRole::Marker => {
+            map.remove(form_key);
+        }
+        ItemBaseRole::Pickable => {
+            if let Some(info) = map.get_mut(form_key) {
+                info.pickable = true;
+            }
+        }
+        ItemBaseRole::UnknownMarker | ItemBaseRole::Loose => {}
+    }
+}
+
+fn register_item_base(
+    map: &mut HashMap<String, BaseObjectInfo>,
+    form_key: String,
+    model_path: String,
+    role: ItemBaseRole,
+) {
+    let pickable = match role {
+        ItemBaseRole::Pickable => true,
+        ItemBaseRole::Loose => false,
+        ItemBaseRole::Marker | ItemBaseRole::UnknownMarker => return,
+    };
+    map.insert(
+        form_key,
+        BaseObjectInfo {
+            is_fx: is_fx_model(&model_path, false),
+            model_path,
+            is_marker: false,
+            lod_model_path: None,
+            has_distant_lod: false,
+            interactable: false,
+            kind: ActivatorKind::Other,
+            water_type: None,
+            weapon: None,
+            pickable,
+        },
+    );
 }
 
 /// Registers every weapon base that has a model. Returns the mod rows its
@@ -6604,6 +6821,7 @@ fn add_weapon_bases(
                 kind: ActivatorKind::Other,
                 water_type: None,
                 weapon: Some(Arc::new(base)),
+                pickable: false,
             },
         );
     }
@@ -6643,6 +6861,104 @@ mod tests {
         assert_eq!(lookup["DOOR_BLANK"].kind, nameless);
         assert_eq!(lookup["DOOR_NULL"].kind, nameless);
         assert_eq!(lookup["CHEST"].kind, ActivatorKind::Other);
+    }
+
+    const ITEM_BASES: &str =
+        "INSERT INTO items (form_key, item_type, name, model_path, is_marker) VALUES
+             ('MUG', 'MISC', 'Mug', 'clutter\\mug.nif', 0),
+             ('PROP', 'MISC', ' ', 'clutter\\prop.nif', 0),
+             ('XMARK', 'MISC', 'Marker', 'markers\\dummy.nif', 1),
+             ('NOMODEL', 'MISC', 'Ghost', NULL, 0),
+             ('STIM', 'ALCH', 'Stim', 'aid\\stim.nif', 0),
+             ('NOTE', 'BOOK', 'Note', 'paper\\note.nif', 0),
+             ('TAPE', 'HOLT', 'Tape', 'tape.nif', 0),
+             ('KEY', 'KEYM', 'Key', 'key.nif', 0),
+             ('SHELL', 'AMMO', 'Shell', 'shell.nif', 0),
+             ('HAT', 'ARMO', 'Hat', 'hat.nif', 0),
+             ('RECIPE', 'COBJ', 'Recipe', 'recipe.nif', 0),
+             ('GUN', 'WEAP', 'Gun', 'gun.nif', 0),
+             ('NAMELESSGUN', 'WEAP', NULL, 'gun.nif', 0),
+             ('MARKERGUN', 'WEAP', 'Dummy', 'markers\\gun.nif', 1);
+         INSERT INTO weapons (form_key) VALUES ('GUN'), ('NAMELESSGUN'), ('MARKERGUN');";
+
+    fn registered(lookup: &HashMap<String, BaseObjectInfo>) -> Vec<(&str, bool)> {
+        let mut bases: Vec<(&str, bool)> = lookup
+            .iter()
+            .map(|(form_key, info)| (form_key.as_str(), info.pickable))
+            .collect();
+        bases.sort_unstable();
+        bases
+    }
+
+    #[test]
+    fn item_bases_known_not_to_be_markers_draw_and_only_named_ones_are_pickable() {
+        let db = crate::assets::db::test_support::database_with(ITEM_BASES);
+
+        let (lookup, _) = build_base_object_lookup(&db, &[]);
+
+        assert_eq!(
+            registered(&lookup),
+            vec![
+                ("GUN", true),
+                ("HAT", true),
+                ("KEY", true),
+                ("MUG", true),
+                ("NAMELESSGUN", false),
+                ("NOTE", true),
+                ("PROP", false),
+                ("SHELL", true),
+                ("STIM", true),
+                ("TAPE", true),
+            ]
+        );
+        let mug = &lookup["MUG"];
+        assert_eq!(mug.model_path, "clutter\\mug.nif");
+        assert!(!mug.is_marker && mug.weapon.is_none() && !mug.interactable);
+        assert!(lookup["GUN"].weapon.is_some());
+    }
+
+    #[test]
+    fn without_the_marker_column_only_weapons_draw_and_nothing_is_pickable() {
+        let db = crate::assets::db::test_support::database_with(&format!(
+            "{ITEM_BASES} ALTER TABLE items DROP COLUMN is_marker;"
+        ));
+
+        let (lookup, _) = build_base_object_lookup(&db, &[]);
+
+        assert_eq!(
+            registered(&lookup),
+            vec![("GUN", false), ("MARKERGUN", false), ("NAMELESSGUN", false)]
+        );
+    }
+
+    #[test]
+    #[ignore = "reads the converted installation's database (OPENFO4_INSTALL_DIR)"]
+    fn the_installed_database_registers_3424_item_bases_3553_pickable_bases_and_no_marker() {
+        let db = crate::assets::db::test_support::installed_database();
+        let items = db.get_items().unwrap();
+
+        let (lookup, _) = build_base_object_lookup(&db, &[]);
+
+        let markers: Vec<&str> = items
+            .iter()
+            .filter(|row| row.is_marker == Some(true))
+            .map(|row| row.form_key.as_str())
+            .collect();
+        assert_eq!(markers.len(), 116);
+        assert!(
+            markers
+                .iter()
+                .all(|form_key| !lookup.contains_key(*form_key))
+        );
+        let non_weapon_item_bases = items
+            .iter()
+            .filter(|row| {
+                item_kind_of(&row.item_type).is_some_and(|kind| kind != ItemKind::Weapon)
+                    && lookup.contains_key(&row.form_key)
+            })
+            .count();
+        assert_eq!(non_weapon_item_bases, 3424);
+        assert_eq!(lookup.values().filter(|info| info.pickable).count(), 3553);
     }
 
     #[test]

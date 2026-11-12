@@ -8,8 +8,8 @@ use tracing::info_span;
 #[cfg(test)]
 use super::index_staged_rows;
 use super::{
-    Aabb, CellObjectGroup, CellResources, DynRow, POSE_EPS_BASIS, POSE_EPS_TRANSLATION, Ring,
-    StreamTargets, WorldStreamer, instance_aabb, world_aabb,
+    Aabb, CellObjectGroup, CellResources, DynRow, POSE_EPS_BASIS, POSE_EPS_TRANSLATION,
+    PendingHide, Ring, StreamTargets, WorldStreamer, instance_aabb, world_aabb,
 };
 use crate::rendering::gpu_driven::GpuInstance;
 use crate::rendering::row_pose::{PoseSource, RowPose};
@@ -114,6 +114,59 @@ impl WorldStreamer {
         self.pose_order = order;
     }
 
+    /// Whether `remove_world_item` queued a hide that `apply_pending_hides` has not written yet.
+    #[expect(
+        dead_code,
+        reason = "lane E1 wires item pickup into the frame in rendering/mod.rs"
+    )]
+    pub(crate) fn has_pending_hides(&self) -> bool {
+        !self.pending_hides.is_empty()
+    }
+
+    /// Hides the rows of every item removed since the last call (CPU mirror and, once the cell
+    /// has a slab range, the slab; rows are never deleted), then forgets the entities' rows. A
+    /// hide whose cell left or was reloaded since has nothing left to hide.
+    #[expect(
+        dead_code,
+        reason = "lane E1 wires item pickup into the frame in rendering/mod.rs"
+    )]
+    pub(crate) fn apply_pending_hides(&mut self, targets: &mut StreamTargets) {
+        let _span = info_span!("apply_pending_hides").entered();
+        let mut hides = std::mem::take(&mut self.pending_hides);
+        for (index, hide) in hides.as_slice().iter().enumerate() {
+            let res = match self.loaded.get_mut(&hide.grid) {
+                Some(res) => res,
+                None => match self.staging.get_mut(Ring::Full, hide.grid) {
+                    Some(staged) => &mut staged.res,
+                    None => continue,
+                },
+            };
+            if res.residency != hide.residency {
+                continue;
+            }
+            let slab = res.instance_range;
+            self.pose_writes.clear();
+            let invalidations = &mut self.shadow_invalidations;
+            hide_entity_rows(
+                res,
+                hides.as_slice(),
+                index,
+                &mut self.pose_writes,
+                |bounds| {
+                    invalidations.region(bounds);
+                },
+            );
+            if self.entity_cell.get(&hide.entity) == Some(&hide.grid) {
+                self.entity_cell.remove(&hide.entity);
+            }
+            if let Some((slab_offset, _)) = slab {
+                self.flush_pose_writes(slab_offset, targets);
+            }
+        }
+        hides.clear();
+        self.pending_hides = hides;
+    }
+
     /// Coalesce the queued row writes into contiguous runs, one slab write each.
     fn flush_pose_writes(&mut self, slab_offset: u32, targets: &mut StreamTargets) {
         self.pose_writes.sort_unstable_by_key(|&(local, _)| local);
@@ -169,6 +222,19 @@ fn rewrite_cell_rows<P: PoseSource + ?Sized>(
             moved(bounds);
         }
     }
+}
+
+/// Collapse the rows of the entity `hides[index]` names and drop them from the cell's
+/// dynamic rows, so no later pose moves them again.
+fn hide_entity_rows(
+    res: &mut CellResources,
+    hides: &[PendingHide],
+    index: usize,
+    writes: &mut Vec<(u32, GpuInstance)>,
+    moved: impl FnMut(Aabb),
+) {
+    rewrite_cell_rows(res, hides, std::iter::once(index), writes, moved);
+    res.dynamic_instances.remove(&hides[index].entity);
 }
 
 /// The slab layout of one cell, needed to resolve a row to its instance slot.
@@ -305,6 +371,123 @@ mod tests {
             writes.is_empty(),
             "a staged cell has no slab range to write"
         );
+    }
+
+    fn cell_with_two_resting_bodies(slab_count: Option<u32>) -> CellResources {
+        use bytemuck::Zeroable;
+
+        use crate::sim::EntityId;
+
+        let mut instances = vec![GpuInstance::zeroed(); 3];
+        for instance in &mut instances {
+            instance.transform =
+                Mat4::from_translation(Vec3::new(3.0, 1.0, 2.0)).to_cols_array_2d();
+        }
+        let mut res = CellResources {
+            object_groups: vec![CellObjectGroup {
+                mega_key: "mesh".into(),
+                instances,
+            }],
+            dynamic_instances: [
+                (
+                    EntityId(11),
+                    vec![
+                        DynRow {
+                            instance_idx: 0,
+                            ..row(1.0, Mat4::IDENTITY)
+                        },
+                        DynRow {
+                            instance_idx: 2,
+                            ..row(1.0, Mat4::IDENTITY)
+                        },
+                    ],
+                ),
+                (
+                    EntityId(12),
+                    vec![DynRow {
+                        instance_idx: 1,
+                        ..row(1.0, Mat4::IDENTITY)
+                    }],
+                ),
+            ]
+            .into(),
+            instance_range: slab_count.map(|count| (40, count)),
+            ..CellResources::default()
+        };
+        index_staged_rows(&mut res);
+        res
+    }
+
+    fn hide_of(entity: u64, at: Vec3) -> PendingHide {
+        PendingHide {
+            entity: crate::sim::EntityId(entity),
+            grid: (0, 0),
+            residency: 1,
+            at,
+        }
+    }
+
+    #[test]
+    fn a_hidden_item_collapses_every_row_to_its_position_without_any_body_pose() {
+        use crate::sim::EntityId;
+
+        let mut res = cell_with_two_resting_bodies(Some(3));
+        let at = Vec3::new(-4.0, 0.5, 9.0);
+        let hides = [hide_of(11, at)];
+        let mut writes = Vec::new();
+        let mut moves = 0;
+
+        hide_entity_rows(&mut res, &hides, 0, &mut writes, |_| moves += 1);
+
+        for slot in [0, 2] {
+            let hidden = &res.object_groups[0].instances[slot];
+            let transform = Mat4::from_cols_array_2d(&hidden.transform);
+            assert_eq!(transform.w_axis.truncate(), at);
+            assert_eq!(transform.transform_vector3(Vec3::ONE), Vec3::ZERO);
+            assert_eq!(hidden.aabb_min, (at - Vec3::ONE).to_array());
+        }
+        let mut written: Vec<u32> = writes.iter().map(|&(local, _)| local).collect();
+        written.sort_unstable();
+        assert_eq!(written, vec![0, 2]);
+        assert_eq!(moves, 1);
+        assert!(!res.dynamic_instances.contains_key(&EntityId(11)));
+        assert!(res.dynamic_instances.contains_key(&EntityId(12)));
+        let untouched = Mat4::from_cols_array_2d(&res.object_groups[0].instances[1].transform);
+        assert_eq!(untouched.w_axis.truncate(), Vec3::new(3.0, 1.0, 2.0));
+    }
+
+    #[test]
+    fn a_hidden_item_of_a_staged_cell_moves_only_the_cpu_mirror() {
+        let mut res = cell_with_two_resting_bodies(None);
+        let at = Vec3::new(1.0, 2.0, 3.0);
+        let mut writes = Vec::new();
+
+        hide_entity_rows(&mut res, &[hide_of(12, at)], 0, &mut writes, |_| {});
+
+        let hidden = Mat4::from_cols_array_2d(&res.object_groups[0].instances[1].transform);
+        assert_eq!(hidden.w_axis.truncate(), at);
+        assert!(writes.is_empty());
+    }
+
+    #[test]
+    fn a_body_pose_after_the_hide_no_longer_moves_the_rows() {
+        use crate::sim::{DynamicPose, EntityId};
+
+        let mut res = cell_with_two_resting_bodies(Some(3));
+        let at = Vec3::new(1.0, 2.0, 3.0);
+        hide_entity_rows(&mut res, &[hide_of(11, at)], 0, &mut Vec::new(), |_| {});
+        let poses = [DynamicPose {
+            entity: EntityId(11),
+            translation: Vec3::new(50.0, 0.0, 0.0),
+            rotation: Quat::IDENTITY,
+        }];
+        let mut writes = Vec::new();
+
+        rewrite_cell_rows(&mut res, &poses[..], 0..1, &mut writes, |_| {});
+
+        assert!(writes.is_empty());
+        let hidden = Mat4::from_cols_array_2d(&res.object_groups[0].instances[0].transform);
+        assert_eq!(hidden.w_axis.truncate(), at);
     }
 
     #[test]

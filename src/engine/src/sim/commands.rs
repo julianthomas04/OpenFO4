@@ -6,6 +6,7 @@
 //! gameplay mutation, so the bake is just an accelerator.
 //! Everything that mutates the sim flows through [`SimCommand`].
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use glam::{Quat, Vec2, Vec3};
@@ -28,6 +29,16 @@ pub enum SimCommand {
         grid: CellGrid,
         batch: Arc<CellColliderBatch>,
         baked: Option<BakedCellColliders>,
+    },
+    /// [`AddCellColliders`](Self::AddCellColliders) for a cell with edits: placements whose
+    /// `ref_key` maps (`refr_entity_id`) to an entity in `skip` are not built at all (no body, no
+    /// collider, no shape-cache count). One command is one deferred queue entry, so there is
+    /// never a frame in which a skipped body exists.
+    AddCellCollidersSkipping {
+        grid: CellGrid,
+        batch: Arc<CellColliderBatch>,
+        baked: Option<BakedCellColliders>,
+        skip: Arc<HashSet<EntityId>>,
     },
     /// Drop every collider a cell registered (unload or LOD demotion). Also
     /// despawns any dynamic rigid bodies the cell owned.

@@ -108,6 +108,15 @@ pub fn object_group(
         mass,
         ragdoll_sidecar: None,
         water: None,
+        pinned: false,
+    }
+}
+
+/// A static group whose placements become pinned bodies.
+pub fn pinned_group(path: &str, placements: Vec<Placement>) -> ObjectColliderGroup {
+    ObjectColliderGroup {
+        pinned: true,
+        ..object_group(path, placements, false, None)
     }
 }
 

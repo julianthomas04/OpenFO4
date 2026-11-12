@@ -170,6 +170,11 @@ impl PlacedWeapon {
         self.parts.iter().filter_map(|part| part.collision)
     }
 
+    /// Whether the placed weapon simulates as a rigid body, not as static colliders.
+    pub fn has_dynamic_body(&self) -> bool {
+        self.body_kind() == BodyKind::Dynamic
+    }
+
     fn body_kind(&self) -> BodyKind {
         let mut collisions = self.collisions().peekable();
         if collisions.peek().is_none() {

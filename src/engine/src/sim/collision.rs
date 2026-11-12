@@ -123,6 +123,10 @@ pub struct ObjectColliderGroup {
     /// Collision layer and materials of the dynamic body (manifest row element 4); `None` for a
     /// manifest written before water data existed or for a static mesh.
     pub water: Option<Arc<WaterBodyProps>>,
+    /// A static mesh whose placements with a form key become fixed, entity-tracked bodies that
+    /// never simulate (a pick-upable item), so the sim can remove one reference at a time.
+    /// Never set together with `dynamic`.
+    pub pinned: bool,
 }
 
 /// The cheap per-mesh collision metadata read at cell-assembly time: enough to

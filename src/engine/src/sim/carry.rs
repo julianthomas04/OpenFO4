@@ -47,6 +47,8 @@ pub enum ReleaseReason {
     BodyLost,
     /// The hold point could not be computed from the eye and the view (non-finite input).
     InvalidHold,
+    /// The body was taken into the inventory while carried.
+    PickedUp,
 }
 
 /// Why a grab was refused.

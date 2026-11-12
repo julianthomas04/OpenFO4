@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use glam::{Quat, Vec2, Vec3};
 
-use super::collision::{CellColliderBatch, ColShape, PartShape};
+use super::collision::{CellColliderBatch, ColShape, ObjectColliderGroup, PartShape};
 use super::commands::{PlayerInput, SimCommand};
 use super::physics::test_support::{bake, box_shape, ground_batch, object_group, placement};
 use super::{FIXED_DT, PlayerMovement, SimWorld, WorldClock};
@@ -17,6 +17,7 @@ pub struct Prop {
     pub shape: PartShape,
     pub dynamic: bool,
     pub mass: Option<f32>,
+    pub pinned: bool,
 }
 
 pub fn prop_box(path: &'static str, at: Vec3, half: Vec3) -> Prop {
@@ -35,6 +36,7 @@ pub fn prop_box(path: &'static str, at: Vec3, half: Vec3) -> Prop {
         },
         dynamic: false,
         mass: None,
+        pinned: false,
     }
 }
 
@@ -46,6 +48,15 @@ pub fn crate_prop(at: Vec3, mass: f32) -> Prop {
         shape: box_shape(0.5),
         dynamic: true,
         mass: Some(mass),
+        pinned: false,
+    }
+}
+
+/// A static 1 x 1 x 1 item centred at `at` that the sim tracks as a fixed body.
+pub fn pinned_prop(at: Vec3) -> Prop {
+    Prop {
+        pinned: true,
+        ..prop_box("meshes\\item.glb", at, Vec3::splat(0.5))
     }
 }
 
@@ -65,12 +76,15 @@ pub fn world_with(props: &[Prop]) -> SimWorld {
 
 pub fn world_in(mut batch: CellColliderBatch, props: &[Prop]) -> SimWorld {
     for (index, prop) in props.iter().enumerate() {
-        batch.objects.push(object_group(
-            prop.path,
-            vec![placement(&prop_ref_key(index), prop.at)],
-            prop.dynamic,
-            prop.mass,
-        ));
+        batch.objects.push(ObjectColliderGroup {
+            pinned: prop.pinned,
+            ..object_group(
+                prop.path,
+                vec![placement(&prop_ref_key(index), prop.at)],
+                prop.dynamic,
+                prop.mass,
+            )
+        });
     }
     let shapes: Vec<(&str, Vec<PartShape>)> = props
         .iter()

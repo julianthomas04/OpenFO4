@@ -1375,3 +1375,328 @@ mod ground_surface {
         assert!(context.terrain_colliders.is_empty());
     }
 }
+
+mod item_removal {
+    use super::*;
+    use crate::sim::carry::{GRAB_MASS_LIMIT, View};
+    use crate::sim::physics::test_support::{body_probe, pinned_group};
+
+    const WIDGET_PATH: &str = "meshes\\widget.glb";
+    const WIDGET_REF: &str = "0F7A01:Test.esm";
+    const OTHER_REF: &str = "0F7A02:Test.esm";
+    const UNPLACED_REF: &str = "0F7AFF:Test.esm";
+    const WIDGET_AT: Vec3 = Vec3::new(120.0, 1.0, -90.0);
+    const OTHER_AT: Vec3 = Vec3::new(160.0, 1.0, -90.0);
+    const WIDGET_HALF_EXTENT: f32 = 1.0;
+    const WIDGET_MASS: f32 = 20.0;
+    const FAR_CELL: CellGrid = (40, 40);
+
+    fn widget() -> EntityId {
+        refr_entity_id(WIDGET_REF)
+    }
+
+    fn other() -> EntityId {
+        refr_entity_id(OTHER_REF)
+    }
+
+    #[derive(Clone, Copy)]
+    enum Kind {
+        Dynamic { mass: f32 },
+        Pinned,
+        Static,
+    }
+
+    fn widgets_of(kind: Kind) -> (CellColliderBatch, BakedCellColliders) {
+        let mut batch = ground_batch();
+        let placements = vec![
+            placement(WIDGET_REF, WIDGET_AT),
+            placement(OTHER_REF, OTHER_AT),
+        ];
+        batch.objects.push(match kind {
+            Kind::Dynamic { mass } => object_group(WIDGET_PATH, placements, true, Some(mass)),
+            Kind::Pinned => pinned_group(WIDGET_PATH, placements),
+            Kind::Static => object_group(WIDGET_PATH, placements, false, None),
+        });
+        let baked = bake(
+            &batch,
+            &[(WIDGET_PATH, vec![box_shape(WIDGET_HALF_EXTENT)])],
+        );
+        (batch, baked)
+    }
+
+    fn context_with(mut context: PhysicsContext, kind: Kind) -> PhysicsContext {
+        let (batch, baked) = widgets_of(kind);
+        context.add_cell(GROUND_CELL, &batch, Some(&baked));
+        context.set_physics_center(GROUND_CELL, 2);
+        context
+    }
+
+    fn dynamic_widgets(context: PhysicsContext) -> PhysicsContext {
+        context_with(context, Kind::Dynamic { mass: WIDGET_MASS })
+    }
+
+    fn view() -> View {
+        View {
+            yaw: 0.0,
+            pitch: -0.5,
+        }
+    }
+
+    #[test]
+    fn removing_a_sleeping_body_takes_its_body_collider_and_cell_entry_with_it() {
+        let mut context = dynamic_widgets(sleeping_context());
+        assert!(body_probe(&context, widget()).sleeping);
+        let handle = context.dyn_bodies[&widget()].handle;
+        let colliders = context.collider_count();
+
+        assert_eq!(context.remove_ref(widget()), Some(GROUND_CELL));
+
+        assert!(context.world.bodies.get(handle).is_none());
+        assert_eq!(context.collider_count(), colliders - 1);
+        assert!(!context.dyn_bodies.contains_key(&widget()));
+        assert_eq!(context.cell_dyn[&GROUND_CELL], vec![other()]);
+        assert_eq!(context.dynamic_body_count(), 1);
+    }
+
+    #[test]
+    fn removing_a_body_wakes_the_sleeping_body_that_rested_on_it() {
+        const RIDER_PATH: &str = "meshes\\rider.glb";
+        const RIDER_REF: &str = "0F7A03:Test.esm";
+        let mut batch = ground_batch();
+        batch.objects.push(pinned_group(
+            WIDGET_PATH,
+            vec![placement(WIDGET_REF, WIDGET_AT)],
+        ));
+        batch.objects.push(object_group(
+            RIDER_PATH,
+            vec![placement(RIDER_REF, WIDGET_AT + Vec3::new(0.0, 2.0, 0.0))],
+            true,
+            Some(WIDGET_MASS),
+        ));
+        let baked = bake(
+            &batch,
+            &[
+                (WIDGET_PATH, vec![box_shape(WIDGET_HALF_EXTENT)]),
+                (RIDER_PATH, vec![box_shape(WIDGET_HALF_EXTENT)]),
+            ],
+        );
+        let mut context = sleeping_context();
+        context.add_cell(GROUND_CELL, &batch, Some(&baked));
+        context.set_physics_center(GROUND_CELL, 2);
+        let rider = refr_entity_id(RIDER_REF);
+        run_ticks(&mut context, 200);
+        let resting_height = body_probe(&context, rider).translation.y;
+        assert!(body_probe(&context, rider).sleeping);
+
+        assert!(context.remove_ref(widget()).is_some());
+        run_ticks(&mut context, 60);
+
+        assert!(body_probe(&context, rider).translation.y < resting_height - 1.0);
+    }
+
+    #[test]
+    fn removing_an_awake_body_leaves_the_others_simulating_and_publishes_no_pose_for_it() {
+        let mut context = dynamic_widgets(wake_context());
+        run_ticks(&mut context, 1);
+        assert!(!body_probe(&context, widget()).sleeping);
+        assert_eq!(context.active_dynamic_count(), 2);
+
+        assert_eq!(context.remove_ref(widget()), Some(GROUND_CELL));
+        run_ticks(&mut context, 5);
+
+        assert_eq!(context.active_dynamic_count(), 1);
+        let mut poses = Vec::new();
+        context.dynamic_poses(1.0, &mut poses);
+        assert_eq!(
+            poses.iter().map(|pose| pose.entity).collect::<Vec<_>>(),
+            vec![other()]
+        );
+    }
+
+    #[test]
+    fn removing_a_carried_body_lets_go_of_it_as_picked_up() {
+        let mut context = dynamic_widgets(wake_context());
+        run_ticks(&mut context, 1);
+        context
+            .grab(widget(), Vec3::new(110.0, 5.0, -90.0), view())
+            .expect("grabbed");
+
+        assert_eq!(context.remove_ref(widget()), Some(GROUND_CELL));
+
+        assert_eq!(context.carried(), None);
+        assert_eq!(context.take_release(), Some(ReleaseReason::PickedUp));
+        assert!(context.player_dynamic_filter().exclude_rigid_body.is_none());
+        run_ticks(&mut context, 3);
+    }
+
+    #[test]
+    fn removing_a_pinned_body_takes_it_out_of_the_world() {
+        let mut context = context_with(wake_context(), Kind::Pinned);
+        let colliders = context.collider_count();
+
+        assert_eq!(context.remove_ref(widget()), Some(GROUND_CELL));
+
+        assert!(!context.dyn_bodies.contains_key(&widget()));
+        assert_eq!(context.collider_count(), colliders - 1);
+        assert!(context.dyn_bodies.contains_key(&other()));
+    }
+
+    #[test]
+    fn removing_an_entity_without_a_body_is_a_miss_and_changes_nothing() {
+        let mut context = dynamic_widgets(wake_context());
+        let colliders = context.collider_count();
+        assert_eq!(context.remove_ref(refr_entity_id(UNPLACED_REF)), None);
+        assert_eq!(context.dynamic_body_count(), 2);
+        assert_eq!(context.collider_count(), colliders);
+    }
+
+    #[test]
+    fn a_static_fallback_collider_has_no_body_to_remove() {
+        let mut context = context_with(wake_context(), Kind::Static);
+        let colliders = context.collider_count();
+        assert_eq!(context.remove_ref(widget()), None);
+        assert_eq!(context.collider_count(), colliders);
+    }
+
+    #[test]
+    fn removing_the_same_entity_twice_misses_the_second_time() {
+        let mut context = dynamic_widgets(wake_context());
+        assert_eq!(context.remove_ref(widget()), Some(GROUND_CELL));
+        assert_eq!(context.remove_ref(widget()), None);
+        assert_eq!(context.dynamic_body_count(), 1);
+    }
+
+    #[test]
+    fn a_stale_cell_entry_or_body_handle_does_not_stop_the_removal() {
+        let mut context = dynamic_widgets(wake_context());
+        let handle = context.dyn_bodies[&widget()].handle;
+        context.world.remove_body(handle);
+        context.cell_dyn.clear();
+
+        assert_eq!(context.remove_ref(widget()), Some(GROUND_CELL));
+        assert!(!context.dyn_bodies.contains_key(&widget()));
+        run_ticks(&mut context, 2);
+    }
+
+    #[test]
+    fn a_removed_body_is_not_revived_when_the_dynamic_radius_moves() {
+        let mut context = dynamic_widgets(wake_context());
+        assert!(context.remove_ref(widget()).is_some());
+        context.set_physics_center(FAR_CELL, 0);
+        context.set_physics_center(GROUND_CELL, 2);
+        assert!(!context.dyn_bodies.contains_key(&widget()));
+        assert_eq!(context.active_dynamic_count(), 1);
+    }
+
+    #[test]
+    fn the_cell_still_releases_every_cache_count_and_body_after_a_removal() {
+        let mut context = dynamic_widgets(wake_context());
+        assert!(context.remove_ref(widget()).is_some());
+        context.remove_cell(GROUND_CELL);
+        assert!(context.shape_cache.is_empty());
+        assert!(context.cell_cache_keys.is_empty());
+        assert!(context.dyn_bodies.is_empty());
+        assert!(context.cell_dyn.is_empty());
+        assert_eq!(context.dynamic_body_count(), 0);
+        assert_eq!(context.collider_count(), 0);
+    }
+
+    #[test]
+    fn a_skipped_reference_is_built_as_neither_body_collider_nor_cache_count() {
+        let skip = HashSet::from([widget()]);
+        for kind in [
+            Kind::Dynamic { mass: WIDGET_MASS },
+            Kind::Pinned,
+            Kind::Static,
+        ] {
+            let (batch, baked) = widgets_of(kind);
+            let mut whole = wake_context();
+            whole.add_cell(GROUND_CELL, &batch, Some(&baked));
+            let mut skipping = wake_context();
+            skipping.add_cell_skipping(GROUND_CELL, &batch, Some(&baked), &skip);
+
+            assert_eq!(skipping.collider_count(), whole.collider_count() - 1);
+            assert_eq!(skipping.cell_cache_keys[&GROUND_CELL].len(), 1);
+            assert_eq!(whole.cell_cache_keys[&GROUND_CELL].len(), 2);
+            assert!(!skipping.dyn_bodies.contains_key(&widget()));
+            assert_eq!(
+                skipping.dyn_bodies.contains_key(&other()),
+                !matches!(kind, Kind::Static)
+            );
+        }
+    }
+
+    #[test]
+    fn a_cell_registered_again_with_the_skip_set_keeps_the_picked_up_body_gone() {
+        let (batch, baked) = widgets_of(Kind::Dynamic { mass: WIDGET_MASS });
+        let mut context = wake_context();
+        context.add_cell(GROUND_CELL, &batch, Some(&baked));
+        context.set_physics_center(GROUND_CELL, 2);
+        assert!(context.remove_ref(widget()).is_some());
+
+        context.remove_cell(GROUND_CELL);
+        context.add_cell_skipping(GROUND_CELL, &batch, Some(&baked), &HashSet::from([widget()]));
+        context.set_physics_center(GROUND_CELL, 2);
+        assert!(!context.dyn_bodies.contains_key(&widget()));
+        assert!(context.dyn_bodies.contains_key(&other()));
+
+        context.remove_cell(GROUND_CELL);
+        context.add_cell(GROUND_CELL, &batch, Some(&baked));
+        assert!(
+            context.dyn_bodies.contains_key(&widget()),
+            "without the skip set the same registration rebuilds it"
+        );
+    }
+
+    #[test]
+    fn a_pinned_body_stays_fixed_and_ungrabbable_wherever_the_dynamic_radius_goes() {
+        let mut context = context_with(wake_context(), Kind::Pinned);
+        for centre in [FAR_CELL, GROUND_CELL] {
+            context.set_physics_center(centre, 2);
+            run_ticks(&mut context, 3);
+            let probe = body_probe(&context, widget());
+            assert!(!probe.dynamic);
+            assert_eq!(probe.translation, WIDGET_AT);
+            assert!(!context.is_grabbable(widget()));
+            assert!(!context.can_carry(widget()));
+        }
+        assert_eq!(context.active_dynamic_count(), 0);
+        let mut poses = Vec::new();
+        context.dynamic_poses(1.0, &mut poses);
+        assert!(poses.is_empty());
+        assert!(
+            context
+                .grab(widget(), Vec3::new(110.0, 5.0, -90.0), view())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_loose_body_is_carriable_up_to_the_grab_mass_limit() {
+        for (mass, carriable) in [
+            (GRAB_MASS_LIMIT - 35.0, true),
+            (GRAB_MASS_LIMIT, true),
+            (GRAB_MASS_LIMIT + 35.0, false),
+        ] {
+            let context = context_with(wake_context(), Kind::Dynamic { mass });
+            assert!(context.is_grabbable(widget()), "mass {mass}");
+            assert_eq!(context.can_carry(widget()), carriable, "mass {mass}");
+        }
+    }
+
+    #[test]
+    fn a_body_outside_the_dynamic_radius_or_missing_is_not_carriable() {
+        let mut context = dynamic_widgets(wake_context());
+        assert!(context.can_carry(widget()));
+        context.set_physics_center(FAR_CELL, 0);
+        assert!(!context.can_carry(widget()));
+        assert!(!context.can_carry(refr_entity_id(UNPLACED_REF)));
+    }
+
+    #[test]
+    fn the_runtime_plugin_owns_the_first_attribution_slot_before_any_cell_loads() {
+        let mut context = PhysicsContext::new();
+        assert_eq!(context.plugin_slot(RUNTIME_REF_PLUGIN), Some(1));
+        assert_eq!(context.plugin_slot("Fallout4.esm"), Some(2));
+    }
+}
