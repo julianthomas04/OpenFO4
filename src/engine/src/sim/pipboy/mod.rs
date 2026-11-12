@@ -24,9 +24,11 @@ use glam::Vec3;
 use super::world_clock::GameClock;
 
 pub use actions::{ActionEffects, PipBoyAction, PipBoyActionError};
-pub use catalog::{ItemDefinition, PipBoyCatalog};
+pub use catalog::{ItemDefinition, ItemKind, PipBoyCatalog};
 pub use character::{Character, Limb, Sex, Special};
-pub use inventory::{DamageType, Inventory, InventoryCategory, InventoryItem, ItemId};
+pub use inventory::{
+    DamageType, Inventory, InventoryCategory, InventoryError, InventoryItem, ItemId,
+};
 pub use map::{MapMarker, MapMarkerId, WorldMap, WorldMapProjection};
 pub use perks::{OwnedPerks, PerkDefinition, PerkId};
 pub use quests::{Quest, QuestId};

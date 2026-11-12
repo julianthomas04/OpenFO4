@@ -11,6 +11,7 @@ pub mod furniture;
 pub mod game_settings;
 pub mod globals;
 pub mod grass;
+pub mod item_components;
 pub mod items;
 pub mod landscape_textures;
 pub mod landscapes;
@@ -25,6 +26,7 @@ pub mod movable_statics;
 pub mod movement_types;
 pub mod music;
 pub mod navigation_meshes;
+pub mod npc_factions;
 pub mod perks;
 pub mod placed_objects;
 mod rows;
@@ -225,7 +227,48 @@ impl DbClient {
 
     #[instrument(skip(self))]
     pub fn get_items(&self) -> anyhow::Result<Vec<items::ItemRow>> {
-        items::ItemRow::list_all(&self.conn)
+        items::ItemRow::list_all(&self.conn, self.schema)
+    }
+
+    /// Every component entry of every miscellaneous item, or `None` for a database converted
+    /// before the installer extracted them.
+    #[instrument(skip(self))]
+    pub fn get_item_components(
+        &self,
+    ) -> anyhow::Result<Option<Vec<item_components::ItemComponentRow>>> {
+        item_components::ItemComponentRow::list_all(&self.conn, self.schema)
+    }
+
+    /// The display name of each named component record, by form key.
+    #[instrument(skip(self))]
+    pub fn get_component_names(&self) -> anyhow::Result<std::collections::HashMap<String, String>> {
+        item_components::component_names(&self.conn)
+    }
+
+    /// The factions of an NPC base record, or `None` for a database converted before the
+    /// installer extracted them.
+    #[instrument(skip(self))]
+    pub fn get_npc_factions(
+        &self,
+        npc: &str,
+    ) -> anyhow::Result<Option<Vec<npc_factions::NpcFactionRow>>> {
+        npc_factions::NpcFactionRow::for_npc(&self.conn, self.schema, npc)
+    }
+
+    /// The form key of the keyword with this editor id; `None` when no keyword has it, an error
+    /// when several do.
+    #[instrument(skip(self))]
+    pub fn get_keyword_form_key(&self, editor_id: &str) -> anyhow::Result<Option<String>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT form_key FROM keywords WHERE editor_id = ?")?;
+        let mut form_keys = stmt
+            .query_map(rusqlite::params![editor_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        match form_keys.len() {
+            0 | 1 => Ok(form_keys.pop()),
+            count => anyhow::bail!("{count} keywords have the editor id '{editor_id}'"),
+        }
     }
 
     #[instrument(skip(self))]
@@ -721,5 +764,34 @@ impl DbClient {
         std::collections::HashMap<String, std::sync::Arc<Vec<material_swaps::SwapEntry>>>,
     > {
         material_swaps::get_material_swap_entries(&self.conn, self.schema)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::database_with;
+
+    #[test]
+    fn a_keyword_is_found_by_its_editor_id() {
+        let db = database_with(
+            "INSERT INTO keywords (form_key, editor_id) VALUES ('0A:T.esm', 'Alpha'), ('0B:T.esm', 'Beta');",
+        );
+
+        assert_eq!(
+            db.get_keyword_form_key("Beta").unwrap().as_deref(),
+            Some("0B:T.esm")
+        );
+        assert_eq!(db.get_keyword_form_key("Gamma").unwrap(), None);
+    }
+
+    #[test]
+    fn two_keywords_with_one_editor_id_are_an_error() {
+        let db = database_with(
+            "INSERT INTO keywords (form_key, editor_id) VALUES ('0A:T.esm', 'Alpha'), ('0B:T.esm', 'Alpha');",
+        );
+
+        let error = db.get_keyword_form_key("Alpha").unwrap_err().to_string();
+
+        assert_eq!(error, "2 keywords have the editor id 'Alpha'");
     }
 }

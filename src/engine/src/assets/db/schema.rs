@@ -31,6 +31,10 @@ const PLACED_OBJECT_LIGHT_COLUMNS: &[&str] = &[
 ];
 
 const PLACED_OBJECT_RAGDOLL_POSE_COLUMNS: &[&str] = &["ragdoll_pose"];
+const PLACED_OBJECT_ITEM_COLUMNS: &[&str] = &["item_count", "owner", "leveled_item"];
+const ITEM_MARKER_COLUMNS: &[&str] = &["is_marker"];
+const MISC_COMPONENT_COLUMNS: &[&str] = &["form_key", "component", "count"];
+const NPC_FACTION_COLUMNS: &[&str] = &["npc", "faction", "rank"];
 const MATERIAL_SWAP_COLUMNS: &[&str] = &["material_name"];
 const WORLDSPACE_WEATHER_COLUMNS: &[&str] = &["climate"];
 const WEATHER_COLUMNS: &[&str] = &["directional_ambient"];
@@ -150,6 +154,10 @@ pub enum ColumnGroup {
     Light,
     PlacedObjectLight,
     PlacedObjectRagdollPose,
+    PlacedObjectItem,
+    ItemMarker,
+    MiscComponent,
+    NpcFaction,
     MaterialSwap,
     WorldspaceWeather,
     Weather,
@@ -187,6 +195,10 @@ impl std::fmt::Display for ColumnGroup {
             Self::Light => "light",
             Self::PlacedObjectLight => "placed object light",
             Self::PlacedObjectRagdollPose => "placed object ragdoll pose",
+            Self::PlacedObjectItem => "placed object item",
+            Self::ItemMarker => "item marker",
+            Self::MiscComponent => "misc component",
+            Self::NpcFaction => "NPC faction",
             Self::MaterialSwap => "material swap",
             Self::WorldspaceWeather => "worldspace weather",
             Self::Weather => "weather",
@@ -417,6 +429,11 @@ pub struct DbSchema {
     pub light_columns_present: bool,
     pub placed_object_light_columns_present: bool,
     pub placed_object_ragdoll_pose_column_present: bool,
+    /// `placed_objects.item_count`, `owner` and `leveled_item`, all or none.
+    pub placed_object_item_columns_present: bool,
+    pub item_marker_column_present: bool,
+    pub misc_components_table_present: bool,
+    pub npc_factions_table_present: bool,
     pub material_swap_name_column_present: bool,
     pub weather_columns_present: bool,
     pub weather_fog_column_present: bool,
@@ -468,6 +485,30 @@ impl DbSchema {
                 ColumnGroup::PlacedObjectRagdollPose,
                 "placed_objects",
                 PLACED_OBJECT_RAGDOLL_POSE_COLUMNS,
+            )?,
+            placed_object_item_columns_present: column_group_present(
+                conn,
+                ColumnGroup::PlacedObjectItem,
+                "placed_objects",
+                PLACED_OBJECT_ITEM_COLUMNS,
+            )?,
+            item_marker_column_present: column_group_present(
+                conn,
+                ColumnGroup::ItemMarker,
+                "items",
+                ITEM_MARKER_COLUMNS,
+            )?,
+            misc_components_table_present: column_group_present(
+                conn,
+                ColumnGroup::MiscComponent,
+                "misc_components",
+                MISC_COMPONENT_COLUMNS,
+            )?,
+            npc_factions_table_present: column_group_present(
+                conn,
+                ColumnGroup::NpcFaction,
+                "npc_factions",
+                NPC_FACTION_COLUMNS,
             )?,
             material_swap_name_column_present: column_group_present(
                 conn,
@@ -649,6 +690,26 @@ impl DbSchema {
                     "placed_objects.ragdoll_pose column missing (database predates ragdoll pose conversion); ragdoll props show and collide in their model's rest pose"
                 );
             }
+            if !self.placed_object_item_columns_present {
+                tracing::warn!(
+                    "placed_objects.item_count/owner/leveled_item columns missing (database predates item pickup conversion); every placed item counts as one unit and none is owned"
+                );
+            }
+            if !self.item_marker_column_present {
+                tracing::warn!(
+                    "items.is_marker column missing (database predates item pickup conversion); whether an item is a CK-only marker is unknown, so no non-weapon item spawns in the world"
+                );
+            }
+            if !self.misc_components_table_present {
+                tracing::warn!(
+                    "misc_components table missing (database predates item pickup conversion); no miscellaneous item is listed as junk"
+                );
+            }
+            if !self.npc_factions_table_present {
+                tracing::warn!(
+                    "npc_factions table missing (database predates item pickup conversion); NPC faction memberships are unknown, so faction-owned items read as not belonging to the player"
+                );
+            }
             if !(self.cell_water_columns_present
                 && self.worldspace_water_columns_present
                 && self.activator_water_column_present)
@@ -756,6 +817,22 @@ pub fn placed_object_ragdoll_pose_select_list(schema: DbSchema, prefix: &str) ->
     select_list(
         PLACED_OBJECT_RAGDOLL_POSE_COLUMNS,
         schema.placed_object_ragdoll_pose_column_present,
+        prefix,
+    )
+}
+
+pub fn placed_object_item_select_list(schema: DbSchema, prefix: &str) -> String {
+    select_list(
+        PLACED_OBJECT_ITEM_COLUMNS,
+        schema.placed_object_item_columns_present,
+        prefix,
+    )
+}
+
+pub fn item_marker_select_list(schema: DbSchema, prefix: &str) -> String {
+    select_list(
+        ITEM_MARKER_COLUMNS,
+        schema.item_marker_column_present,
         prefix,
     )
 }
