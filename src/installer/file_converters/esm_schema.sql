@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS lod_water_quads (
 CREATE TABLE IF NOT EXISTS cells (
     form_key TEXT PRIMARY KEY REFERENCES records(form_key),
     editor_id TEXT,
+    name TEXT,                          -- display name (FULL); NULL when the cell has none
     worldspace TEXT REFERENCES worldspaces(form_key),
     grid_x INTEGER,
     grid_y INTEGER,
@@ -1072,10 +1073,11 @@ CREATE TABLE IF NOT EXISTS sound_output_channels (
 CREATE TABLE IF NOT EXISTS regions (
     form_key TEXT PRIMARY KEY REFERENCES records(form_key),
     editor_id TEXT,
-    name TEXT,
+    name TEXT,                          -- map name (RDMP); NULL when the region has no map entry or the name is empty
     worldspace TEXT,                    -- FormKey
     objects TEXT,                       -- JSON: region data objects
-    flags TEXT                          -- JSON
+    flags TEXT,                         -- JSON
+    map_priority INTEGER                -- RDMP priority; NULL when the region has no map entry
 );
 
 -- ============================================

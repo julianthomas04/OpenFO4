@@ -24,10 +24,16 @@ namespace AssetConverter.Abc
     /// </summary>
     internal sealed record AbcOwnCall(string Method, IReadOnlyList<AbcCallArgument> Arguments, bool Unconditional);
 
+    /// <summary>A static member (<c>scaleform.gfx.TextFieldEx.VALIGN_BOTTOM</c>) passed as a call argument, and the signature it flows into.</summary>
+    /// <param name="Origin">The offset of the instruction that read the member.</param>
+    internal sealed record AbcStaticUse(string Signature, int Origin, string Member);
+
     /// <param name="Closures">The method indices of the functions the method creates, in bytecode order.</param>
     /// <param name="OwnCalls">The calls of the method's own object or scope, in bytecode order.</param>
+    /// <param name="StaticUses">The static members passed as call arguments; their values are known only once the movie's constants are.</param>
     internal sealed record AbcMethodLiterals(
-        IReadOnlyList<AbcLiteralUse> Uses, IReadOnlyList<AbcMemberAssignment> Assignments, IReadOnlyList<int> Closures, IReadOnlyList<AbcOwnCall> OwnCalls);
+        IReadOnlyList<AbcLiteralUse> Uses, IReadOnlyList<AbcMemberAssignment> Assignments, IReadOnlyList<int> Closures, IReadOnlyList<AbcOwnCall> OwnCalls,
+        IReadOnlyList<AbcStaticUse> StaticUses);
 
     /// <summary>
     /// Follows every constant of a method body through the operand stack to the instruction that consumes it, over all control-flow paths
@@ -56,9 +62,11 @@ namespace AssetConverter.Abc
         {
             public static readonly FlowValue Other = new(ImmutableSortedSet<int>.Empty, true, Unknown, null, false, null);
 
-            public FlowValue(ImmutableSortedSet<int> origins, bool maybeOther, string description, object? literal, bool folded, ImmutableArray<(string Suffix, FlowValue Value)>? parts, string? reference = null)
+            public FlowValue(ImmutableSortedSet<int> origins, bool maybeOther, string description, object? literal, bool folded, ImmutableArray<(string Suffix, FlowValue Value)>? parts, string? reference = null,
+                ImmutableSortedSet<(int Origin, string Member)>? statics = null)
             {
                 Reference = reference;
+                Statics = statics ?? ImmutableSortedSet<(int Origin, string Member)>.Empty;
                 Origins = origins;
                 MaybeOther = maybeOther;
                 Description = description.Length > MaxDescriptionLength ? Unknown : description;
@@ -79,9 +87,15 @@ namespace AssetConverter.Abc
             /// <summary>The qualified name when the value is exactly one looked-up name (<c>getlex</c>) on every path.</summary>
             public string? Reference { get; }
 
+            /// <summary>The static members (<c>Class.member</c>, by qualified class) the value is on some path, with the instruction that read each.</summary>
+            public ImmutableSortedSet<(int Origin, string Member)> Statics { get; }
+
             public bool IsPure => Literal is not null;
 
             public static FlowValue Described(string description) => new(ImmutableSortedSet<int>.Empty, true, description, null, false, null);
+
+            public static FlowValue StaticMember(string description, int origin, string member) =>
+                new(ImmutableSortedSet<int>.Empty, true, description, null, false, null, null, ImmutableSortedSet.Create((origin, member)));
 
             public static FlowValue Referenced(string description, string qualifiedName) =>
                 new(ImmutableSortedSet<int>.Empty, true, description, null, false, null, qualifiedName);
@@ -102,12 +116,12 @@ namespace AssetConverter.Abc
                 bool samePure = IsPure && other.IsPure && Origins.SetEquals(other.Origins) && Equals(Literal, other.Literal);
                 bool sameParts = Parts is { } mine && other.Parts is { } theirs && mine.SequenceEqual(theirs);
                 return new FlowValue(origins, maybeOther, description, samePure ? Literal : null, samePure && Folded, sameParts ? Parts : null,
-                    Reference == other.Reference ? Reference : null);
+                    Reference == other.Reference ? Reference : null, Statics.Union(other.Statics));
             }
 
             public bool Equals(FlowValue? other) =>
                 other is not null && MaybeOther == other.MaybeOther && Description == other.Description && Equals(Literal, other.Literal)
-                && Folded == other.Folded && Reference == other.Reference && Origins.SetEquals(other.Origins)
+                && Folded == other.Folded && Reference == other.Reference && Origins.SetEquals(other.Origins) && Statics.SetEquals(other.Statics)
                 && (Parts is { } mine ? other.Parts is { } theirs && mine.SequenceEqual(theirs) : other.Parts is null);
 
             public override bool Equals(object? obj) => Equals(obj as FlowValue);
@@ -139,6 +153,7 @@ namespace AssetConverter.Abc
             private readonly List<(int Origin, string Signature)> _uses = [];
             private readonly List<AbcMemberAssignment> _assignments = [];
             private readonly List<AbcOwnCall> _ownCalls = [];
+            private readonly List<AbcStaticUse> _staticUses = [];
             private readonly HashSet<int> _straight = [];
             private readonly Dictionary<int, (string Condition, bool TakenWhenTrue)> _conditions = [];
             private HashSet<int>[] _dominators = [];
@@ -148,7 +163,7 @@ namespace AssetConverter.Abc
             public AbcMethodLiterals Run()
             {
                 if (code.Count == 0)
-                    return new AbcMethodLiterals([], [], [], []);
+                    return new AbcMethodLiterals([], [], [], [], []);
                 List<Block> blocks = BuildBlocks();
                 MarkUnconditional(blocks);
                 _dominators = Dominators(blocks);
@@ -158,7 +173,7 @@ namespace AssetConverter.Abc
                 _recording = true;
                 foreach (Block block in blocks.Where(b => b.Entry is not null))
                     Transfer(block, block.Entry!);
-                return new AbcMethodLiterals(CollectUses(), _assignments, Closures(), _ownCalls);
+                return new AbcMethodLiterals(CollectUses(), _assignments, Closures(), _ownCalls, [.. _staticUses.Distinct()]);
             }
 
             private List<int> Closures() =>
@@ -468,6 +483,14 @@ namespace AssetConverter.Abc
                         Use(part, signature + suffix);
             }
 
+            private void UseArgument(FlowValue value, string signature)
+            {
+                Use(value, signature);
+                if (_recording)
+                    foreach ((int origin, string member) in value.Statics)
+                        _staticUses.Add(new AbcStaticUse(signature, origin, member));
+            }
+
             private FlowValue Literal(int origin, object value, bool folded)
             {
                 _literals[origin] = (value, folded);
@@ -594,7 +617,10 @@ namespace AssetConverter.Abc
                             var runtime = values.Skip(1).ToList();
                             runtime.ForEach(v => Use(v, $"{values[0].Description}[]"));
                             string member = Name(operands[0], runtime);
-                            stack.Add(FlowValue.Described(name.HasRuntimeName ? values[0].Description + member : Prefix(values[0]) + member));
+                            string description = name.HasRuntimeName ? values[0].Description + member : Prefix(values[0]) + member;
+                            stack.Add(values[0].Reference is { } owner && !name.HasRuntimeName
+                                ? FlowValue.StaticMember(description, instruction.Offset, $"{owner}.{member}")
+                                : FlowValue.Described(description));
                             return;
                         }
                     case "getsuper":
@@ -661,7 +687,7 @@ namespace AssetConverter.Abc
                             runtime.ForEach(v => Use(v, $"{receiver.Description}[]()"));
                             var arguments = values.Skip(1 + name.RuntimeOperands).ToList();
                             for (int a = 0; a < arguments.Count; a++)
-                                Use(arguments[a], $"{callee}({a})");
+                                UseArgument(arguments[a], $"{callee}({a})");
                             if (!mnemonic.StartsWith("callsuper", StringComparison.Ordinal) && mnemonic != "constructprop" && !name.HasRuntimeName
                                 && receiver.Description is This or Scope)
                                 RecordOwnCall(member, arguments, index);
@@ -675,7 +701,7 @@ namespace AssetConverter.Abc
                             string callee = values[0].Description;
                             Use(values[1], $"<call receiver>");
                             for (int a = 2; a < values.Count; a++)
-                                Use(values[a], $"{callee}({a - 2})");
+                                UseArgument(values[a], $"{callee}({a - 2})");
                             stack.Add(Called(callee));
                             return;
                         }
@@ -684,7 +710,7 @@ namespace AssetConverter.Abc
                             var values = Pop(stack, 1 + operands[0], instruction);
                             string callee = (mnemonic == "construct" ? "new " : "") + values[0].Description;
                             for (int a = 1; a < values.Count; a++)
-                                Use(values[a], $"{callee}({a - 1})");
+                                UseArgument(values[a], $"{callee}({a - 1})");
                             stack.Add(Called(callee));
                             return;
                         }
@@ -692,7 +718,7 @@ namespace AssetConverter.Abc
                         {
                             var values = Pop(stack, 1 + operands[0], instruction);
                             for (int a = 1; a < values.Count; a++)
-                                Use(values[a], $"super({a - 1})");
+                                UseArgument(values[a], $"super({a - 1})");
                             return;
                         }
                     case "callmethod" or "callstatic":
@@ -700,7 +726,7 @@ namespace AssetConverter.Abc
                             var values = Pop(stack, 1 + operands[1], instruction);
                             string callee = $"{mnemonic}{operands[0]}";
                             for (int a = 1; a < values.Count; a++)
-                                Use(values[a], $"{callee}({a - 1})");
+                                UseArgument(values[a], $"{callee}({a - 1})");
                             stack.Add(Called(callee));
                             return;
                         }

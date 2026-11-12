@@ -122,6 +122,31 @@ namespace InstallerTests
         }
 
         [Fact]
+        public async Task Reload_CellsAndRegions_FillsTheDisplayNamesAndMapColumns()
+        {
+            Execute("UPDATE cells SET name = NULL");
+            Execute("UPDATE regions SET name = NULL, map_priority = NULL");
+
+            await Reload("cells", "regions");
+
+            Assert.Equal(LoadedFixtureDatabase.InteriorName, Scalar<string>("SELECT name FROM cells WHERE form_key = @key", new { key = _fixture.KeyOf("FixtureInterior") }));
+            Assert.Equal((LoadedFixtureDatabase.MapRegionName, (long)LoadedFixtureDatabase.MapRegionPriority),
+                Scalar<(string, long)>("SELECT name, map_priority FROM regions WHERE form_key = @key", new { key = _fixture.KeyOf("MapRegion") }));
+        }
+
+        [Fact]
+        public async Task Reload_CellsAndRegions_AddsTheColumnsAnOlderDatabaseLacks()
+        {
+            Execute("ALTER TABLE cells DROP COLUMN name");
+            Execute("ALTER TABLE regions DROP COLUMN map_priority");
+
+            await Reload("cells", "regions");
+
+            Assert.Equal(LoadedFixtureDatabase.InteriorName, Scalar<string>("SELECT name FROM cells WHERE form_key = @key", new { key = _fixture.KeyOf("FixtureInterior") }));
+            Assert.Equal((long)LoadedFixtureDatabase.MapRegionPriority, Scalar<long>("SELECT map_priority FROM regions WHERE form_key = @key", new { key = _fixture.KeyOf("MapRegion") }));
+        }
+
+        [Fact]
         public async Task Reload_FailureInsideJob_RollsBackToThePreviousContents()
         {
             Execute("INSERT INTO records (form_key, record_type, editor_id, source_plugin) VALUES ('0FFFFF:Fixture.esm', 'STAT', 'Stale', 'Fixture.esm')");

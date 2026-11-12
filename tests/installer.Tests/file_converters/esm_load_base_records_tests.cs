@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Mutagen.Bethesda.Fallout4;
 using Xunit;
 
 namespace InstallerTests
@@ -73,6 +74,15 @@ namespace InstallerTests
             var json = db.QuerySingle<string>("SELECT bounds FROM doors WHERE form_key = @key", new { key = db.KeyOf("DoorBase") });
 
             Assert.Equal("""{"Min":{"X":-40,"Y":-6,"Z":0},"Max":{"X":40,"Y":6,"Z":200}}""", json);
+        }
+
+        [Fact]
+        public void Door_Flags_AreTheDecimalValueOfTheEnumTheEngineReadsAutomaticAndNoToTextFrom()
+        {
+            var flags = db.QuerySingle<string>("SELECT flags FROM doors WHERE form_key = @key", new { key = db.KeyOf("AutomaticNoTextDoor") });
+
+            Assert.Equal("66", flags);
+            Assert.Equal((0x02, 0x40), ((int)Door.Flag.Automatic, (int)Door.Flag.NoToText));
         }
 
         [Fact]

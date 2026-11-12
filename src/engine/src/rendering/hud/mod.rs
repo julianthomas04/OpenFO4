@@ -16,9 +16,14 @@ pub(crate) mod layout;
 mod meters;
 pub(crate) mod pipeline;
 pub(crate) mod quad;
+mod rollover;
 pub(crate) mod shadow;
 pub(crate) mod shape;
+mod text_face;
 
+use std::sync::Arc;
+
+use crate::rendering::door_prompt::RolloverPrompt;
 use crate::rendering::gpu_profiler::{GpuPass, GpuProfiler, SpanPart};
 use crate::rendering::ui_colour::UiTint;
 use crate::rendering::ui_fonts::UiFonts;
@@ -30,6 +35,7 @@ use layout::{Anchor, Layout};
 use meters::{AP_KEYS, HP_KEYS, MeterSpec};
 use pipeline::HudPipeline;
 use quad::{HudVertex, QuadBuilder};
+use rollover::{RolloverSpec, RolloverWidget};
 
 const INITIAL_VBUF_VERTS: u64 = 1024;
 
@@ -39,7 +45,13 @@ fn validate(layout: &UiLayout) -> Result<(), UiLayoutError> {
 }
 
 pub static LAYOUT_KEYS: ModuleKeys = ModuleKeys {
-    keys: &[&HP_KEYS, &AP_KEYS, &meters::SET_TEXT, &crosshair::KEYS],
+    keys: &[
+        &HP_KEYS,
+        &AP_KEYS,
+        &meters::SET_TEXT,
+        &crosshair::KEYS,
+        &rollover::KEYS,
+    ],
     resolve: validate,
 };
 
@@ -49,6 +61,7 @@ struct HudSpec {
     hp: MeterSpec,
     ap: MeterSpec,
     crosshair: CrosshairSpec,
+    rollover: RolloverSpec,
 }
 
 impl HudSpec {
@@ -67,6 +80,7 @@ impl HudSpec {
             hp: MeterSpec::resolve(layout, &HP_KEYS, Anchor::Bl, stage)?,
             ap: MeterSpec::resolve(layout, &AP_KEYS, Anchor::Br, stage)?,
             crosshair: CrosshairSpec::resolve(layout)?,
+            rollover: RolloverSpec::resolve(layout)?,
         })
     }
 }
@@ -83,10 +97,13 @@ pub struct HudRenderer {
     ap: MeterSpec,
     tint: UiTint,
     crosshair: CrosshairWidget,
+    rollover: RolloverWidget,
     text: FieldText,
     /// The labels for the framebuffer size they were built for.
     labels: Vec<TextItem>,
     labels_for: (u32, u32),
+    /// The labels, then the rollover's items: everything the text pass draws.
+    text_items: Vec<TextItem>,
     fb: (u32, u32),
     /// Whether the HUD is shown this frame (false until the player has spawned,
     /// so meters and crosshair appear/disappear together — FO4 hides the HUD
@@ -100,12 +117,15 @@ impl HudRenderer {
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
         fonts: &UiFonts,
-        layout: &UiLayout,
+        layout: &Arc<UiLayout>,
         tint: UiTint,
     ) -> anyhow::Result<Self> {
         let spec = HudSpec::resolve(layout)?;
         for meter in [&spec.hp, &spec.ap] {
-            fonts.require_family(&meter.label.family)?;
+            fonts.require_family(&meter.label.face.family)?;
+        }
+        for family in spec.rollover.families() {
+            fonts.require_family(family)?;
         }
         let pipeline = HudPipeline::new(device, format);
         let text = FieldText::new(device, queue, format, fonts, glyphon::ColorMode::Accurate);
@@ -122,9 +142,11 @@ impl HudRenderer {
             ap: spec.ap,
             tint,
             crosshair: CrosshairWidget::new(spec.crosshair),
+            rollover: RolloverWidget::new(spec.rollover, Arc::clone(layout)),
             text,
             labels: Vec::new(),
             labels_for: (0, 0),
+            text_items: Vec::new(),
             fb: (0, 0),
             visible: false,
         })
@@ -145,11 +167,13 @@ impl HudRenderer {
 
     /// Advance animation and rebuild the retained vertex list from the
     /// snapshot. `activate` overrides the crosshair to the Activate state
-    /// (door-aim, selected render-side); `dt` is the wall-clock frame delta.
-    pub fn update(
+    /// (door-aim, selected render-side); `prompt` is the rollover text to show, if any;
+    /// `dt` is the wall-clock frame delta.
+    pub(in crate::rendering) fn update(
         &mut self,
         snapshot: &HudSnapshot,
         activate: bool,
+        prompt: Option<&RolloverPrompt>,
         dt: f32,
         fb_w: u32,
         fb_h: u32,
@@ -161,23 +185,31 @@ impl HudRenderer {
             self.verts.clear();
             return;
         }
-        let requested = if activate && snapshot.crosshair != CrosshairState::Hidden {
-            CrosshairState::Activate
-        } else {
-            snapshot.crosshair
-        };
-        self.crosshair.update(requested, dt);
+        self.crosshair
+            .update(requested_crosshair(snapshot.crosshair, activate), dt);
 
         let layout = Layout::for_stage(self.stage.0, self.stage.1, fb_w as f32, fb_h as f32);
         let hp_bar = meters::bar_rect(&layout, &self.hp);
         let ap_bar = meters::bar_rect(&layout, &self.ap);
         self.fb = (fb_w, fb_h);
-        if self.labels_for != self.fb || self.labels.is_empty() {
+        let labels_changed = self.labels_for != self.fb || self.labels.is_empty();
+        if labels_changed {
             self.labels = vec![
                 meters::label_item(&layout, &self.hp, hp_bar, &self.tint),
                 meters::label_item(&layout, &self.ap, ap_bar, &self.tint),
             ];
             self.labels_for = self.fb;
+        }
+        let text = &mut self.text;
+        let rollover_changed = self
+            .rollover
+            .update(prompt, self.fb, &layout, &self.tint, |item| {
+                text.measure(item)
+            });
+        if labels_changed || rollover_changed {
+            self.text_items.clear();
+            self.text_items.extend_from_slice(&self.labels);
+            self.text_items.extend_from_slice(self.rollover.items());
         }
 
         let shadow = layout.s(shadow::QUAD_OFFSET_STAGE_PX);
@@ -212,7 +244,7 @@ impl HudRenderer {
         }
         // Upload text glyphs/positions (no encoder needed) and the quad
         // vertices before the pass.
-        self.text.prepare(device, queue, self.fb, &self.labels);
+        self.text.prepare(device, queue, self.fb, &self.text_items);
         if !self.verts.is_empty() {
             let needed = self.verts.len() as u64;
             if needed > self.vbuf_verts {
@@ -249,6 +281,36 @@ impl HudRenderer {
         }
         // Text (numbers/labels) composited over the bars, in the same pass.
         self.text.render_into(&mut pass);
+    }
+}
+
+/// The crosshair to draw: the activate shape over any visible one when something can be activated.
+fn requested_crosshair(current: CrosshairState, activate: bool) -> CrosshairState {
+    if activate && current != CrosshairState::Hidden {
+        CrosshairState::Activate
+    } else {
+        current
+    }
+}
+
+#[cfg(test)]
+mod crosshair_tests {
+    use super::*;
+
+    #[test]
+    fn something_to_activate_switches_a_visible_crosshair_to_the_activate_shape() {
+        assert_eq!(
+            requested_crosshair(CrosshairState::Dot, true),
+            CrosshairState::Activate
+        );
+        assert_eq!(
+            requested_crosshair(CrosshairState::Dot, false),
+            CrosshairState::Dot
+        );
+        assert_eq!(
+            requested_crosshair(CrosshairState::Hidden, true),
+            CrosshairState::Hidden
+        );
     }
 }
 
@@ -325,7 +387,7 @@ pub(crate) mod real_install {
             );
             println!(
                 "fb {fb:?} size {TEXT_SIZE} text {text:?} hp bracket+bar (x,y,w,h) {meter:?} label {:?}",
-                spec.hp.label.geometry
+                spec.hp.label.face.geometry
             );
             let apart = text.x + text.w <= meter.0
                 || meter.0 + meter.2 <= text.x

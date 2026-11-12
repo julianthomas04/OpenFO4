@@ -57,7 +57,7 @@ namespace InstallerTests.Pipeline
                 [AssetGroup.TexturesDatabase] = 1,
             }, Inputs);
             AssetVersionMarker.Write(Marker, installed);
-            var current = Current((AssetGroup.Audio, 2), (AssetGroup.Meshes, 2));
+            var current = Current((AssetGroup.Audio, 2), (AssetGroup.Meshes, 2), (AssetGroup.TexturesDatabase, 1), (AssetGroup.Interface, 1));
 
             var lines = ReconversionDecision.Read(Marker, current, Inputs).Describe(current);
 

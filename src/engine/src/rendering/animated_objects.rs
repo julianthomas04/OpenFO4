@@ -33,6 +33,15 @@ pub enum DoorState {
     Closing,
 }
 
+/// What an animated object is, as far as the door prompt cares.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum ActivatorKind {
+    /// A door; `name` is its base record name, `None` when the base has none.
+    Door { name: Option<Arc<str>> },
+    #[default]
+    Other,
+}
+
 /// One animated REFR a freshly integrated cell hands to the runtime.
 pub struct AnimatedRefr {
     pub entity: EntityId,
@@ -43,6 +52,7 @@ pub struct AnimatedRefr {
     /// Doors, containers, activators and furniture respond to activation;
     /// anything else only runs its looping sequence on its own.
     pub activatable: bool,
+    pub kind: ActivatorKind,
 }
 
 impl AnimatedRefr {
@@ -92,6 +102,7 @@ pub struct AnimatedObjectState {
     target: DoorState,
     /// Responds to activation; false for statics that merely loop.
     activatable: bool,
+    kind: ActivatorKind,
 }
 
 impl AnimatedObjectState {
@@ -99,6 +110,7 @@ impl AnimatedObjectState {
         let (scale, _, _) = refr.world.to_scale_rotation_translation();
         let activatable = refr.activatable;
         Self {
+            kind: refr.kind,
             refr: refr.form_key,
             world: refr.world,
             scale: scale.x,
@@ -310,6 +322,14 @@ impl AnimatedObjectState {
     }
 }
 
+/// An activatable animated door as the prompt sees it.
+#[derive(Debug, PartialEq, Eq)]
+pub struct AnimatedDoor<'a> {
+    pub name: Option<&'a Arc<str>>,
+    /// Where the door is heading: `Open` or `Closed`, flipped the moment it is activated.
+    pub target: DoorState,
+}
+
 #[derive(Default)]
 pub struct AnimatedObjects {
     states: HashMap<EntityId, AnimatedObjectState>,
@@ -369,6 +389,18 @@ impl AnimatedObjects {
         self.states
             .get(&entity)
             .is_some_and(|state| state.activatable)
+    }
+
+    /// The door the entity is, when it is an activatable one.
+    pub fn door(&self, entity: EntityId) -> Option<AnimatedDoor<'_>> {
+        let state = self.states.get(&entity).filter(|state| state.activatable)?;
+        let ActivatorKind::Door { name } = &state.kind else {
+            return None;
+        };
+        Some(AnimatedDoor {
+            name: name.as_ref(),
+            target: state.target,
+        })
     }
 
     /// Opens a closed object, closes an open one, reverses one mid-motion.
@@ -535,6 +567,15 @@ mod tests {
     }
 
     fn placed(key: &str, rig: &Arc<AnimationRig>, activatable: bool) -> AnimatedObjectEvent {
+        placed_as(key, rig, activatable, ActivatorKind::Other)
+    }
+
+    fn placed_as(
+        key: &str,
+        rig: &Arc<AnimationRig>,
+        activatable: bool,
+        kind: ActivatorKind,
+    ) -> AnimatedObjectEvent {
         AnimatedObjectEvent::Added(AnimatedRefr {
             entity: refr_entity_id(key),
             model_path: "m.glb".to_owned(),
@@ -542,7 +583,18 @@ mod tests {
             world: Mat4::IDENTITY,
             rig: Arc::clone(rig),
             activatable,
+            kind,
         })
+    }
+
+    fn door_named(name: Option<&str>) -> ActivatorKind {
+        ActivatorKind::Door {
+            name: name.map(Arc::from),
+        }
+    }
+
+    fn target_of(objects: &AnimatedObjects, key: &str) -> DoorState {
+        objects.door(refr_entity_id(key)).unwrap().target
     }
 
     fn tick_for(objects: &mut AnimatedObjects, steps: u32) {
@@ -599,6 +651,7 @@ mod tests {
             world: Mat4::IDENTITY,
             rig: Arc::clone(&rig),
             activatable: false,
+            kind: ActivatorKind::Other,
         };
         assert!(!refr.is_runtime_object());
         let mut objects = AnimatedObjects::default();
@@ -640,6 +693,61 @@ mod tests {
         objects.toggle(refr_entity_id("d")).unwrap();
         tick_for(&mut objects, 5);
         assert!((x_of(&objects, "d") - 0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_door_reports_its_base_name_and_a_nameless_base_reports_none() {
+        let rig = rig(&[("Open", Cycle::Clamp)]);
+        let mut objects = AnimatedObjects::default();
+        objects.apply_events(vec![
+            placed_as("named", &rig, true, door_named(Some("Door"))),
+            placed_as("nameless", &rig, true, door_named(None)),
+        ]);
+        let name_of = |key: &str| {
+            objects
+                .door(refr_entity_id(key))
+                .unwrap()
+                .name
+                .map(ToString::to_string)
+        };
+        assert_eq!(name_of("named").as_deref(), Some("Door"));
+        assert_eq!(name_of("nameless"), None);
+    }
+
+    #[test]
+    fn a_door_heads_for_open_once_activated_and_back_to_closed_when_reversed() {
+        let rig = rig(&[("Open", Cycle::Clamp)]);
+        let mut objects = AnimatedObjects::default();
+        objects.apply_events(vec![placed_as("d", &rig, true, door_named(Some("Door")))]);
+        let entity = refr_entity_id("d");
+        assert_eq!(target_of(&objects, "d"), DoorState::Closed);
+
+        objects.toggle(entity).unwrap();
+        assert_eq!(target_of(&objects, "d"), DoorState::Open, "opening");
+        tick_for(&mut objects, 3);
+        assert_eq!(target_of(&objects, "d"), DoorState::Open, "still opening");
+
+        objects.toggle(entity).unwrap();
+        assert_eq!(target_of(&objects, "d"), DoorState::Closed, "closing");
+
+        tick_for(&mut objects, 15);
+        assert_eq!(target_of(&objects, "d"), DoorState::Closed, "closed");
+        objects.toggle(entity).unwrap();
+        tick_for(&mut objects, 15);
+        assert_eq!(target_of(&objects, "d"), DoorState::Open, "open");
+    }
+
+    #[test]
+    fn only_activatable_doors_are_doors() {
+        let rig = rig(&[("Open", Cycle::Clamp), ("Spin", Cycle::Loop)]);
+        let mut objects = AnimatedObjects::default();
+        objects.apply_events(vec![
+            placed("container", &rig, true),
+            placed_as("looping_door", &rig, false, door_named(Some("Door"))),
+        ]);
+        assert_eq!(objects.door(refr_entity_id("container")), None);
+        assert_eq!(objects.door(refr_entity_id("looping_door")), None);
+        assert_eq!(objects.door(refr_entity_id("unknown")), None);
     }
 
     #[test]

@@ -7,7 +7,8 @@ namespace AssetConverter.Abc
     /// The addressable values of a movie's ActionScript:
     /// <list type="bullet">
     /// <item><c>Constants</c>, keyed <c>Class.member</c>: a slot's stated default or the one unconditional constant its initialiser assigns.</item>
-    /// <item><c>Literals</c>, keyed <c>Class.method#signature</c>: every constant inside a method body, by the signature of its consumer.</item>
+    /// <item><c>Literals</c>, keyed <c>Class.method#signature</c>: every constant inside a method body, by the signature of its consumer;
+    /// a static member passed as a call argument contributes its constant's value at its place in the method's order.</item>
     /// <item><c>Unresolved</c>: keys that exist but have no single value, with the reason (assigned twice, computed, conditional, a
     /// signature with an operand that cannot be described, ...); a bare class name when its definitions extend different classes.</item>
     /// <item><c>SuperClasses</c>: the class each defined class extends, by qualified name, where every definition agrees.</item>
@@ -52,11 +53,15 @@ namespace AssetConverter.Abc
             public Dictionary<string, object> Constants { get; } = new(StringComparer.Ordinal);
             public HashSet<string> Folded { get; } = new(StringComparer.Ordinal);
             public Dictionary<string, AbcLiteralList> Literals { get; } = new(StringComparer.Ordinal);
+            public Dictionary<string, IReadOnlyList<int>> LiteralOrigins { get; } = new(StringComparer.Ordinal);
+
+            /// <summary>The static members passed as call arguments, by literal key; their values wait for the merged constants.</summary>
+            public Dictionary<string, List<AbcStaticUse>> Statics { get; } = new(StringComparer.Ordinal);
             public Dictionary<string, string> Unresolved { get; } = new(StringComparer.Ordinal);
             public Dictionary<string, string> SuperClasses { get; } = new(StringComparer.Ordinal);
             public Dictionary<string, IReadOnlyList<string>> ReferenceLists { get; } = new(StringComparer.Ordinal);
 
-            public IEnumerable<string> Keys => Constants.Keys.Concat(Literals.Keys).Concat(Unresolved.Keys).Concat(ReferenceLists.Keys);
+            public IEnumerable<string> Keys => Constants.Keys.Concat(Literals.Keys).Concat(Statics.Keys).Concat(Unresolved.Keys).Concat(ReferenceLists.Keys);
         }
 
         private static AbcConstantMap MergeBlocks(List<BlockResult> blocks)
@@ -90,6 +95,8 @@ namespace AssetConverter.Abc
                 foreach ((string key, IReadOnlyList<string> names) in block.ReferenceLists.Where(p => counts[p.Key] == 1))
                     referenceLists[key] = names;
             }
+            foreach (BlockResult block in blocks)
+                ResolveStatics(block, constants, folded, literals, unresolved);
             foreach (string key in unresolved.Keys)
             {
                 constants.Remove(key);
@@ -98,6 +105,40 @@ namespace AssetConverter.Abc
                 referenceLists.Remove(key);
             }
             return new AbcConstantMap(constants, folded, literals, unresolved, superClasses, referenceLists);
+        }
+
+        /// <summary>
+        /// Puts the value of each static member a call receives into the list of its signature, where the bytecode reads it. A member
+        /// that names a constant of the movie contributes that constant; one the movie declares without a single value makes the whole
+        /// key unresolved, so the argument is never lost silently. A member that is no value of the movie (a method, a class of the
+        /// player) is not a constant argument and adds nothing.
+        /// </summary>
+        private static void ResolveStatics(BlockResult block, SortedDictionary<string, object> constants, SortedSet<string> folded,
+            SortedDictionary<string, AbcLiteralList> literals, SortedDictionary<string, string> unresolved)
+        {
+            foreach ((string key, List<AbcStaticUse> statics) in block.Statics.Where(p => !unresolved.ContainsKey(p.Key)))
+            {
+                var entries = new List<(int Origin, object Value, bool Folded)>();
+                if (block.Literals.TryGetValue(key, out AbcLiteralList? own))
+                    for (int i = 0; i < own.Values.Count; i++)
+                        entries.Add((block.LiteralOrigins[key][i], own.Values[i], own.Folded.Contains(i)));
+                foreach (AbcStaticUse use in statics)
+                {
+                    if (constants.TryGetValue(use.Member, out object? value))
+                        entries.Add((use.Origin, value, folded.Contains(use.Member)));
+                    else if (unresolved.TryGetValue(use.Member, out string? reason))
+                    {
+                        unresolved[key] = $"the argument {use.Member} has no single value ({reason})";
+                        break;
+                    }
+                }
+                if (unresolved.ContainsKey(key) || entries.Count == (own?.Values.Count ?? 0))
+                    continue;
+                var ordered = entries.OrderBy(e => e.Origin).ToList();
+                literals[key] = new AbcLiteralList(
+                    ordered.Select(e => e.Value).ToList(),
+                    ordered.Select((e, i) => (e, i)).Where(p => p.e.Folded).Select(p => p.i).ToList());
+            }
         }
 
         private static BlockResult ExtractBlock(AbcFile abc, string where)
@@ -141,12 +182,22 @@ namespace AssetConverter.Abc
                         result.Unresolved[Displayed(key)] = $"the method name '{name}' names {distinct.Count} methods";
                     continue;
                 }
-                foreach ((string key, AbcLiteralList list) in LiteralLists(name, analysed[distinct[0]]))
+                foreach ((string key, AbcLiteralList list, IReadOnlyList<int> origins) in LiteralLists(name, analysed[distinct[0]]))
                 {
                     if (key.Contains(AbcValues.Undescribable, StringComparison.Ordinal))
                         result.Unresolved[Displayed(key)] = OperandNotDescribed;
                     else
+                    {
                         result.Literals[key] = list;
+                        result.LiteralOrigins[key] = origins;
+                    }
+                }
+                foreach (var group in analysed[distinct[0]].StaticUses.GroupBy(u => $"{name}#{u.Signature}", StringComparer.Ordinal))
+                {
+                    if (group.Key.Contains(AbcValues.Undescribable, StringComparison.Ordinal))
+                        result.Unresolved[Displayed(group.Key)] = OperandNotDescribed;
+                    else
+                        result.Statics[group.Key] = [.. group];
                 }
             }
 
@@ -174,15 +225,16 @@ namespace AssetConverter.Abc
         private static string Displayed(string key) => key.Replace(AbcValues.Undescribable, '?');
 
         private static IEnumerable<string> LiteralKeys(string method, AbcMethodLiterals literals) =>
-            literals.Uses.Select(u => $"{method}#{u.Signature}");
+            literals.Uses.Select(u => $"{method}#{u.Signature}").Concat(literals.StaticUses.Select(u => $"{method}#{u.Signature}"));
 
-        private static IEnumerable<(string, AbcLiteralList)> LiteralLists(string method, AbcMethodLiterals literals) =>
+        private static IEnumerable<(string, AbcLiteralList, IReadOnlyList<int>)> LiteralLists(string method, AbcMethodLiterals literals) =>
             literals.Uses.GroupBy(u => u.Signature, StringComparer.Ordinal).Select(g =>
             {
                 var uses = g.OrderBy(u => u.Literal.Origin).ToList();
                 return ($"{method}#{g.Key}", new AbcLiteralList(
                     uses.Select(u => u.Literal.Value).ToList(),
-                    uses.Select((u, i) => (u, i)).Where(p => p.u.Literal.Folded).Select(p => p.i).ToList()));
+                    uses.Select((u, i) => (u, i)).Where(p => p.u.Literal.Folded).Select(p => p.i).ToList()),
+                    (IReadOnlyList<int>)uses.Select(u => u.Literal.Origin).ToList());
             });
 
         /// <summary>Every method a trait or initialiser names, as <c>Class.method</c> (<c>get:</c>/<c>set:</c> for accessors).</summary>

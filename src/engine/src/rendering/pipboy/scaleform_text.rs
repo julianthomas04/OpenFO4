@@ -10,7 +10,9 @@ use egui::{Align, Color32, Galley, Painter, Pos2, Rect, Vec2};
 
 use super::fonts::{Weight, font_id, weight_for_class};
 use super::shapes::Shade;
-use crate::ui_layout::scaleform_text::{AutoSize, FieldGeometry, FontMetrics, fit_size};
+use crate::ui_layout::scaleform_text::{
+    AutoSize, FieldGeometry, FontMetrics, VerticalAlign, fit_size,
+};
 use crate::ui_layout::values::Align as FieldAlign;
 use crate::ui_layout::{Declaration, KeyCheck, TextKey, UiLayout, UiLayoutError};
 
@@ -282,6 +284,14 @@ pub fn paint_field(
     text: &str,
     style: FieldStyle,
 ) -> PaintedField {
+    if geometry.valign != VerticalAlign::Top {
+        crate::utils::error_once("pipboy-text-valign", || {
+            format!(
+                "a Pip-Boy text field is anchored {:?}, which this painter does not draw",
+                geometry.valign
+            )
+        });
+    }
     let mut geometry = *geometry;
     if let Some(mode) = style.auto_size {
         if geometry.wraps {

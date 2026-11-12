@@ -1,12 +1,13 @@
-//! `OPENFO4_AUTO_WALK_IN="ref,ref,..."`: a dev hook that walks the player into the listed walk-in
-//! doors so the real detector fires, where OS input cannot be injected. Pure state machine; the
-//! renderer feeds it per-frame facts and carries out and logs what it asks for.
+//! `OPENFO4_AUTO_WALK_IN="ref,ref,..."`: a dev hook that moves the player into the start zones
+//! of the listed walk-in doors so the real detector fires, where OS input cannot be injected.
+//! Pure state machine; the renderer feeds it per-frame facts and carries out and logs what it
+//! asks for.
 
 use std::collections::VecDeque;
 
 /// Frames to let a teleport or placement settle (respawn onto the ground) before judging it.
 const SETTLE_FRAMES: u32 = 30;
-/// Frames the detector gets to fire after the player crossed a trigger.
+/// Frames the detector gets to fire after the player moved into a start zone.
 const FIRE_TIMEOUT_FRAMES: u32 = 120;
 /// Frames the arrival after a fire may take before it is reported as missing.
 const ARRIVAL_TIMEOUT_FRAMES: u32 = 1800;
@@ -24,11 +25,11 @@ pub(super) struct HookFrame<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum HookAction {
     None,
-    /// Put the player on the approach side of the door's trigger.
+    /// Put the player outside the door's start zone, in front of it.
     PlaceAtApproach {
         source_ref: String,
     },
-    /// Put the player on the far side, so the move crosses the trigger.
+    /// Put the player at the door, so the move enters its start zone.
     CrossThrough {
         source_ref: String,
     },
@@ -97,7 +98,7 @@ impl WalkInDevHook {
         self.phase != Phase::Done
     }
 
-    /// The renderer found no trigger for the current door: give up on it.
+    /// The renderer found no walk-in entrance for the current door: give up on it.
     pub(super) fn skip_current(&mut self) {
         self.current = None;
         self.phase = Phase::Ready { cooldown: 0 };
@@ -135,7 +136,7 @@ impl WalkInDevHook {
 
     fn after_placement(&mut self, waited: u32, frame: HookFrame<'_>) -> HookAction {
         let source_ref = self.current_ref();
-        // The placement itself (landing, depenetration) may already walk into the trigger; the
+        // The placement itself (landing, depenetration) may already walk into the zone; the
         // detector fired for the door, and the player is on its way through.
         if frame.fired == Some(source_ref.as_str()) {
             self.phase = Phase::Fired { waited: 0 };
@@ -377,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn skipping_a_door_without_a_trigger_moves_on() {
+    fn skipping_a_door_without_an_entrance_moves_on() {
         let mut hook = hook("A,B");
         hook.tick(idle());
         hook.skip_current();

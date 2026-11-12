@@ -1,20 +1,16 @@
-//! `OPENFO4_WALK_IN_TRACE=1`: a diagnostic trace of how close the player is to the nearest
-//! walk-in trigger, to find out why a door does or does not fire. What to log and when lives
-//! here; the renderer owns the logging and the blocker rays.
+//! `OPENFO4_WALK_IN_TRACE=1`: a diagnostic trace of how far the player is from the walk-in
+//! entrance that decides the HUD, else the nearest one, to find out why it does or does not show
+//! or start. What to log and when lives here; the renderer owns the logging.
 
-use super::walk_in::TriggerProbe;
+use super::walk_in::EntranceProbe;
 
 /// Seconds between periodic trace lines.
 const TRACE_INTERVAL_SECONDS: f32 = 0.5;
 
-/// Gap, in Bethesda units, below which the renderer also names what stands between the player
-/// and the trigger.
-pub(super) const BLOCKER_RAY_GAP_UNITS: f32 = 20.0;
-
 #[derive(Debug)]
 pub(super) struct WalkInTrace {
     since_last_line: f32,
-    last_touching: Option<(String, bool)>,
+    last_inside: Option<(String, bool)>,
 }
 
 impl WalkInTrace {
@@ -26,24 +22,23 @@ impl WalkInTrace {
     fn from_setting(setting: Option<&str>) -> Option<Self> {
         (setting == Some("1")).then_some(Self {
             since_last_line: 0.0,
-            last_touching: None,
+            last_inside: None,
         })
     }
 
-    /// Whether this frame's probe deserves a line: every interval, when the capsule starts
-    /// touching the trigger, and whenever the detector fired.
-    pub(super) fn should_log(&mut self, dt: f32, probe: &TriggerProbe, fired: bool) -> bool {
+    /// Whether this frame's probe deserves a line: every interval, when the player steps into
+    /// the start zone, and whenever the entrance started.
+    pub(super) fn should_log(&mut self, dt: f32, probe: &EntranceProbe, fired: bool) -> bool {
         self.since_last_line += dt;
-        let touching = probe.gap_units <= 0.0;
-        let began_touching = match &self.last_touching {
-            Some((source_ref, was_touching)) => {
-                *source_ref == probe.source_ref && !was_touching && touching
+        let stepped_in = match &self.last_inside {
+            Some((source_ref, was_inside)) => {
+                *source_ref == probe.source_ref && !was_inside && probe.inside_start
             }
             None => false,
         };
-        self.last_touching = Some((probe.source_ref.clone(), touching));
+        self.last_inside = Some((probe.source_ref.clone(), probe.inside_start));
         let due = self.since_last_line >= TRACE_INTERVAL_SECONDS;
-        if due || began_touching || fired {
+        if due || stepped_in || fired {
             self.since_last_line = 0.0;
             return true;
         }
@@ -51,17 +46,15 @@ impl WalkInTrace {
     }
 }
 
-pub(super) fn trace_line(probe: &TriggerProbe, fired: bool) -> String {
-    let point = |v: glam::Vec3| format!("({:.1},{:.1},{:.1})", v.x, v.y, v.z);
+pub(super) fn trace_line(probe: &EntranceProbe, fired: bool, live: bool) -> String {
     format!(
-        "WALK_IN_TRACE ref={} feet_local={} head_local={} box_min={} box_max={} gap={:.1} swept_prev={} armed={} fired={fired}",
+        "WALK_IN_TRACE ref={} distance={:.1} display_limit={:.1} start_limit={:.1} shown={} inside_start={} armed={} fired={fired} live={live}",
         probe.source_ref,
-        point(probe.feet_local),
-        point(probe.head_local),
-        point(probe.box_min),
-        point(probe.box_max),
-        probe.gap_units,
-        probe.swept_prev,
+        probe.distance_units,
+        probe.limits.display_units,
+        probe.limits.start_units,
+        probe.shown,
+        probe.inside_start,
         probe.armed,
     )
 }
@@ -69,21 +62,19 @@ pub(super) fn trace_line(probe: &TriggerProbe, fired: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glam::Vec3;
+    use crate::rendering::walk_in::EntranceDistances;
 
-    fn probe(source_ref: &str, gap_units: f32) -> TriggerProbe {
-        TriggerProbe {
+    fn probe(source_ref: &str, inside_start: bool) -> EntranceProbe {
+        EntranceProbe {
             source_ref: source_ref.to_owned(),
-            feet_local: Vec3::new(1.0, 2.0, 3.0),
-            head_local: Vec3::new(1.0, 2.0, 130.0),
-            box_min: Vec3::new(-64.0, -8.0, 0.0),
-            box_max: Vec3::new(64.0, 8.0, 192.0),
-            gap_units,
-            swept_prev: false,
+            distance_units: 340.0,
+            limits: EntranceDistances {
+                display_units: 511.5,
+                start_units: 311.5,
+            },
+            shown: true,
+            inside_start,
             armed: true,
-            horizontal_to_center: Vec3::X,
-            horizontal_distance: 5.0,
-            ray_origins: [Vec3::ZERO; 3],
         }
     }
 
@@ -102,56 +93,56 @@ mod tests {
     #[test]
     fn lines_are_throttled_to_the_interval() {
         let mut trace = trace();
-        let far = probe("A", 50.0);
-        assert!(!trace.should_log(0.2, &far, false));
-        assert!(!trace.should_log(0.2, &far, false));
-        assert!(trace.should_log(0.2, &far, false));
-        assert!(!trace.should_log(0.2, &far, false));
+        let outside = probe("A", false);
+        assert!(!trace.should_log(0.2, &outside, false));
+        assert!(!trace.should_log(0.2, &outside, false));
+        assert!(trace.should_log(0.2, &outside, false));
+        assert!(!trace.should_log(0.2, &outside, false));
     }
 
     #[test]
-    fn the_gap_reaching_zero_logs_at_once() {
+    fn stepping_into_the_start_zone_logs_at_once() {
         let mut trace = trace();
-        assert!(!trace.should_log(0.01, &probe("A", 5.0), false));
-        assert!(trace.should_log(0.01, &probe("A", 0.0), false));
+        assert!(!trace.should_log(0.01, &probe("A", false), false));
+        assert!(trace.should_log(0.01, &probe("A", true), false));
     }
 
     #[test]
-    fn staying_in_contact_does_not_log_every_frame() {
+    fn staying_inside_does_not_log_every_frame() {
         let mut trace = trace();
-        trace.should_log(0.01, &probe("A", 5.0), false);
-        assert!(trace.should_log(0.01, &probe("A", 0.0), false));
-        assert!(!trace.should_log(0.01, &probe("A", 0.0), false));
+        trace.should_log(0.01, &probe("A", false), false);
+        assert!(trace.should_log(0.01, &probe("A", true), false));
+        assert!(!trace.should_log(0.01, &probe("A", true), false));
     }
 
     #[test]
-    fn touching_a_different_nearest_door_is_not_a_transition() {
+    fn being_inside_a_different_nearest_entrance_is_not_a_transition() {
         let mut trace = trace();
-        trace.should_log(0.01, &probe("A", 5.0), false);
-        assert!(!trace.should_log(0.01, &probe("B", 0.0), false));
+        trace.should_log(0.01, &probe("A", false), false);
+        assert!(!trace.should_log(0.01, &probe("B", true), false));
     }
 
     #[test]
-    fn a_fire_always_logs() {
+    fn a_start_always_logs() {
         let mut trace = trace();
-        assert!(trace.should_log(0.0, &probe("A", 50.0), true));
+        assert!(trace.should_log(0.0, &probe("A", false), true));
     }
 
     #[test]
     fn the_line_names_every_diagnostic_field() {
-        let line = trace_line(&probe("12F822:Fallout4.esm", 0.0), true);
+        let line = trace_line(&probe("12F822:Fallout4.esm", true), true, false);
         for part in [
             "WALK_IN_TRACE ref=12F822:Fallout4.esm",
-            "feet_local=(1.0,2.0,3.0)",
-            "head_local=(1.0,2.0,130.0)",
-            "box_min=(-64.0,-8.0,0.0)",
-            "box_max=(64.0,8.0,192.0)",
-            "gap=0.0",
-            "swept_prev=false",
+            "distance=340.0",
+            "display_limit=511.5",
+            "start_limit=311.5",
+            "shown=true",
+            "inside_start=true",
             "armed=true",
             "fired=true",
         ] {
             assert!(line.contains(part), "{part} missing in {line}");
         }
+        assert!(line.ends_with("fired=true live=false"), "{line}");
     }
 }

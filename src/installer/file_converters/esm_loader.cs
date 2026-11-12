@@ -540,6 +540,8 @@ namespace AssetConverter
             ("placed_objects", "ragdoll_pose", "BLOB"),
             ("cells", "is_worldspace_persistent_cell", "INTEGER DEFAULT 0"),
             ("cells", "lighting_template", "TEXT"),
+            ("cells", "name", "TEXT"),
+            ("regions", "map_priority", "INTEGER"),
             ("lights", "constant", "REAL"),
             ("lights", "scalar", "REAL"),
             ("lights", "exponent", "REAL"),
@@ -760,7 +762,7 @@ namespace AssetConverter
         };
         public static readonly string[] Cells =
         {
-            "form_key", "editor_id", "worldspace", "grid_x", "grid_y",
+            "form_key", "editor_id", "name", "worldspace", "grid_x", "grid_y",
             "is_interior", "flags", "lighting", "lighting_template", "encounter_zone",
             "has_water", "no_lod_water", "water_height", "water_type", "water_environment_map", "water_currents",
         };
@@ -903,6 +905,9 @@ namespace AssetConverter
             _currentFormKey = formKey;
             _currentEditorId = editorId;
         }
+
+        /// <summary>A display name that is empty or only whitespace is no name: SQL NULL.</summary>
+        protected static string? NullWhenBlank(string? text) => string.IsNullOrWhiteSpace(text) ? null : text;
 
         // Absent data is SQL NULL. A failed serialization is reported against the
         // record and column (the caller's argument expression) and also stored as
@@ -2162,6 +2167,7 @@ namespace AssetConverter
                 // ── Cell field extraction (sequential, cheap) ──────────────────────
                 var cellFormKeys = new string[cellCount];
                 var cellEditorIds = new string?[cellCount];
+                var cellNames = new string?[cellCount];
                 var cellPlugins = new string[cellCount];
                 var cellWorldspace = new string?[cellCount];
                 var cellGridX = new int?[cellCount];
@@ -2184,6 +2190,7 @@ namespace AssetConverter
                     var cell = list[ci];
                     cellFormKeys[ci] = cell.FormKey.ToString();
                     cellEditorIds[ci] = cell.EditorID;
+                    cellNames[ci] = NullWhenBlank(cell.Name?.ToString());
                     cellPlugins[ci] = cell.FormKey.ModKey.FileName.ToString();
 
                     bool isInterior = cell.Flags.HasFlag(Cell.Flag.IsInteriorCell);
@@ -2228,7 +2235,7 @@ namespace AssetConverter
                 var cellRows = new object?[cellCount][];
                 for (int ci = 0; ci < cellCount; ci++)
                     cellRows[ci] = new object?[] {
-                        cellFormKeys[ci], cellEditorIds[ci], cellWorldspace[ci],
+                        cellFormKeys[ci], cellEditorIds[ci], cellNames[ci], cellWorldspace[ci],
                         cellGridX[ci], cellGridY[ci], cellIsInterior[ci],
                         cellFlags[ci], cellLighting[ci], cellLightingTemplate[ci], cellEZone[ci],
                         cellHasWater[ci], cellNoLodWater[ci], cellWaterHeight[ci], cellWaterType[ci], cellWaterEnvMap[ci], cellWaterCurrents[ci]
@@ -3859,16 +3866,18 @@ namespace AssetConverter
     {
         protected override async Task ProcessSpecificRecordAsync(IRegionGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
         {
-            const string sql = @"INSERT OR REPLACE INTO regions (form_key, editor_id, name, worldspace, objects, flags)
-                VALUES (@FormKey, @EditorId, @Name, @Worldspace, @Objects, @Flags)";
+            const string sql = @"INSERT OR REPLACE INTO regions (form_key, editor_id, name, worldspace, objects, flags, map_priority)
+                VALUES (@FormKey, @EditorId, @Name, @Worldspace, @Objects, @Flags, @MapPriority)";
+            string? mapName = record.Map?.Name?.ToString();
             await conn.ExecuteAsync(sql, new
             {
                 FormKey = formKey,
                 EditorId = record.EditorID,
-                Name = (string?)null,
+                Name = NullWhenBlank(mapName),
                 Worldspace = record.Worldspace.IsNull ? (string?)null : record.Worldspace.FormKey.ToString(),
                 Objects = (string?)null,
-                Flags = (string?)null
+                Flags = (string?)null,
+                MapPriority = (int?)record.Map?.Priority
             }, transaction);
         }
     }

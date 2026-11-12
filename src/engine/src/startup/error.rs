@@ -59,6 +59,10 @@ pub enum StartupError {
     WorldClock(anyhow::Error),
     #[error("cannot load the sky's game settings: {0:#}")]
     SkySettings(anyhow::Error),
+    #[error("cannot load the door prompt settings: {0:#}")]
+    DoorPromptSettings(anyhow::Error),
+    #[error("cannot load the walk-in entrance settings: {0:#}")]
+    WalkInSettings(anyhow::Error),
     #[error("Pip-Boy world map: {0}")]
     PipboyWorldMap(#[from] WorldMapTextureError),
     #[error("Pip-Boy map marker art: {0}")]

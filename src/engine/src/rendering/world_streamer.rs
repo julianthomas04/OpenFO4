@@ -34,9 +34,10 @@ use crate::assets::world_settings::LoadedGrid;
 use crate::audio::place::PlaceSnapshot;
 use crate::bethesda_space;
 use crate::navmesh::{CellNavmeshes, NavMesh, NavResidency, NavWorld, build_meshes};
-use crate::rendering::animated_objects::{AnimatedObjectEvent, AnimatedRefr};
+use crate::rendering::animated_objects::{ActivatorKind, AnimatedObjectEvent, AnimatedRefr};
 use crate::rendering::broken_asset::{BrokenAsset, BrokenAssetSink, BrokenAssets};
 use crate::rendering::cube_array::CubeArray;
+use crate::rendering::door_prompt::non_blank;
 use crate::rendering::effects::geometry::{EffectInstance, EffectMeshData, RefractionInstance};
 use crate::rendering::frustum::Aabb;
 use crate::rendering::gpu_driven::{
@@ -198,6 +199,7 @@ struct BaseObjectInfo {
     has_distant_lod: bool,
     /// Door, container, activator or furniture base: activatable once its model animates.
     interactable: bool,
+    kind: ActivatorKind,
     /// WATR form key of a water activator (`ACTI.WNAM`): its water shapes draw with it.
     water_type: Option<Arc<str>>,
     /// Set for a weapon: the REFR draws and collides as the assembly of its
@@ -4942,6 +4944,7 @@ struct InteractablePlacement<'a> {
     form_key: &'a str,
     transform: Mat4,
     activatable: bool,
+    kind: ActivatorKind,
 }
 
 /// The placements whose model animates, as activatable objects. A Havok-dynamic
@@ -4961,6 +4964,7 @@ fn animated_refs(
                 world: placement.transform,
                 rig: Arc::clone(rig),
                 activatable: placement.activatable,
+                kind: placement.kind,
             })
         })
         .filter(AnimatedRefr::is_runtime_object)
@@ -5701,6 +5705,7 @@ fn assemble_cell_payload<'a>(
                     form_key,
                     transform,
                     activatable: info.interactable,
+                    kind: info.kind.clone(),
                 });
             }
 
@@ -6394,6 +6399,7 @@ fn build_base_object_lookup(
 ) -> (HashMap<String, BaseObjectInfo>, HashMap<String, ModRow>) {
     let mut map = HashMap::new();
     let mut water_activators: Vec<(String, Arc<str>)> = Vec::new();
+    let mut door_names: Vec<(String, Option<Arc<str>>)> = Vec::new();
     // `fx_filename`: whether the fx-filename half of `is_fx_model` applies
     // (movable statics only).
     let mut insert = |fk: &Option<String>,
@@ -6413,6 +6419,7 @@ fn build_base_object_lookup(
                     lod_model_path: lod,
                     has_distant_lod: distant,
                     interactable,
+                    kind: ActivatorKind::Other,
                     water_type: None,
                     weapon: None,
                 },
@@ -6456,6 +6463,12 @@ fn build_base_object_lookup(
             false,
             true,
         );
+        if let Some(form_key) = &s.form_key {
+            door_names.push((
+                form_key.clone(),
+                non_blank(s.name.as_deref()).map(Arc::from),
+            ));
+        }
     }
     for s in rows_or_warn("get_containers", db.get_containers()) {
         insert(
@@ -6542,6 +6555,11 @@ fn build_base_object_lookup(
             false,
         );
     }
+    for (form_key, name) in door_names {
+        if let Some(info) = map.get_mut(&form_key) {
+            info.kind = ActivatorKind::Door { name };
+        }
+    }
     for (form_key, water_type) in water_activators {
         if let Some(info) = map.get_mut(&form_key) {
             info.water_type = Some(water_type);
@@ -6583,6 +6601,7 @@ fn add_weapon_bases(
                 lod_model_path: None,
                 has_distant_lod: false,
                 interactable: false,
+                kind: ActivatorKind::Other,
                 water_type: None,
                 weapon: Some(Arc::new(base)),
             },
@@ -6602,6 +6621,29 @@ mod tests {
     use bytemuck::Zeroable;
 
     use super::*;
+
+    #[test]
+    fn door_bases_are_doors_with_their_name_unless_it_is_blank_and_other_bases_are_not() {
+        let db = crate::assets::db::test_support::database_with(
+            "INSERT INTO doors (form_key, name, model_path, flags) VALUES
+                 ('DOOR_NAMED', 'Door', 'door.nif', '0'),
+                 ('DOOR_BLANK', '  ', 'door.nif', '0'),
+                 ('DOOR_NULL', NULL, 'door.nif', '0');
+             INSERT INTO containers (form_key, name, model_path) VALUES
+                 ('CHEST', 'Chest', 'chest.nif');",
+        );
+
+        let (lookup, _) = build_base_object_lookup(&db, &[]);
+
+        let named = ActivatorKind::Door {
+            name: Some(Arc::from("Door")),
+        };
+        let nameless = ActivatorKind::Door { name: None };
+        assert_eq!(lookup["DOOR_NAMED"].kind, named);
+        assert_eq!(lookup["DOOR_BLANK"].kind, nameless);
+        assert_eq!(lookup["DOOR_NULL"].kind, nameless);
+        assert_eq!(lookup["CHEST"].kind, ActivatorKind::Other);
+    }
 
     #[test]
     fn the_bake_cache_is_keyed_by_the_players_layer_table() {

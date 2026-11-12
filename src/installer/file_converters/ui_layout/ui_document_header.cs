@@ -13,7 +13,7 @@ namespace AssetConverter.UiLayout
         public const int Format = 1;
 
         /// <summary>Raised whenever the conversion changes its output for the same input, so existing documents are rewritten.</summary>
-        public const int ExtractorVersion = 5;
+        public const int ExtractorVersion = 6;
 
         /// <summary>Compact output that keeps characters such as <c>&lt;</c> and <c>+</c> of the keys readable instead of escaping them.</summary>
         public static readonly JsonWriterOptions WriterOptions = new() { Indented = false, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };

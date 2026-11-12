@@ -1,6 +1,9 @@
 /// DOOR record flag "Automatic": touching the door loads its destination.
 const FLAG_AUTOMATIC: u32 = 0x02;
 
+/// DOOR record flag "No To Text": a load door of this base shows no rollover text.
+const FLAG_NO_TO_TEXT: u32 = 0x40;
+
 #[derive(Debug, thiserror::Error)]
 pub enum DoorFlagsError {
     #[error("{subject} has no door flags value")]
@@ -9,9 +12,7 @@ pub enum DoorFlagsError {
     Malformed { subject: String, flags: String },
 }
 
-/// Whether a door's `flags` column (a decimal number as text) has Automatic set;
-/// `subject` names the door or ref in errors.
-pub fn flags_are_automatic(subject: &str, flags: Option<&str>) -> Result<bool, DoorFlagsError> {
+fn flag_is_set(subject: &str, flags: Option<&str>, flag: u32) -> Result<bool, DoorFlagsError> {
     let flags = flags.ok_or_else(|| DoorFlagsError::Missing {
         subject: subject.to_string(),
     })?;
@@ -22,7 +23,19 @@ pub fn flags_are_automatic(subject: &str, flags: Option<&str>) -> Result<bool, D
             subject: subject.to_string(),
             flags: flags.to_string(),
         })?;
-    Ok(value & FLAG_AUTOMATIC != 0)
+    Ok(value & flag != 0)
+}
+
+/// Whether a door's `flags` column (a decimal number as text) has Automatic set;
+/// `subject` names the door or ref in errors.
+pub fn flags_are_automatic(subject: &str, flags: Option<&str>) -> Result<bool, DoorFlagsError> {
+    flag_is_set(subject, flags, FLAG_AUTOMATIC)
+}
+
+/// Whether a door's `flags` column (a decimal number as text) has No To Text set;
+/// `subject` names the door or ref in errors.
+pub fn flags_have_no_to_text(subject: &str, flags: Option<&str>) -> Result<bool, DoorFlagsError> {
+    flag_is_set(subject, flags, FLAG_NO_TO_TEXT)
 }
 
 pub struct Door {
@@ -50,11 +63,12 @@ fn row_to_door(row: &rusqlite::Row) -> rusqlite::Result<Door> {
 }
 
 impl Door {
+    fn subject(&self) -> &str {
+        self.form_key.as_deref().unwrap_or("door without form key")
+    }
+
     pub fn is_automatic(&self) -> Result<bool, DoorFlagsError> {
-        flags_are_automatic(
-            self.form_key.as_deref().unwrap_or("door without form key"),
-            self.flags.as_deref(),
-        )
+        flags_are_automatic(self.subject(), self.flags.as_deref())
     }
 
     pub fn get(form_key: &str, conn: &rusqlite::Connection) -> anyhow::Result<Self> {
@@ -93,10 +107,20 @@ mod tests {
     }
 
     #[test]
+    fn no_to_text_is_bit_six_of_the_decimal_flags() {
+        assert!(flags_have_no_to_text("d", Some("64")).unwrap());
+        assert!(flags_have_no_to_text("d", Some("66")).unwrap());
+        assert!(!flags_have_no_to_text("d", Some("2")).unwrap());
+        assert!(!flags_have_no_to_text("d", Some("0")).unwrap());
+    }
+
+    #[test]
     fn missing_or_malformed_flags_are_errors_naming_the_subject() {
         let missing = flags_are_automatic("door A", None).unwrap_err();
         assert!(missing.to_string().contains("door A"), "{missing}");
         let malformed = flags_are_automatic("door B", Some("two")).unwrap_err();
         assert!(malformed.to_string().contains("door B"), "{malformed}");
+        let no_to_text = flags_have_no_to_text("door C", None).unwrap_err();
+        assert!(no_to_text.to_string().contains("door C"), "{no_to_text}");
     }
 }

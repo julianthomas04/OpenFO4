@@ -2,11 +2,15 @@
 
 use std::collections::HashMap;
 
+use super::door_prompt::DoorPrompts;
 use super::{
     InteriorLightingCatalog, InteriorOption, MaterialBuoyancy, PlayerMovement, ResolvedTarget,
-    State, WorldspaceOption, material_buoyancy_table, walk_in::WalkInTriggers, world_streamer,
+    State, WorldspaceOption, material_buoyancy_table,
+    walk_in::{EntranceDistances, WalkInTriggers},
+    world_streamer,
 };
 use crate::assets::db::DbClient;
+use crate::assets::db::teleports::TeleportRecord;
 use crate::game_flow::{SpawnLocation, StartMode, spawn_locations::resolve_spawn_locations};
 use crate::startup::StartupError;
 
@@ -16,14 +20,15 @@ pub(super) struct StartupDbReads {
     pub interior_lighting: Option<InteriorLightingCatalog>,
     pub interiors: Vec<InteriorOption>,
     pub teleports: HashMap<String, ResolvedTarget>,
+    pub door_prompts: DoorPrompts,
     pub walk_in: WalkInTriggers,
     pub player_movement: PlayerMovement,
     pub buoyancy_table: Option<MaterialBuoyancy>,
 }
 
 impl StartupDbReads {
-    /// Every read except the spawn locations degrades to an empty or default value on failure and
-    /// reports it; the engine still runs.
+    /// Every read except the spawn locations and the door prompt and walk-in settings degrades to
+    /// an empty or default value on failure and reports it; the engine still runs.
     pub(super) fn load(db_path: &str, start_mode: StartMode) -> Result<Self, StartupError> {
         let spawn_locations = match start_mode {
             StartMode::Menu => {
@@ -31,15 +36,30 @@ impl StartupDbReads {
             }
             StartMode::Direct => Vec::new(),
         };
+        let db = DbClient::new(db_path).map_err(StartupError::Database)?;
+        let teleport_rows = Self::load_teleport_rows(&db);
+        let door_prompts = DoorPrompts::load(&db, &teleport_rows)?;
+        let entrance_distances =
+            EntranceDistances::load(&db).map_err(StartupError::WalkInSettings)?;
         Ok(Self {
             spawn_locations,
             worldspaces: Self::load_worldspaces(db_path),
             interior_lighting: InteriorLightingCatalog::load_or_report(db_path),
             interiors: State::build_interiors(db_path),
-            teleports: State::build_teleports(db_path),
-            walk_in: State::build_walk_in(db_path),
+            teleports: State::build_teleports(&db, &teleport_rows),
+            door_prompts,
+            walk_in: State::build_walk_in(&db, entrance_distances),
             player_movement: Self::load_player_movement(db_path),
             buoyancy_table: material_buoyancy_table(db_path),
+        })
+    }
+
+    /// The load door rows both the teleport map and the door prompts are built from. A failed read
+    /// is reported once and leaves no load doors.
+    fn load_teleport_rows(db: &DbClient) -> Vec<TeleportRecord> {
+        db.get_placed_teleports().unwrap_or_else(|error| {
+            tracing::warn!("load doors not read ({error:#}); no load door can be used");
+            Vec::new()
         })
     }
 
@@ -88,5 +108,23 @@ impl StartupDbReads {
             movement.sprint_speed
         );
         movement
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unopenable_database_stops_startup_in_every_start_mode() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("missing.db");
+        for mode in [StartMode::Menu, StartMode::Direct] {
+            let result = StartupDbReads::load(missing.to_str().unwrap(), mode);
+            assert!(
+                matches!(result.err(), Some(StartupError::Database(_))),
+                "{mode:?}"
+            );
+        }
     }
 }
