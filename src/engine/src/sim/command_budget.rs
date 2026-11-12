@@ -11,6 +11,8 @@ use super::CellGrid;
 
 pub(super) enum Deferred<A> {
     AddCell { grid: CellGrid, payload: A },
+    /// More objects for a cell that is already registered.
+    AddObjects { grid: CellGrid, payload: A },
     PhysicsCenter { grid: CellGrid, radius: i32 },
 }
 
@@ -37,6 +39,11 @@ impl<A> DeferredQueue<A> {
         self.entries.push_back(Deferred::AddCell { grid, payload });
     }
 
+    pub(super) fn push_add_objects(&mut self, grid: CellGrid, payload: A) {
+        self.entries
+            .push_back(Deferred::AddObjects { grid, payload });
+    }
+
     /// A centre move supersedes the one queued right before it: nothing sits
     /// between them to observe the older value.
     pub(super) fn push_physics_center(&mut self, grid: CellGrid, radius: i32) {
@@ -47,10 +54,11 @@ impl<A> DeferredQueue<A> {
             .push_back(Deferred::PhysicsCenter { grid, radius });
     }
 
-    /// Drops the queued adds of `grid`.
+    /// Drops the queued adds of `grid`, the objects added to it included.
     pub(super) fn cancel_add(&mut self, grid: CellGrid) {
         self.entries.retain(|entry| match entry {
-            Deferred::AddCell { grid: queued, .. } => *queued != grid,
+            Deferred::AddCell { grid: queued, .. }
+            | Deferred::AddObjects { grid: queued, .. } => *queued != grid,
             Deferred::PhysicsCenter { .. } => true,
         });
     }
@@ -96,6 +104,7 @@ mod tests {
     #[derive(Debug, PartialEq)]
     enum Applied {
         Add(CellGrid, &'static str),
+        Objects(CellGrid, &'static str),
         Center(CellGrid, i32),
     }
 
@@ -122,6 +131,7 @@ mod tests {
                 clock.set(clock.get() + cost);
                 applied.push(match entry {
                     Deferred::AddCell { grid, payload } => Applied::Add(grid, payload),
+                    Deferred::AddObjects { grid, payload } => Applied::Objects(grid, payload),
                     Deferred::PhysicsCenter { grid, radius } => Applied::Center(grid, radius),
                 });
             },
@@ -191,6 +201,38 @@ mod tests {
         assert_eq!(
             applied,
             vec![Applied::Add((0, 0), "a"), Applied::Add((2, 0), "c")]
+        );
+    }
+
+    #[test]
+    fn objects_added_to_a_cell_are_cancelled_with_it_and_only_it() {
+        let mut queue = queue_of(&[((0, 0), "cell"), ((1, 0), "other")]);
+        queue.push_add_objects((0, 0), "drop");
+        queue.push_add_objects((1, 0), "other drop");
+        queue.cancel_add((0, 0));
+        let applied = drain(&mut queue, Duration::MAX, ONE_ADD);
+        assert_eq!(
+            applied,
+            vec![
+                Applied::Add((1, 0), "other"),
+                Applied::Objects((1, 0), "other drop"),
+            ]
+        );
+    }
+
+    #[test]
+    fn objects_added_to_a_cell_keep_their_place_in_the_queue() {
+        let mut queue = queue_of(&[((0, 0), "a")]);
+        queue.push_add_objects((0, 0), "drop");
+        queue.push_add((1, 0), "b");
+        let applied = drain(&mut queue, Duration::MAX, ONE_ADD);
+        assert_eq!(
+            applied,
+            vec![
+                Applied::Add((0, 0), "a"),
+                Applied::Objects((0, 0), "drop"),
+                Applied::Add((1, 0), "b"),
+            ]
         );
     }
 

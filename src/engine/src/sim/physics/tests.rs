@@ -1699,4 +1699,158 @@ mod item_removal {
         assert_eq!(context.plugin_slot(RUNTIME_REF_PLUGIN), Some(1));
         assert_eq!(context.plugin_slot("Fallout4.esm"), Some(2));
     }
+
+    #[test]
+    fn pinned_bodies_are_tracked_but_not_counted_as_dynamic() {
+        let context = context_with(wake_context(), Kind::Pinned);
+        assert_eq!(context.tracked_body_count(), 2);
+        assert_eq!(context.dynamic_body_count(), 0);
+    }
+}
+
+mod object_adding {
+    use super::*;
+    use crate::sim::physics::test_support::{body_probe, pinned_group};
+
+    const DROP_PATH: &str = "meshes\\dropped.glb";
+    const DROP_REF: &str = "00000C:*dropped";
+    const AUTHORED_PATH: &str = "meshes\\authored.glb";
+    const AUTHORED_REF: &str = "0F9A01:Test.esm";
+    const DROP_AT: Vec3 = Vec3::new(140.0, 12.0, -60.0);
+    const DROP_MASS: f32 = 6.0;
+    const FAR_CELL: CellGrid = (40, 40);
+
+    fn dropped() -> EntityId {
+        refr_entity_id(DROP_REF)
+    }
+
+    fn drop_batch() -> (CellColliderBatch, BakedCellColliders) {
+        let batch = CellColliderBatch {
+            objects: vec![object_group(
+                DROP_PATH,
+                vec![placement(DROP_REF, DROP_AT)],
+                true,
+                Some(DROP_MASS),
+            )],
+            ..CellColliderBatch::default()
+        };
+        let baked = bake(&batch, &[(DROP_PATH, vec![box_shape(1.0)])]);
+        (batch, baked)
+    }
+
+    fn registered_cell(mut context: PhysicsContext) -> PhysicsContext {
+        let mut batch = ground_batch();
+        batch.objects.push(pinned_group(
+            AUTHORED_PATH,
+            vec![placement(AUTHORED_REF, Vec3::new(60.0, 0.5, -60.0))],
+        ));
+        let baked = bake(&batch, &[(AUTHORED_PATH, vec![box_shape(0.5)])]);
+        context.add_cell(GROUND_CELL, &batch, Some(&baked));
+        context.set_physics_center(GROUND_CELL, 2);
+        context
+    }
+
+    #[test]
+    fn a_dropped_body_is_awake_at_once_and_falls_even_when_new_clutter_would_sleep() {
+        let mut context = registered_cell(sleeping_context());
+        let (batch, baked) = drop_batch();
+
+        assert_eq!(
+            context.add_objects(GROUND_CELL, &batch, Some(&baked), &HashSet::new()),
+            Ok(())
+        );
+
+        let probe = body_probe(&context, dropped());
+        assert!(probe.dynamic && !probe.sleeping);
+        run_ticks(&mut context, 30);
+        assert!(body_probe(&context, dropped()).translation.y < DROP_AT.y - 1.0);
+        let mut poses = Vec::new();
+        context.dynamic_poses(1.0, &mut poses);
+        assert_eq!(
+            poses.iter().map(|pose| pose.entity).collect::<Vec<_>>(),
+            vec![dropped()]
+        );
+    }
+
+    #[test]
+    fn a_body_added_outside_the_dynamic_radius_stays_fixed_until_the_radius_reaches_it() {
+        let mut context = registered_cell(sleeping_context());
+        context.set_physics_center(FAR_CELL, 0);
+        let (batch, baked) = drop_batch();
+        context
+            .add_objects(GROUND_CELL, &batch, Some(&baked), &HashSet::new())
+            .unwrap();
+        assert!(!body_probe(&context, dropped()).dynamic);
+
+        context.set_physics_center(GROUND_CELL, 2);
+
+        let probe = body_probe(&context, dropped());
+        assert!(probe.dynamic && !probe.sleeping);
+    }
+
+    #[test]
+    fn an_added_object_in_the_skip_set_adds_nothing() {
+        let mut context = registered_cell(wake_context());
+        let (batch, baked) = drop_batch();
+        let colliders = context.collider_count();
+        let bodies = context.tracked_body_count();
+        let keys = context.cell_cache_keys[&GROUND_CELL].len();
+
+        let skip = HashSet::from([dropped()]);
+        assert_eq!(
+            context.add_objects(GROUND_CELL, &batch, Some(&baked), &skip),
+            Ok(())
+        );
+
+        assert_eq!(context.collider_count(), colliders);
+        assert_eq!(context.tracked_body_count(), bodies);
+        assert_eq!(context.cell_cache_keys[&GROUND_CELL].len(), keys);
+        assert!(!context.dyn_bodies.contains_key(&dropped()));
+    }
+
+    #[test]
+    fn objects_added_to_an_unregistered_cell_are_refused_and_nothing_is_built() {
+        let mut context = registered_cell(wake_context());
+        let (batch, baked) = drop_batch();
+        let colliders = context.collider_count();
+
+        assert_eq!(
+            context.add_objects(FAR_CELL, &batch, Some(&baked), &HashSet::new()),
+            Err(AddObjectsError::CellNotRegistered(FAR_CELL))
+        );
+
+        assert_eq!(context.collider_count(), colliders);
+        assert!(!context.dyn_bodies.contains_key(&dropped()));
+        assert!(!context.cell_colliders.contains_key(&FAR_CELL));
+    }
+
+    #[test]
+    fn objects_added_and_then_the_cell_removed_leave_nothing_behind() {
+        let mut context = registered_cell(wake_context());
+        let (batch, baked) = drop_batch();
+        context
+            .add_objects(GROUND_CELL, &batch, Some(&baked), &HashSet::new())
+            .unwrap();
+        assert_eq!(context.cell_cache_keys[&GROUND_CELL].len(), 2);
+
+        context.remove_cell(GROUND_CELL);
+
+        assert!(context.shape_cache.is_empty());
+        assert!(context.cell_cache_keys.is_empty());
+        assert!(context.dyn_bodies.is_empty());
+        assert!(context.cell_dyn.is_empty());
+        assert_eq!(context.collider_count(), 0);
+        assert!(context.world.bodies.is_empty());
+    }
+
+    #[test]
+    fn a_dropped_body_can_be_removed_again_like_any_other() {
+        let mut context = registered_cell(wake_context());
+        let (batch, baked) = drop_batch();
+        context
+            .add_objects(GROUND_CELL, &batch, Some(&baked), &HashSet::new())
+            .unwrap();
+        assert_eq!(context.remove_ref(dropped()), Some(GROUND_CELL));
+        assert!(!context.dyn_bodies.contains_key(&dropped()));
+    }
 }

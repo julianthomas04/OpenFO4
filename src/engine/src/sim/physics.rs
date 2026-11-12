@@ -119,6 +119,13 @@ struct DynBody {
     pinned: bool,
 }
 
+/// Why objects could not be added to a cell.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum AddObjectsError {
+    #[error("cell {0:?} has no registered colliders")]
+    CellNotRegistered(CellGrid),
+}
+
 /// What a scene ray hit, before it is shaped for a caller.
 struct RayProbe {
     mesh_path: String,
@@ -711,7 +718,6 @@ impl PhysicsContext {
         }
 
         let mut handles = Vec::new();
-        let mut keys = Vec::new();
 
         match &batch.terrain {
             TerrainCollision::Present(terrain) => {
@@ -738,6 +744,36 @@ impl PhysicsContext {
             TerrainCollision::Failed => {}
         }
 
+        let (object_handles, keys) = self.insert_object_groups(grid, batch, baked, skip, false);
+        handles.extend(object_handles);
+
+        if !handles.is_empty() {
+            self.dirty = true;
+        }
+        let dyn_count = self.cell_dyn.get(&grid).map_or(0, std::vec::Vec::len);
+        tracing::debug!(
+            "sim: add_cell {grid:?} colliders={} dynamic={} world_total={} bodies={}",
+            handles.len(),
+            dyn_count,
+            self.world.colliders.len(),
+            self.world.bodies.len()
+        );
+        self.cell_colliders.insert(grid, handles);
+        self.cell_cache_keys.insert(grid, keys);
+    }
+
+    /// The object half of a registration: the static colliders it made and the shape-cache keys
+    /// it took a count on (one per placement). `ever_active` is what its new bodies start with.
+    fn insert_object_groups(
+        &mut self,
+        grid: CellGrid,
+        batch: &CellColliderBatch,
+        baked: Option<&BakedCellColliders>,
+        skip: &HashSet<EntityId>,
+        ever_active: bool,
+    ) -> (Vec<ColliderHandle>, Vec<ShapeKey>) {
+        let mut handles = Vec::new();
+        let mut keys = Vec::new();
         // (path, scale) -> pre-baked shapes, consulted on shape-cache misses.
         let baked_lookup: HashMap<(&str, u32), &Arc<Vec<CachedShape>>> = baked
             .map(|b| {
@@ -896,7 +932,7 @@ impl PhysicsContext {
                             prev_pose: refr_pose,
                             cur_pose: refr_pose,
                             active: false,
-                            ever_active: false,
+                            ever_active,
                             water_props,
                             water: WaterBodyState::default(),
                             compound: part_pose.is_some(),
@@ -987,20 +1023,34 @@ impl PhysicsContext {
                 }
             }
         }
+        (handles, keys)
+    }
 
+    /// Registers more objects in the already registered cell `grid` (a runtime-added item):
+    /// placements whose reference is in `skip` are not built, terrain in `batch` is ignored.
+    /// The new bodies have been simulated before and the dynamic radius is reconciled at once, so
+    /// a body inside it is `Dynamic` and awake when this returns.
+    pub fn add_objects(
+        &mut self,
+        grid: CellGrid,
+        batch: &CellColliderBatch,
+        baked: Option<&BakedCellColliders>,
+        skip: &HashSet<EntityId>,
+    ) -> Result<(), AddObjectsError> {
+        if !self.cell_colliders.contains_key(&grid) {
+            return Err(AddObjectsError::CellNotRegistered(grid));
+        }
+        let (handles, keys) = self.insert_object_groups(grid, batch, baked, skip, true);
         if !handles.is_empty() {
             self.dirty = true;
         }
-        let dyn_count = self.cell_dyn.get(&grid).map_or(0, std::vec::Vec::len);
-        tracing::debug!(
-            "sim: add_cell {grid:?} colliders={} dynamic={} world_total={} bodies={}",
-            handles.len(),
-            dyn_count,
-            self.world.colliders.len(),
-            self.world.bodies.len()
-        );
-        self.cell_colliders.insert(grid, handles);
-        self.cell_cache_keys.insert(grid, keys);
+        self.cell_colliders
+            .entry(grid)
+            .or_default()
+            .extend(handles);
+        self.cell_cache_keys.entry(grid).or_default().extend(keys);
+        self.reconcile_dynamic_radius();
+        Ok(())
     }
 
     /// Parentless (static) colliders have no body for rapier to wake on
@@ -1081,7 +1131,8 @@ impl PhysicsContext {
     }
 
     /// Removes the body of `entity` with its colliders and its `cell_dyn` entry, letting go of it
-    /// first when it is carried; bodies in contact wake. Shape-cache counts stay with the cell.
+    /// first when it is carried; bodies resting on it wake on the next step, when the narrow phase
+    /// sees the contacts of the removed colliders end. Shape-cache counts stay with the cell.
     /// The owning cell, or `None` when the entity has no body (a static fallback collider, a
     /// duplicate, a quarantined or never spawned reference): that is not an error.
     pub fn remove_ref(&mut self, entity: EntityId) -> Option<CellGrid> {
@@ -1095,7 +1146,9 @@ impl PhysicsContext {
                 self.cell_dyn.remove(&grid);
             }
         }
-        self.world.remove_body(handle);
+        if self.world.remove_body(handle).is_none() {
+            tracing::warn!("physics: the body of {entity:?} was already gone from the world");
+        }
         self.dirty = true;
         Some(grid)
     }
@@ -1315,7 +1368,14 @@ impl PhysicsContext {
         self.dyn_bodies.values().filter(|db| db.active).count()
     }
 
+    /// Resident bodies that can simulate; pinned items do not count.
     pub fn dynamic_body_count(&self) -> usize {
+        self.dyn_bodies.values().filter(|db| !db.pinned).count()
+    }
+
+    /// Every body tracked by entity, pinned items included.
+    #[cfg(test)]
+    pub fn tracked_body_count(&self) -> usize {
         self.dyn_bodies.len()
     }
 }

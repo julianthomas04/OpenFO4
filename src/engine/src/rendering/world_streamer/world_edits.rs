@@ -130,6 +130,7 @@ pub(super) fn register_command(
             batch: Arc::clone(batch),
             baked: baked.clone(),
             skip: Arc::clone(&edits.removed),
+            added: Vec::new(),
         }
     }
 }

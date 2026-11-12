@@ -18,6 +18,13 @@ use super::ragdoll_tuning::RagdollSettings;
 use super::{CellGrid, EntityId};
 use crate::weather::WeatherId;
 
+/// The colliders of objects added to a cell after its authored content.
+#[derive(Clone)]
+pub struct AddedObjects {
+    pub batch: Arc<CellColliderBatch>,
+    pub baked: Option<BakedCellColliders>,
+}
+
 pub enum SimCommand {
     /// Register a streamed cell's static colliders (terrain + objects). The
     /// batch is built on the streaming worker thread; the sim turns it into
@@ -39,6 +46,15 @@ pub enum SimCommand {
         batch: Arc<CellColliderBatch>,
         baked: Option<BakedCellColliders>,
         skip: Arc<HashSet<EntityId>>,
+        /// Items dropped into the cell, built after the authored objects with the same skip set.
+        added: Vec<AddedObjects>,
+    },
+    /// Registers more colliders in an already registered cell (a dropped item). Takes the same
+    /// defer branch as `AddCellColliders`, so it never overtakes the registration it follows.
+    AddWorldObjects {
+        grid: CellGrid,
+        batch: Arc<CellColliderBatch>,
+        baked: Option<BakedCellColliders>,
     },
     /// Drop every collider a cell registered (unload or LOD demotion). Also
     /// despawns any dynamic rigid bodies the cell owned.

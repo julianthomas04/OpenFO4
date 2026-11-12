@@ -100,6 +100,9 @@ impl LimbConditions {
     }
 }
 
+/// The level a new game starts at: the Pip-Boy model's starting progression and the streamer's initial published level.
+pub const STARTING_LEVEL: u32 = 1;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Progression {
     pub level: u32,

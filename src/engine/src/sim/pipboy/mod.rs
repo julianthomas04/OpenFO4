@@ -23,7 +23,7 @@ use glam::Vec3;
 
 use super::world_clock::GameClock;
 
-pub use actions::{ActionEffects, PipBoyAction, PipBoyActionError};
+pub use actions::{ActionEffects, DroppedStack, PipBoyAction, PipBoyActionError};
 pub use catalog::{ItemDefinition, ItemKind, PipBoyCatalog};
 pub use character::{Character, Limb, Sex, Special};
 pub use inventory::{
@@ -57,6 +57,9 @@ pub struct PipBoyModel {
     pub inspect_request: Option<ItemId>,
     /// The most recent rejected action, for the screen to report; cleared by the next accepted one.
     pub last_rejection: Option<PipBoyActionError>,
+    /// How many rejections were stored so far; a repeated identical one still changes it, so the
+    /// screen can show its text again.
+    pub rejection_count: u64,
 }
 
 const STARTING_CARRY_CAPACITY: f32 = 200.0;
@@ -68,7 +71,7 @@ impl PipBoyModel {
         let mut character = Character::default();
         character.special.0 = [character::SpecialValue { base: 1, bonus: 0 }; 7];
         character.progression = character::Progression {
-            level: 1,
+            level: character::STARTING_LEVEL,
             xp_into_level: 0,
             xp_for_next_level: STARTING_XP_FOR_NEXT_LEVEL,
             unspent_perk_points: 0,
@@ -92,6 +95,7 @@ impl PipBoyModel {
             fast_travel_request: None,
             inspect_request: None,
             last_rejection: None,
+            rejection_count: 0,
         };
         model.discover_all_markers();
         model

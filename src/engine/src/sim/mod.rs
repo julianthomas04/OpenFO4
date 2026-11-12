@@ -47,7 +47,7 @@ use footstep_clock::{FootstepClock, TickObservation};
 use weather::{WeatherCycle, WeatherStep};
 
 pub use carry::{CarriedInfo, GrabRefusal, ReleaseReason};
-pub use commands::{KinematicPose, PlayerInput, SimCommand, look_direction};
+pub use commands::{AddedObjects, KinematicPose, PlayerInput, SimCommand, look_direction};
 pub use footstep_clock::{JumpWindupMismatch, jump_windup_mismatch};
 pub use hud::{CrosshairState, HudSnapshot, MeterFill};
 pub use inventory_event::{InventoryEvent, ItemGrantError};
@@ -191,6 +191,22 @@ struct CellPayload {
     batch: Arc<collision::CellColliderBatch>,
     baked: Option<bake::BakedCellColliders>,
     skip: Arc<HashSet<EntityId>>,
+    added: Vec<AddedObjects>,
+}
+
+impl CellPayload {
+    /// A payload without edits.
+    fn plain(
+        batch: Arc<collision::CellColliderBatch>,
+        baked: Option<bake::BakedCellColliders>,
+    ) -> Self {
+        Self {
+            batch,
+            baked,
+            skip: Arc::default(),
+            added: Vec::new(),
+        }
+    }
 }
 
 pub struct SimWorld {
@@ -386,21 +402,30 @@ impl SimWorld {
     pub fn apply(&mut self, cmd: SimCommand) {
         match cmd {
             SimCommand::AddCellColliders { grid, batch, baked } => {
-                self.add_cell_payload(
-                    grid,
-                    CellPayload {
-                        batch,
-                        baked,
-                        skip: Arc::default(),
-                    },
-                );
+                self.add_cell_payload(grid, CellPayload::plain(batch, baked));
             }
             SimCommand::AddCellCollidersSkipping {
                 grid,
                 batch,
                 baked,
                 skip,
-            } => self.add_cell_payload(grid, CellPayload { batch, baked, skip }),
+                added,
+            } => self.add_cell_payload(
+                grid,
+                CellPayload {
+                    skip,
+                    added,
+                    ..CellPayload::plain(batch, baked)
+                },
+            ),
+            SimCommand::AddWorldObjects { grid, batch, baked } => {
+                let payload = CellPayload::plain(batch, baked);
+                if self.defers_colliders() {
+                    self.pending_colliders.push_add_objects(grid, payload);
+                } else {
+                    apply_collider_work(&mut self.physics, Deferred::AddObjects { grid, payload });
+                }
+            }
             SimCommand::RemoveCellColliders { grid } => {
                 self.pending_colliders.cancel_add(grid);
                 let _span =
@@ -545,6 +570,12 @@ impl SimWorld {
         Ok(())
     }
 
+    /// Puts units back that the world did not take (a failed drop). No body, no event; on `Err`
+    /// nothing changed.
+    pub fn restore_units(&mut self, form_key: &str, count: u32) -> Result<(), ItemGrantError> {
+        self.grant_units(form_key, count)
+    }
+
     fn grant_units(&mut self, form_key: &str, count: u32) -> Result<(), ItemGrantError> {
         let definition =
             self.pipboy
@@ -582,8 +613,18 @@ impl SimWorld {
     }
 
     fn apply_pipboy(&mut self, action: pipboy::PipBoyAction) {
-        let effects = self.pipboy.submit(action);
+        if matches!(action, pipboy::PipBoyAction::Drop { .. }) && !self.player.grounded {
+            self.pipboy.reject(pipboy::PipBoyActionError::Airborne);
+            return;
+        }
+        let mut effects = self.pipboy.submit(action);
         self.player.heal(effects.heal_hp);
+        if let Some(stack) = effects.dropped.take() {
+            self.inventory_events.push(InventoryEvent::Dropped {
+                form_key: stack.form_key,
+                count: stack.count,
+            });
+        }
         if self.pipboy.open {
             self.input = self.input.without_movement();
             self.physics.release(ReleaseReason::MenuOpened);
@@ -915,15 +956,47 @@ fn apply_collider_work(physics: &mut physics::PhysicsContext, work: Deferred<Cel
     match work {
         Deferred::AddCell {
             grid,
-            payload: CellPayload { batch, baked, skip },
+            payload:
+                CellPayload {
+                    batch,
+                    baked,
+                    skip,
+                    added,
+                },
         } => {
             let _span = tracing::trace_span!("sim_add_cell", gx = grid.0, gy = grid.1).entered();
             physics.add_cell_skipping(grid, &batch, baked.as_ref(), &skip);
+            for objects in &added {
+                add_objects_reporting(physics, grid, &objects.batch, objects.baked.as_ref(), &skip);
+            }
+        }
+        Deferred::AddObjects {
+            grid,
+            payload: CellPayload {
+                batch, baked, skip, ..
+            },
+        } => {
+            let _span =
+                tracing::trace_span!("sim_add_objects", gx = grid.0, gy = grid.1).entered();
+            add_objects_reporting(physics, grid, &batch, baked.as_ref(), &skip);
         }
         Deferred::PhysicsCenter { grid, radius } => {
             let _span = tracing::trace_span!("sim_set_physics_center").entered();
             physics.set_physics_center(grid, radius);
         }
+    }
+}
+
+/// A drop into a cell that has no colliders yields a drawn item without a body: reported, not fatal.
+fn add_objects_reporting(
+    physics: &mut physics::PhysicsContext,
+    grid: CellGrid,
+    batch: &collision::CellColliderBatch,
+    baked: Option<&bake::BakedCellColliders>,
+    skip: &HashSet<EntityId>,
+) {
+    if let Err(error) = physics.add_objects(grid, batch, baked, skip) {
+        tracing::warn!("sim: dropped item has no body: {error}");
     }
 }
 
@@ -1845,7 +1918,7 @@ mod item_pickup_tests {
     use super::pipboy::{
         InventoryCategory, InventoryError, ItemDefinition, ItemKind, PipBoyCatalog,
     };
-    use super::test_world::{SPAWN_AT, pinned_prop, prop_entity, world_with};
+    use super::test_world::{SPAWN_AT, pinned_prop, prop_entity, spawned_at, tick, world_with};
     use super::*;
     use crate::sim::collision::CellColliderBatch;
     use crate::sim::physics::test_support::{
@@ -1890,7 +1963,7 @@ mod item_pickup_tests {
     }
 
     fn body_count(sim: &SimWorld) -> usize {
-        sim.physics.dynamic_body_count()
+        sim.physics.tracked_body_count()
     }
 
     #[test]
@@ -2015,6 +2088,7 @@ mod item_pickup_tests {
             batch: Arc::new(batch),
             baked: Some(baked),
             skip: Arc::new(HashSet::from([refr_entity_id(picked)])),
+            added: Vec::new(),
         });
         sim.apply(SimCommand::AddCellColliders {
             grid: (1, 0),
@@ -2050,6 +2124,7 @@ mod item_pickup_tests {
                 batch: Arc::clone(&batch),
                 baked: Some(baked.clone()),
                 skip: Arc::new(HashSet::from([refr_entity_id(picked)])),
+                added: Vec::new(),
             });
         };
         register(&mut sim);
@@ -2079,5 +2154,223 @@ mod item_pickup_tests {
             })
             .collect();
         assert_eq!(counts, [1, 1, 2]);
+    }
+
+    const STOCK: u32 = 5;
+    const DROPPED_UNITS: u32 = 2;
+
+    /// A grounded player holding `STOCK` units of the widget.
+    fn sim_with_stock() -> (SimWorld, pipboy::ItemId) {
+        let mut sim = world_with(&[]);
+        sim.set_pipboy_catalog(Arc::new(PipBoyCatalog {
+            items: vec![definition()],
+            ..PipBoyCatalog::default()
+        }));
+        let stack = sim
+            .pipboy
+            .inventory
+            .add_units(&definition(), STOCK)
+            .unwrap();
+        let mut sim = spawned_at(sim, SPAWN_AT);
+        tick(&mut sim, 30);
+        assert!(sim.player.grounded, "the fixture player stands on the ground");
+        (sim, stack)
+    }
+
+    fn drop_action(stack: pipboy::ItemId, count: u32) -> SimCommand {
+        SimCommand::PipBoy(pipboy::PipBoyAction::Drop { item: stack, count })
+    }
+
+    #[test]
+    fn a_grounded_drop_takes_the_units_and_emits_exactly_one_dropped_event() {
+        let (mut sim, stack) = sim_with_stock();
+
+        sim.apply(drop_action(stack, DROPPED_UNITS));
+
+        assert_eq!(
+            stacks(&sim),
+            vec![(WIDGET_NAME.to_owned(), STOCK - DROPPED_UNITS)]
+        );
+        assert_eq!(
+            sim.drain_inventory_events(),
+            vec![InventoryEvent::Dropped {
+                form_key: WIDGET_KEY.to_owned(),
+                count: DROPPED_UNITS
+            }]
+        );
+        assert_eq!(sim.pipboy.last_rejection, None);
+    }
+
+    #[test]
+    fn an_airborne_drop_changes_nothing_and_reports_the_refusal() {
+        let (mut sim, stack) = sim_with_stock();
+        sim.player.grounded = false;
+
+        sim.apply(drop_action(stack, DROPPED_UNITS));
+
+        assert_eq!(stacks(&sim), vec![(WIDGET_NAME.to_owned(), STOCK)]);
+        assert_eq!(sim.drain_inventory_events(), []);
+        assert_eq!(
+            sim.pipboy.last_rejection,
+            Some(pipboy::PipBoyActionError::Airborne)
+        );
+    }
+
+    #[test]
+    fn only_a_drop_is_refused_while_airborne() {
+        let (mut sim, _) = sim_with_stock();
+        sim.player.grounded = false;
+
+        sim.apply(SimCommand::PipBoy(pipboy::PipBoyAction::Open));
+
+        assert!(sim.pipboy.open);
+        assert_eq!(sim.pipboy.last_rejection, None);
+    }
+
+    #[test]
+    fn a_refused_drop_emits_no_event() {
+        let (mut sim, stack) = sim_with_stock();
+        sim.apply(drop_action(stack, STOCK + 1));
+        assert_eq!(stacks(&sim), vec![(WIDGET_NAME.to_owned(), STOCK)]);
+        assert_eq!(sim.drain_inventory_events(), []);
+        assert!(sim.pipboy.last_rejection.is_some());
+    }
+
+    #[test]
+    fn restoring_returns_exactly_what_a_failed_drop_took_without_an_event() {
+        let (mut sim, stack) = sim_with_stock();
+        sim.apply(drop_action(stack, DROPPED_UNITS));
+        sim.drain_inventory_events();
+
+        assert_eq!(sim.restore_units(WIDGET_KEY, DROPPED_UNITS), Ok(()));
+
+        assert_eq!(stacks(&sim), vec![(WIDGET_NAME.to_owned(), STOCK)]);
+        assert_eq!(sim.drain_inventory_events(), []);
+    }
+
+    #[test]
+    fn restoring_an_unknown_item_or_zero_units_changes_nothing() {
+        let (mut sim, _) = sim_with_stock();
+        assert_eq!(
+            sim.restore_units(UNLISTED_KEY, 1),
+            Err(ItemGrantError::UnknownItem {
+                form_key: UNLISTED_KEY.to_owned()
+            })
+        );
+        assert_eq!(
+            sim.restore_units(WIDGET_KEY, 0),
+            Err(ItemGrantError::Inventory(InventoryError::ZeroUnits {
+                form_key: WIDGET_KEY.to_owned()
+            }))
+        );
+        assert_eq!(stacks(&sim), vec![(WIDGET_NAME.to_owned(), STOCK)]);
+    }
+
+    const DROPPED_REF: &str = "00000A:*dropped";
+
+    fn dropped_objects() -> (Arc<CellColliderBatch>, Option<bake::BakedCellColliders>) {
+        let batch = CellColliderBatch {
+            objects: vec![object_group(
+                QUEUED_PATH,
+                vec![placement(DROPPED_REF, Vec3::new(120.0, 20.0, -50.0))],
+                true,
+                Some(4.0),
+            )],
+            ..CellColliderBatch::default()
+        };
+        let baked = bake(&batch, &[(QUEUED_PATH, vec![box_shape(0.5)])]);
+        (Arc::new(batch), Some(baked))
+    }
+
+    #[test]
+    fn a_world_object_added_to_a_registered_cell_falls() {
+        let mut sim = world_with(&[]);
+        let (batch, baked) = dropped_objects();
+
+        sim.apply(SimCommand::AddWorldObjects {
+            grid: (0, 0),
+            batch,
+            baked,
+        });
+        let start = physics::test_support::body_probe(&sim.physics, refr_entity_id(DROPPED_REF));
+        tick(&mut sim, 20);
+        let later = physics::test_support::body_probe(&sim.physics, refr_entity_id(DROPPED_REF));
+
+        assert!(!start.sleeping);
+        assert!(later.translation.y < start.translation.y - 1.0);
+    }
+
+    #[test]
+    fn world_objects_wait_behind_a_held_fold_and_go_with_their_cell() {
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+        sim.set_fold_hold(true);
+        sim.apply(SimCommand::AddCellColliders {
+            grid: (0, 0),
+            batch: Arc::new(ground_batch()),
+            baked: None,
+        });
+        let (batch, baked) = dropped_objects();
+        sim.apply(SimCommand::AddWorldObjects {
+            grid: (0, 0),
+            batch: Arc::clone(&batch),
+            baked: baked.clone(),
+        });
+        assert_eq!(body_count(&sim), 0);
+
+        sim.drain_pending_colliders(Duration::MAX);
+        assert_eq!(body_count(&sim), 1);
+
+        sim.apply(SimCommand::RemoveCellColliders { grid: (0, 0) });
+        sim.apply(SimCommand::AddCellColliders {
+            grid: (0, 0),
+            batch: Arc::new(ground_batch()),
+            baked: None,
+        });
+        sim.apply(SimCommand::AddWorldObjects {
+            grid: (0, 0),
+            batch,
+            baked,
+        });
+        sim.apply(SimCommand::RemoveCellColliders { grid: (0, 0) });
+        sim.drain_pending_colliders(Duration::MAX);
+        assert_eq!(body_count(&sim), 0);
+        assert!(!sim.has_pending_colliders());
+    }
+
+    #[test]
+    fn a_registration_builds_its_dropped_items_but_not_the_picked_up_ones() {
+        let picked_again = "00000B:*dropped";
+        let (batch, baked) = dropped_objects();
+        let (second, second_baked) = {
+            let batch = CellColliderBatch {
+                objects: vec![object_group(
+                    QUEUED_PATH,
+                    vec![placement(picked_again, Vec3::new(130.0, 20.0, -50.0))],
+                    true,
+                    Some(4.0),
+                )],
+                ..CellColliderBatch::default()
+            };
+            let baked = bake(&batch, &[(QUEUED_PATH, vec![box_shape(0.5)])]);
+            (Arc::new(batch), Some(baked))
+        };
+        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+
+        sim.apply(SimCommand::AddCellCollidersSkipping {
+            grid: (0, 0),
+            batch: Arc::new(ground_batch()),
+            baked: None,
+            skip: Arc::new(HashSet::from([refr_entity_id(picked_again)])),
+            added: vec![
+                AddedObjects { batch, baked },
+                AddedObjects {
+                    batch: second,
+                    baked: second_baked,
+                },
+            ],
+        });
+
+        assert_eq!(body_count(&sim), 1);
+        assert!(sim.physics.remove_ref(refr_entity_id(DROPPED_REF)).is_some());
     }
 }
