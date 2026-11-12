@@ -109,6 +109,9 @@ struct Entrance {
     /// Bethesda units.
     origin: Vec3,
     limits: EntranceDistances,
+    /// Edge state: whether the name shows, as of the last sample. Meaningful only while
+    /// [`WalkInTriggers`] holds a baseline in this entrance's location.
+    showing: bool,
     /// Engine-space ground direction out of the doorway, for the dev hook's walk line.
     outward: Vec3,
 }
@@ -131,6 +134,7 @@ impl Entrance {
             source_ref: door.source_ref.clone(),
             origin: Vec3::from(door.position.map(|v| v as f32)),
             limits: distances.scaled(door.scale as f32),
+            showing: false,
             outward: Vec3::new(facing.x, 0.0, facing.z).normalize_or(Vec3::X),
         })
     }
@@ -148,10 +152,13 @@ impl Entrance {
         self.distance_units(feet) <= self.limits.start_units
     }
 
-    /// Whether the name shows at `feet` after the move from `previous`: inside the display sphere
-    /// now, and either shown already or outside it before. Only the end point matters.
-    fn shown_after(&self, was_shown: bool, previous: Vec3, feet: Vec3) -> bool {
-        self.shows_at(feet) && (was_shown || !self.shows_at(previous))
+    /// Advances [`Self::showing`] over the move from `previous` to `feet`: it stays while inside
+    /// the display sphere and starts on entering it, outside before and inside now. Only the end
+    /// points matter.
+    fn track_display(&mut self, previous: Vec3, feet: Vec3) {
+        let inside_before = self.shows_at(previous);
+        let inside_now = self.shows_at(feet);
+        self.showing = inside_now && (self.showing || !inside_before);
     }
 
     /// Outside at `previous`, and inside at `feet` or the straight path there touches the start
@@ -214,13 +221,11 @@ pub(super) struct WalkLine {
 /// How far beyond the start zone the approach sits, Bethesda units.
 const WALK_LINE_CLEARANCE_UNITS: f32 = 30.0;
 
-/// What the last valid sample left behind: where the player was and which entrances show.
-struct LastSample {
+/// Where the last valid sample put the player.
+struct Baseline {
     location_index: usize,
     /// Bethesda units.
     feet: Vec3,
-    /// Per entrance of the location, in build order.
-    shown: Vec<bool>,
 }
 
 /// Every walk-in entrance plus the edge state deciding when one shows and starts.
@@ -229,7 +234,7 @@ pub(super) struct WalkInTriggers {
     locations: Vec<LocationEntrances>,
     /// `None` until a baseline is taken: after [`Self::rearm`], in a new location, or without
     /// entrances. Nothing shows then.
-    previous: Option<LastSample>,
+    previous: Option<Baseline>,
     armed: bool,
 }
 
@@ -272,18 +277,27 @@ impl WalkInTriggers {
             .map(|(index, entry)| (index, entry.entrances.as_slice()))
     }
 
-    /// The entrances of `location` with whether each shows its name as of the last sample; none
-    /// shows without a baseline taken in `location`.
-    fn entrances_with_display(
+    /// The entrances of `location` and the nearest one to `feet` (Bethesda units) showing its
+    /// name: its flag is set and `feet` are still inside its display sphere. None shows without a
+    /// baseline in `location`.
+    fn displayed(
         &self,
         location: PlayerLocation<'_>,
-    ) -> Option<(&[Entrance], &[bool])> {
+        feet: Vec3,
+    ) -> Option<(&[Entrance], Option<&Entrance>)> {
         let (index, entrances) = self.entrances_of(location)?;
-        let shown = self
+        let baselined = self
             .previous
             .as_ref()
-            .filter(|last| last.location_index == index)
-            .map_or(&[][..], |last| last.shown.as_slice());
+            .is_some_and(|baseline| baseline.location_index == index);
+        let shown = baselined
+            .then(|| {
+                let showing = entrances
+                    .iter()
+                    .filter(|entrance| entrance.showing && entrance.shows_at(feet));
+                nearest(showing, feet)
+            })
+            .flatten();
         Some((entrances, shown))
     }
 
@@ -310,31 +324,29 @@ impl WalkInTriggers {
             self.armed = false;
             return None;
         };
-        let entrances = &self.locations[index].entrances;
-        let before = self
-            .previous
-            .take()
-            .filter(|last| last.location_index == index);
-        self.armed = before.is_some();
-        let shown = match &before {
-            Some(last) => entrances
-                .iter()
-                .zip(&last.shown)
-                .map(|(entrance, was_shown)| entrance.shown_after(*was_shown, last.feet, feet))
-                .collect(),
-            None => vec![false; entrances.len()],
-        };
-        let started = before.and_then(|last| {
-            entrances
-                .iter()
-                .find(|entrance| entrance.entered(last.feet, feet))
-        });
-        self.previous = Some(LastSample {
+        let entrances = &mut self.locations[index].entrances;
+        let baseline = Baseline {
             location_index: index,
             feet,
-            shown,
-        });
-        started.map(|entrance| entrance.source_ref.as_str())
+        };
+        let before = self
+            .previous
+            .replace(baseline)
+            .filter(|before| before.location_index == index);
+        self.armed = before.is_some();
+        let Some(before) = before else {
+            for entrance in entrances.iter_mut() {
+                entrance.showing = false;
+            }
+            return None;
+        };
+        for entrance in entrances.iter_mut() {
+            entrance.track_display(before.feet, feet);
+        }
+        entrances
+            .iter()
+            .find(|entrance| entrance.entered(before.feet, feet))
+            .map(|entrance| entrance.source_ref.as_str())
     }
 
     /// The source ref of the entrance of `location` that decides what the HUD shows at `feet`
@@ -345,16 +357,15 @@ impl WalkInTriggers {
         feet: Vec3,
     ) -> Option<&str> {
         let feet = position_from_engine(feet);
-        let (entrances, shown) = self.entrances_with_display(location)?;
-        shown_entrance(entrances, shown, feet).map(|entrance| entrance.source_ref.as_str())
+        let (_, shown) = self.displayed(location, feet)?;
+        shown.map(|entrance| entrance.source_ref.as_str())
     }
 
     /// The probe of the entrance that decides the HUD at `feet` (engine space), else of the
     /// nearest one; `None` when `location` has no entrances.
     pub(super) fn probe(&self, location: PlayerLocation<'_>, feet: Vec3) -> Option<EntranceProbe> {
         let feet = position_from_engine(feet);
-        let (entrances, shown) = self.entrances_with_display(location)?;
-        let shown = shown_entrance(entrances, shown, feet);
+        let (entrances, shown) = self.displayed(location, feet)?;
         let entrance = shown.or_else(|| nearest(entrances.iter(), feet))?;
         Some(EntranceProbe {
             source_ref: entrance.source_ref.clone(),
@@ -382,26 +393,13 @@ impl WalkInTriggers {
 }
 
 /// The entrance nearest to `feet` (Bethesda units) among `candidates`, the first built winning a
-/// tie.
+/// tie. The one selection the HUD and the trace share, over the entrances showing.
 fn nearest<'a>(candidates: impl Iterator<Item = &'a Entrance>, feet: Vec3) -> Option<&'a Entrance> {
     candidates.min_by(|first, second| {
         first
             .distance_units(feet)
             .total_cmp(&second.distance_units(feet))
     })
-}
-
-/// The one selection the HUD and the trace share: the nearest entrance among those showing.
-fn shown_entrance<'a>(
-    entrances: &'a [Entrance],
-    shown: &[bool],
-    feet: Vec3,
-) -> Option<&'a Entrance> {
-    let showing = entrances
-        .iter()
-        .zip(shown)
-        .filter_map(|(entrance, is_shown)| is_shown.then_some(entrance));
-    nearest(showing, feet)
 }
 
 #[cfg(test)]
@@ -624,6 +622,17 @@ mod tests {
     }
 
     #[test]
+    fn a_rearm_ends_what_showed_even_if_the_player_arrives_inside_the_same_sphere() {
+        let mut triggers = one_door();
+        sample(&mut triggers, FAR);
+        sample(&mut triggers, INSIDE);
+        assert_eq!(nearest(&triggers, INSIDE), Some("DOOR".into()));
+        triggers.rearm();
+        sample(&mut triggers, INSIDE);
+        assert_eq!(nearest(&triggers, INSIDE), None);
+    }
+
+    #[test]
     fn the_first_sample_of_a_fresh_trigger_set_inside_the_display_sphere_shows_nothing() {
         let mut triggers = one_door();
         sample(&mut triggers, INSIDE);
@@ -677,6 +686,59 @@ mod tests {
         sample(&mut triggers, in_a_only);
         sample(&mut triggers, in_both);
         assert_eq!(nearest(&triggers, in_both), Some("B".into()));
+    }
+
+    #[test]
+    fn returning_to_a_location_after_another_one_with_entrances_is_a_new_arrival() {
+        let mut triggers = build(&[door("OUT", exterior()), door("IN", interior("A"))]);
+        let exterior_at = |position: [f32; 3]| {
+            (
+                PlayerLocation::Exterior("WS"),
+                Some(at(position[0], position[1], position[2])),
+            )
+        };
+        let interior_at = |position: [f32; 3]| {
+            (
+                PlayerLocation::Interior("A"),
+                Some(at(position[0], position[1], position[2])),
+            )
+        };
+        for (position, shown) in [(FAR, None), (INSIDE, Some("OUT".to_string()))] {
+            let (location, feet) = exterior_at(position);
+            triggers.sample(location, feet);
+            assert_eq!(nearest(&triggers, position), shown);
+        }
+        let (location, feet) = interior_at(FAR);
+        triggers.sample(location, feet);
+        let (location, feet) = exterior_at(INSIDE);
+        triggers.sample(location, feet);
+        assert_eq!(nearest(&triggers, INSIDE), None);
+        sample(&mut triggers, FAR);
+        sample(&mut triggers, INSIDE);
+        assert_eq!(nearest(&triggers, INSIDE), Some("OUT".into()));
+    }
+
+    #[test]
+    fn returning_to_a_location_after_one_without_entrances_is_a_new_arrival() {
+        let mut triggers = one_door();
+        sample(&mut triggers, FAR);
+        sample(&mut triggers, INSIDE);
+        assert_eq!(nearest(&triggers, INSIDE), Some("DOOR".into()));
+        triggers.sample(PlayerLocation::Interior("NONE"), Some(at(0.0, 0.0, 0.0)));
+        sample(&mut triggers, INSIDE);
+        assert_eq!(nearest(&triggers, INSIDE), None);
+        sample(&mut triggers, FAR);
+        sample(&mut triggers, INSIDE);
+        assert_eq!(nearest(&triggers, INSIDE), Some("DOOR".into()));
+    }
+
+    #[test]
+    fn feet_outside_the_display_sphere_show_nothing_though_the_flag_is_still_set() {
+        let mut triggers = one_door();
+        sample(&mut triggers, FAR);
+        sample(&mut triggers, INSIDE);
+        assert_eq!(nearest(&triggers, FAR), None);
+        assert_eq!(nearest(&triggers, INSIDE), Some("DOOR".into()));
     }
 
     #[test]

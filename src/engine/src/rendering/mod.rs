@@ -1119,9 +1119,10 @@ impl State {
         )
     }
 
-    /// What the walk-in entrance the player stands near shows.
-    fn entrance_near_player(&self) -> Option<ShownEntrance> {
-        if !self.walk_in_live(self.pipboy_open()) {
+    /// What the walk-in entrance the player stands near shows. `pipboy_open` is the value the
+    /// frame's walk-in sample used, so both judge the same liveness.
+    fn entrance_near_player(&self, pipboy_open: bool) -> Option<ShownEntrance> {
+        if !self.walk_in_live(pipboy_open) {
             return None;
         }
         let body = self.sim.player_body()?;
@@ -3950,7 +3951,7 @@ impl State {
         // not own — the sim only supplies the Standard spread radius.
         let aimed_ref = self.aimed_ref();
         self.aimed_door = self.aim_target_of(aimed_ref.as_deref()) == AimTarget::Activatable;
-        let entrance = self.entrance_near_player();
+        let entrance = self.entrance_near_player(pipboy_open);
         let door_hud = door_hud(
             self.aimed_door,
             self.door_prompts.prompt_for(
