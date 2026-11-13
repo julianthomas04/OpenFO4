@@ -151,6 +151,17 @@ mod tests {
     }
 
     #[test]
+    fn the_pick_settings_an_ini_sets_reach_the_game_settings() {
+        let settings = GameSettings::from_ini(&ini_with(
+            "[Interface]\nfActivatePickLength=300\nfActivatePickRadius=40\n[Controls]\nfZKeyDelay=1.0\n",
+        ))
+        .unwrap();
+        assert!((settings.pick.reach() - 30.0).abs() < 1e-5);
+        assert!((settings.pick.radius() - 4.0).abs() < 1e-5);
+        assert_eq!(settings.pick.grab_hold(), std::time::Duration::from_secs(1));
+    }
+
+    #[test]
     fn load_reads_the_cascade_from_the_data_directory_of_the_asset_root() {
         let root = tempfile::tempdir().unwrap();
         let data = root.path().join(layout::DATA_DIR);

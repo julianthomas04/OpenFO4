@@ -314,6 +314,20 @@ mod tests {
     }
 
     #[test]
+    fn a_flat_rectangle_is_multiplied_by_the_hud_tint_and_keeps_its_alpha() {
+        let backdrop = [0.8, 0.6, 0.4, 0.3];
+        let mut verts = Vec::new();
+        let mut quads = QuadBuilder::new(&mut verts, 100.0, 100.0, 2.0, SHADOW);
+        quads.rect_flat(rect(0.0), backdrop);
+        quads.finish();
+        assert_eq!(verts.len(), 6);
+        for vertex in &verts {
+            assert_rgb_eq(shader_rgb(vertex, HUD_TINT), [0.4, 0.15, 0.4]);
+            assert_eq!(vertex.color[3], backdrop[3]);
+        }
+    }
+
+    #[test]
     fn flat_rectangles_keep_their_push_order() {
         let (first, second) = ([1.0, 0.0, 0.0, 0.5], [0.0, 0.0, 1.0, 0.5]);
         let mut verts = Vec::new();

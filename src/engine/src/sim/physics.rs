@@ -132,6 +132,7 @@ struct RayProbe {
     mesh_path: String,
     material: u32,
     ref_id: Option<String>,
+    user_data: u128,
     dist: f32,
     terrain: bool,
 }
@@ -443,6 +444,7 @@ impl PhysicsContext {
             mesh_path,
             material,
             ref_id: self.ref_id_of(collider.user_data),
+            user_data: collider.user_data,
             dist,
             terrain,
         })

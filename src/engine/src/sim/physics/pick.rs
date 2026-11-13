@@ -20,6 +20,8 @@ use crate::sim::collider_user_data::unpack_ref;
 use crate::sim::mirror::scene_query_filter;
 use crate::utils::warn_once;
 
+const NO_USABLE_AIM: &str = "pick-aim-without-direction";
+
 /// What a collider is to the pick, as the caller (which knows items and activators) sees it.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PickClass {
@@ -31,8 +33,10 @@ pub enum PickClass {
     Solid,
 }
 
-/// The aim: a ray of `reach` from `origin` along the unit vector `dir`, widened to a ball of
-/// `radius` for items. A `radius` of 0 is the exact ray.
+/// The aim: a ray of `reach` from `origin` along `dir` (any length above 0), widened to a ball of
+/// `radius` for items. A `radius` of 0 is the exact ray. The `reach` and `radius` come from
+/// `PickSettings`, which guarantees a finite reach above 0 and a finite radius of 0 or more;
+/// `origin` and `dir` come from the camera and are checked on entry.
 #[derive(Copy, Clone, Debug)]
 pub struct PickRay {
     pub origin: Vec3,
@@ -41,9 +45,34 @@ pub struct PickRay {
     pub radius: f32,
 }
 
+/// A [`PickRay`] that passed [`PickRay::validated`]: a finite origin and a unit direction.
+#[derive(Copy, Clone, Debug)]
+struct ValidAim {
+    origin: Vec3,
+    dir: Vec3,
+    reach: f32,
+    radius: f32,
+}
+
 impl PickRay {
-    fn has_a_direction(&self) -> bool {
-        self.origin.is_finite() && self.dir.is_finite() && self.dir.length_squared() > 0.0
+    /// The one entry check of an aim: `None` for a non-finite origin or direction and for a zero
+    /// direction. The direction is normalised here and nowhere else.
+    fn validated(self) -> Option<ValidAim> {
+        debug_assert!(
+            self.reach.is_finite() && self.reach > 0.0,
+            "the reach of {self:?} breaks the guarantee of PickSettings"
+        );
+        debug_assert!(
+            self.radius.is_finite() && self.radius >= 0.0,
+            "the radius of {self:?} breaks the guarantee of PickSettings"
+        );
+        let dir = self.dir.try_normalize()?;
+        self.origin.is_finite().then_some(ValidAim {
+            origin: self.origin,
+            dir,
+            reach: self.reach,
+            radius: self.radius,
+        })
     }
 }
 
@@ -107,25 +136,24 @@ impl PhysicsContext {
         aim: PickRay,
         classify: impl Fn(&str) -> PickClass,
     ) -> Option<RayHit> {
-        if !aim.has_a_direction() {
-            warn_once("pick-aim-without-direction", || {
+        let Some(aim) = aim.validated() else {
+            warn_once(NO_USABLE_AIM, || {
                 format!("pick: the aim {aim:?} has no usable origin and direction; it hits nothing")
             });
             return None;
-        }
+        };
+        let classes = RefClasses::new(self, &classify);
         let exact = self.probe(aim.origin, aim.dir, aim.reach, self.pick_filter());
         let exact_decides = aim.radius <= 0.0
             || exact
                 .as_ref()
-                .and_then(|probe| probe.ref_id.as_deref())
-                .is_some_and(|ref_id| classify(ref_id) != PickClass::Solid);
+                .is_some_and(|probe| classes.of(probe.user_data) != PickClass::Solid);
         if exact_decides {
             return exact.map(RayProbe::into_hit);
         }
         let ball_travel = exact
             .as_ref()
             .map_or(aim.reach, |solid| solid.dist.min(aim.reach));
-        let classes = RefClasses::new(self, &classify);
         self.first_counted_item(aim, ball_travel, &classes)
             .or_else(|| exact.map(RayProbe::into_hit))
     }
@@ -142,7 +170,7 @@ impl PhysicsContext {
     /// The first item along the ray that counts, trying the next one when the nearest does not.
     fn first_counted_item(
         &self,
-        aim: PickRay,
+        aim: ValidAim,
         ball_travel: f32,
         classes: &RefClasses<'_>,
     ) -> Option<RayHit> {
@@ -163,7 +191,7 @@ impl PhysicsContext {
     /// starts inside an item touches it at distance 0.
     fn nearest_item_touch(
         &self,
-        aim: PickRay,
+        aim: ValidAim,
         ball_travel: f32,
         classes: &RefClasses<'_>,
         rejected: &[ColliderHandle],
@@ -190,7 +218,7 @@ impl PhysicsContext {
         })
     }
 
-    fn touch_counts(&self, aim: PickRay, touched_point: Vec3, classes: &RefClasses<'_>) -> bool {
+    fn touch_counts(&self, aim: ValidAim, touched_point: Vec3, classes: &RefClasses<'_>) -> bool {
         let to_touched = touched_point - aim.origin;
         let distance = to_touched.length();
         to_touched.dot(aim.dir) > 0.0
@@ -246,12 +274,14 @@ mod tests {
     const OTHER_SIDE: &str = "0A0006:Fallout4.esm";
     const WALL: &str = "0B0001:Fallout4.esm";
     const THIN_WALL: &str = "0B0002:Fallout4.esm";
+    const SLIVER: &str = "0B0003:Fallout4.esm";
     const DOOR: &str = "0C0001:Fallout4.esm";
+    const DOOR_PANEL: &str = "0C0002:Fallout4.esm";
 
     fn classify(ref_id: &str) -> PickClass {
         match ref_id {
-            WALL | THIN_WALL => PickClass::Solid,
-            DOOR => PickClass::Activator,
+            WALL | THIN_WALL | SLIVER | CRATE_REF => PickClass::Solid,
+            DOOR | DOOR_PANEL => PickClass::Activator,
             _ => PickClass::Item,
         }
     }
@@ -319,7 +349,7 @@ mod tests {
         context.pick_attribution(
             PickRay {
                 origin: EYE,
-                dir: dir.normalize(),
+                dir,
                 reach,
                 radius,
             },
@@ -582,19 +612,45 @@ mod tests {
     }
 
     #[test]
-    fn an_aim_without_a_usable_direction_hits_nothing() {
+    fn an_aim_without_a_usable_origin_or_direction_hits_nothing_and_warns_once() {
         let context = world(&[(BESIDE, at(101.5, 5.0, -101.0))], &[], &[]);
-        for dir in [Vec3::ZERO, Vec3::NAN, Vec3::INFINITY] {
-            let hit = context.pick_attribution(
-                PickRay {
-                    origin: EYE,
-                    dir,
-                    reach: REACH,
-                    radius: RADIUS,
-                },
-                classify,
-            );
-            assert!(hit.is_none(), "{dir}");
+        let unusable = [
+            (EYE, Vec3::ZERO),
+            (EYE, Vec3::NAN),
+            (EYE, Vec3::INFINITY),
+            (Vec3::NAN, Vec3::X),
+            (Vec3::INFINITY, Vec3::X),
+            (Vec3::new(EYE.x, f32::NEG_INFINITY, EYE.z), Vec3::X),
+        ];
+        for (origin, dir) in unusable {
+            crate::utils::forget_once(NO_USABLE_AIM);
+            let log = crate::audio::test_support::SharedBuffer::default();
+            let guard = log.capture("warn");
+            let aim = PickRay {
+                origin,
+                dir,
+                reach: REACH,
+                radius: RADIUS,
+            };
+            let hits = [
+                context.pick_attribution(aim, classify),
+                context.pick_attribution(aim, classify),
+            ];
+            drop(guard);
+            assert!(hits.iter().all(Option::is_none), "{origin} {dir}");
+            let warnings = log.drain();
+            assert_eq!(warnings.lines().count(), 1, "{origin} {dir}: {warnings}");
+        }
+    }
+
+    #[test]
+    fn a_direction_of_any_length_aims_like_its_unit_vector() {
+        let context = world(&[(BESIDE, at(108.0, 5.0, -102.2))], &[], &[]);
+        let unit = aim(&context, Vec3::X, RADIUS).expect("a hit");
+        for length in [0.25, 7.0] {
+            let scaled = aim(&context, Vec3::X * length, RADIUS).expect("a hit");
+            assert_eq!(scaled.ref_id, unit.ref_id, "{length}");
+            assert!((scaled.dist - unit.dist).abs() < 1e-5, "{length}");
         }
     }
 
@@ -698,5 +754,192 @@ mod tests {
         let aimed = |context: &PhysicsContext| aimed_ref(aim(context, Vec3::X, ball_radius));
         assert_eq!(aimed(&rounded_item_context(0.4)), Some(BESIDE.to_owned()));
         assert_eq!(aimed(&rounded_item_context(0.0)), None);
+    }
+
+    const CARRIED_HALF: f32 = 0.25;
+    const BLOCKER_HALF: f32 = 0.25;
+    const SLIVER_HALF: f32 = 0.05;
+    const BLOCKER_PATH: &str = "meshes\\blocker.glb";
+    const SLIVER_PATH: &str = "meshes\\sliver.glb";
+    const SIDEWAYS_FROM_AXIS: f32 = 1.9;
+    const AHEAD_OF_EYE: f32 = 2.0;
+    const SLIVER_FRACTION_OF_THE_WAY: f32 = 0.9;
+    const _: () = assert!(SIDEWAYS_FROM_AXIS < RADIUS);
+
+    struct Block {
+        path: &'static str,
+        ref_id: &'static str,
+        half: f32,
+        at: Vec3,
+    }
+
+    #[derive(Copy, Clone)]
+    struct Crate {
+        at: Vec3,
+        carried: bool,
+    }
+
+    fn world_with_blocks(
+        items: &[(&str, Vec3)],
+        blocks: &[Block],
+        crate_in_the_world: Option<Crate>,
+    ) -> PhysicsContext {
+        let mut batch = ground_batch();
+        let mut shapes = vec![(ITEM_PATH, vec![box_shape(ITEM_HALF)])];
+        if !items.is_empty() {
+            batch.objects.push(pinned_group(
+                ITEM_PATH,
+                items.iter().map(|(r, p)| placement(r, *p)).collect(),
+            ));
+        }
+        for block in blocks {
+            batch.objects.push(object_group(
+                block.path,
+                vec![placement(block.ref_id, block.at)],
+                false,
+                None,
+            ));
+            shapes.push((block.path, vec![box_shape(block.half)]));
+        }
+        if let Some(crate_in_the_world) = crate_in_the_world {
+            batch.objects.push(object_group(
+                CRATE_PATH,
+                vec![placement(CRATE_REF, crate_in_the_world.at)],
+                true,
+                Some(2.0),
+            ));
+            shapes.push((CRATE_PATH, vec![box_shape(CARRIED_HALF)]));
+        }
+        let baked = bake(&batch, &shapes);
+        let mut context = wake_context();
+        context.add_cell(GROUND_CELL, &batch, Some(&baked));
+        context.set_physics_center(GROUND_CELL, 2);
+        run_ticks(&mut context, 1);
+        if crate_in_the_world.is_some_and(|crate_in_the_world| crate_in_the_world.carried) {
+            let view = View {
+                yaw: 0.0,
+                pitch: -0.5,
+            };
+            context
+                .grab(refr_entity_id(CRATE_REF), EYE, view)
+                .expect("grabbed");
+        }
+        context
+    }
+
+    /// An item whose corner nearest the axis is `corner`: its centre lies half an item beyond it,
+    /// away from the axis (the aim looks along +x, the items sit on the -z side).
+    fn item_at_corner(ref_id: &'static str, corner: Vec3) -> (&'static str, Vec3) {
+        (ref_id, corner + Vec3::new(ITEM_HALF, 0.0, -ITEM_HALF))
+    }
+
+    /// The corner of the item the ball touches first: inside the radius sideways, ahead of the eye.
+    fn touched_corner() -> Vec3 {
+        at(EYE.x + AHEAD_OF_EYE, EYE.y, EYE.z - SIDEWAYS_FROM_AXIS)
+    }
+
+    fn halfway_to_the_touched_corner() -> Vec3 {
+        EYE.lerp(touched_corner(), 0.5)
+    }
+
+    /// What the aim along +x reaches when the touched item has `blocks` and `crate_in_the_world`
+    /// around it.
+    fn aimed_at_the_touched_item_with(
+        blocks: &[Block],
+        crate_in_the_world: Option<Crate>,
+    ) -> Option<String> {
+        let item = item_at_corner(BESIDE, touched_corner());
+        let context = world_with_blocks(&[item], blocks, crate_in_the_world);
+        aimed_ref(aim(&context, Vec3::X, RADIUS))
+    }
+
+    #[test]
+    fn a_closed_door_between_the_eye_and_an_item_the_ball_touches_hides_it() {
+        let door = Block {
+            path: BLOCKER_PATH,
+            ref_id: DOOR_PANEL,
+            half: BLOCKER_HALF,
+            at: halfway_to_the_touched_corner(),
+        };
+        assert_eq!(
+            aimed_at_the_touched_item_with(&[], None),
+            Some(BESIDE.to_owned())
+        );
+        assert_eq!(aimed_at_the_touched_item_with(&[door], None), None);
+    }
+
+    #[test]
+    fn a_carried_body_between_the_eye_and_an_item_the_ball_touches_does_not_hide_it() {
+        let crate_between = |carried| {
+            Some(Crate {
+                at: halfway_to_the_touched_corner(),
+                carried,
+            })
+        };
+        assert_eq!(
+            aimed_at_the_touched_item_with(&[], crate_between(false)),
+            None
+        );
+        assert_eq!(
+            aimed_at_the_touched_item_with(&[], crate_between(true)),
+            Some(BESIDE.to_owned())
+        );
+    }
+
+    #[test]
+    fn a_carried_body_in_front_of_the_eye_does_not_hide_an_item_on_the_exact_ray() {
+        let item_on_the_ray = (ON_AXIS, at(EYE.x + 10.0, EYE.y, EYE.z));
+        let aimed = |carried| {
+            let crate_on_the_ray = Crate {
+                at: at(EYE.x + 4.0, EYE.y, EYE.z),
+                carried,
+            };
+            let context = world_with_blocks(&[item_on_the_ray], &[], Some(crate_on_the_ray));
+            aimed_ref(aim(&context, Vec3::X, RADIUS))
+        };
+        assert_eq!(aimed(false), Some(CRATE_REF.to_owned()));
+        assert_eq!(aimed(true), Some(ON_AXIS.to_owned()));
+    }
+
+    #[test]
+    fn an_item_between_the_eye_and_a_farther_touched_item_does_not_hide_it_from_the_eye() {
+        let near_corner = at(EYE.x + 3.5, EYE.y, EYE.z - 0.5);
+        let far_corner = at(EYE.x + 8.0, EYE.y, EYE.z - 1.5);
+        let items = [
+            item_at_corner(NEAR_ITEM, near_corner),
+            item_at_corner(BESIDE, far_corner),
+        ];
+        let sliver = Block {
+            path: SLIVER_PATH,
+            ref_id: SLIVER,
+            half: SLIVER_HALF,
+            at: EYE.lerp(near_corner, SLIVER_FRACTION_OF_THE_WAY),
+        };
+        let first_on_the_line_to = |corner: Vec3, context: &PhysicsContext| {
+            let to_corner = corner - EYE;
+            aimed_ref(context.ray_attribution(EYE, to_corner.normalize(), to_corner.length()))
+        };
+
+        let open = world_with_blocks(&items, &[], None);
+        assert_eq!(
+            aimed_ref(aim(&open, Vec3::X, RADIUS)),
+            Some(NEAR_ITEM.to_owned()),
+            "the nearest valid item wins"
+        );
+
+        let sliver_before_the_near_item = world_with_blocks(&items, &[sliver], None);
+        assert_eq!(
+            first_on_the_line_to(near_corner, &sliver_before_the_near_item),
+            Some(SLIVER.to_owned())
+        );
+        assert_eq!(
+            first_on_the_line_to(far_corner, &sliver_before_the_near_item),
+            Some(NEAR_ITEM.to_owned()),
+            "the line to the far item meets the near item and misses the sliver"
+        );
+        assert_eq!(
+            aimed_ref(aim(&sliver_before_the_near_item, Vec3::X, RADIUS)),
+            Some(BESIDE.to_owned())
+        );
     }
 }

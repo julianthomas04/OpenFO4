@@ -272,3 +272,53 @@ fn last_non_empty(frames: &[Frame]) -> Frame {
         .cloned()
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rendering::hud::quad::{HudVertex, TINTED, UNTINTED};
+    use crate::rendering::hud::warning::warning_linear;
+
+    const ART_COLOUR: [f32; 3] = [0.2, 0.4, 0.6];
+    const ART_ALPHA: f32 = 0.5;
+    const FB: (u32, u32) = (1280, 720);
+
+    fn emitted(warning: bool) -> Vec<HudVertex> {
+        let rect = ClipRect {
+            x: -2.0,
+            y: -2.0,
+            w: 4.0,
+            h: 4.0,
+            colour: ART_COLOUR,
+            alpha: ART_ALPHA,
+        };
+        let mut widget = CrosshairWidget::new(CrosshairSpec {
+            frame_rate: 30.0,
+            dot_loop: vec![vec![rect]],
+            dot_to_activate: vec![vec![rect], vec![rect]],
+            activate_to_dot: vec![vec![rect], vec![rect]],
+        });
+        widget.update(CrosshairState::Dot, MAX_ANIM_CATCHUP);
+        let mut verts = Vec::new();
+        let mut quads = QuadBuilder::new(&mut verts, FB.0 as f32, FB.1 as f32, 0.0, [0.0; 4]);
+        widget.emit(&mut quads, &Layout::hud_stage(FB), warning);
+        quads.finish();
+        verts
+    }
+
+    #[test]
+    fn a_crosshair_keeps_the_alpha_of_its_art_and_is_tinted_unless_it_warns() {
+        let [red, green, blue] = warning_linear();
+        for (warning, colour, tint_weight) in [
+            (false, ART_COLOUR, TINTED),
+            (true, [red, green, blue], UNTINTED),
+        ] {
+            let verts = emitted(warning);
+            assert!(!verts.is_empty(), "{warning}");
+            for vertex in verts {
+                assert_eq!(vertex.color, [colour[0], colour[1], colour[2], ART_ALPHA]);
+                assert_eq!(vertex.tint_weight, tint_weight, "{warning}");
+            }
+        }
+    }
+}
