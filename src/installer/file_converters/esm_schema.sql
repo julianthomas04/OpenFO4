@@ -234,7 +234,7 @@ CREATE TABLE IF NOT EXISTS items (
     pickup_sound TEXT,
     drop_sound TEXT,
     keywords TEXT,                      -- JSON
-    is_marker INTEGER DEFAULT 0         -- ESM major record flag 0x800000: CK-only, never rendered in-game
+    is_marker INTEGER DEFAULT 0         -- model path under markers\: editor-only stand-in, never rendered in-game
 );
 
 -- Components a misc item is made of (CVPA)
