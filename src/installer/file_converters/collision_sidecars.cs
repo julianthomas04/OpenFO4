@@ -9,7 +9,7 @@ namespace AssetConverter
     internal static class CollisionSidecars
     {
         /// <summary>Raised whenever the collision worker (or the staged input it reads) changes what it writes for the same game files.</summary>
-        internal const int ExtractorVersion = 2;
+        internal const int ExtractorVersion = 3;
 
         internal const string SidecarPattern = "*.col.json";
         internal const string StampFileName = ".collision.stamp";

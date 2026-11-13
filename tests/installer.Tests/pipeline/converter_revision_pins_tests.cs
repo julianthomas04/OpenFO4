@@ -20,7 +20,7 @@ namespace InstallerTests.Pipeline
             { AssetGroups.Id(AssetGroup.Meshes), nameof(NifNodeExtras), NifNodeExtras.Version, 1, 1 },
             { AssetGroups.Id(AssetGroup.Meshes), nameof(ParticleSystemExtras), ParticleSystemExtras.Version, 1, 1 },
             { AssetGroups.Id(AssetGroup.Meshes), nameof(EffectMaterialExtras), EffectMaterialExtras.Version, 1, 1 },
-            { AssetGroups.Id(AssetGroup.Collision), nameof(CollisionSidecars), CollisionSidecars.ExtractorVersion, 2, 1 },
+            { AssetGroups.Id(AssetGroup.Collision), nameof(CollisionSidecars), CollisionSidecars.ExtractorVersion, 3, 2 },
             { AssetGroups.Id(AssetGroup.Audio), nameof(AudioConversion), AudioConversion.ConverterVersion, 1, 1 },
             { AssetGroups.Id(AssetGroup.Video), nameof(VideoConversion), VideoConversion.ConverterVersion, 1, 1 },
             { AssetGroups.Id(AssetGroup.Interface), nameof(FontExtractor), FontExtractor.ExtractorVersion, 1, 2 },

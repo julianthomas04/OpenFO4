@@ -29,7 +29,7 @@ namespace AssetConverter.Pipeline
             new(AssetGroup.Audio, "audio", 1, []),
             new(AssetGroup.Video, "video", 1, []),
             new(AssetGroup.Meshes, "meshes", 1, [AssetGroup.Animations, AssetGroup.TexturesDatabase]),
-            new(AssetGroup.Collision, "collision", 1, []),
+            new(AssetGroup.Collision, "collision", 2, []),
             new(AssetGroup.Animations, "animations", 1, []),
             new(AssetGroup.TexturesDatabase, "textures-database", 3, []),
         ];

@@ -158,11 +158,11 @@ if (args.Length > 0 && !args[0].StartsWith("--", StringComparison.Ordinal))
                 // meshes are made ready first (extracted again when the staging folder
                 // is gone); only then is the existing .col.json set purged, because
                 // ExtractFo4Collision always passes --skip-existing and a warm sidecar
-                // would never pick up a change of the extractor.
+                // would never pick up a change of the extractor. The marker is brought to the
+                // current collision revision afterwards, as a normal install would leave it.
                 var tColOnly = Stopwatch.StartNew();
                 new PipelineStages(devLocations, devMemory.Value, CancellationToken.None).EnsureStagedMeshArchives();
-                CollisionSidecars.Purge(meshesOut);
-                ExtractCollisionFromStaging(stagingRoot, meshesOut, devMemory.Value);
+                CollisionRegeneration.Run(devLocations, () => ExtractCollisionFromStaging(stagingRoot, meshesOut, devMemory.Value));
                 Console.WriteLine($"Collision sidecars regenerated in {ProgressFormatter.Invariant.Duration(tColOnly.Elapsed)}");
                 return;
             }
