@@ -503,80 +503,24 @@ fn a_new_sim_rejection_is_shown_as_the_games_text_once_per_change() {
     assert_eq!(screen.notice.text(), None);
 }
 
-fn refusal_texts() -> std::collections::HashMap<&'static str, Arc<str>> {
-    [
-        ("sNoKeyDropWarning", "Keys stay with you"),
-        ("sNoJumpWarning", "Feet on the ground first"),
-    ]
-    .into_iter()
-    .map(|(setting, text)| (setting, Arc::from(text)))
-    .collect()
-}
-
 #[test]
-fn a_refusal_with_a_game_setting_shows_that_settings_text_every_time_it_is_repeated() {
+fn a_refusal_with_a_game_setting_is_left_to_the_hud_message_list() {
     let dir = tempfile::tempdir().unwrap();
     let mut screen = screen(dir.path());
-    screen.set_refusal_texts(refusal_texts());
-    let mut model = populated_model();
-    model.reject(crate::sim::pipboy::PipBoyActionError::Airborne);
-    let snapshot = PipBoySnapshot {
-        model: &model,
-        clock: crate::sim::WorldClock::fixture().date(),
-        vitals: vitals(),
-    };
-    paint(&mut screen, &snapshot, 0.0);
-    assert_eq!(screen.notice.text(), Some("Feet on the ground first"));
-
-    screen.notice.clear();
-    paint(&mut screen, &snapshot, 0.1);
-    assert_eq!(screen.notice.text(), None);
-
-    model.reject(crate::sim::pipboy::PipBoyActionError::Airborne);
-    let snapshot = PipBoySnapshot {
-        model: &model,
-        clock: crate::sim::WorldClock::fixture().date(),
-        vitals: vitals(),
-    };
-    paint(&mut screen, &snapshot, 0.2);
-    assert_eq!(screen.notice.text(), Some("Feet on the ground first"));
-}
-
-#[test]
-fn a_key_refusal_shows_the_key_setting_text() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut screen = screen(dir.path());
-    screen.set_refusal_texts(refusal_texts());
-    let mut model = populated_model();
-    model.reject(crate::sim::pipboy::PipBoyActionError::KeyNotDroppable(
-        ItemId(4),
-    ));
-    let snapshot = PipBoySnapshot {
-        model: &model,
-        clock: crate::sim::WorldClock::fixture().date(),
-        vitals: vitals(),
-    };
-
-    paint(&mut screen, &snapshot, 0.0);
-
-    assert_eq!(screen.notice.text(), Some("Keys stay with you"));
-}
-
-#[test]
-fn a_refusal_whose_setting_text_was_never_loaded_shows_nothing() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut screen = screen(dir.path());
-    let mut model = populated_model();
-    model.reject(crate::sim::pipboy::PipBoyActionError::Airborne);
-    let snapshot = PipBoySnapshot {
-        model: &model,
-        clock: crate::sim::WorldClock::fixture().date(),
-        vitals: vitals(),
-    };
-
-    paint(&mut screen, &snapshot, 0.0);
-
-    assert_eq!(screen.notice.text(), None);
+    for error in [
+        crate::sim::pipboy::PipBoyActionError::Airborne,
+        crate::sim::pipboy::PipBoyActionError::KeyNotDroppable(ItemId(4)),
+    ] {
+        let mut model = populated_model();
+        model.reject(error);
+        let snapshot = PipBoySnapshot {
+            model: &model,
+            clock: crate::sim::WorldClock::fixture().date(),
+            vitals: vitals(),
+        };
+        paint(&mut screen, &snapshot, 0.0);
+        assert_eq!(screen.notice.text(), None);
+    }
 }
 
 #[test]

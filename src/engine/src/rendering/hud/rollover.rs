@@ -22,9 +22,9 @@ use crate::ui_layout::{
 const MOVIE: &str = meters::MOVIE;
 const BAR_PATH: &str = "CenterGroup_mc/RolloverWidget_mc/ButtonHintBar_mc";
 
-/// The 8-bit sRGB colour both rollover lines take for a warning verb. Measured on screen in the
-/// original (about RGB 255, 94, 60), not read from game data: no converted layout carries it.
-/// Awaits confirmation from more captured frames.
+/// The 8-bit sRGB colour both rollover lines take for a warning verb. Measured in the original,
+/// 2026-11-12, 18 reads, 3 backgrounds (no spread); not read from game data: no converted layout
+/// carries it.
 const WARNING_RGB: [u8; 3] = [255, 94, 60];
 
 pub struct RolloverKeys {
@@ -299,7 +299,7 @@ impl RolloverWidget {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::rendering::rollover_prompt::Verb;
     use crate::ui_layout::test_support::{
@@ -608,6 +608,11 @@ mod tests {
 
     fn widget() -> RolloverWidget {
         RolloverWidget::new(spec_of(BASE), fixture(BASE))
+    }
+
+    /// The synthetic rollover spec and its layout, for the scene tests of the HUD.
+    pub(in crate::rendering::hud) fn synthetic() -> (RolloverSpec, Arc<UiLayout>) {
+        (spec_of(BASE), fixture(BASE))
     }
 
     #[test]

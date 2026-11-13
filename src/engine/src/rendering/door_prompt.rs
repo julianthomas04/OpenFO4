@@ -5,10 +5,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use anyhow::Context;
 use glam::Vec3;
 
 use super::animated_objects::{AnimatedDoor, DoorState};
+use super::game_text::{SettingTextError, non_blank, required_setting_text, setting_text};
 use super::rollover_prompt::{RolloverPrompt, Verb};
 use super::walk_in::{PlayerLocation, WalkInTriggers};
 use crate::assets::db::DbClient;
@@ -21,38 +21,16 @@ use crate::startup::StartupError;
 pub(super) const OPEN_SETTING: &str = "sOpen";
 pub(super) const CLOSE_SETTING: &str = "sClose";
 
-/// The text of a game setting the engine cannot run without; a missing setting is an error.
-pub(super) fn required_setting_text(db: &DbClient, name: &'static str) -> anyhow::Result<String> {
-    db.get_game_setting_string(name)?
-        .with_context(|| format!("game setting {name} is missing from the database"))
-}
-
-/// The text when it holds more than whitespace.
-pub(super) fn non_blank(text: Option<&str>) -> Option<&str> {
-    text.filter(|text| !text.trim().is_empty())
-}
-
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub(super) enum VerbError {
-    #[error("game setting {setting} is empty")]
-    Empty { setting: &'static str },
-}
-
 pub(super) struct PromptVerbs {
     open: Arc<str>,
     close: Arc<str>,
 }
 
 impl PromptVerbs {
-    pub(super) fn new(open: &str, close: &str) -> Result<Self, VerbError> {
-        let verb = |text: &str, setting| {
-            non_blank(Some(text))
-                .map(Arc::from)
-                .ok_or(VerbError::Empty { setting })
-        };
+    pub(super) fn new(open: &str, close: &str) -> Result<Self, SettingTextError> {
         Ok(Self {
-            open: verb(open, OPEN_SETTING)?,
-            close: verb(close, CLOSE_SETTING)?,
+            open: setting_text(open, OPEN_SETTING)?,
+            close: setting_text(close, CLOSE_SETTING)?,
         })
     }
 
@@ -1624,13 +1602,13 @@ mod tests {
     fn an_empty_verb_setting_is_an_error_naming_it() {
         assert_eq!(
             PromptVerbs::new("Open", " ").err(),
-            Some(VerbError::Empty {
+            Some(SettingTextError::Empty {
                 setting: CLOSE_SETTING
             })
         );
         assert_eq!(
             PromptVerbs::new("", "Close").err(),
-            Some(VerbError::Empty {
+            Some(SettingTextError::Empty {
                 setting: OPEN_SETTING
             })
         );

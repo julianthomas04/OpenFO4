@@ -63,6 +63,10 @@ pub enum StartupError {
     DoorPromptSettings(anyhow::Error),
     #[error("cannot load the item prompt settings: {0:#}")]
     ItemPromptSettings(anyhow::Error),
+    #[error("cannot load the drop refusal texts: {0:#}")]
+    RefusalTextSettings(anyhow::Error),
+    #[error("cannot load the too-heavy message: {0:#}")]
+    TooHeavyText(anyhow::Error),
     #[error("cannot load the player's owner keys: {0:#}")]
     PlayerOwners(anyhow::Error),
     #[error("cannot load the walk-in entrance settings: {0:#}")]

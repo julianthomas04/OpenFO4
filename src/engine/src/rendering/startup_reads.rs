@@ -1,9 +1,12 @@
 //! The startup database reads that need no GPU, run beside the GPU construction.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::door_prompt::DoorPrompts;
+use super::item_feedback::load_too_heavy_text;
 use super::item_prompt::{ItemPrompts, PlayerOwners};
+use super::refusal_texts;
 use super::{
     InteriorLightingCatalog, InteriorOption, MaterialBuoyancy, PlayerMovement, ResolvedTarget,
     State, WorldspaceOption, material_buoyancy_table,
@@ -24,15 +27,17 @@ pub(super) struct StartupDbReads {
     pub door_prompts: DoorPrompts,
     pub item_prompts: ItemPrompts,
     pub player_owners: PlayerOwners,
+    pub refusal_texts: HashMap<&'static str, Arc<str>>,
+    pub too_heavy_text: Arc<str>,
     pub walk_in: WalkInTriggers,
     pub player_movement: PlayerMovement,
     pub buoyancy_table: Option<MaterialBuoyancy>,
 }
 
 impl StartupDbReads {
-    /// Every read except the spawn locations and the door prompt, item prompt and walk-in
-    /// settings degrades to an empty or default value on failure and reports it; the engine
-    /// still runs.
+    /// Every read except the spawn locations and the door prompt, item prompt, refusal text,
+    /// too-heavy text and walk-in settings degrades to an empty or default value on failure and
+    /// reports it; the engine still runs.
     pub(super) fn load(db_path: &str, start_mode: StartMode) -> Result<Self, StartupError> {
         let spawn_locations = match start_mode {
             StartMode::Menu => {
@@ -45,6 +50,8 @@ impl StartupDbReads {
         let door_prompts = DoorPrompts::load(&db, &teleport_rows)?;
         let item_prompts = ItemPrompts::load(&db)?;
         let player_owners = PlayerOwners::load(&db).map_err(StartupError::PlayerOwners)?;
+        let refusal_texts = refusal_texts::load(&db)?;
+        let too_heavy_text = load_too_heavy_text(&db)?;
         let entrance_distances =
             EntranceDistances::load(&db).map_err(StartupError::WalkInSettings)?;
         Ok(Self {
@@ -56,6 +63,8 @@ impl StartupDbReads {
             door_prompts,
             item_prompts,
             player_owners,
+            refusal_texts,
+            too_heavy_text,
             walk_in: State::build_walk_in(&db, entrance_distances),
             player_movement: Self::load_player_movement(db_path),
             buoyancy_table: material_buoyancy_table(db_path),

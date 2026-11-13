@@ -968,6 +968,27 @@ mod tests {
     }
 
     #[test]
+    fn an_equipped_weapon_drops_like_any_single_item_with_its_record_and_no_refusal() {
+        let mut model = empty_model();
+        let pistol = add_listed(&mut model, weapon("Pistol", 10.0, 1.0), ItemKind::Weapon);
+        model.apply(PipBoyAction::Equip(pistol)).unwrap();
+        let effects = model
+            .apply(PipBoyAction::Drop {
+                item: pistol,
+                count: 1,
+            })
+            .unwrap();
+        assert_eq!(
+            effects.dropped,
+            Some(DroppedStack {
+                form_key: "Pistol:Test.esm".to_owned(),
+                count: 1
+            })
+        );
+        assert!(model.inventory.items.iter().all(|item| !item.equipped));
+    }
+
+    #[test]
     fn dropping_part_of_an_equipped_stack_keeps_it_equipped() {
         let mut model = empty_model();
         let mut pistol = weapon("Pistol", 10.0, 1.0);

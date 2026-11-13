@@ -16,6 +16,7 @@ pub mod debug_view;
 pub mod device;
 pub mod device_loss;
 mod door_prompt;
+mod drop_flow;
 pub mod effects;
 pub mod egui_pass;
 pub mod fatal_runtime_error;
@@ -27,6 +28,7 @@ pub mod free_list;
 pub mod frustum;
 pub mod game_frame;
 pub mod game_settings;
+mod game_text;
 pub mod gpu_cull;
 pub mod gpu_driven;
 pub mod gpu_profiler;
@@ -39,6 +41,8 @@ pub mod grass_streaming;
 pub mod hiz;
 pub mod hud;
 pub mod instance;
+mod item_drop;
+mod item_feedback;
 mod item_pickup;
 mod item_prompt;
 pub mod light_anim;
@@ -66,6 +70,7 @@ pub mod rain;
 mod rain_stage;
 pub mod readback_ring;
 pub mod refraction;
+mod refusal_texts;
 pub mod render_pipelines;
 mod reveal_texture_check;
 mod rollover_prompt;
@@ -219,10 +224,13 @@ use auto_character::AutoCharacters;
 use boot::{BootParts, GpuContext, StartupInputs, StateInputs};
 use cube_array::CubeArray;
 use door_prompt::{DoorPrompts, ShownEntrance, aim_hud};
+use drop_flow::{handle_all, return_abandoned, settle_drop};
 use effects::stage::{EffectFrameInputs, EffectStage};
 use grab_input::{
     AimTarget, CarryContext, GrabAction, GrabInput, carry_key_counts, spin_gate_open,
 };
+use item_drop::{dropped_spec, placement};
+use item_feedback::{inventory_log_line, item_sound_of, load_item_sounds};
 use item_pickup::plan_pickup;
 use item_prompt::{ItemPromptCache, ItemPrompts, PlayerOwners, catalog_item_prompt};
 use light_anim::LightAnimator;
@@ -237,6 +245,7 @@ use menu::{MenuRenderer, OverlayForeground, PanelContent};
 use particles::CameraBasis;
 use ragdoll_objects::RagdollObjects;
 use refraction::{RefractionFrameInputs, RefractionStage};
+use refusal_texts::{RefusalMessages, apply_each};
 use reveal_texture_check::{Draw, RevealTextureCheck};
 use rollover_prompt::RolloverPrompt;
 use shaders::startup::EffectValidation;
@@ -698,6 +707,10 @@ pub struct State {
     item_prompts: ItemPrompts,
     /// The owners that make taking an item no theft, resolved at boot.
     player_owners: PlayerOwners,
+    /// The line shown while E is held on an item too heavy to carry, resolved at boot.
+    too_heavy_text: Arc<str>,
+    /// Turns the Pip-Boy's refusals into HUD message lines.
+    refusal_messages: RefusalMessages,
     /// The same catalog the sim holds, so the item prompt never goes through the Pip-Boy.
     pipboy_catalog: Arc<crate::sim::pipboy::PipBoyCatalog>,
     /// The prompt of the item aimed at, built once per aimed entity.
@@ -822,7 +835,7 @@ pub struct State {
     process_memory: utils::ProcessMemory,
     vram_text: String,
     memory_section_open: bool,
-    aimed_door: bool,
+    aimed_interactible: bool,
     vram_last_refresh: Instant,
 
     // Stats
@@ -1113,9 +1126,9 @@ impl State {
     }
 
     /// What the player is currently aiming at within activation reach, as the E key sees it: a
-    /// load door or an animated object, a loose body, or nothing to act on. Shared by the E key
-    /// and (via a precomputed bool) the crosshair and the debug `is_interactible` readout, so all
-    /// agree exactly.
+    /// load door or an animated object, a placed item, a loose body, or nothing to act on. Shared
+    /// by the E key and (via a precomputed bool) the crosshair and the debug `is_interactible`
+    /// readout, so all agree exactly.
     fn aim_target(&self) -> AimTarget {
         self.aim_target_of(self.aimed_ref().as_deref())
     }
@@ -1231,12 +1244,15 @@ impl State {
         let carrying = self.sim.carried().is_some();
         let now = Instant::now();
         let aim = self.aim_target();
-        let action = if is_pressed {
-            self.grab_input.activate_pressed(aim, carrying, now)
+        if is_pressed {
+            let action = self.grab_input.activate_pressed(aim, carrying, now);
+            self.apply_grab_action(action);
         } else {
-            self.grab_input.activate_released(carrying, now, aim)
-        };
-        self.apply_grab_action(action);
+            let actions = self.grab_input.release_with_due_actions(carrying, now, aim);
+            for action in actions {
+                self.apply_grab_action(action);
+            }
+        }
     }
 
     /// R went down or up in walk mode: charges and throws the carried body.
@@ -1271,6 +1287,9 @@ impl State {
                 self.follow_carry_outcome();
             }
             Some(GrabAction::PickUp(entity)) => self.pick_up_item(entity),
+            Some(GrabAction::ReportTooHeavy) => {
+                self.hud.show_message(Arc::clone(&self.too_heavy_text));
+            }
         }
     }
 
@@ -1300,19 +1319,55 @@ impl State {
         }
     }
 
-    /// The consumer of the sim's inventory events; the pickup sound and the HUD message
-    /// arrive with their own milestone.
-    fn drain_inventory_events(&mut self) {
-        for event in self.sim.drain_inventory_events() {
-            match event {
-                InventoryEvent::Added { form_key, count } => {
-                    tracing::debug!("inventory: added {count} x {form_key}");
-                }
-                InventoryEvent::Dropped { form_key, count } => {
-                    tracing::debug!("inventory: dropped {count} x {form_key}");
-                }
+    /// Gives back the units of every drop the world never took, then handles every inventory
+    /// event of the sim, whatever an earlier one did: a taken item plays its pick-up sound, a
+    /// dropped stack goes into the world and plays its put-down sound once the world accepted
+    /// it. An audio error is fatal, as for footsteps, and returned after the last event.
+    fn drain_inventory_events(&mut self) -> Result<(), AudioError> {
+        return_abandoned(self.streamer.take_abandoned_drops(), |form_key, count| {
+            self.sim.restore_units(form_key, count)
+        });
+        handle_all(self.sim.drain_inventory_events(), |event| {
+            tracing::debug!("{}", inventory_log_line(&event));
+            let world_took_it = match &event {
+                InventoryEvent::Added { .. } => true,
+                InventoryEvent::Dropped { form_key, count } => self.place_dropped(form_key, *count),
+            };
+            if world_took_it {
+                self.play_item_sound(&event)
+            } else {
+                Ok(())
             }
-        }
+        })
+    }
+
+    /// Puts a dropped stack into the world in front of the view; when the world refuses, the units
+    /// go back to the inventory. Returns whether the world took it.
+    fn place_dropped(&mut self, form_key: &str, count: u32) -> bool {
+        let eye = self.camera.eye;
+        let forward = self.camera_controller.forward();
+        let spec = dropped_spec(
+            form_key,
+            count,
+            placement(eye, forward, |origin, direction, reach| {
+                self.sim
+                    .debug_ray_hit(origin, direction, reach)
+                    .map(|hit| hit.dist)
+            }),
+        );
+        settle_drop(
+            spec,
+            |spec| self.streamer.spawn_world_item(spec),
+            |form_key, count| self.sim.restore_units(form_key, count),
+        )
+    }
+
+    fn play_item_sound(&mut self, event: &InventoryEvent) -> Result<(), AudioError> {
+        let Some(audio) = &mut self.audio else {
+            return Ok(());
+        };
+        let sound = item_sound_of(event);
+        audio.play_item_sound(sound.item, sound.kind)
     }
 
     /// Reports how the sim answered: a release of the carried body lets go of E and R, and a
@@ -1816,6 +1871,8 @@ impl State {
             door_prompts,
             item_prompts,
             player_owners,
+            refusal_texts,
+            too_heavy_text,
             walk_in,
             player_movement,
             buoyancy_table,
@@ -1894,6 +1951,13 @@ impl State {
             )
             .map_err(AudioError::from)?;
             audio.set_footsteps(footsteps);
+            if let Some(item_sounds) = load_item_sounds(
+                &db_path,
+                Path::new(&layout::audio_dir(asset_server.asset_location())),
+                seed_from_clock(),
+            ) {
+                audio.set_item_sounds(item_sounds);
+            }
             if let Some(weather_sounds) =
                 weather_library.as_ref().map(sound_table).and_then(|table| {
                     load_or_report(
@@ -2044,6 +2108,8 @@ impl State {
             door_prompts,
             item_prompts,
             player_owners,
+            too_heavy_text,
+            refusal_messages: RefusalMessages::new(refusal_texts),
             pipboy_catalog,
             item_prompt_cache: ItemPromptCache::default(),
             walk_in,
@@ -2120,7 +2186,7 @@ impl State {
             process_memory: utils::ProcessMemory::new(),
             vram_text: String::new(),
             memory_section_open: false,
-            aimed_door: false,
+            aimed_interactible: false,
             vram_last_refresh: Instant::now(),
             cull_stats,
             gpu_profiler,
@@ -2805,20 +2871,20 @@ impl State {
         let shows_interface = !self.shot_active();
         let pipboy_open = self.sim.pipboy_snapshot().model.open;
         self.pipboy.sync_open(pipboy_open);
-        if pipboy_open {
-            if shows_interface && !skip.skips(DebugPass::PipBoy) {
-                let snapshot = self.sim.pipboy_snapshot();
-                self.pipboy.render(
-                    &self.device,
-                    &self.queue,
-                    &mut encoder,
-                    &view,
-                    [self.config.width, self.config.height],
-                    &self.gpu_profiler,
-                    &snapshot,
-                );
-            }
-        } else if shows_interface && !skip.skips(DebugPass::Hud) {
+        if pipboy_open && shows_interface && !skip.skips(DebugPass::PipBoy) {
+            let snapshot = self.sim.pipboy_snapshot();
+            self.pipboy.render(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                &view,
+                [self.config.width, self.config.height],
+                &self.gpu_profiler,
+                &snapshot,
+            );
+        }
+        // Over the open Pip-Boy the HUD holds only its message list (`update_over_pipboy`).
+        if shows_interface && !skip.skips(DebugPass::Hud) {
             self.hud.render(
                 &self.device,
                 &self.queue,
@@ -2896,7 +2962,7 @@ impl State {
         // Compute the load-door activation state up front: a &self method can't
         // be called inside the egui closure once `self.debug_ui` is borrowed
         // mutably by render, so capture the plain bool here.
-        let dbg_interactible = self.aimed_door;
+        let dbg_interactible = self.aimed_interactible;
         let developer_window_visible = self.developer_window_visible() && !self.capture_active();
         let mut preview_request: Option<ScreenRequest> = None;
         let mut memory_section_open = false;
@@ -3936,6 +4002,10 @@ impl State {
 
         self.tick_walk_in_hook();
 
+        // Before a teleport tears the world down, so a dropped item lands in the world the
+        // player dropped it in.
+        self.drain_inventory_events()?;
+
         // Apply a load-door activation (E): the same teardown + teleport path as
         // the debug pickers, but the arrival position, grid and facing all come
         // from the door's XTEL. `switch_worldspace`'s returned default start is
@@ -4030,7 +4100,7 @@ impl State {
         // not own — the sim only supplies the Standard spread radius.
         let aimed_ref = self.aimed_ref();
         let aim = self.aim_target_of(aimed_ref.as_deref());
-        self.aimed_door = aim == AimTarget::Activatable;
+        self.aimed_interactible = aim.is_interactible();
         let entrance = self.entrance_near_player(pipboy_open);
         let ordinary = if let AimTarget::Item { entity, .. } = aim {
             self.item_prompt_of(entity)
@@ -4042,21 +4112,23 @@ impl State {
                 |ref_id| self.animated_objects.door(refr_entity_id(ref_id)),
             )
         };
-        let aim_hud = aim_hud(
-            self.aimed_door || matches!(aim, AimTarget::Item { .. }),
-            ordinary,
-            entrance.as_ref(),
-        );
+        let aim_hud = aim_hud(self.aimed_interactible, ordinary, entrance.as_ref());
         let mut hud_snapshot = self.sim.hud_snapshot();
         hud_snapshot.visible &= self.flow.hud_visible();
-        self.hud.update(
-            &hud_snapshot,
-            aim_hud.activate,
-            aim_hud.prompt.as_ref(),
-            world_dt,
-            self.config.width,
-            self.config.height,
-        );
+        if pipboy_open {
+            self.hud
+                .update_over_pipboy(&hud_snapshot, dt, self.config.width, self.config.height);
+        } else {
+            self.hud.update(
+                &hud_snapshot,
+                aim_hud.activate,
+                aim_hud.prompt.as_ref(),
+                world_dt,
+                dt,
+                self.config.width,
+                self.config.height,
+            );
+        }
 
         drop(hud_span);
         let lighting_frame_span = tracing::info_span!("lighting_frame").entered();
@@ -4217,6 +4289,8 @@ impl State {
             width: self.config.width,
             height: self.config.height,
         });
+        self.streamer
+            .set_player_level(self.sim.pipboy_snapshot().model.character.progression.level);
         let stream = self.with_stream_targets(asset_server, |streamer, targets| {
             streamer.update_gpu_driven(eye, targets)
         })?;
@@ -4268,7 +4342,6 @@ impl State {
                 streamer.apply_pending_hides(targets);
             });
         }
-        self.drain_inventory_events();
         self.write_animated_rows(asset_server);
         self.update_ragdolls(asset_server);
 
@@ -4599,10 +4672,22 @@ impl State {
         consumed
     }
 
+    /// Applies the Pip-Boy's actions one by one; the refusal of each goes to the HUD message list
+    /// before the next action can replace it.
     fn flush_pipboy_actions(&mut self) {
-        for action in self.pipboy.take_actions() {
-            self.sim.apply(SimCommand::PipBoy(action));
-        }
+        let actions = self.pipboy.take_actions();
+        apply_each(
+            &mut self.sim,
+            actions,
+            |sim, action| {
+                sim.apply(SimCommand::PipBoy(action));
+            },
+            |sim| {
+                if let Some(text) = self.refusal_messages.next_of(sim) {
+                    self.hud.show_message(text);
+                }
+            },
+        );
     }
 
     fn open_pipboy(&mut self, key: OpenKey) {

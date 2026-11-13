@@ -23,7 +23,6 @@ pub mod tab;
 pub mod test_layout;
 pub mod world_map_texture;
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -157,8 +156,6 @@ pub struct PipBoyScreen {
     notice: NoticeLine,
     /// `PipBoyModel::rejection_count` as of the last rejection shown.
     shown_rejection_count: u64,
-    /// Refusal texts by the game setting that holds them (`PipBoyActionError::refusal_setting`).
-    refusal_texts: HashMap<&'static str, Arc<str>>,
     pointer_sync_pending: bool,
     window_px: Vec2,
     seconds_open: f64,
@@ -198,7 +195,6 @@ impl PipBoyScreen {
             requests: Vec::new(),
             notice: NoticeLine::default(),
             shown_rejection_count: 0,
-            refusal_texts: HashMap::new(),
             pointer_sync_pending: false,
             window_px: stages.shell(),
             seconds_open: 0.0,
@@ -254,11 +250,6 @@ impl PipBoyScreen {
 
     pub fn set_perk_grid(&mut self, textures: PerkGridTextures) {
         self.perk_grid = Some(textures);
-    }
-
-    /// The strings of the game settings that are refusal texts, by setting name.
-    pub fn set_refusal_texts(&mut self, texts: HashMap<&'static str, Arc<str>>) {
-        self.refusal_texts = texts;
     }
 
     pub fn take_actions(&mut self) -> Vec<PipBoyAction> {
@@ -453,20 +444,16 @@ impl PipBoyScreen {
         }
     }
 
-    /// Shows the game's own refusal text for `error`: its translation, else its game setting. A
-    /// rejection the game has no text for only reaches the log.
+    /// Shows the game's own refusal text for `error` by its translation. A refusal that has a game
+    /// setting is shown by the HUD message list, not here; a rejection the game has no text for
+    /// only reaches the log.
     fn show_rejection_text(&mut self, error: &PipBoyActionError) {
         if let Some(key) = error.translation_key() {
             match self.layout.get(&TranslateKey::text(key)) {
                 Ok(text) => self.notice.show(text, self.seconds_open),
                 Err(error) => tracing::error!("Pip-Boy refusal text '{key}': {error}"),
             }
-        } else if let Some(setting) = error.refusal_setting() {
-            match self.refusal_texts.get(setting) {
-                Some(text) => self.notice.show(text.to_string(), self.seconds_open),
-                None => tracing::error!("Pip-Boy refusal text '{setting}' was never loaded"),
-            }
-        } else {
+        } else if error.refusal_setting().is_none() {
             tracing::warn!("Pip-Boy action rejected: {error}");
         }
     }
@@ -591,11 +578,6 @@ impl PipBoy {
         )?;
         self.screen.set_perk_grid(textures);
         Ok(())
-    }
-
-    /// Hands the refusal texts (game setting name to string) to the screen; run once at startup.
-    pub fn set_refusal_texts(&mut self, texts: HashMap<&'static str, Arc<str>>) {
-        self.screen.set_refusal_texts(texts);
     }
 
     /// Follows the model's open flag: starts the animation clock and clears stale input state on

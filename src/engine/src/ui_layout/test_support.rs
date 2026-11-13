@@ -81,6 +81,11 @@ pub fn font_config_json() -> String {
     .to_string()
 }
 
+/// A literal list of one value, as the layout documents write it.
+pub fn literal(value: &Value) -> Value {
+    json!({"values": [value]})
+}
+
 pub fn identity_color() -> Value {
     json!({"mult": [1, 1, 1, 1], "add": [0, 0, 0, 0]})
 }

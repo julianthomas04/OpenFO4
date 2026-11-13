@@ -65,6 +65,27 @@ impl CrosshairSpec {
     }
 }
 
+#[cfg(test)]
+impl CrosshairSpec {
+    /// A one-rect reticle at a steady rate, for the scene tests of the HUD.
+    pub(super) fn synthetic() -> Self {
+        let rect = ClipRect {
+            x: -2.0,
+            y: -2.0,
+            w: 4.0,
+            h: 4.0,
+            colour: [1.0; 3],
+            alpha: 1.0,
+        };
+        Self {
+            frame_rate: 30.0,
+            dot_loop: vec![vec![rect]],
+            dot_to_activate: vec![vec![rect], vec![rect]],
+            activate_to_dot: vec![vec![rect], vec![rect]],
+        }
+    }
+}
+
 /// The frames of a clip; every clip must show something, since the resting states hold a frame
 /// and the transitions index frames during playback.
 fn flatten(

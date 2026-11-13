@@ -46,6 +46,7 @@ use command_budget::{Deferred, DeferredQueue};
 use footstep_clock::{FootstepClock, TickObservation};
 use weather::{WeatherCycle, WeatherStep};
 
+pub(crate) use carry::HOLD_INSET;
 pub use carry::{CarriedInfo, GrabRefusal, ReleaseReason};
 pub use commands::{AddedObjects, KinematicPose, PlayerInput, SimCommand, look_direction};
 pub use footstep_clock::{JumpWindupMismatch, jump_windup_mismatch};
@@ -976,8 +977,7 @@ fn apply_collider_work(physics: &mut physics::PhysicsContext, work: Deferred<Cel
                 batch, baked, skip, ..
             },
         } => {
-            let _span =
-                tracing::trace_span!("sim_add_objects", gx = grid.0, gy = grid.1).entered();
+            let _span = tracing::trace_span!("sim_add_objects", gx = grid.0, gy = grid.1).entered();
             add_objects_reporting(physics, grid, &batch, baked.as_ref(), &skip);
         }
         Deferred::PhysicsCenter { grid, radius } => {
@@ -2173,7 +2173,10 @@ mod item_pickup_tests {
             .unwrap();
         let mut sim = spawned_at(sim, SPAWN_AT);
         tick(&mut sim, 30);
-        assert!(sim.player.grounded, "the fixture player stands on the ground");
+        assert!(
+            sim.player.grounded,
+            "the fixture player stands on the ground"
+        );
         (sim, stack)
     }
 
@@ -2371,6 +2374,10 @@ mod item_pickup_tests {
         });
 
         assert_eq!(body_count(&sim), 1);
-        assert!(sim.physics.remove_ref(refr_entity_id(DROPPED_REF)).is_some());
+        assert!(
+            sim.physics
+                .remove_ref(refr_entity_id(DROPPED_REF))
+                .is_some()
+        );
     }
 }

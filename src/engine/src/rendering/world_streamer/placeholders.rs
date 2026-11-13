@@ -309,21 +309,30 @@ mod tests {
     fn a_linked_reference_on_a_marker_base_rolls_its_list() {
         let obj = reference(CRATE_MARKER, Some(LIST), None);
 
-        assert_eq!(effective_of(&placeholders(one_item_list()), &obj), rolled(3));
+        assert_eq!(
+            effective_of(&placeholders(one_item_list()), &obj),
+            rolled(3)
+        );
     }
 
     #[test]
     fn a_linked_reference_on_a_real_item_rolls_its_list_instead_of_its_base() {
         let obj = reference(PLAIN_ITEM, Some(LIST), None);
 
-        assert_eq!(effective_of(&placeholders(one_item_list()), &obj), rolled(3));
+        assert_eq!(
+            effective_of(&placeholders(one_item_list()), &obj),
+            rolled(3)
+        );
     }
 
     #[test]
     fn a_reference_on_a_real_item_without_a_link_keeps_its_own_base() {
         let obj = reference(PLAIN_ITEM, None, Some(2));
 
-        assert_eq!(effective_of(&placeholders(one_item_list()), &obj), Effective::Own);
+        assert_eq!(
+            effective_of(&placeholders(one_item_list()), &obj),
+            Effective::Own
+        );
     }
 
     #[test]
@@ -338,7 +347,10 @@ mod tests {
     fn a_marker_reference_without_a_link_spawns_nothing() {
         let obj = reference(CRATE_MARKER, None, None);
 
-        assert_eq!(effective_of(&placeholders(one_item_list()), &obj), Effective::Vacant);
+        assert_eq!(
+            effective_of(&placeholders(one_item_list()), &obj),
+            Effective::Vacant
+        );
     }
 
     #[test]
@@ -346,14 +358,20 @@ mod tests {
         let mut obj = reference(CRATE_MARKER, Some(LIST), None);
         obj.form_key = None;
 
-        assert_eq!(effective_of(&placeholders(one_item_list()), &obj), Effective::Vacant);
+        assert_eq!(
+            effective_of(&placeholders(one_item_list()), &obj),
+            Effective::Vacant
+        );
     }
 
     #[test]
     fn without_leveled_lists_every_placeholder_spawns_nothing() {
         let obj = reference(CRATE_MARKER, Some(LIST), None);
 
-        assert_eq!(effective_of(&placeholders(Vec::new()), &obj), Effective::Vacant);
+        assert_eq!(
+            effective_of(&placeholders(Vec::new()), &obj),
+            Effective::Vacant
+        );
     }
 
     #[test]
@@ -456,7 +474,11 @@ mod tests {
             .iter()
             .position(|result| *result != Effective::Vacant)
             .expect("a list with half a chance of an item yields one within 62 loads");
-        assert!(results[first_item..].iter().all(|result| *result == rolled(2)));
+        assert!(
+            results[first_item..]
+                .iter()
+                .all(|result| *result == rolled(2))
+        );
     }
 
     #[test]
@@ -485,13 +507,18 @@ mod tests {
         let obj = reference(CRATE_MARKER, Some(LIST), None);
         let ref_key = obj.form_key.as_deref().unwrap();
         let entity = refr_entity_id(ref_key);
-        let Effective::Resolved(stack) = placeholders.effective(&obj, &load(1, 1), &is_item)
-        else {
+        let Effective::Resolved(stack) = placeholders.effective(&obj, &load(1, 1), &is_item) else {
             panic!("the list always rolls an item");
         };
         let mut items = HashMap::from([(
             entity,
-            placed_item(entity, &stack.base, Some(i64::from(stack.count)), None, Vec3::ZERO),
+            placed_item(
+                entity,
+                &stack.base,
+                Some(i64::from(stack.count)),
+                None,
+                Vec3::ZERO,
+            ),
         )]);
         let mut edits = CellEdits::default();
 
@@ -552,7 +579,10 @@ mod tests {
             is_item(key)
         };
 
-        assert_eq!(placeholders.effective(&obj, &ROLL, &lock_is_free), rolled(3));
+        assert_eq!(
+            placeholders.effective(&obj, &ROLL, &lock_is_free),
+            rolled(3)
+        );
     }
 
     #[test]
@@ -560,9 +590,7 @@ mod tests {
         let rows = vec![list(
             LIST,
             0,
-            &(0..16)
-                .map(|n| (ROLLED_ITEM, 1, n + 1))
-                .collect::<Vec<_>>(),
+            &(0..16).map(|n| (ROLLED_ITEM, 1, n + 1)).collect::<Vec<_>>(),
         )];
         let obj = reference(CRATE_MARKER, Some(LIST), None);
         for _ in 0..50 {
@@ -600,7 +628,7 @@ mod tests {
     fn an_empty_leveled_items_table_reads_as_no_lists() {
         let db = database_with("");
 
-        assert!(read_leveled_lists(&db).unwrap().is_empty());
+        assert_eq!(read_leveled_lists(&db).unwrap(), Vec::new());
     }
 
     #[test]

@@ -38,9 +38,9 @@ use crate::navmesh::{CellNavmeshes, NavMesh, NavResidency, NavWorld, build_meshe
 use crate::rendering::animated_objects::{ActivatorKind, AnimatedObjectEvent, AnimatedRefr};
 use crate::rendering::broken_asset::{BrokenAsset, BrokenAssetSink, BrokenAssets};
 use crate::rendering::cube_array::CubeArray;
-use crate::rendering::door_prompt::non_blank;
 use crate::rendering::effects::geometry::{EffectInstance, EffectMeshData, RefractionInstance};
 use crate::rendering::frustum::Aabb;
+use crate::rendering::game_text::non_blank;
 use crate::rendering::gpu_driven::{
     DRAW_BUCKET_COUNT, FALLBACK_MATERIAL_ID, FALLBACK_SLOT, GpuInstance, GpuTerrainInstance,
     INSTANCE_FLAGS_BLEND, INSTANCE_FLAGS_DECAL, INSTANCE_FLAGS_EFFECT, INSTANCE_FLAGS_HIDDEN_FX,
@@ -3044,9 +3044,10 @@ impl WorldStreamer {
             }
             Err(rejection) => self.abandon_drop(AbandonedDrop::from(spec), rejection),
         }
-        match self.full_cell_mut(grid) {
-            Some(slot) => *slot = res,
-            None => error!("dropped item {entity:?}: cell {grid:?} vanished while it joined"),
+        if let Some(slot) = self.full_cell_mut(grid) {
+            *slot = res;
+        } else {
+            error!("dropped item {entity:?}: cell {grid:?} vanished while it joined");
         }
         self.demand_stale = true;
         self.mark_loaded_changed();
@@ -6062,7 +6063,9 @@ fn assemble_cell_payload<'a>(
                     && info.pickable
                     && let Some(form_key) = obj.form_key.as_deref()
                 {
-                    result.items.push(placed_item_of(obj, form_key, base_key, item_count));
+                    result
+                        .items
+                        .push(placed_item_of(obj, form_key, base_key, item_count));
                 }
                 continue;
             }
@@ -7432,7 +7435,10 @@ mod tests {
                 Effective::Own => panic!("{:?} has a link and kept its own base", obj.form_key),
             }
         }
-        assert_eq!(linked_real_items, 5, "linked references on a real item base");
+        assert_eq!(
+            linked_real_items, 5,
+            "linked references on a real item base"
+        );
         assert!(resolved > 0, "no linked reference resolved");
     }
 

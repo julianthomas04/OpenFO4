@@ -42,6 +42,12 @@ impl Layout {
         }
     }
 
+    /// The HUD's 1280x720 stage on a framebuffer of `fb` pixels.
+    #[cfg(test)]
+    pub fn hud_stage(fb: (u32, u32)) -> Self {
+        Self::for_stage(1280.0, 720.0, fb.0 as f32, fb.1 as f32)
+    }
+
     /// Framebuffer pixels per stage pixel.
     pub fn scale(&self) -> f32 {
         self.scale

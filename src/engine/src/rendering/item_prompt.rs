@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 
-use super::door_prompt::{VerbError, non_blank, required_setting_text};
+use super::game_text::{SettingTextError, required_setting_text, setting_text};
 use super::rollover_prompt::{RolloverPrompt, Verb};
 use super::world_streamer::PlacedItem;
 use crate::assets::db::DbClient;
@@ -26,15 +26,10 @@ pub(super) struct ItemPrompts {
 }
 
 impl ItemPrompts {
-    pub(super) fn new(take: &str, steal: &str) -> Result<Self, VerbError> {
-        let verb = |text: &str, setting| {
-            non_blank(Some(text))
-                .map(Arc::from)
-                .ok_or(VerbError::Empty { setting })
-        };
+    pub(super) fn new(take: &str, steal: &str) -> Result<Self, SettingTextError> {
         Ok(Self {
-            take: verb(take, TAKE_SETTING)?,
-            steal: verb(steal, STEAL_SETTING)?,
+            take: setting_text(take, TAKE_SETTING)?,
+            steal: setting_text(steal, STEAL_SETTING)?,
         })
     }
 
@@ -92,7 +87,17 @@ pub(super) fn is_stealing(owner: Option<&str>, player: &PlayerOwners) -> bool {
     owner.is_some_and(|owner| !player.owns(owner))
 }
 
-/// The item's name and, as its verb, Take or (in the warning tone) Steal. No count text.
+/// The verb with the stack size after it when the stack holds more than one unit: `Take (12)`.
+fn verb_text(verb: &Arc<str>, count: u32) -> Arc<str> {
+    if count > 1 {
+        Arc::from(format!("{verb} ({count})"))
+    } else {
+        Arc::clone(verb)
+    }
+}
+
+/// The item's name and, as its verb, Take or (in the warning tone) Steal, each followed by the
+/// stack size when it is more than one. The name line carries no count.
 pub(super) fn item_prompt(
     item: &PlacedItem,
     definition: &ItemDefinition,
@@ -100,9 +105,9 @@ pub(super) fn item_prompt(
     player: &PlayerOwners,
 ) -> RolloverPrompt {
     let verb = if is_stealing(item.owner.as_deref(), player) {
-        Verb::warning(Arc::clone(&prompts.steal))
+        Verb::warning(verb_text(&prompts.steal, item.count))
     } else {
-        Verb::normal(Arc::clone(&prompts.take))
+        Verb::normal(verb_text(&prompts.take, item.count))
     };
     RolloverPrompt {
         name: Arc::from(definition.name.as_str()),
@@ -180,10 +185,14 @@ mod tests {
     }
 
     fn item(owner: Option<&str>) -> PlacedItem {
+        stack(owner, 1)
+    }
+
+    fn stack(owner: Option<&str>, count: u32) -> PlacedItem {
         PlacedItem {
             entity: EntityId(9),
             base: WIDGET_KEY.to_owned(),
-            count: 4,
+            count,
             owner: owner.map(str::to_owned),
             position: Vec3::ZERO,
         }
@@ -254,6 +263,26 @@ mod tests {
     }
 
     #[test]
+    fn a_stack_shows_its_count_after_the_verb_and_a_single_unit_shows_none() {
+        for (count, take, steal) in [
+            (1, "Grab it", "Pinch it"),
+            (2, "Grab it (2)", "Pinch it (2)"),
+            (12, "Grab it (12)", "Pinch it (12)"),
+        ] {
+            let taken = item_prompt(&stack(None, count), &definition(), &prompts(), &player());
+            assert_eq!(verb_of(&taken), (take, VerbTone::Normal), "{count}");
+            let stolen = item_prompt(
+                &stack(Some(STRANGER), count),
+                &definition(),
+                &prompts(),
+                &player(),
+            );
+            assert_eq!(verb_of(&stolen), (steal, VerbTone::Warning), "{count}");
+            assert_eq!(taken.name.as_ref(), "Brass Widget", "{count}");
+        }
+    }
+
+    #[test]
     fn an_item_missing_from_the_catalog_has_no_prompt() {
         let empty = PipBoyCatalog::default();
         assert_eq!(
@@ -268,13 +297,13 @@ mod tests {
     fn a_blank_verb_is_refused_naming_its_setting() {
         assert_eq!(
             ItemPrompts::new("  ", "Pinch it").err(),
-            Some(VerbError::Empty {
+            Some(SettingTextError::Empty {
                 setting: TAKE_SETTING
             })
         );
         assert_eq!(
             ItemPrompts::new("Grab it", "").err(),
-            Some(VerbError::Empty {
+            Some(SettingTextError::Empty {
                 setting: STEAL_SETTING
             })
         );

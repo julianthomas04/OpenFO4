@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use glam::Vec3;
 
-use crate::rendering::door_prompt::non_blank;
+use crate::rendering::game_text::non_blank;
 use crate::rendering::row_pose::{PoseSource, RowPose};
 use crate::sim::bake::BakedCellColliders;
 use crate::sim::collision::CellColliderBatch;
@@ -890,7 +890,14 @@ mod tests {
         let mut items = HashMap::new();
         let mut edits = CellEdits::default();
 
-        let joined = join_drop(item(44), Some(authored()), true, None, &mut items, &mut edits);
+        let joined = join_drop(
+            item(44),
+            Some(authored()),
+            true,
+            None,
+            &mut items,
+            &mut edits,
+        );
 
         assert!(matches!(joined, Ok(None)));
         assert!(items.contains_key(&EntityId(44)));
