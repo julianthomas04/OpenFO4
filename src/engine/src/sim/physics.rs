@@ -1374,6 +1374,15 @@ impl PhysicsContext {
         self.dyn_bodies.values().filter(|db| !db.pinned).count()
     }
 
+    /// The collider count and position of the tracked body of `entity`, `None` without one.
+    pub fn body_summary(&self, entity: EntityId) -> Option<(usize, Vec3)> {
+        let body = self
+            .world
+            .bodies
+            .get(self.dyn_bodies.get(&entity)?.handle)?;
+        Some((body.colliders().len(), body.translation()))
+    }
+
     /// Every body tracked by entity, pinned items included.
     #[cfg(test)]
     pub fn tracked_body_count(&self) -> usize {

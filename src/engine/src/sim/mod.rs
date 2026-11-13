@@ -11,6 +11,7 @@ mod collider_user_data;
 pub mod collision;
 mod command_budget;
 pub mod commands;
+mod drop_body_log;
 mod dynamic_body;
 mod dynamic_contact;
 mod footstep_clock;
@@ -997,6 +998,28 @@ fn add_objects_reporting(
 ) {
     if let Err(error) = physics.add_objects(grid, batch, baked, skip) {
         tracing::warn!("sim: dropped item has no body: {error}");
+        return;
+    }
+    trace_dropped_bodies(physics, batch);
+}
+
+fn trace_dropped_bodies(physics: &physics::PhysicsContext, batch: &collision::CellColliderBatch) {
+    if !tracing::enabled!(target: drop_body_log::DROP_BODY_TRACE_TARGET, tracing::Level::TRACE) {
+        return;
+    }
+    let ref_keys = batch
+        .objects
+        .iter()
+        .flat_map(|group| &group.placements)
+        .filter_map(|placement| placement.ref_key.as_deref());
+    for ref_key in ref_keys {
+        let line = match physics.body_summary(refr_entity_id(ref_key)) {
+            Some((colliders, position)) => {
+                drop_body_log::dropped_body_line(ref_key, colliders, position)
+            }
+            None => drop_body_log::dropped_without_body_line(ref_key),
+        };
+        tracing::trace!(target: drop_body_log::DROP_BODY_TRACE_TARGET, "{line}");
     }
 }
 
@@ -1918,9 +1941,11 @@ mod item_pickup_tests {
     use super::pipboy::{
         InventoryCategory, InventoryError, ItemDefinition, ItemKind, PipBoyCatalog,
     };
-    use super::test_world::{SPAWN_AT, pinned_prop, prop_entity, spawned_at, tick, world_with};
+    use super::test_world::{
+        SPAWN_AT, pinned_prop, prop_box, prop_entity, spawned_at, tick, world_with,
+    };
     use super::*;
-    use crate::sim::collision::CellColliderBatch;
+    use crate::sim::collision::{CellColliderBatch, ColShape, PartShape};
     use crate::sim::physics::test_support::{
         bake, box_shape, ground_batch, object_group, pinned_group, placement,
     };
@@ -2301,6 +2326,97 @@ mod item_pickup_tests {
 
         assert!(!start.sleeping);
         assert!(later.translation.y < start.translation.y - 1.0);
+    }
+
+    /// The tall single-round capsule and the small hull of the 10mm ammo model: a body that
+    /// cannot rest upright and tilts where it lands.
+    fn tipping_item_shapes() -> Vec<PartShape> {
+        use glam::Quat;
+        let capsule = ColShape::Capsule {
+            center: Vec3::new(0.0, 0.16, 0.0),
+            rotation: Quat::IDENTITY,
+            radius: 0.06,
+            height: 0.4,
+        };
+        let hull = ColShape::Box {
+            center: Vec3::new(0.0, 0.2, 0.0),
+            rotation: Quat::IDENTITY,
+            half_extents: Vec3::new(0.06, 0.04, 0.05),
+        };
+        [capsule, hull]
+            .into_iter()
+            .map(|shape| PartShape {
+                shape,
+                node: None,
+                joint: None,
+                material: 0,
+            })
+            .collect()
+    }
+
+    const SHELF_TOP: f32 = 1.0;
+
+    fn tick_until_asleep(sim: &mut SimWorld, entity: EntityId) {
+        for _ in 0..600 {
+            if physics::test_support::body_probe(&sim.physics, entity).sleeping {
+                return;
+            }
+            tick(sim, 1);
+        }
+        panic!("the dropped body never fell asleep");
+    }
+
+    #[test]
+    fn a_world_object_that_starts_inside_a_shelf_comes_to_rest_on_it_and_is_the_first_thing_aimed_at()
+     {
+        let shelf_half_thickness = 0.2;
+        let shelf = || {
+            prop_box(
+                "meshes_shelf.glb",
+                Vec3::new(150.0, SHELF_TOP - shelf_half_thickness, -50.0),
+                Vec3::new(5.0, shelf_half_thickness, 5.0),
+            )
+        };
+        for sunk in [0.0, 0.05, 0.15] {
+            let mut sim = world_with(&[shelf()]);
+            let batch = CellColliderBatch {
+                objects: vec![object_group(
+                    QUEUED_PATH,
+                    vec![placement(
+                        DROPPED_REF,
+                        Vec3::new(150.0, SHELF_TOP - sunk, -50.0),
+                    )],
+                    true,
+                    Some(0.01),
+                )],
+                ..CellColliderBatch::default()
+            };
+            let baked = bake(&batch, &[(QUEUED_PATH, tipping_item_shapes())]);
+            sim.apply(SimCommand::AddWorldObjects {
+                grid: (0, 0),
+                batch: Arc::new(batch),
+                baked: Some(baked),
+            });
+            let entity = refr_entity_id(DROPPED_REF);
+
+            tick_until_asleep(&mut sim, entity);
+
+            let rest = physics::test_support::body_probe(&sim.physics, entity);
+            assert!(
+                rest.translation.y > SHELF_TOP - 0.01,
+                "sunk {sunk}: rests at {:?}",
+                rest.translation
+            );
+            let above = rest.translation + Vec3::new(-2.0, 2.2, 0.0);
+            let hit = sim
+                .debug_ray_hit(
+                    above,
+                    (rest.translation + Vec3::Y * 0.2 - above).normalize(),
+                    15.0,
+                )
+                .expect("the ray reaches the shelf area");
+            assert_eq!(hit.ref_id.as_deref(), Some(DROPPED_REF), "sunk {sunk}");
+        }
     }
 
     #[test]

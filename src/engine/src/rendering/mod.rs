@@ -1,6 +1,7 @@
 mod activation;
 pub mod adapter;
 pub mod addon_nodes;
+mod aim_log;
 pub mod anim_debug_panel;
 pub mod animated_objects;
 mod auto_anim;
@@ -210,7 +211,7 @@ use crate::sim::commands::{ClockEdit, WeatherEdit};
 use crate::sim::pipboy::PipBoyAction;
 use crate::sim::{
     ClockFrame, DynamicPose, EntityId, InventoryEvent, MaterialBuoyancy, PlayerInput,
-    PlayerMovement, SimCommand, SimWorld, refr_entity_id, water_physics,
+    PlayerMovement, RayHit, SimCommand, SimWorld, refr_entity_id, water_physics,
 };
 use crate::spawn_cell::SpawnCellTarget;
 use crate::startup::{StartupError, StartupTimer};
@@ -717,6 +718,7 @@ pub struct State {
     pipboy_catalog: Arc<crate::sim::pipboy::PipBoyCatalog>,
     /// The prompt of the item aimed at, built once per aimed entity.
     item_prompt_cache: ItemPromptCache,
+    aim_trace: aim_log::AimTrace,
     /// The entrances of the walk-in (automatic) load doors; their sources are keys of
     /// `teleports`.
     walk_in: WalkInTriggers,
@@ -1178,13 +1180,16 @@ impl State {
 
     /// The ref id of the object under the crosshair within activation reach.
     fn aimed_ref(&self) -> Option<String> {
-        self.sim
-            .debug_ray_hit(
-                self.camera.eye,
-                self.camera_controller.forward(),
-                ACTIVATE_REACH,
-            )?
-            .ref_id
+        self.aimed_hit()?.ref_id
+    }
+
+    /// What the crosshair ray hits first within activation reach.
+    fn aimed_hit(&self) -> Option<RayHit> {
+        self.sim.debug_ray_hit(
+            self.camera.eye,
+            self.camera_controller.forward(),
+            ACTIVATE_REACH,
+        )
     }
 
     /// The one entry for every request to teleport through a load door, by the door's ref id.
@@ -2112,6 +2117,7 @@ impl State {
             refusal_messages: RefusalMessages::new(refusal_texts),
             pipboy_catalog,
             item_prompt_cache: ItemPromptCache::default(),
+            aim_trace: aim_log::AimTrace::default(),
             walk_in,
             pending_teleport: spawn_target,
             auto_activate: std::env::var("OPENFO4_AUTO_ACTIVATE")
@@ -4098,8 +4104,14 @@ impl State {
         // Build the HUD overlay for this frame. The crosshair state is selected
         // here (render-side): door-aim depends on the camera, which the sim does
         // not own — the sim only supplies the Standard spread radius.
-        let aimed_ref = self.aimed_ref();
+        let aimed_hit = self.aimed_hit();
+        let aimed_ref = aimed_hit.as_ref().and_then(|hit| hit.ref_id.clone());
         let aim = self.aim_target_of(aimed_ref.as_deref());
+        if tracing::enabled!(target: aim_log::AIM_TRACE_TARGET, tracing::Level::TRACE)
+            && let Some(line) = self.aim_trace.observe(aimed_hit.as_ref(), aim)
+        {
+            tracing::trace!(target: aim_log::AIM_TRACE_TARGET, "{line}");
+        }
         self.aimed_interactible = aim.is_interactible();
         let entrance = self.entrance_near_player(pipboy_open);
         let ordinary = if let AimTarget::Item { entity, .. } = aim {
