@@ -32,6 +32,7 @@ use crate::assets::types::water_shader::WaterShaderToken;
 use crate::assets::types::weapon_assembly::ModRow;
 use crate::assets::world_settings::LoadedGrid;
 use crate::audio::place::PlaceSnapshot;
+use crate::audio::world_music_loader::seed_from_clock;
 use crate::bethesda_space;
 use crate::navmesh::{CellNavmeshes, NavMesh, NavResidency, NavWorld, build_meshes};
 use crate::rendering::animated_objects::{ActivatorKind, AnimatedObjectEvent, AnimatedRefr};
@@ -86,6 +87,7 @@ use crate::sim::collision::{
 };
 use crate::sim::pipboy::ItemKind;
 use crate::sim::{EntityId, SimCommand, refr_entity_id};
+use crate::utils::{drop_off_thread, warn_once};
 use crate::water_world::{LoadedCell, VolumeShapes};
 use one_shot::OneShot;
 use staging::{DeferredSpawn, Ring, StagedCell, Staging};
@@ -103,19 +105,37 @@ use fire_hooks::{
 };
 pub(crate) use fire_hooks::{LightKey, ModelLight, ParticleHost};
 mod load_pacing;
+mod placeholders;
 mod row_poses;
 mod weapons;
 mod world_edits;
 use load_pacing::{IntegrationProgress, LoadFrameMeter, integration_must_stop};
+use placeholders::{Placeholders, RollState, read_leveled_lists};
 use weapons::{
-    WeaponAssemblies, WeaponBase, WeaponRecords, WeaponRefr, WeaponSinks, add_weapon_parts,
-    trace_enabled,
+    BodyKind, WeaponAssemblies, WeaponBase, WeaponRecords, WeaponRefr, WeaponSinks,
+    add_weapon_parts, trace_enabled,
+};
+pub(crate) use world_edits::{
+    AbandonedDrop, DroppedItemSpec, PlacedItem, SpawnItemError, WorldItemError,
 };
 use world_edits::{
-    CellEdits, ItemBaseRole, PendingHide, PendingHides, item_base_role, placed_item,
-    register_command, take_item,
+    CellEdits, GroupBody, ItemBaseRole, PendingHide, PendingHides, RuntimeRefKeys, checked_drop,
+    drop_admission, drop_owner, group_body, item_base_role, join_drop, placed_item,
+    register_command, rotation_z_from_yaw, take_item,
 };
-pub(crate) use world_edits::{PlacedItem, WorldItemError};
+
+/// The registration of a full cell's colliders with the cell's edits; `None` for a cell that
+/// has no colliders.
+fn cell_registration(grid: (i32, i32), res: &mut CellResources) -> Option<SimCommand> {
+    let CellResources {
+        collider_payload,
+        edits,
+        ..
+    } = res;
+    collider_payload
+        .as_ref()
+        .map(|authored| register_command(grid, authored, edits))
+}
 
 const CELL_SIZE_BETH: f32 = 4096.0;
 pub(crate) const SCALE: f32 = bethesda_space::UNITS_TO_ENGINE;
@@ -245,6 +265,25 @@ enum CellRequest {
         grid: (i32, i32),
         epoch: u64,
     },
+    /// One object that exists only at runtime (a dropped item), built as a one-object payload
+    /// for the resident cell that owns it.
+    RuntimeObject(RuntimeObjectRequest),
+}
+
+struct RuntimeObjectRequest {
+    spec: DroppedItemSpec,
+    ref_key: String,
+    /// The owning cell, and its residency when the request was made.
+    grid: (i32, i32),
+    residency: u64,
+    epoch: u64,
+}
+
+/// The one-object payload of a `RuntimeObjectRequest`, to be appended to its owning cell.
+struct RuntimeObjectResult {
+    entity: EntityId,
+    residency: u64,
+    payload: CellLoadResult,
 }
 
 /// The interior cell request could not reach the cell workers: their request channel is closed.
@@ -286,6 +325,7 @@ impl CellRequest {
             CellRequest::Full { epoch, .. }
             | CellRequest::Lod { epoch, .. }
             | CellRequest::Interior { epoch, .. } => *epoch,
+            CellRequest::RuntimeObject(request) => request.epoch,
         }
     }
 }
@@ -293,6 +333,7 @@ impl CellRequest {
 enum WorkerResponse {
     Full(CellLoadResult),
     Lod(CellLoadResult),
+    RuntimeObject(RuntimeObjectResult),
 }
 
 /// A GLB submesh parsed and ready for upload, with its local-space AABB and
@@ -663,6 +704,37 @@ struct CellLoadResult {
     load_failure: Option<String>,
     /// Pick-upable placed references that got a body. Always empty for LOD cells.
     items: Vec<PlacedItem>,
+}
+
+impl CellLoadResult {
+    fn empty(grid: (i32, i32), epoch: u64) -> Self {
+        Self {
+            grid,
+            epoch,
+            terrain: None,
+            meshes: Vec::new(),
+            grass: Vec::new(),
+            grass_models: GrassModels::new(),
+            lights: Vec::new(),
+            shadow_lamps: Vec::new(),
+            light_models: Vec::new(),
+            addon_lights: 0,
+            colliders: None,
+            baked_colliders: None,
+            animated_refs: Vec::new(),
+            ragdoll_refs: Vec::new(),
+            textures: HashMap::new(),
+            navmeshes: Vec::new(),
+            load_failure: None,
+            items: Vec::new(),
+        }
+    }
+}
+
+/// Where the placements of a requested cell come from.
+enum CellSource<'a> {
+    Exterior { worldspace: &'a str },
+    Interior { cell_form_key: &'a str },
 }
 
 /// All placed instances of one mega-buffer slot within a cell. Keeping the
@@ -1233,6 +1305,14 @@ pub struct WorldStreamer {
     pose_run: Vec<GpuInstance>,
     /// Items taken out of the world whose rows `apply_pending_hides` has not hidden yet.
     pending_hides: PendingHides,
+    /// Allocates the reference keys of dropped items.
+    runtime_ref_keys: RuntimeRefKeys,
+    /// Dropped items whose payload the workers are building, by entity.
+    pending_drops: HashMap<EntityId, DroppedItemSpec>,
+    /// Built payloads of dropped items, waiting to join their cell.
+    buffered_runtime: VecDeque<RuntimeObjectResult>,
+    /// Drops that will never appear, until `take_abandoned_drops`.
+    abandoned_drops: Vec<AbandonedDrop>,
     /// A cell's slab allocation failed (instance buffer at the device cap):
     /// repack at the end of the update to recover it.
     needs_repack: bool,
@@ -1334,7 +1414,12 @@ impl WorldStreamer {
         let db = DbClient::new(db_path)?;
 
         let lights = load_lights(&db);
-        let (base_object_lookup, weapon_mods) = build_base_object_lookup(&db, &lights);
+        let BaseLookup {
+            bases: base_object_lookup,
+            weapon_mods,
+            marker_bases,
+        } = build_base_object_lookup(&db, &lights);
+        let placeholders = Placeholders::new(marker_bases, read_leveled_lists(&db)?);
         let light_lookup = build_light_lookup(&lights, db.schema().light_columns_present);
         let light_models = build_light_models(&lights);
         let addon_nodes = db.get_addon_nodes()?;
@@ -1445,6 +1530,8 @@ impl WorldStreamer {
 
         let shared = Arc::new(WorkerShared {
             base_object_lookup,
+            placeholders,
+            rolls: RollState::new(seed_from_clock()),
             weapons: WeaponAssemblies::new(asset_root, weapon_mods),
             light_lookup,
             light_models,
@@ -1533,6 +1620,10 @@ impl WorldStreamer {
             pose_order: Vec::new(),
             pose_run: Vec::new(),
             pending_hides: PendingHides::default(),
+            runtime_ref_keys: RuntimeRefKeys::new(),
+            pending_drops: HashMap::new(),
+            buffered_runtime: VecDeque::new(),
+            abandoned_drops: Vec::new(),
             needs_repack: false,
             shadow_invalidations: ShadowInvalidations::default(),
             integrated_since_rebind: Vec::new(),
@@ -1728,7 +1819,7 @@ impl WorldStreamer {
                 break;
             };
             let staged = self.stage_full(&mut result, targets);
-            crate::utils::drop_off_thread(result);
+            drop_off_thread(result);
             if staged {
                 integrated += 1;
             }
@@ -1750,13 +1841,14 @@ impl WorldStreamer {
                 break;
             };
             let staged = self.stage_lod(&mut result, targets);
-            crate::utils::drop_off_thread(result);
+            drop_off_thread(result);
             if staged {
                 integrated += 1;
             }
             self.drain_worker_responses();
         }
 
+        self.integrate_runtime_objects(targets);
         integrate_span.record("integrated", integrated);
         drop(integrate_span);
 
@@ -2439,7 +2531,9 @@ impl WorldStreamer {
             match response {
                 WorkerResponse::Full(r) if r.epoch == self.epoch => self.buffered_full.push_back(r),
                 WorkerResponse::Lod(r) if r.epoch == self.epoch => self.buffered_lod.push_back(r),
-                stale => crate::utils::drop_off_thread(stale),
+                // A stale one is abandoned when it is merged: its units go back.
+                WorkerResponse::RuntimeObject(r) => self.buffered_runtime.push_back(r),
+                stale => drop_off_thread(stale),
             }
         }
     }
@@ -2832,6 +2926,192 @@ impl WorldStreamer {
         Ok(item)
     }
 
+    /// The player level linked references roll at; cells loaded afterwards use it.
+    pub(crate) fn set_player_level(&self, level: u32) {
+        self.worker_shared.rolls.set_player_level(level);
+    }
+
+    /// Puts a dropped stack into the world: allocates its reference key, picks the resident cell
+    /// that owns it and asks a worker for its one-object payload, which joins the cell when it
+    /// arrives (`integrate_runtime_objects`). `Err` means nothing was recorded; the caller returns
+    /// the units. A drop that later cannot join its cell comes back from `take_abandoned_drops`.
+    pub(crate) fn spawn_world_item(
+        &mut self,
+        spec: DroppedItemSpec,
+    ) -> Result<EntityId, SpawnItemError> {
+        let pickable = self
+            .worker_shared
+            .base_object_lookup
+            .get(&spec.base)
+            .is_some_and(|info| info.pickable);
+        let spec = checked_drop(spec, pickable)?;
+        let (grid, residency) = drop_owner(
+            Self::camera_to_grid(spec.position),
+            self.current_cell,
+            self.interior_cell.is_some(),
+            |grid| self.collision_registered.contains(&grid),
+            |grid| self.full_cell(grid).map(|res| res.residency),
+        )
+        .ok_or(SpawnItemError::NoOwnerCell(spec.position))?;
+        let ref_key = self.runtime_ref_keys.next_key()?;
+        let entity = refr_entity_id(&ref_key);
+        self.db_worker_tx
+            .send(CellRequest::RuntimeObject(RuntimeObjectRequest {
+                spec: spec.clone(),
+                ref_key,
+                grid,
+                residency,
+                epoch: self.epoch,
+            }))
+            .map_err(|_| SpawnItemError::WorkerChannelClosed)?;
+        self.pending_drops.insert(entity, spec);
+        Ok(entity)
+    }
+
+    /// Drops that will never appear since the last call: the world changed or the owning cell
+    /// left before the payload arrived, or the payload holds no body.
+    pub(crate) fn take_abandoned_drops(&mut self) -> Vec<AbandonedDrop> {
+        std::mem::take(&mut self.abandoned_drops)
+    }
+
+    fn abandon_drop(&mut self, drop: AbandonedDrop, reason: impl std::fmt::Display) {
+        warn!(
+            "dropped {} x{} is not placed: {reason}",
+            drop.base, drop.count
+        );
+        self.abandoned_drops.push(drop);
+    }
+
+    /// Joins every built drop payload to its cell.
+    fn integrate_runtime_objects(&mut self, targets: &mut StreamTargets) {
+        while let Some(object) = self.buffered_runtime.pop_front() {
+            self.integrate_runtime_object(object, targets);
+        }
+    }
+
+    fn integrate_runtime_object(
+        &mut self,
+        object: RuntimeObjectResult,
+        targets: &mut StreamTargets,
+    ) {
+        let RuntimeObjectResult {
+            entity,
+            residency,
+            mut payload,
+        } = object;
+        let Some(spec) = self.pending_drops.remove(&entity) else {
+            debug!("dropped item {entity:?} arrived after its drop was abandoned");
+            drop_off_thread(payload);
+            return;
+        };
+        let grid = payload.grid;
+        let cell_residency = self.full_cell(grid).map(|res| res.residency);
+        let item = payload.items.pop().filter(|item| item.entity == entity);
+        let item = match drop_admission(
+            payload.epoch == self.epoch,
+            cell_residency == Some(residency),
+            item,
+        ) {
+            Ok(item) => item,
+            Err(rejection) => {
+                self.abandon_drop(AbandonedDrop::from(spec), rejection);
+                drop_off_thread(payload);
+                return;
+            }
+        };
+        let Some(slot) = self.full_cell_mut(grid) else {
+            error!("dropped item {entity:?}: its admitted cell {grid:?} is gone");
+            self.abandon_drop(AbandonedDrop::from(spec), "its cell is gone");
+            return;
+        };
+        let mut res = std::mem::take(slot);
+        self.append_runtime_object(grid, &mut res, &payload, targets);
+        let colliders = payload
+            .colliders
+            .take()
+            .map(|batch| (batch, payload.baked_colliders.take()));
+        match join_drop(
+            item,
+            colliders,
+            res.dynamic_instances.contains_key(&entity),
+            self.collision_registered.contains(&grid).then_some(grid),
+            &mut res.items,
+            &mut res.edits,
+        ) {
+            Ok(command) => {
+                self.entity_cell.insert(entity, grid);
+                self.sim_commands.extend(command);
+            }
+            Err(rejection) => self.abandon_drop(AbandonedDrop::from(spec), rejection),
+        }
+        match self.full_cell_mut(grid) {
+            Some(slot) => *slot = res,
+            None => error!("dropped item {entity:?}: cell {grid:?} vanished while it joined"),
+        }
+        self.demand_stale = true;
+        self.mark_loaded_changed();
+        drop_off_thread(payload);
+    }
+
+    /// Builds the payload's meshes into the cell. A drawn cell gets a new slab range holding all
+    /// its instances (the old one is freed only once the new one is written; on failure the old
+    /// one stays and the repack places the cell) and its tallies follow; a staged cell uploads
+    /// at promotion. Lights, effects, animation and ragdolls of a dropped model are not placed.
+    fn append_runtime_object(
+        &mut self,
+        grid: (i32, i32),
+        res: &mut CellResources,
+        payload: &CellLoadResult,
+        targets: &mut StreamTargets,
+    ) {
+        let drawn = self.loaded.contains_key(&grid);
+        if drawn {
+            self.subtract_cell_tallies(res);
+        }
+        let (attachments, particle_hosts, effects, refractions) = (
+            res.addon_attachments.len(),
+            res.particle_hosts.len(),
+            res.effect_instances.len(),
+            res.refraction_instances.len(),
+        );
+        for group in &payload.meshes {
+            self.build_mesh_group(group, &payload.textures, res, targets);
+        }
+        let left_out = res.addon_attachments.len() - attachments + res.particle_hosts.len()
+            - particle_hosts
+            + res.effect_instances.len()
+            - effects
+            + res.refraction_instances.len()
+            - refractions
+            + payload.lights.len()
+            + payload.animated_refs.len()
+            + payload.ragdoll_refs.len();
+        res.addon_attachments.truncate(attachments);
+        res.particle_hosts.truncate(particle_hosts);
+        res.effect_instances.truncate(effects);
+        res.refraction_instances.truncate(refractions);
+        if left_out > 0 {
+            let models = payload
+                .meshes
+                .iter()
+                .map(|group| group.model_path.as_ref())
+                .collect::<Vec<_>>()
+                .join(", ");
+            warn_once(&format!("dropped-item-effects {models}"), || {
+                format!(
+                    "dropped {models} carries {left_out} lights, effects, animations or \
+                     ragdolls; it is placed without them"
+                )
+            });
+        }
+        if drawn {
+            self.upload_cell_instances(res, targets);
+            self.add_cell_tallies(res);
+        } else {
+            index_staged_rows(res);
+        }
+    }
+
     /// Register/deregister cell colliders so exactly the resident full cells
     /// within the collision ring of the player are in the rapier world, and
     /// move the sim's dynamic-physics center/radius. The ring is
@@ -2883,14 +3163,13 @@ impl WorldStreamer {
                 if self.collision_registered.contains(&grid) {
                     continue;
                 }
-                let Some(res) = self.full_cell(grid) else {
+                let Some(command) = self
+                    .full_cell_mut(grid)
+                    .and_then(|res| cell_registration(grid, res))
+                else {
                     continue;
                 };
-                let Some(authored) = &res.collider_payload else {
-                    continue;
-                };
-                self.sim_commands
-                    .push(register_command(grid, authored, &res.edits));
+                self.sim_commands.push(command);
                 self.collision_registered.insert(grid);
                 ring_changed = true;
             }
@@ -2980,6 +3259,12 @@ impl WorldStreamer {
         if res.has_grass {
             with_grass_gpu(targets, |grass, gpu| grass.remove_cell(res.residency, gpu));
         }
+        self.subtract_cell_tallies(res);
+        Self::release_cell(res, targets);
+    }
+
+    /// Roll a drawn cell out of the resident tallies: the inverse of `add_cell_tallies`.
+    fn subtract_cell_tallies(&mut self, res: &CellResources) {
         self.marker_instance_count -= res.marker_count;
         self.fx_instance_count -= res.fx_count;
         for bucket in 0..DRAW_BUCKET_COUNT {
@@ -2992,7 +3277,6 @@ impl WorldStreamer {
             self.bucket_potential_total[bucket] =
                 self.bucket_potential_total[bucket].saturating_sub(res.bucket_potential[bucket]);
         }
-        Self::release_cell(res, targets);
     }
 
     /// Hands the cell's grass to the grass stage, keyed by the cell's residency id, hidden until
@@ -3056,7 +3340,9 @@ impl WorldStreamer {
     /// O(total instances) vec rebuild + 48 MB re-upload per membership
     /// change. On allocation failure (instance buffer at the device cap) the
     /// cell's objects stay invisible until the scheduled repack assigns them
-    /// a range.
+    /// a range. A cell that already has a range (an object joined it) gets a
+    /// new one; the old one is freed once the new one is written and kept,
+    /// still drawing what it held, when allocation fails.
     fn upload_cell_instances(&mut self, res: &mut CellResources, targets: &mut StreamTargets) {
         let _span = info_span!("upload_cell_instances").entered();
         res.group_base = group_base_offsets(&res.object_groups);
@@ -3086,7 +3372,13 @@ impl WorldStreamer {
                 targets
                     .upload_budget
                     .add((total * std::mem::size_of::<GpuInstance>()) as u64);
-                res.instance_range = Some((offset, total as u32));
+                if let Some((old_offset, old_count)) =
+                    res.instance_range.replace((offset, total as u32))
+                {
+                    targets
+                        .object_instances
+                        .free(old_offset, old_count, targets.queue);
+                }
             }
             None => {
                 self.needs_repack = true;
@@ -3989,6 +4281,10 @@ impl WorldStreamer {
         // physics-center tracker so the new content's first ring sync re-pushes.
         self.entity_cell.clear();
         self.pending_hides.clear();
+        self.buffered_runtime.clear();
+        for (_, spec) in std::mem::take(&mut self.pending_drops) {
+            self.abandon_drop(AbandonedDrop::from(spec), "the world was torn down");
+        }
         self.animated_events.clear();
         self.animated_events.push(AnimatedObjectEvent::Cleared);
         self.ragdoll_events.clear();
@@ -4548,6 +4844,11 @@ fn with_grass_gpu<R>(
 /// the small maps are Mutex'd one-shot/memoized lookups.
 struct WorkerShared {
     base_object_lookup: HashMap<String, BaseObjectInfo>,
+    /// The leveled lists linked references roll at full-detail cell loads, and the items they
+    /// keep for the session.
+    placeholders: Placeholders,
+    /// The player level and load count those rolls draw from.
+    rolls: RollState,
     /// Assembled weapons of the WEAP bases in `base_object_lookup`.
     weapons: WeaponAssemblies,
     /// LIGH `form_key` -> validated light parameters (lights whose row failed
@@ -4717,7 +5018,7 @@ fn retain_deferred_drop(
         std::mem::take(queue).into_iter().partition(|r| keep(r));
     *queue = kept;
     if !stale.is_empty() {
-        crate::utils::drop_off_thread(stale);
+        drop_off_thread(stale);
     }
 }
 
@@ -5157,10 +5458,37 @@ fn db_worker(
 /// the request (plus caches): any worker can prepare any cell, and the main
 /// thread's pending-set gating already tolerates arbitrary response order.
 fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) -> WorkerResponse {
-    let (grid, is_lod, epoch) = match request {
-        CellRequest::Full { gx, gy, epoch, .. } => ((*gx, *gy), false, *epoch),
-        CellRequest::Lod { gx, gy, epoch, .. } => ((*gx, *gy), true, *epoch),
-        CellRequest::Interior { grid, epoch, .. } => (*grid, false, *epoch),
+    let (grid, is_lod, epoch, source) = match request {
+        CellRequest::Full {
+            gx,
+            gy,
+            worldspace,
+            epoch,
+        } => (
+            (*gx, *gy),
+            false,
+            *epoch,
+            CellSource::Exterior { worldspace },
+        ),
+        CellRequest::Lod {
+            gx,
+            gy,
+            worldspace,
+            epoch,
+        } => (
+            (*gx, *gy),
+            true,
+            *epoch,
+            CellSource::Exterior { worldspace },
+        ),
+        CellRequest::Interior {
+            cell_form_key,
+            grid,
+            epoch,
+        } => (*grid, false, *epoch, CellSource::Interior { cell_form_key }),
+        CellRequest::RuntimeObject(request) => {
+            return WorkerResponse::RuntimeObject(runtime_object_payload(request, shared));
+        }
     };
     let wrap = |result: CellLoadResult| {
         if is_lod {
@@ -5172,42 +5500,18 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
 
     let _span = info_span!("db_query_cell", gx = grid.0, gy = grid.1, is_lod).entered();
 
-    let mut result = CellLoadResult {
-        grid,
-        epoch,
-        terrain: None,
-        meshes: Vec::new(),
-        grass: Vec::new(),
-        grass_models: GrassModels::new(),
-        lights: Vec::new(),
-        shadow_lamps: Vec::new(),
-        light_models: Vec::new(),
-        addon_lights: 0,
-        colliders: None,
-        baked_colliders: None,
-        animated_refs: Vec::new(),
-        ragdoll_refs: Vec::new(),
-        textures: HashMap::new(),
-        navmeshes: Vec::new(),
-        load_failure: None,
-        items: Vec::new(),
-    };
+    let mut result = CellLoadResult::empty(grid, epoch);
     let fail_lod = |result: &mut CellLoadResult, reason: String| {
         if is_lod {
             result.load_failure = Some(reason);
         }
     };
 
-    match &request {
+    match source {
         // Exterior cell: resolved by grid + worldspace, with terrain and the
         // worldspace's persistent REFRs folded in.
-        CellRequest::Full {
-            gx, gy, worldspace, ..
-        }
-        | CellRequest::Lod {
-            gx, gy, worldspace, ..
-        } => {
-            let (gx, gy, worldspace) = (*gx, *gy, worldspace.as_str());
+        CellSource::Exterior { worldspace } => {
+            let (gx, gy) = grid;
             // Built alongside the render data for full cells, packed into
             // result.colliders before every send.
             let mut terrain_collider;
@@ -5356,13 +5660,14 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
                 placed_objects.len() + persistent_objs.len(),
                 terrain_collider,
                 is_lod,
+                false,
                 shared,
             );
         }
         // Interior cell: resolved directly by form_key (no grid/worldspace).
         // No LAND terrain and no worldspace-persistent refs — the floor is the
         // placed object meshes themselves.
-        CellRequest::Interior { cell_form_key, .. } => {
+        CellSource::Interior { cell_form_key } => {
             let cell = match db.get_cell_by_form_key(cell_form_key) {
                 Ok(c) => c,
                 Err(e) => {
@@ -5394,12 +5699,46 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
                 placed_objects.len(),
                 TerrainCollision::Absent,
                 false,
+                false,
                 shared,
             );
         }
     }
 
     wrap(result)
+}
+
+/// Builds the one-object payload of a dropped item: the reference `PlacedObject::runtime`
+/// describes, assembled like a placed one but always as a moving body.
+fn runtime_object_payload(
+    request: &RuntimeObjectRequest,
+    shared: &WorkerShared,
+) -> RuntimeObjectResult {
+    let _span = info_span!("runtime_object", key = request.ref_key.as_str()).entered();
+    let spec = &request.spec;
+    let position = bethesda_space::position_from_engine(spec.position);
+    let object = PlacedObject::runtime(
+        request.ref_key.clone(),
+        spec.base.clone(),
+        [position.x, position.y, position.z].map(f64::from),
+        f64::from(rotation_z_from_yaw(spec.yaw)),
+        i64::from(spec.count),
+    );
+    let mut payload = CellLoadResult::empty(request.grid, request.epoch);
+    assemble_cell_payload(
+        &mut payload,
+        std::iter::once(&object),
+        1,
+        TerrainCollision::Absent,
+        false,
+        true,
+        shared,
+    );
+    RuntimeObjectResult {
+        entity: refr_entity_id(&request.ref_key),
+        residency: request.residency,
+        payload,
+    }
 }
 
 /// Whether a query failed only because no row matched, as for a grid without a cell.
@@ -5553,12 +5892,18 @@ fn refr_world(obj: &PlacedObject) -> Mat4 {
         * Mat4::from_scale(Vec3::splat(obj.scale as f32))
 }
 
-/// The item record of a placed reference of an item base.
-fn placed_item_of(obj: &PlacedObject, form_key: &str, base: &str) -> PlacedItem {
+/// The item record of a placed reference of an item base; `count` is the reference's own or,
+/// for a linked reference, its roll's.
+fn placed_item_of(
+    obj: &PlacedObject,
+    form_key: &str,
+    base: &str,
+    count: Option<i64>,
+) -> PlacedItem {
     placed_item(
         refr_entity_id(form_key),
         base,
-        obj.item_count,
+        count,
         obj.owner.as_deref(),
         refr_position(obj),
     )
@@ -5566,17 +5911,17 @@ fn placed_item_of(obj: &PlacedObject, form_key: &str, base: &str) -> PlacedItem 
 
 /// Expands a weapon REFR into one mesh group entry and one collision placement
 /// per assembled part. All parts carry the REFR's pose, scale and entity id,
-/// so they render and simulate as one object. Returns whether the REFR got a
-/// dynamic body.
+/// so they render and simulate as one object. Returns the kind of body the
+/// REFR's collision makes (`None` when it was not expanded).
 fn expand_weapon_refr(
     obj: &PlacedObject,
     weapon: &WeaponBase,
     info: &BaseObjectInfo,
     shared: &WorkerShared,
     sinks: &mut WeaponSinks,
-) -> bool {
+) -> BodyKind {
     if !sinks.claim(obj.form_key.as_deref()) {
-        return false;
+        return BodyKind::None;
     }
     let placed = shared
         .weapons
@@ -5588,7 +5933,7 @@ fn expand_weapon_refr(
         );
     }
     if placed.skip.is_some() {
-        return false;
+        return BodyKind::None;
     }
     add_weapon_parts(
         &placed,
@@ -5599,7 +5944,7 @@ fn expand_weapon_refr(
         },
         sinks,
     );
-    placed.has_dynamic_body()
+    placed.body_kind()
 }
 
 /// Resolve placements -> render mesh groups + collider batch + preloaded DDS,
@@ -5616,6 +5961,7 @@ fn assemble_cell_payload<'a>(
     placement_count: usize,
     terrain_collider: TerrainCollision,
     is_lod: bool,
+    dropped: bool,
     shared: &WorkerShared,
 ) {
     let (gx, gy) = result.grid;
@@ -5644,6 +5990,8 @@ fn assemble_cell_payload<'a>(
     // Full-detail placements of doors/containers/activators/furniture; the ones
     // whose model turns out animated become activatable objects.
     let mut interactables: Vec<InteractablePlacement<'a>> = Vec::new();
+    let roll = (!is_lod && !dropped).then(|| shared.rolls.next_cell());
+    let is_item = |key: &str| shared.base_object_lookup.contains_key(key);
     {
         let _span = info_span!("resolve_transforms", count = placement_count).entered();
         for obj in placements {
@@ -5683,6 +6031,14 @@ fn assemble_cell_payload<'a>(
                 continue;
             }
 
+            let effective = match &roll {
+                Some(roll) => shared.placeholders.effective(obj, roll, &is_item),
+                None => shared.placeholders.at_reduced_detail(obj),
+            };
+            let Some((base_key, item_count)) = effective.item_entry(obj, base_key) else {
+                continue;
+            };
+
             // A light base without a model has no entry here: its ref is only
             // a light.
             let Some(info) = shared.base_object_lookup.get(base_key) else {
@@ -5702,10 +6058,11 @@ fn assemble_cell_payload<'a>(
                             expanded_refs: &mut expanded_weapon_refs,
                         },
                     )
+                    .holds_item_body(dropped)
                     && info.pickable
                     && let Some(form_key) = obj.form_key.as_deref()
                 {
-                    result.items.push(placed_item_of(obj, form_key, base_key));
+                    result.items.push(placed_item_of(obj, form_key, base_key, item_count));
                 }
                 continue;
             }
@@ -5779,8 +6136,10 @@ fn assemble_cell_payload<'a>(
                 };
                 let item_ref = obj.form_key.as_deref().filter(|_| info.pickable);
                 if let Some(form_key) = item_ref {
-                    item_candidates
-                        .push((mesh_path.clone(), placed_item_of(obj, form_key, base_key)));
+                    item_candidates.push((
+                        mesh_path.clone(),
+                        placed_item_of(obj, form_key, base_key, item_count),
+                    ));
                 }
                 let collision_paths = if item_ref.is_some() {
                     &mut item_placements_by_path
@@ -5875,8 +6234,9 @@ fn assemble_cell_payload<'a>(
                     );
                 for (path, placements, items) in groups {
                     if let Some(meta) = shared.collision_manifest.get(&manifest_key(&path)) {
-                        let pinned = items && !meta.dynamic;
-                        if meta.dynamic {
+                        let GroupBody { dynamic, pinned } =
+                            group_body(items, meta.dynamic, dropped);
+                        if dynamic {
                             dynamic_paths.insert(path.clone());
                         }
                         if pinned {
@@ -5895,7 +6255,7 @@ fn assemble_cell_payload<'a>(
                         objects.push(ObjectColliderGroup {
                             path,
                             placements,
-                            dynamic: meta.dynamic,
+                            dynamic,
                             mass: meta.mass,
                             ragdoll_sidecar,
                             water: meta.water.clone(),
@@ -6517,11 +6877,16 @@ fn rows_or_warn<T>(query: &str, rows: anyhow::Result<Vec<T>>) -> Vec<T> {
     })
 }
 
-/// The base-object lookup, and the mod rows the weapon assemblies read.
-fn build_base_object_lookup(
-    db: &DbClient,
-    lights: &[Light],
-) -> (HashMap<String, BaseObjectInfo>, HashMap<String, ModRow>) {
+/// What cell assembly knows about base objects.
+struct BaseLookup {
+    bases: HashMap<String, BaseObjectInfo>,
+    /// The mod rows the weapon assemblies read.
+    weapon_mods: HashMap<String, ModRow>,
+    /// The marker item bases: without a leveled link their references spawn nothing.
+    marker_bases: HashSet<String>,
+}
+
+fn build_base_object_lookup(db: &DbClient, lights: &[Light]) -> BaseLookup {
     let mut map = HashMap::new();
     let mut water_activators: Vec<(String, Arc<str>)> = Vec::new();
     let mut door_names: Vec<(String, Option<Arc<str>>)> = Vec::new();
@@ -6691,34 +7056,43 @@ fn build_base_object_lookup(
             info.water_type = Some(water_type);
         }
     }
-    let weapon_mods = add_item_bases(db, &mut map);
-    (map, weapon_mods)
+    let (weapon_mods, marker_bases) = add_item_bases(db, &mut map);
+    BaseLookup {
+        bases: map,
+        weapon_mods,
+        marker_bases,
+    }
 }
 
 /// Registers the weapon bases (`add_weapon_bases`) and, on a database that knows which items
 /// are CK-only markers, every other item base with a model that is not one. Without that
 /// knowledge no other item base is registered (a marker would draw and get a body) and no
-/// weapon is pick-upable; weapons draw as before either way. Returns the weapon mod rows.
+/// weapon is pick-upable; weapons draw as before either way. Returns the weapon mod rows and
+/// the marker item bases.
 fn add_item_bases(
     db: &DbClient,
     map: &mut HashMap<String, BaseObjectInfo>,
-) -> HashMap<String, ModRow> {
+) -> (HashMap<String, ModRow>, HashSet<String>) {
     let weapon_mods = add_weapon_bases(db, map);
+    let mut markers = HashSet::new();
     if !db.schema().item_marker_column_present {
         warn!(
             "the database has no items.is_marker column: placed items other than weapons are \
              not drawn and nothing can be picked up; reconvert the database"
         );
-        return weapon_mods;
+        return (weapon_mods, markers);
     }
     let rows = match db.get_items() {
         Ok(rows) => rows,
         Err(e) => {
             warn!("get_items failed, placed items other than weapons will not be drawn: {e:#}");
-            return weapon_mods;
+            return (weapon_mods, markers);
         }
     };
     for row in rows {
+        if row.is_marker == Some(true) {
+            markers.insert(row.form_key.clone());
+        }
         let Some(kind) = item_kind_of(&row.item_type) else {
             continue;
         };
@@ -6729,7 +7103,7 @@ fn add_item_bases(
             register_item_base(map, row.form_key, model_path, role);
         }
     }
-    weapon_mods
+    (weapon_mods, markers)
 }
 
 fn register_weapon_role(
@@ -6826,11 +7200,18 @@ fn add_weapon_bases(
     reason = "tests compare exact sentinels and copied values"
 )]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{BTreeSet, HashSet};
 
     use bytemuck::Zeroable;
 
+    use super::placeholders::Effective;
+    use super::world_edits::AddedObject;
     use super::*;
+    use crate::leveled_items::{LeveledLists, resolve};
+    use crate::random::SplitMix64;
+    use crate::sim::pipboy::character::STARTING_LEVEL;
+
+    const ROLLS_PER_LIST: u64 = 64;
 
     #[test]
     fn door_bases_are_doors_with_their_name_unless_it_is_blank_and_other_bases_are_not() {
@@ -6843,7 +7224,7 @@ mod tests {
                  ('CHEST', 'Chest', 'chest.nif');",
         );
 
-        let (lookup, _) = build_base_object_lookup(&db, &[]);
+        let lookup = build_base_object_lookup(&db, &[]).bases;
 
         let named = ActivatorKind::Door {
             name: Some(Arc::from("Door")),
@@ -6886,7 +7267,7 @@ mod tests {
     fn item_bases_known_not_to_be_markers_draw_and_only_named_ones_are_pickable() {
         let db = crate::assets::db::test_support::database_with(ITEM_BASES);
 
-        let (lookup, _) = build_base_object_lookup(&db, &[]);
+        let lookup = build_base_object_lookup(&db, &[]).bases;
 
         assert_eq!(
             registered(&lookup),
@@ -6915,7 +7296,7 @@ mod tests {
             "{ITEM_BASES} ALTER TABLE items DROP COLUMN is_marker;"
         ));
 
-        let (lookup, _) = build_base_object_lookup(&db, &[]);
+        let lookup = build_base_object_lookup(&db, &[]).bases;
 
         assert_eq!(
             registered(&lookup),
@@ -6929,7 +7310,7 @@ mod tests {
         let db = crate::assets::db::test_support::installed_database();
         let items = db.get_items().unwrap();
 
-        let (lookup, _) = build_base_object_lookup(&db, &[]);
+        let lookup = build_base_object_lookup(&db, &[]).bases;
 
         let markers: Vec<&str> = items
             .iter()
@@ -6951,6 +7332,158 @@ mod tests {
             .count();
         assert_eq!(non_weapon_item_bases, 3424);
         assert_eq!(lookup.values().filter(|info| info.pickable).count(), 3553);
+    }
+
+    #[test]
+    fn marker_item_bases_are_the_placeholder_bases() {
+        let db = crate::assets::db::test_support::database_with(ITEM_BASES);
+
+        let marker_bases = build_base_object_lookup(&db, &[]).marker_bases;
+
+        assert_eq!(
+            marker_bases,
+            HashSet::from(["XMARK".to_owned(), "MARKERGUN".to_owned()])
+        );
+    }
+
+    fn every_installed_reference(db: &DbClient) -> Vec<PlacedObject> {
+        let mut cells = db.get_interior_cells().unwrap();
+        let mut refs = Vec::new();
+        for worldspace in db.get_worldspaces().unwrap() {
+            let Some(form_key) = worldspace.form_key.as_deref() else {
+                continue;
+            };
+            cells.extend(db.get_cells(form_key).unwrap());
+            refs.extend(db.get_worldspace_persistent_objects(form_key).unwrap());
+        }
+        for chunk in cells.chunks(500) {
+            refs.extend(db.get_placed_objects_batched(chunk).unwrap());
+        }
+        refs
+    }
+
+    #[test]
+    #[ignore = "reads the converted installation's database (OPENFO4_INSTALL_DIR)"]
+    fn every_linked_reference_rolls_a_registered_item_or_nothing_from_a_chance_none() {
+        let db = crate::assets::db::test_support::installed_database();
+        let lookup = build_base_object_lookup(&db, &[]);
+        let rows = db.get_leveled_items().unwrap();
+        let chance_none: HashMap<String, u8> = rows
+            .iter()
+            .map(|row| (row.form_key.clone(), row.chance_none))
+            .collect();
+        let lists = LeveledLists::from_rows(rows.clone());
+        let placeholders = Placeholders::new(lookup.marker_bases.clone(), rows);
+        let rolls = RollState::new(0x5EED);
+        let is_item = |key: &str| lookup.bases.contains_key(key);
+        let linked: Vec<PlacedObject> = every_installed_reference(&db)
+            .into_iter()
+            .filter(|obj| obj.leveled_item.is_some() && !obj.initially_hidden)
+            .collect();
+
+        let linked_lists: BTreeSet<&str> = linked
+            .iter()
+            .filter_map(|obj| obj.leveled_item.as_deref())
+            .collect();
+        for list in linked_lists {
+            for seed in 0..ROLLS_PER_LIST {
+                let mut rng = SplitMix64::new(seed);
+                match resolve(&lists, &is_item, list, STARTING_LEVEL, &mut rng) {
+                    Ok(Some(stack)) => assert!(
+                        lookup.bases.contains_key(&stack.base),
+                        "{list} rolled {}, which is not registered",
+                        stack.base
+                    ),
+                    Ok(None) => assert!(
+                        chance_none[list] > 0,
+                        "{list} rolled nothing and has no chance none"
+                    ),
+                    Err(error) => panic!("{list} does not resolve: {error}"),
+                }
+            }
+        }
+
+        let mut resolved = 0;
+        let mut linked_real_items = 0;
+        for obj in &linked {
+            let list = obj.leveled_item.as_deref().unwrap_or_default();
+            if obj
+                .base_object
+                .as_ref()
+                .is_some_and(|base| lookup.bases.contains_key(base))
+            {
+                linked_real_items += 1;
+            }
+            match placeholders.effective(obj, &rolls.next_cell(), &is_item) {
+                Effective::Resolved(stack) => {
+                    assert!(
+                        lookup.bases.contains_key(&stack.base),
+                        "{:?} rolled {} from {list}, which is not registered",
+                        obj.form_key,
+                        stack.base
+                    );
+                    resolved += 1;
+                }
+                Effective::Vacant => assert!(
+                    chance_none[list] > 0,
+                    "{:?} rolled nothing from {list}, which has no chance none",
+                    obj.form_key
+                ),
+                Effective::Own => panic!("{:?} has a link and kept its own base", obj.form_key),
+            }
+        }
+        assert_eq!(linked_real_items, 5, "linked references on a real item base");
+        assert!(resolved > 0, "no linked reference resolved");
+    }
+
+    fn cell_with_colliders() -> CellResources {
+        CellResources {
+            collider_payload: Some((Arc::new(CellColliderBatch::default()), None)),
+            ..CellResources::default()
+        }
+    }
+
+    #[test]
+    fn a_cell_registers_with_the_items_taken_from_it() {
+        let mut res = cell_with_colliders();
+        Arc::make_mut(&mut res.edits.removed).insert(EntityId(31));
+
+        let Some(SimCommand::AddCellCollidersSkipping { grid, skip, .. }) =
+            cell_registration((4, -5), &mut res)
+        else {
+            panic!("an edited cell registers with its skip set");
+        };
+
+        assert_eq!(grid, (4, -5));
+        assert_eq!(*skip, HashSet::from([EntityId(31)]));
+    }
+
+    #[test]
+    fn a_cell_registers_the_items_dropped_into_it() {
+        let mut res = cell_with_colliders();
+        let dropped = Arc::new(CellColliderBatch::default());
+        res.edits.added.push(AddedObject {
+            entity: EntityId(32),
+            batch: Arc::clone(&dropped),
+            baked: None,
+        });
+
+        let Some(SimCommand::AddCellCollidersSkipping { added, .. }) =
+            cell_registration((0, 0), &mut res)
+        else {
+            panic!("a cell with a dropped item registers it");
+        };
+
+        assert_eq!(added.len(), 1);
+        assert!(Arc::ptr_eq(&added[0].batch, &dropped));
+    }
+
+    #[test]
+    fn a_cell_without_colliders_registers_nothing() {
+        let mut res = CellResources::default();
+        Arc::make_mut(&mut res.edits.removed).insert(EntityId(31));
+
+        assert!(cell_registration((0, 0), &mut res).is_none());
     }
 
     #[test]

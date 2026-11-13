@@ -3,7 +3,7 @@
 //! the animation tick) share one write path.
 
 use glam::{Mat4, Quat, Vec3};
-use tracing::info_span;
+use tracing::{debug, info_span};
 
 #[cfg(test)]
 use super::index_staged_rows;
@@ -127,27 +127,28 @@ impl WorldStreamer {
         let mut hides = std::mem::take(&mut self.pending_hides);
         for (index, hide) in hides.as_slice().iter().enumerate() {
             let res = match self.loaded.get_mut(&hide.grid) {
-                Some(res) => res,
-                None => match self.staging.get_mut(Ring::Full, hide.grid) {
-                    Some(staged) => &mut staged.res,
-                    None => continue,
-                },
+                Some(res) => Some(res),
+                None => self
+                    .staging
+                    .get_mut(Ring::Full, hide.grid)
+                    .map(|staged| &mut staged.res),
             };
-            if res.residency != hide.residency {
-                continue;
-            }
-            let slab = res.instance_range;
             self.pose_writes.clear();
             let invalidations = &mut self.shadow_invalidations;
-            hide_entity_rows(
+            let outcome = hide_in_cell(
                 res,
                 hides.as_slice(),
                 index,
                 &mut self.pose_writes,
-                |bounds| {
-                    invalidations.region(bounds);
-                },
+                |bounds| invalidations.region(bounds),
             );
+            let HideOutcome::Hidden { slab } = outcome else {
+                debug!(
+                    "hide of taken item {:?} in cell {:?} skipped: {outcome:?}",
+                    hide.entity, hide.grid
+                );
+                continue;
+            };
             if self.entity_cell.get(&hide.entity) == Some(&hide.grid) {
                 self.entity_cell.remove(&hide.entity);
             }
@@ -227,6 +228,38 @@ fn hide_entity_rows(
 ) {
     rewrite_cell_rows(res, hides, std::iter::once(index), writes, moved);
     res.dynamic_instances.remove(&hides[index].entity);
+}
+
+/// What became of one pending hide.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HideOutcome {
+    /// The rows are hidden; `slab` is the cell's range the queued writes go to.
+    Hidden { slab: Option<(u32, u32)> },
+    /// The cell left: its rows went with it.
+    CellGone,
+    /// The grid holds a later load of the cell, whose item was never taken.
+    CellReloaded,
+}
+
+/// Hides the rows of `hides[index]` in `res`, the full cell now at its grid, if that is still
+/// the cell the item was taken from.
+fn hide_in_cell(
+    res: Option<&mut CellResources>,
+    hides: &[PendingHide],
+    index: usize,
+    writes: &mut Vec<(u32, GpuInstance)>,
+    moved: impl FnMut(Aabb),
+) -> HideOutcome {
+    let Some(res) = res else {
+        return HideOutcome::CellGone;
+    };
+    if res.residency != hides[index].residency {
+        return HideOutcome::CellReloaded;
+    }
+    hide_entity_rows(res, hides, index, writes, moved);
+    HideOutcome::Hidden {
+        slab: res.instance_range,
+    }
 }
 
 /// The slab layout of one cell, needed to resolve a row to its instance slot.
@@ -408,6 +441,54 @@ mod tests {
         };
         index_staged_rows(&mut res);
         res
+    }
+
+    #[test]
+    fn a_hide_skips_a_cell_that_left_or_was_loaded_again() {
+        let at = Vec3::new(1.0, 2.0, 3.0);
+        let mut reloaded = cell_with_two_resting_bodies(Some(3));
+        reloaded.residency = 2;
+        let mut writes = Vec::new();
+
+        let gone = hide_in_cell(None, &[hide_of(11, at)], 0, &mut writes, |_| {});
+        let other = hide_in_cell(
+            Some(&mut reloaded),
+            &[hide_of(11, at)],
+            0,
+            &mut writes,
+            |_| {},
+        );
+
+        assert_eq!(gone, HideOutcome::CellGone);
+        assert_eq!(other, HideOutcome::CellReloaded);
+        assert!(writes.is_empty());
+        assert!(
+            reloaded
+                .dynamic_instances
+                .contains_key(&crate::sim::EntityId(11))
+        );
+    }
+
+    #[test]
+    fn a_hide_in_the_cell_it_was_queued_for_hides_and_names_its_slab_range() {
+        let at = Vec3::new(1.0, 2.0, 3.0);
+        let mut res = cell_with_two_resting_bodies(Some(3));
+        res.residency = 1;
+        let mut writes = Vec::new();
+
+        let outcome = hide_in_cell(Some(&mut res), &[hide_of(11, at)], 0, &mut writes, |_| {});
+
+        assert_eq!(
+            outcome,
+            HideOutcome::Hidden {
+                slab: Some((40, 3))
+            }
+        );
+        assert_eq!(writes.len(), 2);
+        assert!(
+            !res.dynamic_instances
+                .contains_key(&crate::sim::EntityId(11))
+        );
     }
 
     fn hide_of(entity: u64, at: Vec3) -> PendingHide {
