@@ -340,6 +340,14 @@ impl GameIni {
         })
     }
 
+    /// Like [`Self::require_non_negative`], and `None` when no INI sets the key; the same rule as
+    /// [`Self::optional_positive`] for a setting where 0 is a real value.
+    pub fn optional_non_negative(&self, key: IniKey) -> Result<Option<f32>, IniError> {
+        self.optional_valid(key, "a finite number, 0 or more", |v: &f32| {
+            v.is_finite() && *v >= 0.0
+        })
+    }
+
     /// Like [`Self::require_valid`], and `None` when no INI sets the key; the same rule as
     /// [`Self::optional_positive`] for a setting with any other validity.
     pub fn optional_valid<T: IniValue>(

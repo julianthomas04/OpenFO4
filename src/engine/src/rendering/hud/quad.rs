@@ -38,14 +38,20 @@ impl PxRect {
 pub struct HudVertex {
     /// Clip-space position (x,y in [-1, 1], y up).
     pub pos: [f32; 2],
-    /// Linear-RGBA "art" color, multiplied by the HUD tint in the shader.
+    /// Linear-RGBA "art" color, multiplied by the HUD tint in the shader by `tint_weight`.
     pub color: [f32; 4],
+    /// How much of the HUD tint multiplies `color`: [`TINTED`] for art, [`UNTINTED`] for a colour
+    /// that must reach the screen as it is (the opacity still applies).
+    pub tint_weight: f32,
 }
+
+pub const TINTED: f32 = 1.0;
+pub const UNTINTED: f32 = 0.0;
 
 impl HudVertex {
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
-        const ATTRS: [wgpu::VertexAttribute; 2] =
-            wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4];
+        const ATTRS: [wgpu::VertexAttribute; 3] =
+            wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4, 2 => Float32];
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<HudVertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -91,7 +97,7 @@ impl<'a> QuadBuilder<'a> {
         [x / self.fb_w * 2.0 - 1.0, 1.0 - y / self.fb_h * 2.0]
     }
 
-    fn raw_rect(&mut self, r: PxRect, color: [f32; 4]) {
+    fn raw_rect(&mut self, r: PxRect, color: [f32; 4], tint_weight: f32) {
         if r.w <= 0.0 || r.h <= 0.0 {
             return;
         }
@@ -99,7 +105,11 @@ impl<'a> QuadBuilder<'a> {
         let tr = self.to_clip(r.x + r.w, r.y);
         let bl = self.to_clip(r.x, r.y + r.h);
         let br = self.to_clip(r.x + r.w, r.y + r.h);
-        let v = |pos| HudVertex { pos, color };
+        let v = |pos| HudVertex {
+            pos,
+            color,
+            tint_weight,
+        };
         self.verts
             .extend_from_slice(&[v(tl), v(bl), v(br), v(tl), v(br), v(tr)]);
     }
@@ -107,18 +117,27 @@ impl<'a> QuadBuilder<'a> {
     /// Push one filled rectangle. Its drop shadow is added by [`Self::finish`].
     /// Empty/inverted rectangles emit nothing.
     pub fn rect(&mut self, r: PxRect, color: [f32; 4]) {
+        self.rect_weighted(r, color, TINTED);
+    }
+
+    /// [`Self::rect`] whose colour the HUD tint does not multiply.
+    pub fn rect_untinted(&mut self, r: PxRect, color: [f32; 4]) {
+        self.rect_weighted(r, color, UNTINTED);
+    }
+
+    fn rect_weighted(&mut self, r: PxRect, color: [f32; 4], tint_weight: f32) {
         debug_assert!(
             self.shadowed_end.is_none(),
             "a shadowed rectangle must be pushed before every flat one"
         );
-        self.raw_rect(r, color);
+        self.raw_rect(r, color, tint_weight);
     }
 
     /// Push one filled rectangle that casts no shadow and is drawn beneath every shadow and every
     /// shadowed rectangle (a translucent backdrop). Must come after the last [`Self::rect`].
     pub fn rect_flat(&mut self, r: PxRect, color: [f32; 4]) {
         self.shadowed_end.get_or_insert(self.verts.len());
-        self.raw_rect(r, color);
+        self.raw_rect(r, color, TINTED);
     }
 
     /// Puts a drop shadow (a dark copy offset down-right) behind every shadowed rectangle, all of
@@ -142,12 +161,24 @@ impl<'a> QuadBuilder<'a> {
                     self.verts.push(HudVertex {
                         pos: [pos[0] + dx, pos[1] + dy],
                         color,
+                        tint_weight: TINTED,
                     });
                 }
             }
         }
         self.verts.rotate_left(shadowed);
     }
+}
+
+/// The colour the HUD shader outputs for `vertex` under `tint`: `mix(color, color * tint,
+/// tint_weight)`, before the opacity.
+#[cfg(test)]
+pub(crate) fn shader_rgb(vertex: &HudVertex, tint: [f32; 3]) -> [f32; 3] {
+    let weight = vertex.tint_weight;
+    std::array::from_fn(|channel| {
+        let color = vertex.color[channel];
+        color * (1.0 - weight) + color * tint[channel] * weight
+    })
 }
 
 /// The rectangles of `verts` (as [`QuadBuilder`] writes them) in framebuffer pixels, with their
@@ -192,6 +223,54 @@ mod tests {
             y: 10.0,
             w: 20.0,
             h: 20.0,
+        }
+    }
+
+    const HUD_TINT: [f32; 3] = [0.5, 0.25, 1.0];
+
+    fn assert_rgb_eq(actual: [f32; 3], expected: [f32; 3]) {
+        for (actual, expected) in actual.into_iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-6, "{actual} vs {expected}");
+        }
+    }
+
+    #[test]
+    fn the_two_tint_weights_are_the_ends_of_the_shaders_mix() {
+        assert_eq!(TINTED.to_bits(), 1.0_f32.to_bits());
+        assert_eq!(UNTINTED.to_bits(), 0.0_f32.to_bits());
+    }
+
+    #[test]
+    fn a_tinted_vertex_comes_out_multiplied_by_the_hud_tint_and_an_untinted_one_unchanged() {
+        let art = [0.8, 0.6, 0.4, 1.0];
+        let mut tinted = Vec::new();
+        let mut qb = QuadBuilder::new(&mut tinted, 100.0, 100.0, 0.0, SHADOW);
+        qb.rect(rect(0.0), art);
+        qb.finish();
+        let mut untinted = Vec::new();
+        let mut qb = QuadBuilder::new(&mut untinted, 100.0, 100.0, 0.0, SHADOW);
+        qb.rect_untinted(rect(0.0), art);
+        qb.finish();
+        for vertex in &tinted {
+            assert_rgb_eq(shader_rgb(vertex, HUD_TINT), [0.4, 0.15, 0.4]);
+        }
+        for vertex in &untinted {
+            assert_rgb_eq(shader_rgb(vertex, HUD_TINT), [0.8, 0.6, 0.4]);
+        }
+    }
+
+    #[test]
+    fn the_shadow_of_an_untinted_rectangle_is_still_multiplied_by_the_hud_tint() {
+        let mut verts = Vec::new();
+        let mut qb = QuadBuilder::new(&mut verts, 100.0, 100.0, 2.0, [1.0; 4]);
+        qb.rect_untinted(rect(0.0), [0.8, 0.6, 0.4, 1.0]);
+        qb.finish();
+        let (shadow, shape) = verts.split_at(VERTS_PER_RECT);
+        for vertex in shadow {
+            assert_rgb_eq(shader_rgb(vertex, HUD_TINT), HUD_TINT);
+        }
+        for vertex in shape {
+            assert_rgb_eq(shader_rgb(vertex, HUD_TINT), [0.8, 0.6, 0.4]);
         }
     }
 

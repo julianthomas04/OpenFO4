@@ -10,7 +10,8 @@ use super::field_text::{ScreenMap, TextExtent, TextItem};
 use super::layout::Layout;
 use super::meters;
 use super::text_face::TextFace;
-use crate::rendering::rollover_prompt::{RolloverPrompt, VerbTone};
+use super::warning::WARNING_RGB;
+use crate::rendering::rollover_prompt::RolloverPrompt;
 use crate::rendering::ui_colour::UiTint;
 use crate::ui_layout::button_hint::{ButtonHintKeys, ButtonHintRules};
 use crate::ui_layout::scaleform_text::{AutoSize, VerticalAlign};
@@ -21,11 +22,6 @@ use crate::ui_layout::{
 
 const MOVIE: &str = meters::MOVIE;
 const BAR_PATH: &str = "CenterGroup_mc/RolloverWidget_mc/ButtonHintBar_mc";
-
-/// The 8-bit sRGB colour both rollover lines take for a warning verb. Measured in the original,
-/// 2026-11-12, 18 reads, 3 backgrounds (no spread); not read from game data: no converted layout
-/// carries it.
-const WARNING_RGB: [u8; 3] = [255, 94, 60];
 
 pub struct RolloverKeys {
     centre: PlacementKey,
@@ -160,7 +156,7 @@ impl RolloverSpec {
         measure: impl FnMut(&TextItem) -> TextExtent,
     ) -> Vec<TextItem> {
         let mut items = self.laid_out_items(prompt, ui, layout, tint, measure);
-        if prompt.verb.as_ref().map(|verb| verb.tone) == Some(VerbTone::Warning) {
+        if prompt.is_warning() {
             for item in &mut items {
                 let [_, _, _, alpha] = item.colour;
                 let [r, g, b] = WARNING_RGB;

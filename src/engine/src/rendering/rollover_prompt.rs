@@ -10,6 +10,13 @@ pub(super) struct RolloverPrompt {
     pub verb: Option<Verb>,
 }
 
+impl RolloverPrompt {
+    /// Whether the verb is a warning, which colours the whole prompt and the crosshair.
+    pub(super) fn is_warning(&self) -> bool {
+        self.verb.as_ref().map(|verb| verb.tone) == Some(VerbTone::Warning)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Verb {
     pub text: Arc<str>,

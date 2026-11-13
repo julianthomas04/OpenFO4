@@ -61,6 +61,7 @@ pub mod mouse_capture;
 pub mod navmesh_overlay;
 pub mod particles;
 pub mod perf_log;
+mod pick_settings;
 pub mod pipboy;
 pub mod pipboy_capture;
 pub mod placed_light;
@@ -210,8 +211,8 @@ use crate::rendering::{
 use crate::sim::commands::{ClockEdit, WeatherEdit};
 use crate::sim::pipboy::PipBoyAction;
 use crate::sim::{
-    ClockFrame, DynamicPose, EntityId, InventoryEvent, MaterialBuoyancy, PlayerInput,
-    PlayerMovement, RayHit, SimCommand, SimWorld, refr_entity_id, water_physics,
+    ClockFrame, DynamicPose, EntityId, InventoryEvent, MaterialBuoyancy, PickClass, PickRay,
+    PlayerInput, PlayerMovement, RayHit, SimCommand, SimWorld, refr_entity_id, water_physics,
 };
 use crate::spawn_cell::SpawnCellTarget;
 use crate::startup::{StartupError, StartupTimer};
@@ -230,7 +231,7 @@ use drop_flow::{handle_all, return_abandoned, settle_drop};
 use drop_log::drop_request_line;
 use effects::stage::{EffectFrameInputs, EffectStage};
 use grab_input::{
-    AimTarget, CarryContext, GrabAction, GrabInput, carry_key_counts, spin_gate_open,
+    AimTarget, CarryContext, GrabAction, GrabInput, QueueDelay, carry_key_counts, spin_gate_open,
 };
 use item_drop::{dropped_spec, placement};
 use item_feedback::{inventory_log_line, item_sound_of, load_item_sounds};
@@ -246,6 +247,7 @@ use loading_screen::{GradeSource, LoadingScene};
 use material_rebuild::MaterialDirt;
 use menu::{MenuRenderer, OverlayForeground, PanelContent};
 use particles::CameraBasis;
+use pick_settings::PickSettings;
 use ragdoll_objects::RagdollObjects;
 use refraction::{RefractionFrameInputs, RefractionStage};
 use refusal_texts::{RefusalMessages, apply_each};
@@ -307,11 +309,6 @@ struct InteriorOption {
     grid: (i32, i32),
     start_pos: Vec3,
 }
-
-/// How far (engine units) the activation ray reaches when looking for a load
-/// door under the crosshair. ~150 Bethesda units (SCALE 0.1), near vanilla
-/// `fActivatePickLength`; the debug inspector ray (2000) is far longer.
-const ACTIVATE_REACH: f32 = 15.0;
 
 /// Frames the `OPENFO4_AUTO_ACTIVATE` dev hook waits between hops (~3s at 60fps)
 /// as a floor; the real gate is `player_eye().is_some()` (the prior teleport's
@@ -756,6 +753,10 @@ pub struct State {
     freeze_camera: bool,
     walk_keys: WalkKeys,
     grab_input: GrabInput,
+    /// Reach and grab hold of the E key, from one source.
+    pick: PickSettings,
+    /// How long the last finished frame ran: the most a key event can have waited in the queue.
+    queue_delay: QueueDelay,
     /// Base world FOV in Bethesda convention (horizontal at a 16:9 base),
     /// from the INI cascade (`fDefaultWorldFOV`).
     world_fov_beth: f32,
@@ -1183,12 +1184,26 @@ impl State {
         self.aimed_hit()?.ref_id
     }
 
-    /// What the crosshair ray hits first within activation reach.
+    /// What the player aims at within activation reach: the crosshair ray, widened to a ball for
+    /// placed items. A door or animated object wins over an item, as in `aim_target_of`.
     fn aimed_hit(&self) -> Option<RayHit> {
-        self.sim.debug_ray_hit(
-            self.camera.eye,
-            self.camera_controller.forward(),
-            ACTIVATE_REACH,
+        let classify = |ref_id: &str| {
+            if activation::resolve(ref_id, &self.teleports, &self.animated_objects).is_some() {
+                PickClass::Activator
+            } else if self.streamer.world_item(refr_entity_id(ref_id)).is_some() {
+                PickClass::Item
+            } else {
+                PickClass::Solid
+            }
+        };
+        self.sim.pick_hit(
+            PickRay {
+                origin: self.camera.eye,
+                dir: self.camera_controller.forward(),
+                reach: self.pick.reach,
+                radius: self.pick.radius,
+            },
+            classify,
         )
     }
 
@@ -1251,14 +1266,11 @@ impl State {
         let carrying = self.sim.carried().is_some();
         let now = Instant::now();
         let aim = self.aim_target();
-        if is_pressed {
-            let action = self.grab_input.activate_pressed(aim, carrying, now);
+        let actions =
+            self.grab_input
+                .activate_key(is_pressed, carrying, now, aim, self.queue_delay);
+        for action in actions {
             self.apply_grab_action(action);
-        } else {
-            let actions = self.grab_input.release_with_due_actions(carrying, now, aim);
-            for action in actions {
-                self.apply_grab_action(action);
-            }
         }
     }
 
@@ -2025,6 +2037,7 @@ impl State {
             history: LoadHistory::default(),
             preview: LoadScreenPreview::default(),
         };
+        let pick = settings.pick;
         Ok(Self {
             surface,
             device,
@@ -2146,7 +2159,9 @@ impl State {
             input_mode: InputMode::Walk,
             freeze_camera,
             walk_keys: WalkKeys::default(),
-            grab_input: GrabInput::default(),
+            grab_input: GrabInput::new(pick.grab_hold),
+            pick,
+            queue_delay: QueueDelay::default(),
             world_fov_beth,
             fov_adjust: 0.0,
             collision_wireframe: false,
@@ -3870,6 +3885,13 @@ impl State {
             Some(audio) => audio.sync(frame),
             None => Ok(()),
         }
+    }
+
+    /// Notes how long the frame that just finished ran, from the start of its update to the end of
+    /// its render: key events that came in during it were dispatched only after it, so it bounds
+    /// how long any of them waited.
+    pub fn finish_frame(&mut self, duration: Duration) {
+        self.queue_delay.after_frame(duration);
     }
 
     pub fn record_perf_frame(&mut self, update: std::time::Duration, render: std::time::Duration) {

@@ -10,6 +10,7 @@
 use super::clip::{ClipRect, flatten_clip};
 use super::layout::Layout;
 use super::quad::{PxRect, QuadBuilder};
+use super::warning::warning_linear;
 use crate::sim::CrosshairState;
 use crate::ui_layout::{KeyGroup, Movie, TimelineKey, UiLayout, UiLayoutError};
 
@@ -230,7 +231,9 @@ impl CrosshairWidget {
         }
     }
 
-    pub fn emit(&self, qb: &mut QuadBuilder, layout: &Layout) {
+    /// Draws the current frame; a `warning` crosshair takes the warning colour, which the HUD
+    /// tint does not multiply, in place of the art colour.
+    pub fn emit(&self, qb: &mut QuadBuilder, layout: &Layout, warning: bool) {
         let (cx, cy) = layout.center();
         let frame: &Frame = match self.playing {
             Some(p) => &self.clip(p.clip)[p.frame],
@@ -241,15 +244,18 @@ impl CrosshairWidget {
             },
         };
         for r in frame {
-            qb.rect(
-                PxRect {
-                    x: cx + layout.s(r.x),
-                    y: cy + layout.s(r.y),
-                    w: layout.s(r.w),
-                    h: layout.s(r.h),
-                },
-                [r.colour[0], r.colour[1], r.colour[2], r.alpha],
-            );
+            let rect = PxRect {
+                x: cx + layout.s(r.x),
+                y: cy + layout.s(r.y),
+                w: layout.s(r.w),
+                h: layout.s(r.h),
+            };
+            if warning {
+                let [red, green, blue] = warning_linear();
+                qb.rect_untinted(rect, [red, green, blue, r.alpha]);
+            } else {
+                qb.rect(rect, [r.colour[0], r.colour[1], r.colour[2], r.alpha]);
+            }
         }
     }
 }

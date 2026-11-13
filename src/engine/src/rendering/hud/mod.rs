@@ -24,6 +24,7 @@ mod rollover;
 pub(crate) mod shadow;
 pub(crate) mod shape;
 mod text_face;
+mod warning;
 
 use std::sync::Arc;
 
@@ -240,7 +241,11 @@ impl HudScene {
             meters::emit(&mut qb, &layout, &self.ap, ap_bar, snapshot.ap);
         }
         if scope.shows(HudPart::Crosshair) {
-            self.crosshair.emit(&mut qb, &layout);
+            self.crosshair.emit(
+                &mut qb,
+                &layout,
+                prompt.is_some_and(RolloverPrompt::is_warning),
+            );
         }
         if scope.shows(HudPart::Messages) {
             self.messages.emit(&mut qb, &layout);
@@ -453,9 +458,11 @@ mod crosshair_tests {
 #[cfg(test)]
 mod scene_tests {
     use super::*;
+    use crate::rendering::rollover_prompt::Verb;
 
     const FB: (u32, u32) = (1280, 720);
     const LINE: &str = "Keys stay in the bag.";
+    const SCENE_TINT: [f32; 3] = [0.0, 1.0, 0.0];
 
     /// A scene on synthetic movie values: the meter tests' meters, a one-rect crosshair, the rollover
     /// tests' rollover, and the message list of the message tests' fixture.
@@ -471,7 +478,7 @@ mod scene_tests {
             messages: messages::tests::synthetic_spec(),
         };
         let tint = UiTint {
-            color: [0.0, 1.0, 0.0],
+            color: SCENE_TINT,
             opacity: 1.0,
         };
         HudScene::new(spec, &layout, tint)
@@ -510,6 +517,48 @@ mod scene_tests {
 
     fn push(scene: &mut HudScene) {
         scene.messages.push(Arc::from(LINE));
+    }
+
+    /// What the shader outputs for every vertex of a frame with the crosshair shown.
+    fn output_colours(prompt: Option<&RolloverPrompt>) -> Vec<[f32; 3]> {
+        let mut scene = scene();
+        scene.compose(
+            HudScope::Full,
+            &snapshot(),
+            false,
+            prompt,
+            0.5,
+            0.0,
+            FB,
+            measure,
+        );
+        scene
+            .verts
+            .iter()
+            .map(|vertex| quad::shader_rgb(vertex, SCENE_TINT))
+            .collect()
+    }
+
+    fn prompt_with(verb: Verb) -> RolloverPrompt {
+        RolloverPrompt {
+            name: Arc::from("Scale"),
+            verb: Some(verb),
+        }
+    }
+
+    #[test]
+    fn the_crosshair_of_a_warning_prompt_reaches_the_screen_in_the_warning_colour() {
+        let prompt = prompt_with(Verb::warning(Arc::from("Steal")));
+        let warning = warning::warning_linear();
+        assert!(output_colours(Some(&prompt)).contains(&warning));
+    }
+
+    #[test]
+    fn the_crosshair_of_a_normal_prompt_or_none_never_shows_the_warning_colour() {
+        let normal = prompt_with(Verb::normal(Arc::from("Take")));
+        let warning = warning::warning_linear();
+        assert!(!output_colours(Some(&normal)).contains(&warning));
+        assert!(!output_colours(None).contains(&warning));
     }
 
     #[test]

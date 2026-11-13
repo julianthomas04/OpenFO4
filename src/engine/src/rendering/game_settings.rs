@@ -11,6 +11,7 @@ use crate::audio::MenuMusicSettings;
 use crate::rendering::grass::FadeLimits;
 use crate::rendering::loading_screen::{LoadScreenLut, ModelControls, SceneLights};
 use crate::rendering::local_lights::LightFade;
+use crate::rendering::pick_settings::PickSettings;
 use crate::rendering::post::depth_of_field::BokehGate;
 use crate::rendering::post::night_sky::SunSizes;
 use crate::rendering::shadows::lamps::LampShadowConfig;
@@ -68,6 +69,8 @@ pub struct GameSettings {
     pub loading_model: ModelControls,
     pub menu_music: MenuMusicSettings,
     pub menu_video: MenuVideoSettings,
+    /// What E reaches and how long a hold grabs.
+    pub pick: PickSettings,
 }
 
 impl GameSettings {
@@ -102,6 +105,7 @@ impl GameSettings {
             loading_model: ModelControls::from_ini(ini)?,
             menu_music: MenuMusicSettings::from_ini(ini)?,
             menu_video: MenuVideoSettings::from_ini(ini)?,
+            pick: PickSettings::from_ini(ini)?,
         })
     }
 }
@@ -140,6 +144,10 @@ mod tests {
         assert!(settings.menu_music.enabled);
         assert!(settings.menu_video.enabled);
         assert_eq!(settings.safe_zone, SafeZone { x: 50.0, y: 36.0 });
+        assert_eq!(
+            settings.pick,
+            crate::rendering::pick_settings::ORIGINAL_PICK_DEFAULTS
+        );
     }
 
     #[test]

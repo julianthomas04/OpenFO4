@@ -260,6 +260,7 @@ impl ApplicationHandler for App {
                 if let Err(e) = state.render(&mut self.asset_server) {
                     tracing::error!("render error: {e}");
                 }
+                state.finish_frame(update_start.elapsed());
                 state.record_perf_frame(render_start - update_start, render_start.elapsed());
                 #[cfg(feature = "tracy")]
                 tracing_tracy::client::frame_mark();
