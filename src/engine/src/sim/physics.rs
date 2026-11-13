@@ -450,11 +450,23 @@ impl PhysicsContext {
 
     /// The REFR form key a collider's `user_data` names, `None` without attribution.
     fn ref_id_of(&self, user_data: u128) -> Option<String> {
+        let mut ref_id = String::new();
+        self.write_ref_id(user_data, &mut ref_id).then_some(ref_id)
+    }
+
+    /// [`Self::ref_id_of`] into a caller's buffer, so a query visiting many colliders reuses one
+    /// allocation. False, with `out` untouched, without attribution.
+    fn write_ref_id(&self, user_data: u128, out: &mut String) -> bool {
+        use std::fmt::Write as _;
         let (form_id, plugin_slot) = unpack_ref(user_data);
-        (plugin_slot != 0)
+        let Some(plugin) = (plugin_slot != 0)
             .then(|| self.plugin_registry.get(plugin_slot as usize - 1))
             .flatten()
-            .map(|plugin| format!("{form_id:06X}:{plugin}"))
+        else {
+            return false;
+        };
+        out.write_fmt(format_args!("{form_id:06X}:{plugin}"))
+            .is_ok()
     }
 
     /// Whether a fixed tick must step the pipeline. Steps on a pending collider

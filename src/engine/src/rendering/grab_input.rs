@@ -5,7 +5,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::sim::{EntityId, SimCommand};
+use crate::sim::{EntityId, PickClass, SimCommand};
 
 /// What the crosshair rests on within activation reach, as the E key sees it.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -34,31 +34,43 @@ pub(super) enum ItemBody {
     Fixed,
 }
 
+/// What a ref under the crosshair is to the pick: a door or animated object wins over a placed
+/// item, so a door's activation never waits for the grab hold. `is_item` only runs for a ref that
+/// is no activator.
+pub(super) fn pick_class(is_activator: bool, is_item: impl FnOnce() -> bool) -> PickClass {
+    if is_activator {
+        PickClass::Activator
+    } else if is_item() {
+        PickClass::Item
+    } else {
+        PickClass::Solid
+    }
+}
+
 impl AimTarget {
-    /// A door or animated object wins over an item, an item over a loose body, so a door's
-    /// activation never waits for the grab hold. Only the closures of the branches taken run.
+    /// What the crosshair rests on for a ref of `class`: a door or animated object, an item (and
+    /// what its body allows), a loose body, or nothing. Only the closures of the branches taken
+    /// run.
     pub(super) fn resolve(
-        activatable: bool,
+        class: PickClass,
         entity: EntityId,
-        is_item: impl FnOnce(EntityId) -> bool,
         is_grabbable: impl FnOnce(EntityId) -> bool,
         can_carry: impl FnOnce(EntityId) -> bool,
     ) -> Self {
-        if activatable {
-            Self::Activatable
-        } else if is_item(entity) {
-            let body = if can_carry(entity) {
-                ItemBody::Carriable
-            } else if is_grabbable(entity) {
-                ItemBody::TooHeavy
-            } else {
-                ItemBody::Fixed
-            };
-            Self::Item { entity, body }
-        } else if is_grabbable(entity) {
-            Self::Grabbable(entity)
-        } else {
-            Self::Nothing
+        match class {
+            PickClass::Activator => Self::Activatable,
+            PickClass::Item => {
+                let body = if can_carry(entity) {
+                    ItemBody::Carriable
+                } else if is_grabbable(entity) {
+                    ItemBody::TooHeavy
+                } else {
+                    ItemBody::Fixed
+                };
+                Self::Item { entity, body }
+            }
+            PickClass::Solid if is_grabbable(entity) => Self::Grabbable(entity),
+            PickClass::Solid => Self::Nothing,
         }
     }
 
@@ -202,7 +214,7 @@ pub(super) struct GrabInput {
 #[cfg(test)]
 impl Default for GrabInput {
     fn default() -> Self {
-        Self::new(super::pick_settings::ORIGINAL_PICK_DEFAULTS.grab_hold)
+        Self::new(super::pick_settings::ORIGINAL_PICK_DEFAULTS.grab_hold())
     }
 }
 
@@ -639,31 +651,42 @@ mod tests {
     #[test]
     fn a_door_wins_over_an_item_and_an_item_over_a_grabbable_body() {
         assert_eq!(
-            AimTarget::resolve(true, BODY, NEVER, NEVER, NEVER),
+            AimTarget::resolve(PickClass::Activator, BODY, NEVER, NEVER),
             AimTarget::Activatable
         );
         assert_eq!(
-            AimTarget::resolve(false, BODY, |_| true, NEVER, |_| true),
+            AimTarget::resolve(PickClass::Item, BODY, NEVER, |_| true),
             ITEM
         );
         assert_eq!(
-            AimTarget::resolve(false, BODY, |_| false, |entity| entity == BODY, NEVER),
+            AimTarget::resolve(PickClass::Solid, BODY, |entity| entity == BODY, NEVER),
             AimTarget::Grabbable(BODY)
         );
         assert_eq!(
-            AimTarget::resolve(false, BODY, |_| false, |_| false, NEVER),
+            AimTarget::resolve(PickClass::Solid, BODY, |_| false, NEVER),
             AimTarget::Nothing
         );
     }
 
     #[test]
+    fn a_ref_that_is_both_a_door_and_an_item_is_a_door_and_neither_is_solid() {
+        assert_eq!(pick_class(true, || true), PickClass::Activator);
+        assert_eq!(
+            pick_class(true, || panic!("the item test ran for an activator")),
+            PickClass::Activator
+        );
+        assert_eq!(pick_class(false, || true), PickClass::Item);
+        assert_eq!(pick_class(false, || false), PickClass::Solid);
+    }
+
+    #[test]
     fn an_item_is_too_heavy_only_with_a_movable_body_and_fixed_without_one() {
         assert_eq!(
-            AimTarget::resolve(false, BODY, |_| true, |_| true, |_| false),
+            AimTarget::resolve(PickClass::Item, BODY, |_| true, |_| false),
             HEAVY_ITEM
         );
         assert_eq!(
-            AimTarget::resolve(false, BODY, |_| true, |_| false, |_| false),
+            AimTarget::resolve(PickClass::Item, BODY, |_| false, |_| false),
             FIXED_ITEM
         );
     }

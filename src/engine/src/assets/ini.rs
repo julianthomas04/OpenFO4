@@ -780,6 +780,33 @@ fWord=big
     }
 
     #[test]
+    fn an_optional_non_negative_setting_takes_zero_and_rejects_the_rest() {
+        let ini = ini("fZero=0
+fSet=2.5
+fNegative=-1
+fNan=NaN
+fInf=inf
+fWord=big
+");
+        assert_eq!(ini.optional_non_negative(key("fZero")).unwrap(), Some(0.0));
+        assert_eq!(ini.optional_non_negative(key("fSet")).unwrap(), Some(2.5));
+        assert_eq!(ini.optional_non_negative(key("fAbsent")).unwrap(), None);
+        for name in ["fNegative", "fNan", "fInf"] {
+            assert!(
+                matches!(
+                    ini.optional_non_negative(key(name)),
+                    Err(IniError::Invalid { .. })
+                ),
+                "{name}"
+            );
+        }
+        assert!(matches!(
+            ini.optional_non_negative(key("fWord")),
+            Err(IniError::Unparsable { .. })
+        ));
+    }
+
+    #[test]
     fn float_requirements_reject_negative_zero_and_non_finite_values() {
         let ini = ini("fZero=0\nfNegative=-1\nfNan=NaN\nfInf=inf\nfPositive=2.5\n");
         assert_eq!(ini.require_positive(key("fPositive")).unwrap(), 2.5);

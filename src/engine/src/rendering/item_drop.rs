@@ -307,8 +307,8 @@ mod tests {
     fn the_observed_look_starts_the_item_within_the_activation_reach_so_it_can_be_taken_again() {
         let front = placement(EYE, Vec3::X, open);
         assert!(((front.position - EYE).x - OBSERVED_DROP.forward_distance).abs() < 1e-4);
-        const { assert!(OBSERVED_DROP.forward_distance < ORIGINAL_PICK_DEFAULTS.reach) };
-        const { assert!(OBSERVED_DROP.side_distance < ORIGINAL_PICK_DEFAULTS.reach) };
+        const { assert!(OBSERVED_DROP.forward_distance < ORIGINAL_PICK_DEFAULTS.reach()) };
+        const { assert!(OBSERVED_DROP.side_distance < ORIGINAL_PICK_DEFAULTS.reach()) };
     }
 
     #[test]

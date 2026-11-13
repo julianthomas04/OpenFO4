@@ -176,6 +176,8 @@ pub struct RayHit {
     /// placement id, distinguishing copies of the same mesh. `None` for
     /// terrain.
     pub ref_id: Option<String>,
+    /// From the ray origin to the surface point hit: for an aim with a radius, to the point the
+    /// ball touches.
     pub dist: f32,
 }
 

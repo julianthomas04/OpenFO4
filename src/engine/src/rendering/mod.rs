@@ -211,8 +211,8 @@ use crate::rendering::{
 use crate::sim::commands::{ClockEdit, WeatherEdit};
 use crate::sim::pipboy::PipBoyAction;
 use crate::sim::{
-    ClockFrame, DynamicPose, EntityId, InventoryEvent, MaterialBuoyancy, PickClass, PickRay,
-    PlayerInput, PlayerMovement, RayHit, SimCommand, SimWorld, refr_entity_id, water_physics,
+    ClockFrame, DynamicPose, EntityId, InventoryEvent, MaterialBuoyancy, PickClass, PlayerInput,
+    PlayerMovement, RayHit, SimCommand, SimWorld, refr_entity_id, water_physics,
 };
 use crate::spawn_cell::SpawnCellTarget;
 use crate::startup::{StartupError, StartupTimer};
@@ -1144,13 +1144,21 @@ impl State {
             return AimTarget::Nothing;
         };
         AimTarget::resolve(
-            activation::resolve(ref_id, &self.teleports, &self.animated_objects).is_some(),
+            self.pick_class_of(ref_id),
             refr_entity_id(ref_id),
-            |entity| self.streamer.world_item(entity).is_some(),
             |entity| self.sim.is_grabbable(entity),
             |entity| self.sim.can_carry(entity),
         )
         .while_carrying(self.sim.carried().is_some())
+    }
+
+    /// What the ref is to the pick: the one place that tells a door, an item and a solid apart,
+    /// for the ball and for `aim_target_of` alike.
+    fn pick_class_of(&self, ref_id: &str) -> PickClass {
+        grab_input::pick_class(
+            activation::resolve(ref_id, &self.teleports, &self.animated_objects).is_some(),
+            || self.streamer.world_item(refr_entity_id(ref_id)).is_some(),
+        )
     }
 
     /// The rollover of the placed item aimed at, none when its base has no catalog entry.
@@ -1187,23 +1195,10 @@ impl State {
     /// What the player aims at within activation reach: the crosshair ray, widened to a ball for
     /// placed items. A door or animated object wins over an item, as in `aim_target_of`.
     fn aimed_hit(&self) -> Option<RayHit> {
-        let classify = |ref_id: &str| {
-            if activation::resolve(ref_id, &self.teleports, &self.animated_objects).is_some() {
-                PickClass::Activator
-            } else if self.streamer.world_item(refr_entity_id(ref_id)).is_some() {
-                PickClass::Item
-            } else {
-                PickClass::Solid
-            }
-        };
         self.sim.pick_hit(
-            PickRay {
-                origin: self.camera.eye,
-                dir: self.camera_controller.forward(),
-                reach: self.pick.reach,
-                radius: self.pick.radius,
-            },
-            classify,
+            self.pick
+                .aim_from(self.camera.eye, self.camera_controller.forward()),
+            |ref_id| self.pick_class_of(ref_id),
         )
     }
 
@@ -2159,7 +2154,7 @@ impl State {
             input_mode: InputMode::Walk,
             freeze_camera,
             walk_keys: WalkKeys::default(),
-            grab_input: GrabInput::new(pick.grab_hold),
+            grab_input: GrabInput::new(pick.grab_hold()),
             pick,
             queue_delay: QueueDelay::default(),
             world_fov_beth,
