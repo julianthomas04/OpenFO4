@@ -6,6 +6,7 @@
 use rapier3d::prelude::*;
 
 use super::bake::CachedShape;
+use super::solid_mass::solid_volume;
 use super::{CellGrid, FIXED_DT};
 
 /// Engine-unit gravity for dynamic bodies: the player's base rise gravity
@@ -87,11 +88,12 @@ pub(super) fn body_builder(
 /// trimesh has ~zero solid volume so contributes ~no mass; a purely-trimesh
 /// dynamic body thus falls to the fallback density and ends near-massless —
 /// rare for movable clutter, which uses primitive/convex collision (known
-/// limitation).
+/// limitation). A round hull counts with its radius (see `solid_mass`), so a plate stored as a
+/// thin hull plus a radius weighs its data mass instead of hitting the clamp.
 pub(super) fn density_for_mass(shapes: &[CachedShape], mass: Option<f32>) -> f32 {
     let volume: f32 = shapes
         .iter()
-        .map(|cached| cached.shape.mass_properties(1.0).mass())
+        .map(|cached| solid_volume(&cached.shape))
         .sum();
     match mass.filter(|mass| mass.is_finite() && *mass > 0.0) {
         Some(mass) if volume > VOLUME_EPS => {

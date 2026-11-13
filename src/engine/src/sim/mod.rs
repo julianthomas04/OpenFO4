@@ -26,7 +26,9 @@ mod ragdoll;
 mod ragdoll_pose;
 pub mod ragdoll_spec;
 mod ragdoll_tuning;
+mod rounded_hull;
 mod sidecar_hash;
+mod solid_mass;
 mod sound_pose;
 mod water_materials;
 pub mod water_physics;
@@ -53,6 +55,7 @@ pub use commands::{AddedObjects, KinematicPose, PlayerInput, SimCommand, look_di
 pub use footstep_clock::{JumpWindupMismatch, jump_windup_mismatch};
 pub use hud::{CrosshairState, HudSnapshot, MeterFill};
 pub use inventory_event::{InventoryEvent, ItemGrantError};
+pub use physics::pick::{PickClass, PickRay};
 pub use player::{PlayerMovement, STANDING_CENTER_ABOVE_FEET};
 pub use ragdoll::{BodyDelta, MAX_SKINNED_RAGDOLLS, RagdollEntry, RagdollPoses};
 pub use ragdoll_tuning::RagdollSettings;
@@ -945,6 +948,12 @@ impl SimWorld {
     /// turns "stuck on nothing" into a mesh name.
     pub fn debug_ray_hit(&self, origin: Vec3, dir: Vec3, max_dist: f32) -> Option<RayHit> {
         self.physics.ray_attribution(origin, dir, max_dist)
+    }
+
+    /// What the player aims at: the exact ray, or the ball swept along it for items (see
+    /// `PhysicsContext::pick_attribution`). `classify` tells items from activators and solids.
+    pub fn pick_hit(&self, aim: PickRay, classify: impl Fn(&str) -> PickClass) -> Option<RayHit> {
+        self.physics.pick_attribution(aim, classify)
     }
 
     /// The first surface straight below `origin` within `max_dist`.

@@ -31,10 +31,13 @@ pub enum ColShape {
         radius: f32,
         height: f32,
     },
+    /// The collision surface is the hull grown by `radius` (Havok's convex radius), in the same
+    /// unit as the vertices; 0.0 = the bare hull.
     Convex {
         center: Vec3,
         rotation: Quat,
         vertices: Vec<Vec3>,
+        radius: f32,
     },
     Trimesh {
         vertices: Vec<Vec3>,
@@ -216,6 +219,9 @@ pub(super) struct RawShape {
     pub(super) half_extents: Option<[f32; 3]>,
     pub(super) height: Option<f32>,
     pub(super) vertices: Option<Vec<[f32; 3]>>,
+    /// Havok convex radius of a convex shape, engine units; absent in a sidecar written before
+    /// the installer extracted it.
+    pub(super) convex_radius: Option<f32>,
     pub(super) indices: Option<Vec<[u32; 3]>>,
     /// Name of the model node owning the shape (animated models only).
     pub(super) node: Option<String>,
@@ -424,6 +430,27 @@ fn keep_player_solid(
     (kept, dropped)
 }
 
+/// The largest convex radius a sidecar may carry, in engine units (the installer's bound: 1.0
+/// Havok metre; the largest radius in the game data is 0.70). A larger value is corruption.
+const MAX_CONVEX_RADIUS: f32 = 7.0;
+const CONVEX_RADIUS_MISSING: &str = "collision-convex-radius-missing";
+
+/// The radius of a convex shape: a stored finite value in `0..=MAX_CONVEX_RADIUS` is used; a sidecar without
+/// the key predates the radius extraction and gets 0 (one warning per run); anything else makes
+/// the shape malformed (`None`).
+fn resolve_convex_radius(stored: Option<f32>) -> Option<f32> {
+    match stored {
+        None => {
+            crate::utils::warn_once(CONVEX_RADIUS_MISSING, || {
+                "collision: a sidecar has convex shapes without \"convex_radius\" (written before the installer extracted it); their collision is the bare hull until `collision-only` regenerates the sidecars".to_owned()
+            });
+            Some(0.0)
+        }
+        Some(radius) if (0.0..=MAX_CONVEX_RADIUS).contains(&radius) => Some(radius),
+        Some(_) => None,
+    }
+}
+
 pub(super) fn convert_shape(s: RawShape) -> Option<ColShape> {
     let center = s.center.map_or(Vec3::ZERO, Vec3::from);
     let rotation = s.rotation.map_or(Quat::IDENTITY, |q| {
@@ -455,6 +482,7 @@ pub(super) fn convert_shape(s: RawShape) -> Option<ColShape> {
                 center,
                 rotation,
                 vertices: vertices.into_iter().map(Vec3::from).collect(),
+                radius: resolve_convex_radius(s.convex_radius)?,
             })
         }
         "trimesh" => {
@@ -600,12 +628,103 @@ mod tests {
 
     #[test]
     fn convex_needs_at_least_four_points() {
-        let three = json!({ "type": "convex", "vertices": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]] });
+        let three = json!({
+            "type": "convex",
+            "vertices": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            "convex_radius": 0.0,
+        });
         assert!(convert(three).is_none());
-        let four = json!({ "type": "convex", "vertices": tetrahedron() });
+        let four = json!({ "type": "convex", "vertices": tetrahedron(), "convex_radius": 0.0 });
         assert!(
             matches!(convert(four), Some(ColShape::Convex { vertices, .. }) if vertices.len() == 4)
         );
+    }
+
+    fn convex_radius_of(shape: Value) -> Option<f32> {
+        match convert(shape)? {
+            ColShape::Convex { radius, .. } => Some(radius),
+            other => panic!("not a convex shape: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_convex_shape_carries_the_stored_radius() {
+        let shape = json!({ "type": "convex", "vertices": tetrahedron(), "convex_radius": 0.07 });
+        assert_eq!(convex_radius_of(shape), Some(0.07));
+    }
+
+    #[test]
+    fn a_stored_radius_of_zero_is_a_bare_hull() {
+        let shape = json!({ "type": "convex", "vertices": tetrahedron(), "convex_radius": 0.0 });
+        assert_eq!(convex_radius_of(shape), Some(0.0));
+    }
+
+    #[test]
+    fn a_convex_shape_without_the_key_keeps_its_hull_with_radius_zero_and_warns_once() {
+        crate::utils::forget_once(CONVEX_RADIUS_MISSING);
+        let log = crate::audio::test_support::SharedBuffer::default();
+        let guard = log.capture("warn");
+        let shape = || json!({ "type": "convex", "vertices": tetrahedron() });
+        let radii = [convex_radius_of(shape()), convex_radius_of(shape())];
+        drop(guard);
+        assert_eq!(radii, [Some(0.0), Some(0.0)]);
+        let warnings = log.drain();
+        assert_eq!(warnings.lines().count(), 1, "{warnings}");
+    }
+
+    #[test]
+    fn a_stored_radius_does_not_warn() {
+        crate::utils::forget_once(CONVEX_RADIUS_MISSING);
+        let log = crate::audio::test_support::SharedBuffer::default();
+        let guard = log.capture("warn");
+        let shape = json!({ "type": "convex", "vertices": tetrahedron(), "convex_radius": 0.0 });
+        convex_radius_of(shape);
+        drop(guard);
+        assert_eq!(log.drain(), "");
+    }
+
+    #[test]
+    fn a_negative_radius_makes_the_convex_shape_malformed() {
+        let negative =
+            json!({ "type": "convex", "vertices": tetrahedron(), "convex_radius": -0.01 });
+        assert_eq!(convex_radius_of(negative), None);
+    }
+
+    #[test]
+    fn a_non_finite_radius_is_malformed() {
+        let just_above_the_bound = MAX_CONVEX_RADIUS.next_up();
+        for radius in [
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            -f32::MIN_POSITIVE,
+            just_above_the_bound,
+            1.0e6,
+        ] {
+            assert_eq!(resolve_convex_radius(Some(radius)), None, "{radius}");
+        }
+        assert_eq!(resolve_convex_radius(Some(0.0)), Some(0.0));
+        assert_eq!(
+            resolve_convex_radius(Some(MAX_CONVEX_RADIUS)),
+            Some(MAX_CONVEX_RADIUS)
+        );
+    }
+
+    #[test]
+    fn a_sidecar_drops_only_the_convex_shape_with_a_malformed_radius() {
+        let sidecar = json!({
+            "shapes": [
+                { "type": "convex", "vertices": tetrahedron(), "convex_radius": 0.07, "node": "good" },
+                { "type": "convex", "vertices": tetrahedron(), "convex_radius": -1.0, "node": "bad" },
+                { "type": "convex", "vertices": tetrahedron(), "convex_radius": 7.5, "node": "too big" },
+                { "type": "convex", "vertices": tetrahedron(), "convex_radius": 0.0, "node": "bare" },
+            ],
+        });
+        let parsed =
+            parse_sidecar_bytes(&serde_json::to_vec(&sidecar).unwrap(), "test", &all_solid())
+                .unwrap();
+        let nodes: Vec<_> = parsed.shapes.iter().map(|s| s.node.as_deref()).collect();
+        assert_eq!(nodes, [Some("good"), Some("bare")]);
     }
 
     #[test]

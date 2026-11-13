@@ -45,6 +45,14 @@ fn first_time(key: &str) -> bool {
     set.lock().unwrap().insert(key.to_string())
 }
 
+/// Lets a test see a once-per-run message again.
+#[cfg(test)]
+pub fn forget_once(key: &str) {
+    if let Some(set) = LOGGED_ONCE.get() {
+        set.lock().unwrap().remove(key);
+    }
+}
+
 /// Logs the message with `tracing::warn!`, but only the first time `key` is seen. Use for
 /// per-asset failures that would otherwise spam every streamed cell or frame.
 pub fn warn_once(key: &str, msg: impl FnOnce() -> String) {

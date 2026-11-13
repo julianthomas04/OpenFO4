@@ -23,6 +23,7 @@ use super::mirror::{KinematicMirror, scene_query_filter};
 use super::ragdoll::{RagdollManager, RagdollPlacement, RagdollPoses, RagdollRejection};
 use super::ragdoll_pose::authored_body_poses;
 use super::ragdoll_tuning::RagdollSettings;
+use super::solid_mass::solid_collider;
 use super::sound_pose::{pose_is_sound, vec_is_sound};
 use super::water_materials::{MaterialBuoyancy, WaterBodyProps};
 use super::water_physics::{WaterBodyState, WaterPhysics, WaterQuery, WaterTarget};
@@ -133,6 +134,16 @@ struct RayProbe {
     ref_id: Option<String>,
     dist: f32,
     terrain: bool,
+}
+
+impl RayProbe {
+    fn into_hit(self) -> RayHit {
+        RayHit {
+            mesh_path: self.mesh_path,
+            ref_id: self.ref_id,
+            dist: self.dist,
+        }
+    }
 }
 
 /// Interns (mesh path, material) pairs into the 32-bit path slot of the
@@ -369,12 +380,10 @@ impl PhysicsContext {
     /// What the ray from `origin` along `dir` hits first: mesh path (or
     /// "terrain"), REFR form key when known, and distance.
     pub fn ray_attribution(&self, origin: Vec3, dir: Vec3, max_dist: f32) -> Option<RayHit> {
-        let probe = self.probe(origin, dir, max_dist, scene_query_filter())?;
-        Some(RayHit {
-            mesh_path: probe.mesh_path,
-            ref_id: probe.ref_id,
-            dist: probe.dist,
-        })
+        Some(
+            self.probe(origin, dir, max_dist, scene_query_filter())?
+                .into_hit(),
+        )
     }
 
     /// Surface under `origin` along a straight-down ray. Dynamic bodies are
@@ -406,6 +415,11 @@ impl PhysicsContext {
     ) -> Option<RayProbe> {
         let ray = Ray::new(origin, dir);
         let (handle, dist) = self.world.cast_ray(&ray, max_dist, true, filter)?;
+        self.attribute(handle, dist)
+    }
+
+    /// What the collider `handle` is, for a query that reached it at `dist`.
+    fn attribute(&self, handle: ColliderHandle, dist: f32) -> Option<RayProbe> {
         let collider = self.world.colliders.get(handle)?;
         let terrain = self.terrain_colliders.contains(&handle);
         let (mesh_path, material) = if terrain {
@@ -425,18 +439,22 @@ impl PhysicsContext {
                 |(path, material)| (path.to_string(), material),
             )
         };
-        let (form_id, plugin_slot) = unpack_ref(collider.user_data);
-        let ref_id = (plugin_slot != 0)
-            .then(|| self.plugin_registry.get(plugin_slot as usize - 1))
-            .flatten()
-            .map(|plugin| format!("{form_id:06X}:{plugin}"));
         Some(RayProbe {
             mesh_path,
             material,
-            ref_id,
+            ref_id: self.ref_id_of(collider.user_data),
             dist,
             terrain,
         })
+    }
+
+    /// The REFR form key a collider's `user_data` names, `None` without attribution.
+    fn ref_id_of(&self, user_data: u128) -> Option<String> {
+        let (form_id, plugin_slot) = unpack_ref(user_data);
+        (plugin_slot != 0)
+            .then(|| self.plugin_registry.get(plugin_slot as usize - 1))
+            .flatten()
+            .map(|plugin| format!("{form_id:06X}:{plugin}"))
     }
 
     /// Whether a fixed tick must step the pipeline. Steps on a pending collider
@@ -896,9 +914,8 @@ impl PhysicsContext {
                     let density = density_for_mass(&entry.shapes, group.mass);
                     for cached in entry.shapes.iter() {
                         let path_slot = slots.slot(&mut self.paths, cached.material);
-                        let cb = ColliderBuilder::new(cached.shape.clone())
+                        let cb = solid_collider(&cached.shape, density)
                             .position(collider_pose(cached))
-                            .density(density)
                             .user_data(pack_grid(grid) | pack_path(path_slot) | ref_bits);
                         self.world.insert_collider(cb, Some(body_handle));
                     }
@@ -922,9 +939,8 @@ impl PhysicsContext {
                     let density = density_for_mass(&entry.shapes, group.mass);
                     for cached in entry.shapes.iter() {
                         let path_slot = slots.slot(&mut self.paths, cached.material);
-                        let cb = ColliderBuilder::new(cached.shape.clone())
+                        let cb = solid_collider(&cached.shape, density)
                             .position(collider_pose(cached))
-                            .density(density)
                             .user_data(pack_grid(grid) | pack_path(path_slot) | ref_bits);
                         self.world.insert_collider(cb, Some(body_handle));
                     }
@@ -1501,6 +1517,7 @@ fn ragdoll_placement(
 
 mod audit;
 mod carried;
+pub(super) mod pick;
 
 #[cfg(test)]
 pub(super) mod test_support;

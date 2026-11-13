@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use super::cache_purge::{spawn_purge, versioned_dir_name};
 use super::collision::{CellColliderBatch, ColShape, PartShape, TerrainColliderSpec};
 use super::ragdoll_spec::{RagdollSpec, load_ragdoll_spec};
+use super::rounded_hull::grown_hull;
 use super::sidecar_hash::{SidecarHasher, SidecarLookup};
 use crate::assets::db::collision_layers::PlayerCollisionLayers;
 use crate::assets::layout::{CACHE_DIR, PHYSICS_CACHE_DIR};
@@ -45,8 +46,11 @@ use crate::shared_cache::SharedCache;
 /// no bump is needed for that. Respelling the mesh path inside the key (it starts
 /// with the layout's `meshes\` root) re-keys every blob the same way, but is
 /// bumped so that the purge removes the orphans. Changing which shapes a sidecar
-/// bakes (e.g. dropping layers that never touch the player) bumps it too.
-const COLLIDER_CACHE_VERSION: u32 = 6;
+/// bakes (e.g. dropping layers that never touch the player) bumps it too. The bump to 7
+/// (convex hulls grown by their radius) is not needed for correctness: an old sidecar still bakes
+/// the same bare hull and a reconverted one re-keys through its content hash. It only retires the
+/// blobs of the previous format.
+const COLLIDER_CACHE_VERSION: u32 = 7;
 
 pub(crate) const TRIMESH_FLAGS: TriMeshFlags = TriMeshFlags::FIX_INTERNAL_EDGES
     .union(TriMeshFlags::MERGE_DUPLICATE_VERTICES)
@@ -720,9 +724,10 @@ pub(crate) fn merge_shapes_of_material<'a>(
                 center,
                 rotation,
                 vertices,
+                radius,
             } => {
                 let points: Vec<Vec3> = vertices.iter().map(|v| *v * scale).collect();
-                if let Some(shape) = SharedShape::convex_hull(&points) {
+                if let Some(shape) = grown_hull(&points, radius * scale) {
                     primitives.push((Pose::from_parts(*center * scale, *rotation), shape));
                 } else {
                     tracing::warn!("collision: degenerate convex hull in {path}");
@@ -1520,6 +1525,7 @@ mod tests {
             center: Vec3::ZERO,
             rotation: Quat::IDENTITY,
             vertices: vec![Vec3::ZERO, Vec3::X, Vec3::X * 2.0, Vec3::X * 3.0],
+            radius: 0.0,
         };
         let sphere = ColShape::Sphere {
             center: Vec3::ZERO,
@@ -1528,6 +1534,192 @@ mod tests {
         let merged = merge_shapes_of_material([flat, sphere].iter(), 0, 1.0, "t");
         assert_eq!(merged.len(), 1);
         assert!(merged[0].shape.as_ball().is_some());
+    }
+
+    fn unit_box_hull(radius: f32) -> ColShape {
+        let corner = |x: f32, y: f32, z: f32| Vec3::new(x, y, z) * 0.5;
+        ColShape::Convex {
+            center: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            vertices: vec![
+                corner(-1.0, -1.0, -1.0),
+                corner(1.0, -1.0, -1.0),
+                corner(-1.0, 1.0, -1.0),
+                corner(1.0, 1.0, -1.0),
+                corner(-1.0, -1.0, 1.0),
+                corner(1.0, -1.0, 1.0),
+                corner(-1.0, 1.0, 1.0),
+                corner(1.0, 1.0, 1.0),
+            ],
+            radius,
+        }
+    }
+
+    fn flat_hull(radius: f32) -> ColShape {
+        ColShape::Convex {
+            center: Vec3::new(0.0, 3.0, 0.0),
+            rotation: Quat::IDENTITY,
+            vertices: vec![
+                Vec3::new(-1.0, 0.0, -1.0),
+                Vec3::new(1.0, 0.0, -1.0),
+                Vec3::new(1.0, 0.0, 1.0),
+                Vec3::new(-1.0, 0.0, 1.0),
+            ],
+            radius,
+        }
+    }
+
+    fn border_radius_of(shape: &SharedShape) -> f32 {
+        shape.as_round_convex_polyhedron().unwrap().border_radius
+    }
+
+    #[test]
+    fn a_convex_hull_without_radius_bakes_the_bare_hull() {
+        let merged = merge_shapes_of_material([unit_box_hull(0.0)].iter(), 0, 1.0, "t");
+        assert!(merged[0].shape.as_convex_polyhedron().is_some());
+    }
+
+    #[test]
+    fn a_convex_hull_bakes_grown_by_its_radius() {
+        let merged = merge_shapes_of_material([unit_box_hull(0.07)].iter(), 0, 1.0, "t");
+        assert_eq!(border_radius_of(&merged[0].shape), 0.07);
+    }
+
+    #[test]
+    fn the_radius_scales_with_the_placement_like_the_vertices() {
+        let merged = merge_shapes_of_material([unit_box_hull(0.07)].iter(), 0, 2.0, "t");
+        assert_eq!(border_radius_of(&merged[0].shape), 0.14);
+        let inner = merged[0]
+            .shape
+            .as_round_convex_polyhedron()
+            .unwrap()
+            .inner_shape
+            .local_aabb();
+        assert!((inner.maxs.x - 1.0).abs() < 1e-5, "vertices scaled too");
+    }
+
+    #[test]
+    fn hulls_of_one_compound_keep_their_own_radius() {
+        let merged = merge_shapes_of_material(
+            [unit_box_hull(0.07), unit_box_hull(0.3), unit_box_hull(0.0)].iter(),
+            0,
+            1.0,
+            "t",
+        );
+        assert_eq!(merged.len(), 1);
+        let leaves = merged[0].shape.as_compound().unwrap().shapes();
+        assert_eq!(leaves.len(), 3);
+        assert_eq!(border_radius_of(&leaves[0].1), 0.07);
+        assert_eq!(border_radius_of(&leaves[1].1), 0.3);
+        assert!(leaves[2].1.as_convex_polyhedron().is_some());
+    }
+
+    #[test]
+    fn a_grown_hull_is_hit_by_a_ray_that_misses_the_bare_hull() {
+        use rapier3d::parry::query::Ray;
+
+        let ray = Ray::new(Vec3::new(0.55, 0.0, 3.0), -Vec3::Z);
+        let hit = |radius: f32| {
+            let merged = merge_shapes_of_material([unit_box_hull(radius)].iter(), 0, 1.0, "t");
+            merged[0]
+                .shape
+                .cast_ray(&merged[0].local_pose, &ray, 10.0, true)
+        };
+        assert_eq!(hit(0.0), None);
+        assert!(hit(0.07).is_some());
+    }
+
+    #[test]
+    fn a_flat_hull_with_a_radius_bakes_to_a_plate_at_its_own_pose() {
+        let merged = merge_shapes_of_material([flat_hull(0.1)].iter(), 0, 1.0, "t");
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].local_pose.translation, Vec3::new(0.0, 3.0, 0.0));
+        let aabb = merged[0].shape.compute_local_aabb();
+        assert!((aabb.maxs.y - 0.101).abs() < 5e-3, "{aabb:?}");
+        assert!((aabb.mins.y + 0.101).abs() < 5e-3, "{aabb:?}");
+    }
+
+    #[test]
+    fn a_flat_hull_without_a_radius_bakes_a_zero_thickness_polyhedron_as_before() {
+        let merged = merge_shapes_of_material([flat_hull(0.0)].iter(), 0, 1.0, "t");
+        let aabb = merged[0].shape.compute_local_aabb();
+        assert!(merged[0].shape.as_convex_polyhedron().is_some());
+        assert_eq!(aabb.maxs.y, aabb.mins.y);
+    }
+
+    #[test]
+    fn a_thin_hull_with_a_radius_larger_than_its_half_extent_is_a_plate() {
+        let thin = ColShape::Convex {
+            center: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            vertices: vec![
+                Vec3::new(-2.0, -0.005, -2.0),
+                Vec3::new(2.0, -0.005, -2.0),
+                Vec3::new(2.0, 0.005, -2.0),
+                Vec3::new(-2.0, 0.005, -2.0),
+                Vec3::new(-2.0, -0.005, 2.0),
+                Vec3::new(2.0, -0.005, 2.0),
+                Vec3::new(2.0, 0.005, 2.0),
+                Vec3::new(-2.0, 0.005, 2.0),
+            ],
+            radius: 0.35,
+        };
+        let merged = merge_shapes_of_material([thin].iter(), 0, 1.0, "t");
+        let aabb = merged[0].shape.compute_local_aabb();
+        assert!((aabb.maxs.y - 0.355).abs() < 1e-4);
+        assert!((aabb.maxs.x - 2.35).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_round_hull_survives_the_disk_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = ShapeBakeCache::new(dir.path().to_owned());
+        let shapes =
+            merge_shapes_of_material([unit_box_hull(0.07), flat_hull(0.1)].iter(), 0, 1.0, "t");
+        cache.disk_store("obj|round", &shapes);
+        let loaded = cache.disk_load("obj|round").unwrap();
+        let leaves = loaded[0].shape.as_compound().unwrap().shapes();
+        assert_eq!(border_radius_of(&leaves[0].1), 0.07);
+        assert_eq!(border_radius_of(&leaves[1].1), 0.1);
+    }
+
+    fn convex_sidecar(radius: f32) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "shapes": [{
+                "type": "convex",
+                "vertices": [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                "convex_radius": radius,
+            }]
+        }))
+        .unwrap()
+    }
+
+    fn baked_hull_of(sidecar: &[u8]) -> SharedShape {
+        let parsed = crate::sim::collision::parse_sidecar_bytes(
+            sidecar,
+            "t",
+            &PlayerCollisionLayers::all_solid(),
+        )
+        .unwrap();
+        build_shapes(&parsed.shapes, 1.0, "t").remove(0).shape
+    }
+
+    fn key_of(sidecar: &[u8]) -> String {
+        let lookup = SidecarLookup::Hashed(SidecarHash::of_bytes(sidecar));
+        object_disk_key("a.glb", 1, None, lookup, 0).unwrap()
+    }
+
+    #[test]
+    fn two_sidecars_differing_only_in_the_radius_bake_different_hulls_under_different_keys() {
+        let (bare, round, round_again) = (
+            convex_sidecar(0.0),
+            convex_sidecar(0.07),
+            convex_sidecar(0.07),
+        );
+        assert!(baked_hull_of(&bare).as_convex_polyhedron().is_some());
+        assert_eq!(border_radius_of(&baked_hull_of(&round)), 0.07);
+        assert_ne!(key_of(&bare), key_of(&round));
+        assert_eq!(key_of(&round), key_of(&round_again));
     }
 
     #[test]
@@ -1601,8 +1793,9 @@ mod tests {
     #[test]
     fn blobs_baked_before_layer_filtering_live_in_an_older_version_directory() {
         let current = physics_cache_dir("install/assets");
-        assert_eq!(current.file_name().unwrap(), "v6");
+        assert_eq!(current.file_name().unwrap(), "v7");
         assert_ne!(current.file_name().unwrap(), "v5");
+        assert_ne!(current.file_name().unwrap(), "v6");
     }
 
     fn ragdoll_batch(sidecar: &Path) -> CellColliderBatch {
