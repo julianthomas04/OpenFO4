@@ -23,6 +23,11 @@ pub(crate) fn database_with(statements: &str) -> DbClient {
 /// The converted installation's database: `OPENFO4_DB`, else the install `OPENFO4_INSTALL_DIR`
 /// names. For ignored real-install tests.
 pub(crate) fn installed_database() -> DbClient {
+    DbClient::new(&installed_database_path()).unwrap()
+}
+
+/// The path [`installed_database`] opens.
+pub(crate) fn installed_database_path() -> String {
     let path = std::env::var_os("OPENFO4_DB").map_or_else(
         || {
             let root = resolve_asset_root(
@@ -34,5 +39,7 @@ pub(crate) fn installed_database() -> DbClient {
         },
         PathBuf::from,
     );
-    DbClient::new(path.to_str().unwrap()).unwrap()
+    path.to_str()
+        .expect("the installed database path is UTF-8")
+        .to_owned()
 }
