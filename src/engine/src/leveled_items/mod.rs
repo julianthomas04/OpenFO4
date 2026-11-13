@@ -85,7 +85,7 @@ pub enum ResolveError {
 /// tree reachable from `root` is validated before the first draw (unknown list or item target,
 /// cycle), so a failure is the same for every reference of a list, whatever the roll.
 ///
-/// Rules (public CK wiki: falloutck.uesp.net LeveledCharacter, cs.uesp.net Leveled Item; unverified
+/// Rules (public CK wiki: `falloutck.uesp.net` `LeveledCharacter`, `cs.uesp.net` Leveled Item; unverified
 /// against the game):
 /// 1. `chance_none` percent: `rng.below(100) < chance_none` ends the list with nothing.
 /// 2. Candidates: entries with `level <= player_level`; without

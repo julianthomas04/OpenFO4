@@ -612,7 +612,10 @@ impl DbClient {
     /// The form key the default object manager assigns to `slot` (`LSIS`, ...); `None` when the
     /// slot is unassigned or absent.
     pub fn get_default_object(&self, slot: &str) -> rusqlite::Result<Option<String>> {
-        rows::default_object_slot(&self.conn, slot).map(Option::flatten)
+        rows::default_object_slot(&self.conn, slot).map(|assigned| match assigned {
+            rows::DefaultObjectSlot::Target(target) => Some(target),
+            rows::DefaultObjectSlot::Absent | rows::DefaultObjectSlot::Empty => None,
+        })
     }
 
     /// Every leveled item list; errors on the first malformed row, naming the list.

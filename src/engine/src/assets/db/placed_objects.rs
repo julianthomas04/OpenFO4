@@ -478,9 +478,11 @@ mod tests {
             .into_iter()
             .map(|item| item.form_key)
             .collect();
-        let item_refs = refs
-            .iter()
-            .filter(|r| r.base_object.as_ref().is_some_and(|base| item_keys.contains(base)));
+        let item_refs = refs.iter().filter(|r| {
+            r.base_object
+                .as_ref()
+                .is_some_and(|base| item_keys.contains(base))
+        });
         let counted = refs.iter().filter(|r| r.item_count.is_some()).count();
         let owned = item_refs.filter(|r| r.owner.is_some()).count();
 

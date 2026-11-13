@@ -10,10 +10,19 @@ use std::time::Duration;
 use super::CellGrid;
 
 pub(super) enum Deferred<A> {
-    AddCell { grid: CellGrid, payload: A },
+    AddCell {
+        grid: CellGrid,
+        payload: A,
+    },
     /// More objects for a cell that is already registered.
-    AddObjects { grid: CellGrid, payload: A },
-    PhysicsCenter { grid: CellGrid, radius: i32 },
+    AddObjects {
+        grid: CellGrid,
+        payload: A,
+    },
+    PhysicsCenter {
+        grid: CellGrid,
+        radius: i32,
+    },
 }
 
 pub(super) struct DeferredQueue<A> {
@@ -57,8 +66,9 @@ impl<A> DeferredQueue<A> {
     /// Drops the queued adds of `grid`, the objects added to it included.
     pub(super) fn cancel_add(&mut self, grid: CellGrid) {
         self.entries.retain(|entry| match entry {
-            Deferred::AddCell { grid: queued, .. }
-            | Deferred::AddObjects { grid: queued, .. } => *queued != grid,
+            Deferred::AddCell { grid: queued, .. } | Deferred::AddObjects { grid: queued, .. } => {
+                *queued != grid
+            }
             Deferred::PhysicsCenter { .. } => true,
         });
     }

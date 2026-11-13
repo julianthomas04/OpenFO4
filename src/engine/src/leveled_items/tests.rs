@@ -32,11 +32,11 @@ fn is_item(key: &str) -> bool {
     matches!(key, "a" | "b" | "c" | "d")
 }
 
-fn stack(base: &str, count: u32) -> Option<ItemStack> {
-    Some(ItemStack {
+fn stack(base: &str, count: u32) -> ItemStack {
+    ItemStack {
         base: base.to_owned(),
         count,
-    })
+    }
 }
 
 fn run(
@@ -61,7 +61,7 @@ fn level_ladder(flags: u8) -> LeveledLists {
 fn a_single_entry_resolves_to_its_item_and_count() {
     let lists = lists(vec![row("list", 0, 0, vec![entry("a", 1, 3)])]);
     let mut rng = ScriptedRandom::new(&[99, 0], &[]);
-    assert_eq!(run(&lists, "list", 1, &mut rng), stack("a", 3));
+    assert_eq!(run(&lists, "list", 1, &mut rng), Some(stack("a", 3)));
     assert_eq!(rng.asked_below(), &[100, 1]);
     assert!(rng.is_spent());
 }
@@ -73,7 +73,7 @@ fn a_nested_list_resolves_through_its_pick_and_multiplies_the_counts() {
         row("inner", 0, 0, vec![entry("a", 1, 2), entry("b", 1, 2)]),
     ]);
     let mut rng = ScriptedRandom::new(&[50, 0, 50, 1], &[]);
-    assert_eq!(run(&lists, "outer", 1, &mut rng), stack("b", 6));
+    assert_eq!(run(&lists, "outer", 1, &mut rng), Some(stack("b", 6)));
     assert_eq!(rng.asked_below(), &[100, 1, 100, 2]);
 }
 
@@ -131,7 +131,7 @@ fn without_the_all_levels_flag_only_the_highest_eligible_level_qualifies() {
         let mut rng = ScriptedRandom::new(&[99, 0], &[]);
         assert_eq!(
             run(&ladder, "ladder", level, &mut rng),
-            stack(expected, 1),
+            Some(stack(expected, 1)),
             "player level {level}"
         );
         assert_eq!(rng.asked_below(), &[100, 1], "player level {level}");
@@ -142,15 +142,15 @@ fn without_the_all_levels_flag_only_the_highest_eligible_level_qualifies() {
 fn with_the_all_levels_flag_every_entry_at_or_below_the_player_qualifies() {
     let ladder = level_ladder(ALL_LEVELS);
     let mut rng = ScriptedRandom::new(&[99, 1], &[]);
-    assert_eq!(run(&ladder, "ladder", 11, &mut rng), stack("b", 1));
+    assert_eq!(run(&ladder, "ladder", 11, &mut rng), Some(stack("b", 1)));
     assert_eq!(rng.asked_below(), &[100, 2]);
 
     let mut rng = ScriptedRandom::new(&[99, 0], &[]);
-    assert_eq!(run(&ladder, "ladder", 1, &mut rng), stack("a", 1));
+    assert_eq!(run(&ladder, "ladder", 1, &mut rng), Some(stack("a", 1)));
     assert_eq!(rng.asked_below(), &[100, 1]);
 
     let mut rng = ScriptedRandom::new(&[99, 2], &[]);
-    assert_eq!(run(&ladder, "ladder", 17, &mut rng), stack("c", 1));
+    assert_eq!(run(&ladder, "ladder", 17, &mut rng), Some(stack("c", 1)));
     assert_eq!(rng.asked_below(), &[100, 3]);
 }
 
@@ -159,11 +159,15 @@ fn with_the_all_levels_flag_a_level_between_ladder_levels_keeps_the_lower_entrie
     let ladder = level_ladder(ALL_LEVELS);
     for (level, candidates) in [(10, 1), (12, 2), (16, 2)] {
         let mut rng = ScriptedRandom::new(&[99, 0], &[]);
-        assert_eq!(run(&ladder, "ladder", level, &mut rng), stack("a", 1));
-        assert_eq!(rng.asked_below(), &[100, candidates], "player level {level}");
+        assert_eq!(run(&ladder, "ladder", level, &mut rng), Some(stack("a", 1)));
+        assert_eq!(
+            rng.asked_below(),
+            &[100, candidates],
+            "player level {level}"
+        );
     }
     let mut rng = ScriptedRandom::new(&[99, 1], &[]);
-    assert_eq!(run(&ladder, "ladder", 12, &mut rng), stack("b", 1));
+    assert_eq!(run(&ladder, "ladder", 12, &mut rng), Some(stack("b", 1)));
 }
 
 #[test]
@@ -190,7 +194,7 @@ fn use_all_takes_the_first_candidate_without_a_pick() {
         vec![entry("c", 9, 1), entry("b", 1, 4), entry("a", 1, 1)],
     )]);
     let mut rng = ScriptedRandom::new(&[99], &[]);
-    assert_eq!(run(&lists, "list", 1, &mut rng), stack("b", 4));
+    assert_eq!(run(&lists, "list", 1, &mut rng), Some(stack("b", 4)));
     assert_eq!(rng.asked_below(), &[100]);
 }
 
@@ -220,7 +224,7 @@ fn the_for_each_in_count_flag_is_accepted_and_leaves_the_count_as_it_is() {
         vec![entry("a", 1, 5)],
     )]);
     let mut rng = ScriptedRandom::new(&[99, 0], &[]);
-    assert_eq!(run(&lists, "list", 1, &mut rng), stack("a", 5));
+    assert_eq!(run(&lists, "list", 1, &mut rng), Some(stack("a", 5)));
 }
 
 #[test]
@@ -280,7 +284,7 @@ fn a_list_reached_twice_without_a_cycle_is_not_a_cycle() {
         row("shared", 0, 0, vec![entry("a", 1, 1)]),
     ]);
     let mut rng = ScriptedRandom::new(&[99, 1, 99, 0, 99, 0], &[]);
-    assert_eq!(run(&lists, "top", 1, &mut rng), stack("a", 1));
+    assert_eq!(run(&lists, "top", 1, &mut rng), Some(stack("a", 1)));
 }
 
 #[test]
@@ -333,9 +337,8 @@ fn nested_fixture() -> LeveledLists {
 #[test]
 fn a_resolve_depends_only_on_its_list_level_and_seed() {
     let lists = nested_fixture();
-    let resolve_top = |seed: u64| {
-        resolve(&lists, &is_item, "top", 1, &mut SplitMix64::new(seed)).unwrap()
-    };
+    let resolve_top =
+        |seed: u64| resolve(&lists, &is_item, "top", 1, &mut SplitMix64::new(seed)).unwrap();
     let alone: Vec<_> = (0..200).map(resolve_top).collect();
     let interleaved: Vec<_> = (0..200)
         .map(|seed| {
@@ -359,7 +362,7 @@ fn nesting_four_lists_deep_resolves_to_the_leaf_with_multiplied_counts() {
         row("l4", 0, 0, vec![entry("a", 1, 7)]),
     ]);
     let mut rng = ScriptedRandom::new(&[99, 0, 99, 0, 99, 0, 99, 0], &[]);
-    assert_eq!(run(&lists, "l1", 1, &mut rng), stack("a", 210));
+    assert_eq!(run(&lists, "l1", 1, &mut rng), Some(stack("a", 210)));
     assert_eq!(rng.asked_below(), &[100, 1, 100, 1, 100, 1, 100, 1]);
     assert!(rng.is_spent());
 }

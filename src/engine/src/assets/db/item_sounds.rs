@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use anyhow::Context;
 use rusqlite::Connection;
 
-use crate::assets::db::rows::{collect_rows, default_object_slot, required};
+use crate::assets::db::rows::{DefaultObjectSlot, collect_rows, default_object_slot, required};
 use crate::assets::db::sound_catalog::SoundCatalog;
 
 /// The default-object pair an item falls back to. The four letter pairs exist in the data (PUSW/PDSW,
@@ -134,10 +134,15 @@ fn load_defaults(conn: &Connection) -> anyhow::Result<HashMap<&'static str, Stri
 }
 
 fn load_default(conn: &Connection, slot: &str) -> anyhow::Result<String> {
-    let target = default_object_slot(conn, slot)
-        .with_context(|| format!("reading default object slot {slot}"))?
-        .with_context(|| format!("default object slot {slot} is absent"))?;
-    required(target, "target", &format!("default object slot {slot}"))
+    let assigned = default_object_slot(conn, slot)
+        .with_context(|| format!("reading default object slot {slot}"))?;
+    match assigned {
+        DefaultObjectSlot::Absent => anyhow::bail!("default object slot {slot} is absent"),
+        DefaultObjectSlot::Empty => {
+            required(None, "target", &format!("default object slot {slot}"))
+        }
+        DefaultObjectSlot::Target(target) => Ok(target),
+    }
 }
 
 #[cfg(test)]

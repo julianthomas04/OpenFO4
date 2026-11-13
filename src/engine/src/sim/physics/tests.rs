@@ -1635,7 +1635,12 @@ mod item_removal {
         assert!(context.remove_ref(widget()).is_some());
 
         context.remove_cell(GROUND_CELL);
-        context.add_cell_skipping(GROUND_CELL, &batch, Some(&baked), &HashSet::from([widget()]));
+        context.add_cell_skipping(
+            GROUND_CELL,
+            &batch,
+            Some(&baked),
+            &HashSet::from([widget()]),
+        );
         context.set_physics_center(GROUND_CELL, 2);
         assert!(!context.dyn_bodies.contains_key(&widget()));
         assert!(context.dyn_bodies.contains_key(&other()));

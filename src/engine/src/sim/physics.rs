@@ -325,7 +325,11 @@ impl PhysicsContext {
             carry: carried::Carry::default(),
         };
         let runtime_slot = context.plugin_slot(RUNTIME_REF_PLUGIN);
-        debug_assert_eq!(runtime_slot, Some(1), "the runtime plugin takes the first slot");
+        debug_assert_eq!(
+            runtime_slot,
+            Some(1),
+            "the runtime plugin takes the first slot"
+        );
         context
     }
 
@@ -1044,10 +1048,7 @@ impl PhysicsContext {
         if !handles.is_empty() {
             self.dirty = true;
         }
-        self.cell_colliders
-            .entry(grid)
-            .or_default()
-            .extend(handles);
+        self.cell_colliders.entry(grid).or_default().extend(handles);
         self.cell_cache_keys.entry(grid).or_default().extend(keys);
         self.reconcile_dynamic_radius();
         Ok(())

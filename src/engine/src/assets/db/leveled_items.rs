@@ -75,7 +75,9 @@ impl LeveledItemRow {
         let chance_none = u8::try_from(stored_chance)
             .ok()
             .filter(|&percent| percent <= MAX_CHANCE_NONE)
-            .with_context(|| format!("leveled list {list} has a chance none of {stored_chance}%"))?;
+            .with_context(|| {
+                format!("leveled list {list} has a chance none of {stored_chance}%")
+            })?;
         let stored_flags = stored
             .flags
             .as_deref()
