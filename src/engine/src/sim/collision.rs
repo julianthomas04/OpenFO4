@@ -8,6 +8,7 @@ use glam::{Quat, Vec3};
 
 use super::water_materials::WaterBodyProps;
 use crate::assets::db::collision_layers::{LayerSolidity, PlayerCollisionLayers};
+use crate::bethesda_space::ENGINE_UNITS_PER_METER;
 
 /// One collision shape in a GLB's local space. Sidecar writers already
 /// applied the engine convention (Y-up, x0.1 scale, Z negated), so these
@@ -430,9 +431,11 @@ fn keep_player_solid(
     (kept, dropped)
 }
 
-/// The largest convex radius a sidecar may carry, in engine units (the installer's bound: 1.0
-/// Havok metre; the largest radius in the game data is 0.70). A larger value is corruption.
-const MAX_CONVEX_RADIUS: f32 = 7.0;
+/// The installer's bound on a convex radius, in Havok metres (the largest radius in the game
+/// data is 0.70).
+const INSTALLER_MAX_CONVEX_RADIUS_METERS: f32 = 1.0;
+/// The largest convex radius a sidecar may carry, in engine units. A larger value is corruption.
+const MAX_CONVEX_RADIUS: f32 = INSTALLER_MAX_CONVEX_RADIUS_METERS * ENGINE_UNITS_PER_METER;
 const CONVEX_RADIUS_MISSING: &str = "collision-convex-radius-missing";
 
 /// The radius of a convex shape: a stored finite value in `0..=MAX_CONVEX_RADIUS` is used; a sidecar without
@@ -708,6 +711,17 @@ mod tests {
             resolve_convex_radius(Some(MAX_CONVEX_RADIUS)),
             Some(MAX_CONVEX_RADIUS)
         );
+    }
+
+    #[test]
+    fn the_radius_bound_is_the_installers_one_havok_metre_in_engine_units() {
+        let radius_of = |radius: f32| {
+            convex_radius_of(
+                json!({ "type": "convex", "vertices": tetrahedron(), "convex_radius": radius }),
+            )
+        };
+        assert_eq!(radius_of(6.99), Some(6.99));
+        assert_eq!(radius_of(7.01), None);
     }
 
     #[test]

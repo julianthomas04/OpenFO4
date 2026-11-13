@@ -40,16 +40,25 @@ pub fn lower_thread_priority() {
 
 static LOGGED_ONCE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
+/// Under test every thread has its own once-set, so parallel tests never consume each other's keys.
+fn scoped_key(key: &str) -> String {
+    if cfg!(test) {
+        format!("{:?}:{key}", std::thread::current().id())
+    } else {
+        key.to_string()
+    }
+}
+
 fn first_time(key: &str) -> bool {
     let set = LOGGED_ONCE.get_or_init(|| Mutex::new(HashSet::new()));
-    set.lock().unwrap().insert(key.to_string())
+    set.lock().unwrap().insert(scoped_key(key))
 }
 
 /// Lets a test see a once-per-run message again.
 #[cfg(test)]
 pub fn forget_once(key: &str) {
     if let Some(set) = LOGGED_ONCE.get() {
-        set.lock().unwrap().remove(key);
+        set.lock().unwrap().remove(&scoped_key(key));
     }
 }
 
