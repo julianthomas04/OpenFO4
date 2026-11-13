@@ -317,13 +317,15 @@ impl RuntimeRefKeys {
 pub(crate) struct AbandonedDrop {
     pub base: String,
     pub count: u32,
+    pub reason: String,
 }
 
-impl From<DroppedItemSpec> for AbandonedDrop {
-    fn from(spec: DroppedItemSpec) -> Self {
+impl AbandonedDrop {
+    pub(super) fn new(spec: DroppedItemSpec, reason: impl std::fmt::Display) -> Self {
         Self {
             base: spec.base,
             count: spec.count,
+            reason: reason.to_string(),
         }
     }
 }
@@ -776,7 +778,7 @@ mod tests {
     }
 
     #[test]
-    fn an_abandoned_drop_returns_the_dropped_base_and_units() {
+    fn an_abandoned_drop_returns_the_dropped_base_and_units_and_keeps_the_reason() {
         let spec = DroppedItemSpec {
             base: "00BEEF:Test.esm".to_owned(),
             count: 4,
@@ -785,10 +787,11 @@ mod tests {
         };
 
         assert_eq!(
-            AbandonedDrop::from(spec),
+            AbandonedDrop::new(spec, DropRejection::NoBody),
             AbandonedDrop {
                 base: "00BEEF:Test.esm".to_owned(),
-                count: 4
+                count: 4,
+                reason: "its payload holds no body".to_owned(),
             }
         );
     }

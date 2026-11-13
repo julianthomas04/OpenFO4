@@ -117,13 +117,21 @@ impl Placeholders {
             return Effective::Vacant;
         };
         if let Some(stack) = self.kept_stack(ref_key) {
+            debug!("{}", leveled_log_line(ref_key, list, Leveled::Kept(&stack)));
             return Effective::Resolved(stack);
         }
         let mut rng = SplitMix64::new(roll_seed(roll.load_nonce, refr_entity_id(ref_key)));
         match resolve(lists, is_item, list, roll.player_level, &mut rng) {
-            Ok(Some(stack)) => Effective::Resolved(self.keep(ref_key, stack)),
+            Ok(Some(stack)) => {
+                let stack = self.keep(ref_key, stack);
+                debug!(
+                    "{}",
+                    leveled_log_line(ref_key, list, Leveled::Rolled(&stack))
+                );
+                Effective::Resolved(stack)
+            }
             Ok(None) => {
-                debug!("linked reference {ref_key} rolled nothing from leveled list {list}");
+                debug!("{}", leveled_log_line(ref_key, list, Leveled::Nothing));
                 Effective::Vacant
             }
             Err(error) => {
@@ -175,6 +183,26 @@ impl Placeholders {
     fn kept(&self) -> MutexGuard<'_, HashMap<String, ItemStack>> {
         self.kept.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// How a linked reference's list resolved in one cell load.
+#[derive(Clone, Copy)]
+enum Leveled<'a> {
+    Nothing,
+    Kept(&'a ItemStack),
+    Rolled(&'a ItemStack),
+}
+
+fn leveled_log_line(ref_key: &str, list: &str, outcome: Leveled<'_>) -> String {
+    let (stack, how) = match outcome {
+        Leveled::Nothing => return format!("leveled: ref={ref_key} list={list} -> nothing"),
+        Leveled::Kept(stack) => (stack, "kept"),
+        Leveled::Rolled(stack) => (stack, "rolled"),
+    };
+    format!(
+        "leveled: ref={ref_key} list={list} -> {} x {} ({how})",
+        stack.base, stack.count
+    )
 }
 
 /// The inputs every linked reference of one cell load rolls with.
@@ -303,6 +331,27 @@ mod tests {
             base: ROLLED_ITEM.to_owned(),
             count,
         })
+    }
+
+    #[test]
+    fn each_resolution_of_a_linked_reference_logs_one_plain_line() {
+        let stack = ItemStack {
+            base: ROLLED_ITEM.to_owned(),
+            count: 3,
+        };
+        let line = |outcome| leveled_log_line("00ABCD:Fixture.esm", LIST, outcome);
+        assert_eq!(
+            line(Leveled::Nothing),
+            "leveled: ref=00ABCD:Fixture.esm list=LL_FIXTURE -> nothing"
+        );
+        assert_eq!(
+            line(Leveled::Rolled(&stack)),
+            "leveled: ref=00ABCD:Fixture.esm list=LL_FIXTURE -> ROLLED_CAN x 3 (rolled)"
+        );
+        assert_eq!(
+            line(Leveled::Kept(&stack)),
+            "leveled: ref=00ABCD:Fixture.esm list=LL_FIXTURE -> ROLLED_CAN x 3 (kept)"
+        );
     }
 
     #[test]

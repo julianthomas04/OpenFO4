@@ -45,9 +45,18 @@ pub(super) const OBSERVED_DROP: DropLook = DropLook {
     side_angle: 97.0 * std::f32::consts::PI / 180.0,
 };
 
+/// Which of the candidate spots the placement ended at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DropSpot {
+    Front,
+    Side,
+    PulledBack,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct DropPlacement {
     pub position: Vec3,
+    pub spot: DropSpot,
     /// The engine camera yaw the item faces: the direction of the view.
     pub yaw: f32,
 }
@@ -89,12 +98,14 @@ fn placement_with(
     if direction == Vec3::ZERO {
         return DropPlacement {
             position: origin,
+            spot: DropSpot::Front,
             yaw,
         };
     }
     let Some(front_hit) = ray(origin, direction, look.forward_distance + look.margin) else {
         return DropPlacement {
             position: origin + direction * look.forward_distance,
+            spot: DropSpot::Front,
             yaw,
         };
     };
@@ -102,12 +113,14 @@ fn placement_with(
     if ray(origin, side, look.side_distance + look.margin).is_none() {
         return DropPlacement {
             position: origin + side * look.side_distance,
+            spot: DropSpot::Side,
             yaw,
         };
     }
     let free_distance = (front_hit - look.margin).max(0.0);
     DropPlacement {
         position: origin + direction * free_distance,
+        spot: DropSpot::PulledBack,
         yaw,
     }
 }
@@ -169,6 +182,22 @@ mod tests {
     fn a_blocked_front_spot_moves_the_item_to_the_right_of_the_body() {
         let placed = placement_with(&LOOK, EYE, Vec3::X, wall_ahead(7.0));
         assert_near(placed.position, Vec3::new(10.0, SPAWN_Y, 44.0));
+    }
+
+    #[test]
+    fn the_placement_names_the_spot_it_ended_at() {
+        let spot =
+            |ray: fn(Vec3, Vec3, f32) -> Option<f32>| placement_with(&LOOK, EYE, Vec3::X, ray).spot;
+        assert_eq!(spot(open), DropSpot::Front);
+        assert_eq!(
+            spot(|_, direction, _| (direction == Vec3::X).then_some(7.0)),
+            DropSpot::Side
+        );
+        assert_eq!(spot(|_, _, _| Some(1.0)), DropSpot::PulledBack);
+        assert_eq!(
+            placement_with(&LOOK, EYE, Vec3::ZERO, open).spot,
+            DropSpot::Front
+        );
     }
 
     #[test]
@@ -286,6 +315,7 @@ mod tests {
     fn the_spec_carries_the_item_count_position_and_yaw_of_the_placement() {
         let placed = DropPlacement {
             position: Vec3::new(1.0, 2.0, 3.0),
+            spot: DropSpot::Front,
             yaw: 0.75,
         };
         assert_eq!(

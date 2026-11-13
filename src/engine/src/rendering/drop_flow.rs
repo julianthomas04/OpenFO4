@@ -3,19 +3,9 @@
 
 use std::fmt::Display;
 
+use super::drop_log::drop_failure_line;
 use super::world_streamer::{AbandonedDrop, DroppedItemSpec, SpawnItemError};
 use crate::sim::{EntityId, ItemGrantError};
-
-/// Puts the units back into the inventory; a failure is reported, never silent.
-fn give_back(
-    restore: &mut impl FnMut(&str, u32) -> Result<(), ItemGrantError>,
-    form_key: &str,
-    count: u32,
-) {
-    if let Err(error) = restore(form_key, count) {
-        tracing::error!("{count} x {form_key} could not return to the inventory: {error}");
-    }
-}
 
 /// Hands a dropped stack to the world. When the world refuses it the whole count goes back to
 /// the inventory. Returns whether the world took it.
@@ -28,8 +18,12 @@ pub(super) fn settle_drop(
     match spawn(spec) {
         Ok(_) => true,
         Err(error) => {
-            tracing::error!("drop of {count} x {form_key} refused by the world: {error}");
-            give_back(&mut restore, &form_key, count);
+            let returned = restore(&form_key, count);
+            let reason = format!("refused by the world: {error}");
+            tracing::error!(
+                "{}",
+                drop_failure_line(&form_key, count, &reason, &returned)
+            );
             false
         }
     }
@@ -41,12 +35,13 @@ pub(super) fn return_abandoned(
     mut restore: impl FnMut(&str, u32) -> Result<(), ItemGrantError>,
 ) {
     for drop in abandoned {
-        tracing::warn!(
-            "dropped {} x{} never reached the world",
-            drop.base,
-            drop.count
-        );
-        give_back(&mut restore, &drop.base, drop.count);
+        let returned = restore(&drop.base, drop.count);
+        let line = drop_failure_line(&drop.base, drop.count, &drop.reason, &returned);
+        if returned.is_ok() {
+            tracing::warn!("{line}");
+        } else {
+            tracing::error!("{line}");
+        }
     }
 }
 
@@ -170,10 +165,12 @@ mod tests {
                 AbandonedDrop {
                     base: KEY.to_owned(),
                     count: 30,
+                    reason: "its cell left before the item was built".to_owned(),
                 },
                 AbandonedDrop {
                     base: "0F3B02:Test.esm".to_owned(),
                     count: 1,
+                    reason: "its payload holds no body".to_owned(),
                 },
             ],
             |key, count| {

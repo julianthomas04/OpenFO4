@@ -17,6 +17,7 @@ pub mod device;
 pub mod device_loss;
 mod door_prompt;
 mod drop_flow;
+mod drop_log;
 pub mod effects;
 pub mod egui_pass;
 pub mod fatal_runtime_error;
@@ -225,6 +226,7 @@ use boot::{BootParts, GpuContext, StartupInputs, StateInputs};
 use cube_array::CubeArray;
 use door_prompt::{DoorPrompts, ShownEntrance, aim_hud};
 use drop_flow::{handle_all, return_abandoned, settle_drop};
+use drop_log::drop_request_line;
 use effects::stage::{EffectFrameInputs, EffectStage};
 use grab_input::{
     AimTarget, CarryContext, GrabAction, GrabInput, carry_key_counts, spin_gate_open,
@@ -1346,15 +1348,13 @@ impl State {
     fn place_dropped(&mut self, form_key: &str, count: u32) -> bool {
         let eye = self.camera.eye;
         let forward = self.camera_controller.forward();
-        let spec = dropped_spec(
-            form_key,
-            count,
-            placement(eye, forward, |origin, direction, reach| {
-                self.sim
-                    .debug_ray_hit(origin, direction, reach)
-                    .map(|hit| hit.dist)
-            }),
-        );
+        let placed = placement(eye, forward, |origin, direction, reach| {
+            self.sim
+                .debug_ray_hit(origin, direction, reach)
+                .map(|hit| hit.dist)
+        });
+        tracing::debug!("{}", drop_request_line(form_key, count, &placed, eye));
+        let spec = dropped_spec(form_key, count, placed);
         settle_drop(
             spec,
             |spec| self.streamer.spawn_world_item(spec),

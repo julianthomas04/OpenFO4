@@ -38,6 +38,7 @@ use crate::navmesh::{CellNavmeshes, NavMesh, NavResidency, NavWorld, build_meshe
 use crate::rendering::animated_objects::{ActivatorKind, AnimatedObjectEvent, AnimatedRefr};
 use crate::rendering::broken_asset::{BrokenAsset, BrokenAssetSink, BrokenAssets};
 use crate::rendering::cube_array::CubeArray;
+use crate::rendering::drop_log::drop_in_world_line;
 use crate::rendering::effects::geometry::{EffectInstance, EffectMeshData, RefractionInstance};
 use crate::rendering::frustum::Aabb;
 use crate::rendering::game_text::non_blank;
@@ -277,6 +278,12 @@ struct RuntimeObjectRequest {
     grid: (i32, i32),
     residency: u64,
     epoch: u64,
+}
+
+/// A dropped stack the cell workers are still building.
+struct PendingDrop {
+    ref_key: String,
+    spec: DroppedItemSpec,
 }
 
 /// The one-object payload of a `RuntimeObjectRequest`, to be appended to its owning cell.
@@ -1308,7 +1315,7 @@ pub struct WorldStreamer {
     /// Allocates the reference keys of dropped items.
     runtime_ref_keys: RuntimeRefKeys,
     /// Dropped items whose payload the workers are building, by entity.
-    pending_drops: HashMap<EntityId, DroppedItemSpec>,
+    pending_drops: HashMap<EntityId, PendingDrop>,
     /// Built payloads of dropped items, waiting to join their cell.
     buffered_runtime: VecDeque<RuntimeObjectResult>,
     /// Drops that will never appear, until `take_abandoned_drops`.
@@ -2958,13 +2965,14 @@ impl WorldStreamer {
         self.db_worker_tx
             .send(CellRequest::RuntimeObject(RuntimeObjectRequest {
                 spec: spec.clone(),
-                ref_key,
+                ref_key: ref_key.clone(),
                 grid,
                 residency,
                 epoch: self.epoch,
             }))
             .map_err(|_| SpawnItemError::WorkerChannelClosed)?;
-        self.pending_drops.insert(entity, spec);
+        self.pending_drops
+            .insert(entity, PendingDrop { ref_key, spec });
         Ok(entity)
     }
 
@@ -2974,11 +2982,8 @@ impl WorldStreamer {
         std::mem::take(&mut self.abandoned_drops)
     }
 
-    fn abandon_drop(&mut self, drop: AbandonedDrop, reason: impl std::fmt::Display) {
-        warn!(
-            "dropped {} x{} is not placed: {reason}",
-            drop.base, drop.count
-        );
+    fn abandon_drop(&mut self, spec: DroppedItemSpec, reason: impl std::fmt::Display) {
+        let drop = AbandonedDrop::new(spec, reason);
         self.abandoned_drops.push(drop);
     }
 
@@ -2999,7 +3004,7 @@ impl WorldStreamer {
             residency,
             mut payload,
         } = object;
-        let Some(spec) = self.pending_drops.remove(&entity) else {
+        let Some(PendingDrop { ref_key, spec }) = self.pending_drops.remove(&entity) else {
             debug!("dropped item {entity:?} arrived after its drop was abandoned");
             drop_off_thread(payload);
             return;
@@ -3014,14 +3019,14 @@ impl WorldStreamer {
         ) {
             Ok(item) => item,
             Err(rejection) => {
-                self.abandon_drop(AbandonedDrop::from(spec), rejection);
+                self.abandon_drop(spec, rejection);
                 drop_off_thread(payload);
                 return;
             }
         };
         let Some(slot) = self.full_cell_mut(grid) else {
             error!("dropped item {entity:?}: its admitted cell {grid:?} is gone");
-            self.abandon_drop(AbandonedDrop::from(spec), "its cell is gone");
+            self.abandon_drop(spec, "its cell is gone");
             return;
         };
         let mut res = std::mem::take(slot);
@@ -3039,10 +3044,11 @@ impl WorldStreamer {
             &mut res.edits,
         ) {
             Ok(command) => {
+                debug!("{}", drop_in_world_line(&ref_key, &spec));
                 self.entity_cell.insert(entity, grid);
                 self.sim_commands.extend(command);
             }
-            Err(rejection) => self.abandon_drop(AbandonedDrop::from(spec), rejection),
+            Err(rejection) => self.abandon_drop(spec, rejection),
         }
         if let Some(slot) = self.full_cell_mut(grid) {
             *slot = res;
@@ -4283,8 +4289,8 @@ impl WorldStreamer {
         self.entity_cell.clear();
         self.pending_hides.clear();
         self.buffered_runtime.clear();
-        for (_, spec) in std::mem::take(&mut self.pending_drops) {
-            self.abandon_drop(AbandonedDrop::from(spec), "the world was torn down");
+        for (_, PendingDrop { spec, .. }) in std::mem::take(&mut self.pending_drops) {
+            self.abandon_drop(spec, "the world was torn down");
         }
         self.animated_events.clear();
         self.animated_events.push(AnimatedObjectEvent::Cleared);
