@@ -328,4 +328,54 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    #[ignore = "needs a converted installation (OPENFO4_INSTALL_DIR or OPENFO4_DB)"]
+    fn no_installed_item_base_has_a_convex_radius_beyond_the_drop_margin() {
+        use crate::assets::db::collision_layers::PlayerCollisionLayers;
+        use crate::assets::types::glb_key::glb_key;
+        use crate::assets::{AssetRootEnv, resolve_asset_root};
+        use crate::sim::collision::{ColShape, load_sidecar_file};
+
+        let asset_root = resolve_asset_root(
+            &AssetRootEnv::from_process(),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+        )
+        .expect("set OPENFO4_INSTALL_DIR to a converted installation");
+        let items = crate::assets::db::test_support::installed_database()
+            .get_items()
+            .expect("the installed items read");
+        let mut with_collision = 0;
+        let mut largest: Option<(f32, String)> = None;
+        for item in &items {
+            let Some(stem) = item
+                .model_path
+                .as_deref()
+                .map(glb_key)
+                .and_then(|key| key.strip_suffix(".glb").map(str::to_owned))
+            else {
+                continue;
+            };
+            let sidecar = format!("{}/{stem}.col.json", asset_root.display());
+            let Some(data) = load_sidecar_file(&sidecar, &PlayerCollisionLayers::all_solid())
+            else {
+                continue;
+            };
+            with_collision += 1;
+            for part in data.shapes.iter() {
+                if let ColShape::Convex { radius, .. } = part.shape
+                    && largest.as_ref().is_none_or(|(most, _)| radius > *most)
+                {
+                    largest = Some((radius, item.form_key.clone()));
+                }
+            }
+        }
+        println!(
+            "{} item bases, {with_collision} with collision, largest convex radius {largest:?}, margin {}",
+            items.len(),
+            OBSERVED_DROP.margin
+        );
+        let (radius, base) = largest.expect("some item base has a convex shape");
+        assert!(radius < OBSERVED_DROP.margin, "{base}: {radius}");
+    }
 }

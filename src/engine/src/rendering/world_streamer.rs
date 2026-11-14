@@ -7203,6 +7203,72 @@ fn add_weapon_bases(
     records.mods
 }
 
+/// The collision of a converted installation's cells, built by the streaming worker exactly as at
+/// runtime. For ignored real-install tests elsewhere in the crate.
+#[cfg(test)]
+pub(crate) mod real_install {
+    use std::collections::HashSet;
+    use std::path::Path;
+    use std::sync::{Arc, Mutex};
+
+    use super::{CellRequest, WorkerResponse, WorldStreamer, process_request};
+    use crate::assets::db::DbClient;
+    use crate::assets::db::test_support::installed_database_path;
+    use crate::assets::ini::GameIni;
+    use crate::assets::types::grass_placement::GrassSettings;
+    use crate::assets::world_settings::test_support::grid_of_side;
+    use crate::assets::{AssetRootEnv, resolve_asset_root};
+    use crate::game_flow::spawn_locations::COMMONWEALTH;
+    use crate::rendering::texture_streaming::policy::ResidencyPolicy;
+    use crate::sim::bake::BakedCellColliders;
+    use crate::sim::collision::CellColliderBatch;
+
+    /// The collision batch and its baked shapes of the interior cell `cell_form_key`.
+    pub(crate) fn interior_collision(
+        cell_form_key: &str,
+    ) -> (Arc<CellColliderBatch>, BakedCellColliders) {
+        let db_path = installed_database_path();
+        let asset_root = resolve_asset_root(
+            &AssetRootEnv::from_process(),
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+        )
+        .expect("set OPENFO4_INSTALL_DIR to a converted installation");
+        let grass = GrassSettings::from_ini(&GameIni::from_texts(["[Grass]\niMinGrassSize=20\n"]))
+            .expect("the grass settings parse");
+        let streamer = WorldStreamer::new(
+            &db_path,
+            asset_root.to_str().expect("the asset root is UTF-8"),
+            COMMONWEALTH,
+            Arc::new(Mutex::new(HashSet::new())),
+            ResidencyPolicy {
+                global_skip: 0,
+                max_anisotropy: 1,
+            },
+            grid_of_side(5),
+            grass,
+        )
+        .expect("the streamer starts on the installed database");
+        let db = DbClient::new(&db_path).expect("the installed database opens");
+        let request = CellRequest::Interior {
+            cell_form_key: cell_form_key.to_owned(),
+            grid: (0, 0),
+            epoch: 0,
+        };
+        let WorkerResponse::Full(result) = process_request(&request, &db, &streamer.worker_shared)
+        else {
+            panic!("an interior request answers with a full cell");
+        };
+        (
+            result
+                .colliders
+                .expect("the interior has a collision batch"),
+            result
+                .baked_colliders
+                .expect("the interior's collision is baked"),
+        )
+    }
+}
+
 #[cfg(test)]
 #[allow(
     clippy::float_cmp,

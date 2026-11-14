@@ -1536,6 +1536,10 @@ fn despawn_bodies(world: &mut PhysicsWorld, live: &LiveRagdoll) {
 }
 
 #[cfg(test)]
+#[path = "ragdoll_radius_tests.rs"]
+mod radius_tests;
+
+#[cfg(test)]
 #[allow(
     clippy::float_cmp,
     reason = "fixture values are exactly representable in f32"
