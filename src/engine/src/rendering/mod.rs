@@ -231,7 +231,7 @@ use drop_flow::{handle_all, return_abandoned, settle_drop};
 use drop_log::drop_request_line;
 use effects::stage::{EffectFrameInputs, EffectStage};
 use grab_input::{
-    AimTarget, CarryContext, GrabAction, GrabInput, QueueDelay, carry_key_counts, spin_gate_open,
+    AimTarget, CarryContext, GrabAction, GrabInput, carry_key_counts, spin_gate_open,
 };
 use item_drop::{dropped_spec, placement};
 use item_feedback::{inventory_log_line, item_sound_of, load_item_sounds};
@@ -755,8 +755,6 @@ pub struct State {
     grab_input: GrabInput,
     /// Reach and grab hold of the E key, from one source.
     pick: PickSettings,
-    /// How long the last finished frame ran: the most a key event can have waited in the queue.
-    queue_delay: QueueDelay,
     /// Base world FOV in Bethesda convention (horizontal at a 16:9 base),
     /// from the INI cascade (`fDefaultWorldFOV`).
     world_fov_beth: f32,
@@ -1193,7 +1191,8 @@ impl State {
     }
 
     /// What the player aims at within activation reach: the crosshair ray, widened to a ball for
-    /// placed items. A door or animated object wins over an item, as in `aim_target_of`.
+    /// placed items and activators. A ref that is both a door and an item counts as the door, as
+    /// in `aim_target_of`.
     fn aimed_hit(&self) -> Option<RayHit> {
         self.sim.pick_hit(
             self.pick
@@ -1259,14 +1258,9 @@ impl State {
             return;
         }
         let carrying = self.sim.carried().is_some();
-        let now = Instant::now();
         let aim = self.aim_target();
-        let actions =
-            self.grab_input
-                .activate_key(is_pressed, carrying, now, aim, self.queue_delay);
-        for action in actions {
-            self.apply_grab_action(action);
-        }
+        let action = self.grab_input.activate_key(is_pressed, carrying, aim);
+        self.apply_grab_action(action);
     }
 
     /// R went down or up in walk mode: charges and throws the carried body.
@@ -1284,10 +1278,10 @@ impl State {
         }
     }
 
-    /// Fires a grab whose hold E has reached by `now`.
-    fn advance_carry_input(&mut self, now: Instant) {
+    /// Counts the frame starting at `frame_start` towards E's hold and fires a grab it reaches.
+    fn advance_carry_input(&mut self, frame_start: Instant) {
         if self.carry_controls_live() {
-            let action = self.grab_input.advance(now);
+            let action = self.grab_input.advance(frame_start);
             self.apply_grab_action(action);
         }
     }
@@ -2156,7 +2150,6 @@ impl State {
             walk_keys: WalkKeys::default(),
             grab_input: GrabInput::new(pick.grab_hold()),
             pick,
-            queue_delay: QueueDelay::default(),
             world_fov_beth,
             fov_adjust: 0.0,
             collision_wireframe: false,
@@ -3882,13 +3875,6 @@ impl State {
         }
     }
 
-    /// Notes how long the frame that just finished ran, from the start of its update to the end of
-    /// its render: key events that came in during it were dispatched only after it, so it bounds
-    /// how long any of them waited.
-    pub fn finish_frame(&mut self, duration: Duration) {
-        self.queue_delay.after_frame(duration);
-    }
-
     pub fn record_perf_frame(&mut self, update: std::time::Duration, render: std::time::Duration) {
         if let Some(perf_log) = &mut self.perf_log {
             perf_log.record_frame(update, render);
@@ -4094,8 +4080,8 @@ impl State {
             InputMode::Walk => {
                 self.sim
                     .apply(SimCommand::SetPlayerInput(self.player_input()));
-                // Before the tick, with this frame's view: the grab hold is measured to the
-                // start of the frame, not to after a streaming hitch inside it.
+                // Before the tick, after this frame's key events, with this frame's view: the
+                // frame counts towards E's hold at its start.
                 self.advance_carry_input(frame_start);
                 self.sim.tick(dt);
                 self.sample_walk_in(pipboy_open, dt);
