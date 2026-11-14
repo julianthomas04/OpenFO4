@@ -69,15 +69,15 @@ impl PickSettings {
         self.reach
     }
 
-    /// The radius (engine units) of the ball swept along the crosshair line to find placed
-    /// items: `fActivatePickRadius`. Doors, containers and other activators keep the exact ray:
-    /// the original was only measured on an item.
+    /// The radius (engine units) of the ball swept along the crosshair line to find placed items
+    /// and activators: `fActivatePickRadius`. Measured, the margin it gives follows the collision
+    /// shape, for items and for a door alike.
     pub const fn radius(&self) -> f32 {
         self.radius
     }
 
-    /// How long E must stay down on a loose body before it is grabbed: `fZKeyDelay`. A hold of
-    /// exactly this long still takes.
+    /// How long E must stay down on a loose body before it is grabbed, counted in frames from the
+    /// first frame after the press: `fZKeyDelay`.
     pub const fn grab_hold(&self) -> Duration {
         self.grab_hold
     }

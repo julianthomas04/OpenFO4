@@ -952,8 +952,8 @@ impl SimWorld {
         self.physics.ray_attribution(origin, dir, max_dist)
     }
 
-    /// What the player aims at: the exact ray, or the ball swept along it for items (see
-    /// `PhysicsContext::pick_attribution`). `classify` tells items from activators and solids.
+    /// What the player aims at: the exact ray, or the ball swept along it for items and activators
+    /// (see `PhysicsContext::pick_attribution`). `classify` tells items from activators and solids.
     pub fn pick_hit(&self, aim: PickRay, classify: impl Fn(&str) -> PickClass) -> Option<RayHit> {
         self.physics.pick_attribution(aim, classify)
     }

@@ -1,11 +1,12 @@
 //! Aiming with a radius. The original picks with a volume around the crosshair line, not with the
-//! line alone: measured, the rollover of an item shows up to the pick radius beside its outline.
-//! This module composes the exact ray with a ball swept along it.
+//! line alone: measured, the rollover of an item or a door shows up to the pick radius beside the
+//! outline of its collision.
 //!
-//! The ball only looks for placed items. Everything else, a load door, a container, any other
-//! activator, keeps the exact ray: the original was measured on an item only. The ball does not
-//! extend the reach: what it touches counts only when the touched point is within reach of the
-//! eye, as for the exact ray.
+//! The exact ray decides when it hits an item or an activator. Otherwise every item and activator
+//! the ball swept along the ray touches is a candidate when its touched point is in front of the
+//! eye, within reach and seen from the eye, and the candidate whose touched point lies nearest
+//! the ray wins (measured on item pairs at two depths and a door end, 2026-11-13/14). Solids never
+//! stop the ball: they only hide from the eye what lies behind them.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -27,16 +28,26 @@ const NO_USABLE_AIM: &str = "pick-aim-without-direction";
 pub enum PickClass {
     /// A placed item: the ball finds it.
     Item,
-    /// A door or an animated object: only the exact ray finds it, and it wins over any item.
+    /// A door or an animated object: the ball finds it like an item, and it hides what lies
+    /// behind it from the eye.
     Activator,
-    /// Anything else: only the exact ray finds it, and it hides items behind it.
+    /// Anything else: the ball never finds it, and it hides what lies behind it from the eye.
     Solid,
 }
 
+impl PickClass {
+    fn is_pickable(self) -> bool {
+        match self {
+            Self::Item | Self::Activator => true,
+            Self::Solid => false,
+        }
+    }
+}
+
 /// The aim: a ray of `reach` from `origin` along `dir` (any length above 0), widened to a ball of
-/// `radius` for items. A `radius` of 0 is the exact ray. The `reach` and `radius` come from
-/// `PickSettings`, which guarantees a finite reach above 0 and a finite radius of 0 or more;
-/// `origin` and `dir` come from the camera and are checked on entry.
+/// `radius` for items and activators. A `radius` of 0 is the exact ray. The `reach` and `radius`
+/// come from `PickSettings`, which guarantees a finite reach above 0 and a finite radius of 0 or
+/// more; `origin` and `dir` come from the camera and are checked on entry.
 #[derive(Copy, Clone, Debug)]
 pub struct PickRay {
     pub origin: Vec3,
@@ -76,10 +87,55 @@ impl PickRay {
     }
 }
 
-/// An item collider the ball touched, and where.
-struct ItemTouch {
+impl ValidAim {
+    /// Where the ball centre stops: the reach along the aim.
+    fn far_end(&self) -> Vec3 {
+        self.origin + self.dir * self.reach
+    }
+
+    /// How far a touched point is from the eye for the reach: straight from the eye. Measured,
+    /// the far item of a pair is lost where its touched point passes the reach from the eye, not
+    /// along the aim (2026-11-14).
+    fn reach_distance(&self, point: Vec3) -> f32 {
+        self.origin.distance(point)
+    }
+
+    /// How far `point` lies from the line of the aim.
+    fn offset_from_aim(&self, point: Vec3) -> f32 {
+        (point - self.origin).cross(self.dir).length()
+    }
+}
+
+/// An item or activator in the ball whose touched point counts, and how far that point lies from
+/// the line of the aim.
+#[derive(Copy, Clone, Debug)]
+struct Candidate {
     handle: ColliderHandle,
-    point: Vec3,
+    touched_point: Vec3,
+    offset: f32,
+}
+
+impl Candidate {
+    fn new(handle: ColliderHandle, touched_point: Vec3, aim: &ValidAim) -> Self {
+        Self {
+            handle,
+            touched_point,
+            offset: aim.offset_from_aim(touched_point),
+        }
+    }
+
+    /// The touched point nearer the line of the aim wins; at an equal offset the one nearer the
+    /// eye does.
+    fn beats(&self, other: &Self, aim: &ValidAim) -> bool {
+        self.offset
+            .total_cmp(&other.offset)
+            .then_with(|| {
+                aim.origin
+                    .distance(self.touched_point)
+                    .total_cmp(&aim.origin.distance(other.touched_point))
+            })
+            .is_lt()
+    }
 }
 
 /// The class of the ref a collider belongs to, asked of the caller once per ref and without
@@ -121,16 +177,16 @@ impl<'a> RefClasses<'a> {
 
 impl PhysicsContext {
     /// What the player aims at. The exact ray decides when it hits an item or an activator.
-    /// Otherwise a ball swept along the ray looks for items: the ball centre travels no farther
-    /// than the reach or the exact ray's solid hit, whichever is nearer, so it never passes
-    /// through what the crosshair line stops at. Of the items the ball touches, the one met first
-    /// along the ray counts when its touched point is in front of the eye, within reach, and
-    /// seen from the eye: no solid, activator or terrain lies on the line from the eye to that
-    /// point. Items and the carried body never block that line. When no item counts, the exact
-    /// ray's hit is the aim.
+    /// Otherwise every item and activator a ball swept along the whole reach of the ray touches
+    /// is a candidate when its touched point is in front of the eye, within reach, and seen from
+    /// the eye: no solid, activator or terrain other than itself lies on the line from the eye
+    /// to that point. Items and the carried body never block that line. Of the candidates, the
+    /// one whose touched point lies nearest the line of the ray wins. When there is none, the
+    /// exact ray's hit is the aim.
     ///
-    /// Costs the exact ray plus, only when the ray hit neither an item nor an activator, one ball
-    /// sweep restricted to items per candidate tried (normally one), each with a visibility ray.
+    /// Costs the exact ray plus, only when the ray hit neither an item nor an activator, one query
+    /// of the swept ball's volume restricted to items and activators, and for each collider in it
+    /// one ball sweep and one visibility ray.
     pub fn pick_attribution(
         &self,
         aim: PickRay,
@@ -147,15 +203,17 @@ impl PhysicsContext {
         let exact_decides = aim.radius <= 0.0
             || exact
                 .as_ref()
-                .is_some_and(|probe| classes.of(probe.user_data) != PickClass::Solid);
+                .is_some_and(|probe| classes.of(probe.user_data).is_pickable());
         if exact_decides {
             return exact.map(RayProbe::into_hit);
         }
-        let ball_travel = exact
-            .as_ref()
-            .map_or(aim.reach, |solid| solid.dist.min(aim.reach));
-        self.first_counted_item(aim, ball_travel, &classes)
-            .or_else(|| exact.map(RayProbe::into_hit))
+        self.best_candidate(aim, &classes)
+            .and_then(|candidate| {
+                let eye_distance = aim.origin.distance(candidate.touched_point);
+                self.attribute(candidate.handle, eye_distance)
+            })
+            .or(exact)
+            .map(RayProbe::into_hit)
     }
 
     /// The query filter of every pick query: the carried body is no part of the world to the
@@ -167,79 +225,85 @@ impl PhysicsContext {
         }
     }
 
-    /// The first item along the ray that counts, trying the next one when the nearest does not.
-    fn first_counted_item(
-        &self,
-        aim: ValidAim,
-        ball_travel: f32,
-        classes: &RefClasses<'_>,
-    ) -> Option<RayHit> {
-        let mut rejected = Vec::new();
-        loop {
-            let touch = self.nearest_item_touch(aim, ball_travel, classes, &rejected)?;
-            if self.touch_counts(aim, touch.point, classes) {
-                let eye_distance = aim.origin.distance(touch.point);
-                return self
-                    .attribute(touch.handle, eye_distance)
-                    .map(RayProbe::into_hit);
+    /// Of the items and activators in the volume the ball sweeps, the candidate that wins.
+    fn best_candidate(&self, aim: ValidAim, classes: &RefClasses<'_>) -> Option<Candidate> {
+        let swept_ball = Capsule::new(aim.origin, aim.far_end(), aim.radius);
+        let is_pickable =
+            |_: ColliderHandle, collider: &Collider| classes.of(collider.user_data).is_pickable();
+        let queries = self
+            .world
+            .query_pipeline_with_filter(self.pick_filter().predicate(&is_pickable));
+        let mut best: Option<Candidate> = None;
+        for (handle, collider) in queries.intersect_shape(Pose::IDENTITY, &swept_ball) {
+            let Some(touched_point) = self.ball_touch(aim, handle) else {
+                continue;
+            };
+            if !self.touch_counts(aim, touched_point, collider, classes) {
+                continue;
             }
-            rejected.push(touch.handle);
+            let candidate = Candidate::new(handle, touched_point, &aim);
+            if best.is_none_or(|best| candidate.beats(&best, &aim)) {
+                best = Some(candidate);
+            }
         }
+        best
     }
 
-    /// The item the ball, centre travelling `ball_travel` along the ray, meets first. A ball that
-    /// starts inside an item touches it at distance 0.
-    fn nearest_item_touch(
-        &self,
-        aim: ValidAim,
-        ball_travel: f32,
-        classes: &RefClasses<'_>,
-        rejected: &[ColliderHandle],
-    ) -> Option<ItemTouch> {
-        let is_candidate = |handle: ColliderHandle, collider: &Collider| {
-            !rejected.contains(&handle) && classes.of(collider.user_data) == PickClass::Item
-        };
-        let filter = self.pick_filter().predicate(&is_candidate);
-        let (handle, hit) = self.world.query_pipeline_with_filter(filter).cast_shape(
+    /// Where the ball, its centre travelling the reach along the aim, first touches the collider
+    /// `handle`. A ball that starts inside it touches it at once.
+    fn ball_touch(&self, aim: ValidAim, handle: ColliderHandle) -> Option<Vec3> {
+        let is_this_collider = |other: ColliderHandle, _: &Collider| other == handle;
+        let filter = self.pick_filter().predicate(&is_this_collider);
+        let (_, hit) = self.world.query_pipeline_with_filter(filter).cast_shape(
             &Pose::from_translation(aim.origin),
             aim.dir,
             &Ball::new(aim.radius),
             ShapeCastOptions {
                 target_distance: 0.0,
                 stop_at_penetration: true,
-                max_time_of_impact: ball_travel,
+                max_time_of_impact: aim.reach,
                 compute_impact_geometry_on_penetration: true,
             },
         )?;
-        let touched_point = hit.witness1;
-        Some(ItemTouch {
-            handle,
-            point: touched_point,
-        })
+        Some(hit.witness1)
     }
 
-    fn touch_counts(&self, aim: ValidAim, touched_point: Vec3, classes: &RefClasses<'_>) -> bool {
-        let to_touched = touched_point - aim.origin;
-        let distance = to_touched.length();
-        to_touched.dot(aim.dir) > 0.0
-            && distance <= aim.reach
-            && self.is_seen_from(aim.origin, to_touched / distance, distance, classes)
+    fn touch_counts(
+        &self,
+        aim: ValidAim,
+        touched_point: Vec3,
+        touched: &Collider,
+        classes: &RefClasses<'_>,
+    ) -> bool {
+        (touched_point - aim.origin).dot(aim.dir) > 0.0
+            && aim.reach_distance(touched_point) <= aim.reach
+            && self.is_seen_from(aim.origin, touched_point, touched, classes)
     }
 
-    /// Whether nothing but items lies on the line from `origin` along `dir` for `distance`.
+    /// Whether nothing but items and the ref of `seen` lies on the line from `origin` to `point`,
+    /// which differ.
     fn is_seen_from(
         &self,
         origin: Vec3,
-        dir: Vec3,
-        distance: f32,
+        point: Vec3,
+        seen: &Collider,
         classes: &RefClasses<'_>,
     ) -> bool {
+        let seen_ref = unpack_ref(seen.user_data);
         let is_obstacle = |_: ColliderHandle, collider: &Collider| {
             classes.of(collider.user_data) != PickClass::Item
+                && unpack_ref(collider.user_data) != seen_ref
         };
         let filter = self.pick_filter().predicate(&is_obstacle);
+        let to_point = point - origin;
+        let distance = to_point.length();
         self.world
-            .cast_ray(&Ray::new(origin, dir), distance, true, filter)
+            .cast_ray(
+                &Ray::new(origin, to_point / distance),
+                distance,
+                true,
+                filter,
+            )
             .is_none()
     }
 }
@@ -247,8 +311,12 @@ impl PhysicsContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assets::db::collision_layers::{
+        CollisionLayerRow, PlayerCollisionLayers, layer_flags,
+    };
+    use crate::bethesda_space::UNITS_TO_ENGINE;
     use crate::sim::carry::View;
-    use crate::sim::collision::{ColShape, PartShape};
+    use crate::sim::collision::{CellColliderBatch, ColShape, PartShape, parse_sidecar_bytes};
     use crate::sim::physics::test_support::{
         GROUND_CELL, bake, box_shape, ground_batch, object_group, pinned_group, placement,
         run_ticks, wake_context,
@@ -277,10 +345,14 @@ mod tests {
     const SLIVER: &str = "0B0003:Fallout4.esm";
     const DOOR: &str = "0C0001:Fallout4.esm";
     const DOOR_PANEL: &str = "0C0002:Fallout4.esm";
+    const TOASTER: &str = "0A0007:Fallout4.esm";
+    const TEDDY: &str = "0A0008:Fallout4.esm";
+    const TABLE: &str = "0B0004:Fallout4.esm";
+    const GLASS: &str = "0B0005:Fallout4.esm";
 
     fn classify(ref_id: &str) -> PickClass {
         match ref_id {
-            WALL | THIN_WALL | SLIVER | CRATE_REF => PickClass::Solid,
+            WALL | THIN_WALL | SLIVER | TABLE | GLASS | CRATE_REF => PickClass::Solid,
             DOOR | DOOR_PANEL => PickClass::Activator,
             _ => PickClass::Item,
         }
@@ -288,6 +360,16 @@ mod tests {
 
     fn at(x: f32, y: f32, z: f32) -> Vec3 {
         Vec3::new(x, y, z)
+    }
+
+    /// The cell of `batch` with `shapes`, loaded and stepped once.
+    fn settled(batch: &CellColliderBatch, shapes: &[(&str, Vec<PartShape>)]) -> PhysicsContext {
+        let baked = bake(batch, shapes);
+        let mut context = wake_context();
+        context.add_cell(GROUND_CELL, batch, Some(&baked));
+        context.set_physics_center(GROUND_CELL, 2);
+        run_ticks(&mut context, 1);
+        context
     }
 
     /// Items stand in the world as pinned bodies, walls and doors as static boxes, on the ground.
@@ -320,7 +402,7 @@ mod tests {
                     .push(object_group(path, placements, false, None));
             }
         }
-        let baked = bake(
+        settled(
             &batch,
             &[
                 (ITEM_PATH, vec![box_shape(ITEM_HALF)]),
@@ -328,12 +410,7 @@ mod tests {
                 (THIN_WALL_PATH, vec![box_shape(THIN_WALL_HALF)]),
                 (DOOR_PATH, vec![box_shape(ITEM_HALF)]),
             ],
-        );
-        let mut context = wake_context();
-        context.add_cell(GROUND_CELL, &batch, Some(&baked));
-        context.set_physics_center(GROUND_CELL, 2);
-        run_ticks(&mut context, 1);
-        context
+        )
     }
 
     fn aim(context: &PhysicsContext, dir: Vec3, radius: f32) -> Option<RayHit> {
@@ -346,9 +423,19 @@ mod tests {
         radius: f32,
         reach: f32,
     ) -> Option<RayHit> {
+        aim_from(context, EYE, dir, radius, reach)
+    }
+
+    fn aim_from(
+        context: &PhysicsContext,
+        origin: Vec3,
+        dir: Vec3,
+        radius: f32,
+        reach: f32,
+    ) -> Option<RayHit> {
         context.pick_attribution(
             PickRay {
-                origin: EYE,
+                origin,
                 dir,
                 reach,
                 radius,
@@ -421,22 +508,6 @@ mod tests {
     }
 
     #[test]
-    fn of_two_items_in_the_ball_the_one_met_first_along_the_ray_is_aimed_at() {
-        let context = world(
-            &[
-                (NEAR_ITEM, at(106.0, 5.0, -101.9)),
-                (BESIDE, at(109.0, 5.0, -100.9)),
-            ],
-            &[],
-            &[],
-        );
-        assert_eq!(
-            aimed_ref(aim(&context, Vec3::X, RADIUS)),
-            Some(NEAR_ITEM.to_owned())
-        );
-    }
-
-    #[test]
     fn a_wall_in_front_hides_an_item_behind_it_and_the_wall_stays_the_aim() {
         let items = [(BESIDE, at(112.0, 5.0, -101.5))];
         let open = world(&items, &[], &[]);
@@ -488,9 +559,15 @@ mod tests {
     }
 
     #[test]
-    fn a_door_beside_the_ray_is_never_aimed_at_through_the_radius() {
-        let context = world(&[], &[], &[at(108.0, 5.0, -102.2)]);
-        assert_eq!(aimed_ref(aim(&context, Vec3::X, RADIUS)), None);
+    fn a_door_beside_the_ray_within_the_radius_is_aimed_at_like_an_item_and_one_outside_it_is_not()
+    {
+        let within = world(&[], &[], &[at(108.0, 5.0, -102.2)]);
+        assert_eq!(
+            aimed_ref(aim(&within, Vec3::X, RADIUS)),
+            Some(DOOR.to_owned())
+        );
+        let outside = world(&[], &[], &[at(108.0, 5.0, -104.0)]);
+        assert_eq!(aimed_ref(aim(&outside, Vec3::X, RADIUS)), None);
     }
 
     #[test]
@@ -559,7 +636,7 @@ mod tests {
     }
 
     #[test]
-    fn an_item_hidden_behind_a_thin_solid_does_not_hide_a_visible_item_the_ball_touches_later() {
+    fn an_item_hidden_behind_a_thin_solid_leaves_a_visible_item_in_the_ball_aimed_at() {
         let context = world_with_thin_walls(
             &[
                 (BESIDE, at(104.5, 5.0, -101.0)),
@@ -586,15 +663,30 @@ mod tests {
         );
     }
 
+    /// W1 (2026-11-13/14): an item clear of a wall's end stayed named while the exact ray already
+    /// met the wall, as long as the eye saw its touched point. A ball stopped at the wall would
+    /// have lost it about 2 degrees early.
     #[test]
-    fn the_ball_never_travels_past_the_solid_the_ray_hits() {
+    fn an_item_beside_the_wall_the_ray_hits_beyond_its_face_is_aimed_at_while_its_touched_point_is_seen()
+     {
         let wall_edge_at_z = -100.5;
         let wall = at(106.0, 5.0, wall_edge_at_z + WALL_HALF);
         let beside_the_wall_beyond_its_face = at(105.5, 5.0, -102.0);
         let context = world(&[(BESIDE, beside_the_wall_beyond_its_face)], &[wall], &[]);
+        let exact = aim(&context, Vec3::X, 0.0).expect("the exact ray hits the wall");
+        assert_eq!(exact.ref_id.as_deref(), Some(WALL));
+        let wall_hit = EYE + Vec3::X * exact.dist;
+        assert!(
+            box_distance(
+                wall_hit,
+                beside_the_wall_beyond_its_face,
+                Vec3::splat(ITEM_HALF)
+            ) > RADIUS,
+            "a ball stopped at the wall never reaches the item"
+        );
         assert_eq!(
             aimed_ref(aim(&context, Vec3::X, RADIUS)),
-            Some(WALL.to_owned())
+            Some(BESIDE.to_owned())
         );
     }
 
@@ -678,11 +770,7 @@ mod tests {
             true,
             Some(2.0),
         ));
-        let baked = bake(&batch, &[(CRATE_PATH, vec![box_shape(ITEM_HALF)])]);
-        let mut context = wake_context();
-        context.add_cell(GROUND_CELL, &batch, Some(&baked));
-        context.set_physics_center(GROUND_CELL, 2);
-        run_ticks(&mut context, 1);
+        let mut context = settled(&batch, &[(CRATE_PATH, vec![box_shape(ITEM_HALF)])]);
         if carried {
             let view = View {
                 yaw: 0.0,
@@ -740,12 +828,7 @@ mod tests {
             joint: None,
             material: 0,
         };
-        let baked = bake(&batch, &[(ITEM_PATH, vec![shape])]);
-        let mut context = wake_context();
-        context.add_cell(GROUND_CELL, &batch, Some(&baked));
-        context.set_physics_center(GROUND_CELL, 2);
-        run_ticks(&mut context, 1);
-        context
+        settled(&batch, &[(ITEM_PATH, vec![shape])])
     }
 
     #[test]
@@ -757,20 +840,34 @@ mod tests {
     }
 
     const CARRIED_HALF: f32 = 0.25;
-    const BLOCKER_HALF: f32 = 0.25;
     const SLIVER_HALF: f32 = 0.05;
-    const BLOCKER_PATH: &str = "meshes\\blocker.glb";
     const SLIVER_PATH: &str = "meshes\\sliver.glb";
+    const DOOR_SLAB_PATH: &str = "meshes\\door_slab.glb";
+    const TABLE_PATH: &str = "meshes\\table.glb";
     const SIDEWAYS_FROM_AXIS: f32 = 1.9;
     const AHEAD_OF_EYE: f32 = 2.0;
     const SLIVER_FRACTION_OF_THE_WAY: f32 = 0.9;
     const _: () = assert!(SIDEWAYS_FROM_AXIS < RADIUS);
 
+    #[derive(Copy, Clone)]
     struct Block {
         path: &'static str,
         ref_id: &'static str,
-        half: f32,
+        half_extents: Vec3,
         at: Vec3,
+    }
+
+    fn cuboid_shape(half_extents: Vec3) -> PartShape {
+        PartShape {
+            shape: ColShape::Box {
+                center: Vec3::ZERO,
+                rotation: glam::Quat::IDENTITY,
+                half_extents,
+            },
+            node: None,
+            joint: None,
+            material: 0,
+        }
     }
 
     #[derive(Copy, Clone)]
@@ -799,7 +896,7 @@ mod tests {
                 false,
                 None,
             ));
-            shapes.push((block.path, vec![box_shape(block.half)]));
+            shapes.push((block.path, vec![cuboid_shape(block.half_extents)]));
         }
         if let Some(crate_in_the_world) = crate_in_the_world {
             batch.objects.push(object_group(
@@ -810,11 +907,7 @@ mod tests {
             ));
             shapes.push((CRATE_PATH, vec![box_shape(CARRIED_HALF)]));
         }
-        let baked = bake(&batch, &shapes);
-        let mut context = wake_context();
-        context.add_cell(GROUND_CELL, &batch, Some(&baked));
-        context.set_physics_center(GROUND_CELL, 2);
-        run_ticks(&mut context, 1);
+        let mut context = settled(&batch, &shapes);
         if crate_in_the_world.is_some_and(|crate_in_the_world| crate_in_the_world.carried) {
             let view = View {
                 yaw: 0.0,
@@ -851,21 +944,6 @@ mod tests {
         let item = item_at_corner(BESIDE, touched_corner());
         let context = world_with_blocks(&[item], blocks, crate_in_the_world);
         aimed_ref(aim(&context, Vec3::X, RADIUS))
-    }
-
-    #[test]
-    fn a_closed_door_between_the_eye_and_an_item_the_ball_touches_hides_it() {
-        let door = Block {
-            path: BLOCKER_PATH,
-            ref_id: DOOR_PANEL,
-            half: BLOCKER_HALF,
-            at: halfway_to_the_touched_corner(),
-        };
-        assert_eq!(
-            aimed_at_the_touched_item_with(&[], None),
-            Some(BESIDE.to_owned())
-        );
-        assert_eq!(aimed_at_the_touched_item_with(&[door], None), None);
     }
 
     #[test]
@@ -912,7 +990,7 @@ mod tests {
         let sliver = Block {
             path: SLIVER_PATH,
             ref_id: SLIVER,
-            half: SLIVER_HALF,
+            half_extents: Vec3::splat(SLIVER_HALF),
             at: EYE.lerp(near_corner, SLIVER_FRACTION_OF_THE_WAY),
         };
         let first_on_the_line_to = |corner: Vec3, context: &PhysicsContext| {
@@ -924,7 +1002,7 @@ mod tests {
         assert_eq!(
             aimed_ref(aim(&open, Vec3::X, RADIUS)),
             Some(NEAR_ITEM.to_owned()),
-            "the nearest valid item wins"
+            "the item whose touched point lies nearer the aim wins"
         );
 
         let sliver_before_the_near_item = world_with_blocks(&items, &[sliver], None);
@@ -940,6 +1018,655 @@ mod tests {
         assert_eq!(
             aimed_ref(aim(&sliver_before_the_near_item, Vec3::X, RADIUS)),
             Some(BESIDE.to_owned())
+        );
+    }
+
+    const fn game_units(units: f32) -> f32 {
+        units * UNITS_TO_ENGINE
+    }
+
+    /// `fActivatePickLength` and `fActivatePickRadius` at the built-in defaults the original was
+    /// measured with.
+    const MEASURED_REACH: f32 = game_units(180.0);
+    const MEASURED_RADIUS: f32 = game_units(16.0);
+    /// Degrees either side of a switch at which the tests aim: wide enough for the shape cast,
+    /// narrow enough that the other rules still name the other item.
+    const CLEAR_OF_SWITCH: f32 = 0.05;
+    /// Thirds or halvings of the test oracles' brackets, beyond the f32 resolution of their ends.
+    const ORACLE_STEPS: u32 = 64;
+    /// Items float this far above the floor or a top, so the line to their underside never grazes
+    /// it.
+    const ABOVE_THE_SURFACE: f32 = 0.1;
+
+    fn aimed_measured(context: &PhysicsContext, dir: Vec3) -> Option<String> {
+        aimed_ref(aim_with_reach(
+            context,
+            dir,
+            MEASURED_RADIUS,
+            MEASURED_REACH,
+        ))
+    }
+
+    fn exact_measured(context: &PhysicsContext, dir: Vec3) -> Option<String> {
+        aimed_ref(aim_with_reach(context, dir, 0.0, MEASURED_REACH))
+    }
+
+    /// The aim from +x turned by `degrees` toward `side`, a unit vector square to +x.
+    fn turned_aim(degrees: f32, side: Vec3) -> Vec3 {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        Vec3::X * cos + side * sin
+    }
+
+    fn box_distance(point: Vec3, center: Vec3, half_extents: Vec3) -> f32 {
+        ((point - center).abs() - half_extents)
+            .max(Vec3::ZERO)
+            .length()
+    }
+
+    fn span(values: impl Iterator<Item = f32>) -> (f32, f32) {
+        values.fold((f32::INFINITY, f32::NEG_INFINITY), |(low, high), value| {
+            (low.min(value), high.max(value))
+        })
+    }
+
+    /// The boundary between `holds` (where `predicate` is true) and `fails`, either side of it.
+    fn boundary(mut holds: f32, mut fails: f32, predicate: impl Fn(f32) -> bool) -> f32 {
+        assert!(
+            predicate(holds) && !predicate(fails),
+            "{holds} and {fails} do not bracket the boundary"
+        );
+        for _ in 0..ORACLE_STEPS {
+            let middle = f32::midpoint(holds, fails);
+            if predicate(middle) {
+                holds = middle;
+            } else {
+                fails = middle;
+            }
+        }
+        f32::midpoint(holds, fails)
+    }
+
+    /// A point in the plane of a [`PlanarBox`]: along +x and toward its side, from its eye.
+    #[derive(Copy, Clone, Debug)]
+    struct InPlane {
+        along: f32,
+        across: f32,
+    }
+
+    impl InPlane {
+        fn eye_distance(self) -> f32 {
+            self.along.hypot(self.across)
+        }
+
+        /// Its depth along an aim turned by `degrees`.
+        fn depth_along(self, degrees: f32) -> f32 {
+            let (sin, cos) = degrees.to_radians().sin_cos();
+            self.along * cos + self.across * sin
+        }
+
+        /// How far it lies from an aim turned by `degrees`.
+        fn offset_from(self, degrees: f32) -> f32 {
+            let (sin, cos) = degrees.to_radians().sin_cos();
+            (self.across * cos - self.along * sin).abs()
+        }
+    }
+
+    /// An axis-aligned box seen from `eye` in the plane spanned by +x and `side`. The test boxes
+    /// are symmetric about that plane, so for any aim in it their nearest points and the points a
+    /// ball swept along it touches lie in it, and their projected corners give their exact
+    /// angles, distances and depths.
+    struct PlanarBox {
+        eye: Vec3,
+        center: Vec3,
+        half_extents: Vec3,
+        side: Vec3,
+    }
+
+    impl PlanarBox {
+        fn new(center: Vec3, half_extents: Vec3, side: Vec3) -> Self {
+            Self {
+                eye: EYE,
+                center,
+                half_extents,
+                side,
+            }
+        }
+
+        fn item(center: Vec3, side: Vec3) -> Self {
+            Self::new(center, Vec3::splat(ITEM_HALF), side)
+        }
+
+        fn seen_from(self, eye: Vec3) -> Self {
+            Self { eye, ..self }
+        }
+
+        fn in_plane(&self, point: Vec3) -> InPlane {
+            let offset = point - self.eye;
+            InPlane {
+                along: offset.x,
+                across: offset.dot(self.side),
+            }
+        }
+
+        /// Each corner in the plane.
+        fn corners(&self) -> impl Iterator<Item = InPlane> + '_ {
+            [-1.0_f32, 1.0].into_iter().flat_map(move |x| {
+                [-1.0_f32, 1.0].into_iter().flat_map(move |y| {
+                    [-1.0_f32, 1.0].map(move |z| {
+                        self.in_plane(self.center + self.half_extents * Vec3::new(x, y, z))
+                    })
+                })
+            })
+        }
+
+        /// The angle (degrees) from +x toward `side` at which the eye sees its centre.
+        fn center_angle(&self) -> f32 {
+            let center = self.in_plane(self.center);
+            center.across.atan2(center.along).to_degrees()
+        }
+
+        /// The smallest and largest angle (degrees) from +x toward `side` at which the eye sees it.
+        fn angular_span(&self) -> (f32, f32) {
+            span(
+                self.corners()
+                    .map(|corner| corner.across.atan2(corner.along).to_degrees()),
+            )
+        }
+
+        /// How far it lies from an aim turned by `degrees` that misses it.
+        fn distance_from_aim(&self, degrees: f32) -> f32 {
+            span(self.corners().map(|corner| corner.offset_from(degrees))).0
+        }
+
+        /// Its nearest and farthest depth along an aim turned by `degrees`.
+        fn depth_span(&self, degrees: f32) -> (f32, f32) {
+            span(self.corners().map(|corner| corner.depth_along(degrees)))
+        }
+
+        /// Where a ball of the measured radius, its centre travelling the measured reach from the
+        /// eye along an aim turned by `degrees`, first touches it. The distance from the moving
+        /// centre to the box is convex in the travel: a ternary search finds its least value, a
+        /// bisection before it the first touch.
+        fn measured_touched_point(&self, degrees: f32) -> Option<InPlane> {
+            let center = self.in_plane(self.center);
+            let half = InPlane {
+                along: self.half_extents.x,
+                across: self.half_extents.dot(self.side.abs()),
+            };
+            let (sin, cos) = degrees.to_radians().sin_cos();
+            let nearest = |travel: f32| {
+                let ball = InPlane {
+                    along: travel * cos,
+                    across: travel * sin,
+                };
+                let point = InPlane {
+                    along: ball
+                        .along
+                        .clamp(center.along - half.along, center.along + half.along),
+                    across: ball
+                        .across
+                        .clamp(center.across - half.across, center.across + half.across),
+                };
+                let gap = (point.along - ball.along).hypot(point.across - ball.across);
+                (point, gap)
+            };
+            let touches = |travel: f32| nearest(travel).1 <= MEASURED_RADIUS;
+            let (mut low, mut high) = (0.0, MEASURED_REACH);
+            for _ in 0..ORACLE_STEPS {
+                let third = (high - low) / 3.0;
+                if nearest(low + third).1 < nearest(high - third).1 {
+                    high -= third;
+                } else {
+                    low += third;
+                }
+            }
+            if !touches(low) {
+                return None;
+            }
+            if touches(0.0) {
+                return Some(nearest(0.0).0);
+            }
+            let first_touch = boundary(low, 0.0, touches);
+            Some(nearest(first_touch).0)
+        }
+
+        /// How far the touched point of an aim turned by `degrees` lies from that aim, when it is
+        /// within the measured reach of the eye.
+        fn touched_offset(&self, degrees: f32) -> Option<f32> {
+            self.measured_touched_point(degrees)
+                .filter(|touched| touched.eye_distance() <= MEASURED_REACH)
+                .map(|touched| touched.offset_from(degrees))
+        }
+    }
+
+    /// The aim at which `narrower` (at the smaller angles) and `wider` lie at equal angles.
+    fn equal_angle_aim(narrower: &PlanarBox, wider: &PlanarBox) -> f32 {
+        let (_, narrower_edge) = narrower.angular_span();
+        let (wider_edge, _) = wider.angular_span();
+        assert!(narrower_edge < wider_edge, "the boxes overlap in angle");
+        f32::midpoint(narrower_edge, wider_edge)
+    }
+
+    /// The aim between the centre angles of `first` and `second` at which their touched points
+    /// lie equally far from it, `first`'s being the nearer one before it.
+    fn equal_offset_aim(first: &PlanarBox, second: &PlanarBox) -> f32 {
+        let first_nearer = |degrees: f32| match (
+            first.touched_offset(degrees),
+            second.touched_offset(degrees),
+        ) {
+            (Some(first), Some(second)) => first < second,
+            (Some(_), None) => true,
+            (None, _) => false,
+        };
+        boundary(first.center_angle(), second.center_angle(), first_nearer)
+    }
+
+    /// Whether a ball of `radius` swept along an aim turned by `degrees` meets `first` before
+    /// `second`, both within the radius of the aim: it reaches a box no earlier than its nearest
+    /// depth less the radius and no later than its farthest depth.
+    fn first_contact_meets(
+        first: &PlanarBox,
+        second: &PlanarBox,
+        degrees: f32,
+        radius: f32,
+    ) -> bool {
+        first.distance_from_aim(degrees) < radius
+            && second.distance_from_aim(degrees) < radius
+            && first.depth_span(degrees).1 < second.depth_span(degrees).0 - radius
+    }
+
+    /// Two items level with the eye: the farther one 145 ahead on the aim, the nearer one
+    /// `depth_gap` nearer and 14 beside it, and the aims just either side of the one at which
+    /// their touched points lie equally far from the aim.
+    struct LevelPair {
+        farther_at: Vec3,
+        nearer_at: Vec3,
+        farther: PlanarBox,
+        nearer: PlanarBox,
+        before: f32,
+        after: f32,
+    }
+
+    const LEVEL_PAIR_SIDE: Vec3 = Vec3::Z;
+
+    fn level_pair(depth_gap: f32) -> LevelPair {
+        let farther_at = at(EYE.x + game_units(145.0), EYE.y, EYE.z);
+        let nearer_at = at(
+            EYE.x + game_units(145.0 - depth_gap),
+            EYE.y,
+            EYE.z + game_units(14.0),
+        );
+        let farther = PlanarBox::item(farther_at, LEVEL_PAIR_SIDE);
+        let nearer = PlanarBox::item(nearer_at, LEVEL_PAIR_SIDE);
+        let switch = equal_offset_aim(&farther, &nearer);
+        LevelPair {
+            farther_at,
+            nearer_at,
+            farther,
+            nearer,
+            before: switch - CLEAR_OF_SWITCH,
+            after: switch + CLEAR_OF_SWITCH,
+        }
+    }
+
+    /// With equal boxes the swapped pair (P5 for P4, Q2 for Q1) is the same geometry: the
+    /// winner follows the geometry, not the item.
+    fn assert_the_pair_switches_from_the_farther_to_the_nearer(pair: &LevelPair) {
+        for (far_ref, near_ref) in [(TOASTER, TEDDY), (TEDDY, TOASTER)] {
+            let context = world(
+                &[(far_ref, pair.farther_at), (near_ref, pair.nearer_at)],
+                &[],
+                &[],
+            );
+            for degrees in [pair.before, pair.after] {
+                assert_eq!(
+                    exact_measured(&context, turned_aim(degrees, LEVEL_PAIR_SIDE)),
+                    None
+                );
+            }
+            assert_eq!(
+                aimed_measured(&context, turned_aim(pair.before, LEVEL_PAIR_SIDE)),
+                Some(far_ref.to_owned()),
+                "{far_ref} farther, at {} degrees",
+                pair.before
+            );
+            assert_eq!(
+                aimed_measured(&context, turned_aim(pair.after, LEVEL_PAIR_SIDE)),
+                Some(near_ref.to_owned()),
+                "{near_ref} nearer, at {} degrees",
+                pair.after
+            );
+        }
+    }
+
+    /// P4 and P5 (2026-11-13/14): eye 145 from the farther item on the aim, the nearer item 40
+    /// nearer and 14 beside it. First contact switched to the nearer item about 5 degrees early;
+    /// the switch came where the two touched points lay equally far from the aim.
+    #[test]
+    fn the_item_whose_touched_point_lies_nearest_the_aim_wins_over_one_the_ball_meets_first() {
+        let pair = level_pair(40.0);
+        assert!(first_contact_meets(
+            &pair.nearer,
+            &pair.farther,
+            pair.before,
+            MEASURED_RADIUS
+        ));
+        assert_the_pair_switches_from_the_farther_to_the_nearer(&pair);
+    }
+
+    /// Q1 and Q2 (2026-11-14): the pair of P4/P5 with the nearer item 55 nearer. The smallest
+    /// angle between the aim and the shapes missed the switch by 1.70 and 0.68 degrees; the
+    /// touched point nearest the aim fitted within one sweep step.
+    #[test]
+    fn in_a_deeper_pair_the_touched_point_nearest_the_aim_wins_where_the_smaller_angle_names_the_other_item()
+     {
+        let pair = level_pair(55.0);
+        let equal_angles = equal_angle_aim(&pair.farther, &pair.nearer);
+        assert!(
+            pair.after < equal_angles,
+            "at {} degrees the farther item still lies at the smaller angle (equal at {equal_angles})",
+            pair.after
+        );
+        assert_the_pair_switches_from_the_farther_to_the_nearer(&pair);
+    }
+
+    /// P6: the nearer item 60 nearer on the same line below the eye, the aim swept down from the
+    /// farther one. The eye stands 4 above the item row so both lie well within the reach, and the
+    /// items float 0.5 above the ground so the ground hides neither.
+    #[test]
+    fn sweeping_down_from_a_far_item_to_a_near_one_below_it_switches_where_their_touched_points_lie_equally_near_the_aim()
+     {
+        let side = Vec3::NEG_Y;
+        let row_y = EYE.y - 4.0;
+        let farther_at = at(EYE.x + game_units(145.0), row_y, EYE.z);
+        let nearer_at = at(EYE.x + game_units(145.0 - 60.0), row_y, EYE.z);
+        let farther = PlanarBox::item(farther_at, side);
+        let nearer = PlanarBox::item(nearer_at, side);
+        let switch = equal_offset_aim(&farther, &nearer);
+        let before = switch - CLEAR_OF_SWITCH;
+        let after = switch + CLEAR_OF_SWITCH;
+        assert!(first_contact_meets(
+            &nearer,
+            &farther,
+            before,
+            MEASURED_RADIUS
+        ));
+        let context = world(&[(TOASTER, farther_at), (TEDDY, nearer_at)], &[], &[]);
+        let exact = exact_measured(&context, turned_aim(before, side));
+        assert!(
+            exact.is_none(),
+            "the exact ray meets only the ground, not {exact:?}"
+        );
+        assert_eq!(
+            aimed_measured(&context, turned_aim(before, side)),
+            Some(TOASTER.to_owned())
+        );
+        assert_eq!(
+            aimed_measured(&context, turned_aim(after, side)),
+            Some(TEDDY.to_owned())
+        );
+    }
+
+    /// Q4 and the P6 gap (2026-11-14): the eye 118.5 above the floor, the farther item 145 ahead
+    /// on the floor, the nearer one 90 nearer on the same line, the aim swept down from the
+    /// farther one. The farther item was lost where its touched point passed the reach from the
+    /// eye (measured 6.94, from the eye 7.18, along the aim 8.77 degrees below it), and nothing
+    /// was named until the nearer item.
+    #[test]
+    fn the_far_item_of_a_pair_is_lost_where_its_touched_point_passes_the_reach_from_the_eye_not_along_the_aim()
+     {
+        let side = Vec3::NEG_Y;
+        let eye = at(EYE.x, game_units(118.5), EYE.z);
+        let row_y = ABOVE_THE_SURFACE + ITEM_HALF;
+        let farther_at = at(eye.x + game_units(145.0), row_y, eye.z);
+        let nearer_at = at(eye.x + game_units(145.0 - 90.0), row_y, eye.z);
+        let farther = PlanarBox::item(farther_at, side).seen_from(eye);
+        let nearer = PlanarBox::item(nearer_at, side).seen_from(eye);
+        let aimed_at_the_farther = farther.center_angle();
+        let swept_past_its_loss = aimed_at_the_farther + 6.0;
+        let touched = |degrees: f32| {
+            farther
+                .measured_touched_point(degrees)
+                .expect("the ball touches the farther item over the whole sweep")
+        };
+        let lost_from_the_eye = boundary(aimed_at_the_farther, swept_past_its_loss, |degrees| {
+            touched(degrees).eye_distance() <= MEASURED_REACH
+        });
+        let lost_along_the_aim = boundary(aimed_at_the_farther, swept_past_its_loss, |degrees| {
+            touched(degrees).depth_along(degrees) <= MEASURED_REACH
+        });
+        assert!(
+            lost_along_the_aim - lost_from_the_eye > 2.0 * CLEAR_OF_SWITCH,
+            "from the eye {lost_from_the_eye}, along the aim {lost_along_the_aim}"
+        );
+        let between = f32::midpoint(lost_from_the_eye, lost_along_the_aim);
+        assert_eq!(nearer.touched_offset(between), None);
+
+        let context = world(&[(TOASTER, farther_at), (TEDDY, nearer_at)], &[], &[]);
+        let aimed = |degrees: f32| {
+            aimed_ref(aim_from(
+                &context,
+                eye,
+                turned_aim(degrees, side),
+                MEASURED_RADIUS,
+                MEASURED_REACH,
+            ))
+        };
+        assert_eq!(
+            aimed(lost_from_the_eye - CLEAR_OF_SWITCH),
+            Some(TOASTER.to_owned())
+        );
+        assert_eq!(aimed(between), None);
+    }
+
+    /// D1: a door end and an item beside it compete by the same rule as two items.
+    #[test]
+    fn a_door_and_an_item_in_the_ball_compete_by_how_near_their_touched_points_lie_to_the_aim() {
+        let side = Vec3::Z;
+        let door_at = at(108.0, 5.0, -101.2);
+        let item_at = at(112.0, 5.0, -99.0);
+        let door = PlanarBox::item(door_at, side);
+        let item = PlanarBox::item(item_at, side);
+        let switch = equal_offset_aim(&door, &item);
+        let toward_the_item = switch + CLEAR_OF_SWITCH;
+        assert!(first_contact_meets(
+            &door,
+            &item,
+            toward_the_item,
+            MEASURED_RADIUS
+        ));
+        let context = world(&[(BESIDE, item_at)], &[], &[door_at]);
+        assert_eq!(
+            aimed_measured(&context, turned_aim(toward_the_item, side)),
+            Some(BESIDE.to_owned())
+        );
+        assert_eq!(
+            aimed_measured(&context, turned_aim(switch - CLEAR_OF_SWITCH, side)),
+            Some(DOOR.to_owned())
+        );
+    }
+
+    const DOOR_SLAB_HALF: Vec3 = Vec3::new(0.1, 3.0, 5.0);
+
+    /// D3: an item 15 inside the end of a door and just behind it. The door was named until about
+    /// one radius past its end, the item never.
+    #[test]
+    fn a_door_is_aimed_at_until_about_a_radius_past_its_end_and_the_item_it_hides_never() {
+        let side = Vec3::Z;
+        let item = (TOASTER, at(EYE.x + game_units(145.0), EYE.y, EYE.z));
+        let door_end_z = EYE.z + game_units(15.0);
+        let door = Block {
+            path: DOOR_SLAB_PATH,
+            ref_id: DOOR_PANEL,
+            half_extents: DOOR_SLAB_HALF,
+            at: at(
+                item.1.x - game_units(15.0),
+                EYE.y,
+                door_end_z - DOOR_SLAB_HALF.z,
+            ),
+        };
+        let open = world_with_blocks(&[item], &[], None);
+        assert_eq!(
+            aimed_measured(&open, turned_aim(4.0, side)),
+            Some(TOASTER.to_owned()),
+            "without the door the item is in the ball"
+        );
+        let behind_the_door = world_with_blocks(&[item], &[door], None);
+        for degrees in 0..=16 {
+            let aimed = aimed_measured(&behind_the_door, turned_aim(degrees as f32, side));
+            assert!(
+                matches!(aimed.as_deref(), Some(DOOR_PANEL) | None),
+                "{degrees} degrees: {aimed:?}"
+            );
+        }
+        let past_the_end_within_the_radius = turned_aim(10.0, side);
+        assert_eq!(
+            exact_measured(&behind_the_door, past_the_end_within_the_radius),
+            None
+        );
+        assert_eq!(
+            aimed_measured(&behind_the_door, past_the_end_within_the_radius),
+            Some(DOOR_PANEL.to_owned())
+        );
+        assert_eq!(
+            aimed_measured(&behind_the_door, turned_aim(16.0, side)),
+            None
+        );
+    }
+
+    const TABLE_HALF: Vec3 = Vec3::new(4.0, 0.1, 3.0);
+    const TABLE_AT: Vec3 = Vec3::new(108.0, 2.8, -100.0);
+
+    /// T2: an item 20 in from a table's near edge, the crosshair on the top short of it. The
+    /// original kept naming the item where a ball stopped at the top would have lost it.
+    #[test]
+    fn an_item_on_a_table_stays_aimed_at_while_the_crosshair_rests_on_the_top_short_of_it() {
+        let table = Block {
+            path: TABLE_PATH,
+            ref_id: TABLE,
+            half_extents: TABLE_HALF,
+            at: TABLE_AT,
+        };
+        let top = TABLE_AT.y + TABLE_HALF.y;
+        let near_edge = TABLE_AT.x - TABLE_HALF.x;
+        let item_at = at(
+            near_edge + game_units(20.0) + ITEM_HALF,
+            top + ABOVE_THE_SURFACE + ITEM_HALF,
+            EYE.z,
+        );
+        let context = world_with_blocks(&[(TOASTER, item_at)], &[table], None);
+        let short_of_the_item = Vec3::new(2.0, -1.0, 0.0);
+        let exact = aim_with_reach(&context, short_of_the_item, 0.0, MEASURED_REACH)
+            .expect("the exact ray hits the table");
+        assert_eq!(exact.ref_id.as_deref(), Some(TABLE));
+        let top_hit = EYE + short_of_the_item.normalize() * exact.dist;
+        assert!(
+            box_distance(top_hit, item_at, Vec3::splat(ITEM_HALF)) > MEASURED_RADIUS,
+            "a ball stopped at the top never reaches the item"
+        );
+        assert_eq!(
+            aimed_measured(&context, short_of_the_item),
+            Some(TOASTER.to_owned())
+        );
+    }
+
+    const GLASS_PATH: &str = "meshes\\glass.glb";
+    const TRANSPARENT_LAYER: u8 = 3;
+    const TRIGGER_LAYER: u8 = 12;
+    const GLASS_HALF: [f32; 3] = [0.1, 3.0, 3.0];
+
+    fn layer_row(
+        form_key: &str,
+        editor_id: &str,
+        index: u8,
+        flags: i64,
+        collides_with: &[&str],
+    ) -> CollisionLayerRow {
+        CollisionLayerRow {
+            form_key: form_key.to_owned(),
+            editor_id: Some(editor_id.to_owned()),
+            layer_index: Some(i64::from(index)),
+            flags: Some(flags),
+            collides_with: Some(collides_with.iter().map(|key| (*key).to_owned()).collect()),
+        }
+    }
+
+    /// The installed table's say on the layers of a glass pane: `L_TRANSPARENT` collides with the
+    /// character controller; a trigger layer never touches the player.
+    fn installed_layers() -> PlayerCollisionLayers {
+        PlayerCollisionLayers::from_rows(&[
+            layer_row(
+                "C:x.esm",
+                "L_CHARCONTROLLER",
+                30,
+                0,
+                &["B:x.esm", "T:x.esm"],
+            ),
+            layer_row("B:x.esm", "L_CHARBUMPER", 56, 0, &["C:x.esm"]),
+            layer_row(
+                "T:x.esm",
+                "L_TRANSPARENT",
+                TRANSPARENT_LAYER,
+                0,
+                &["C:x.esm", "T:x.esm"],
+            ),
+            layer_row(
+                "G:x.esm",
+                "L_TRIGGER",
+                TRIGGER_LAYER,
+                layer_flags::TRIGGER_VOLUME,
+                &["C:x.esm"],
+            ),
+        ])
+        .expect("a complete layer table")
+    }
+
+    /// A glass pane read from its collision sidecar, its slab on `layer`.
+    fn glass_pane_on(layer: u8) -> Vec<PartShape> {
+        let sidecar = serde_json::json!({
+            "shapes": [{ "type": "box", "half_extents": GLASS_HALF, "layer": layer }],
+        });
+        let bytes = serde_json::to_vec(&sidecar).expect("the sidecar serialises");
+        let parsed = parse_sidecar_bytes(&bytes, GLASS_PATH, &installed_layers())
+            .expect("the sidecar parses");
+        parsed.shapes.to_vec()
+    }
+
+    /// G2-G4 (2026-11-14): no rollover through a glass pane, exactly as through a plywood wall.
+    /// The pane's slab sits on `L_TRANSPARENT`, so it loads as a collider and hides from the eye
+    /// what lies behind it.
+    #[test]
+    fn a_glass_pane_on_the_transparent_layer_hides_an_item_behind_it_like_a_wall() {
+        let item = (BESIDE, at(104.5, 5.0, -101.0));
+        let pane_at = at(103.0, 5.0, -100.0);
+        let aimed_through_a_pane_on = |layer: u8| {
+            let mut batch = ground_batch();
+            batch
+                .objects
+                .push(pinned_group(ITEM_PATH, vec![placement(item.0, item.1)]));
+            batch.objects.push(object_group(
+                GLASS_PATH,
+                vec![placement(GLASS, pane_at)],
+                false,
+                None,
+            ));
+            let context = settled(
+                &batch,
+                &[
+                    (ITEM_PATH, vec![box_shape(ITEM_HALF)]),
+                    (GLASS_PATH, glass_pane_on(layer)),
+                ],
+            );
+            aimed_ref(aim(&context, Vec3::X, RADIUS))
+        };
+        assert_eq!(
+            aimed_through_a_pane_on(TRANSPARENT_LAYER),
+            Some(GLASS.to_owned())
+        );
+        assert_eq!(
+            aimed_through_a_pane_on(TRIGGER_LAYER),
+            Some(BESIDE.to_owned()),
+            "a pane on a layer that never touches the player is no collider and hides nothing"
         );
     }
 }
