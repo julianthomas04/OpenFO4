@@ -1,7 +1,10 @@
 pub mod active_set;
 pub mod binding;
+pub mod character_assets;
 pub mod clip;
+pub mod clip_library;
 pub mod clip_roles;
+pub mod first_person_eye;
 pub mod gltf_import;
 pub mod marker_timeline;
 pub mod player;
@@ -10,6 +13,8 @@ pub mod rig;
 pub mod sampler;
 pub mod scalar_track;
 pub mod skeleton;
+#[cfg(test)]
+mod test_glb;
 
 pub use active_set::ActiveSet;
 pub use binding::{BindError, ClipBinding};

@@ -7,7 +7,7 @@ use glam::{Quat, Vec2, Vec3};
 use super::collision::{CellColliderBatch, ColShape, ObjectColliderGroup, PartShape};
 use super::commands::{PlayerInput, SimCommand};
 use super::physics::test_support::{bake, box_shape, ground_batch, object_group, placement};
-use super::{FIXED_DT, PlayerMovement, SimWorld, WorldClock};
+use super::{EyeHeights, FIXED_DT, PlayerMovement, SimWorld, WorldClock};
 
 pub const SPAWN_AT: Vec3 = Vec3::new(200.0, 3.0, -100.0);
 
@@ -74,7 +74,20 @@ pub fn world_with(props: &[Prop]) -> SimWorld {
     world_in(ground_batch(), props)
 }
 
-pub fn world_in(mut batch: CellColliderBatch, props: &[Prop]) -> SimWorld {
+pub fn world_in(batch: CellColliderBatch, props: &[Prop]) -> SimWorld {
+    world_in_with_eye_heights(batch, props, EyeHeights::default())
+}
+
+/// A flat world without props whose player sees from `eye_heights`.
+pub fn flat_world_with_eye_heights(eye_heights: EyeHeights) -> SimWorld {
+    world_in_with_eye_heights(ground_batch(), &[], eye_heights)
+}
+
+fn world_in_with_eye_heights(
+    mut batch: CellColliderBatch,
+    props: &[Prop],
+    eye_heights: EyeHeights,
+) -> SimWorld {
     for (index, prop) in props.iter().enumerate() {
         batch.objects.push(ObjectColliderGroup {
             pinned: prop.pinned,
@@ -91,7 +104,11 @@ pub fn world_in(mut batch: CellColliderBatch, props: &[Prop]) -> SimWorld {
         .map(|prop| (prop.path, vec![prop.shape.clone()]))
         .collect();
     let baked = bake(&batch, &shapes);
-    let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+    let mut sim = SimWorld::new(
+        PlayerMovement::default(),
+        eye_heights,
+        WorldClock::fixture(),
+    );
     sim.apply(SimCommand::AddCellColliders {
         grid: (0, 0),
         batch: Arc::new(batch),
@@ -124,7 +141,7 @@ pub fn hold(sim: &mut SimWorld, input: PlayerInput) {
     sim.apply(SimCommand::SetPlayerInput(input));
 }
 
-pub fn walking(yaw: f32) -> PlayerInput {
+pub fn running(yaw: f32) -> PlayerInput {
     PlayerInput {
         move_dir: Vec2::new(0.0, 1.0),
         yaw,

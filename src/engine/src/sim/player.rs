@@ -10,7 +10,9 @@
 //! player against dynamic bodies, shoves them and lets it land on them.
 
 use glam::{Vec2, Vec3};
-use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
+use rapier3d::control::{
+    CharacterAutostep, CharacterLength, EffectiveCharacterMovement, KinematicCharacterController,
+};
 use rapier3d::parry::query::details::ShapeCastOptions;
 use rapier3d::prelude::*;
 
@@ -19,6 +21,7 @@ use super::dynamic_contact::{self, Character};
 use super::mirror::static_scene_query_filter;
 use super::physics::PhysicsContext;
 use super::world_to_grid;
+use crate::anim::first_person_eye::FirstPersonCamera;
 
 // Jump = the vanilla Fallout 4 model (no easing curve exists): liftoff velocity
 // comes from a height game setting, the rise happens under FULL real gravity
@@ -93,15 +96,95 @@ impl PlayerMovement {
         }
     }
 }
+
+/// Heights of the first-person eye above the soles, standing and sneaking, in engine units. Read
+/// from the first-person skeleton's `Camera` bone and its sneak offset clip; independent of the
+/// collision capsule.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct EyeHeights {
+    standing: f32,
+    sneaking: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EyePose {
+    Standing,
+    Sneaking,
+}
+
+impl std::fmt::Display for EyePose {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Standing => "standing",
+            Self::Sneaking => "sneaking",
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum EyeHeightsError {
+    #[error("the {pose} eye height {height} is not a positive finite length")]
+    NotPositive { pose: EyePose, height: f32 },
+}
+
+impl TryFrom<FirstPersonCamera> for EyeHeights {
+    type Error = EyeHeightsError;
+
+    fn try_from(camera: FirstPersonCamera) -> Result<Self, Self::Error> {
+        Self::new(
+            camera.standing_height,
+            camera.standing_height + camera.sneak_shift,
+        )
+    }
+}
+
+impl EyeHeights {
+    pub fn new(standing: f32, sneaking: f32) -> Result<Self, EyeHeightsError> {
+        for (pose, height) in [(EyePose::Standing, standing), (EyePose::Sneaking, sneaking)] {
+            if !(height.is_finite() && height > 0.0) {
+                return Err(EyeHeightsError::NotPositive { pose, height });
+            }
+        }
+        Ok(Self { standing, sneaking })
+    }
+
+    pub fn standing(self) -> f32 {
+        self.standing
+    }
+
+    pub fn sneaking(self) -> f32 {
+        self.sneaking
+    }
+
+    fn above_soles(self, sneaking: bool) -> f32 {
+        if sneaking {
+            self.sneaking
+        } else {
+            self.standing
+        }
+    }
+}
+
+/// The vanilla first-person skeleton: `Camera` 12.0483 above `Root`, lowered 4.0 by the
+/// `SneakOffset` clip. Tests only; the engine reads the installed assets.
+#[cfg(test)]
+impl Default for EyeHeights {
+    fn default() -> Self {
+        Self {
+            standing: 12.0483,
+            sneaking: 8.0483,
+        }
+    }
+}
+
 /// Airborne input only steers at this acceleration; momentum is otherwise
 /// kept (no mid-air dead stop, a sprint jump can't be reversed before
 /// landing). Feel-tuned, not measured.
 const AIR_ACCEL: f32 = 60.0;
-// Human height is ~12.8 units; eye sits near the capsule top.
+// Human height is ~12.8 units.
 const STAND_HEIGHT: f32 = 12.6;
 const CROUCH_HEIGHT: f32 = 6.3;
 pub(super) const RADIUS: f32 = 2.5;
-const EYE_BELOW_TOP: f32 = 0.8;
 // Raw FO4 collision has noisy normals: a tighter climb angle glues the
 // capsule on small ledges (player.gd:18).
 const MAX_SLOPE_CLIMB: f32 = 60.0 * std::f32::consts::PI / 180.0;
@@ -118,8 +201,14 @@ pub(super) const MOVE_EPSILON: f32 = OFFSET;
 pub const STANDING_CENTER_ABOVE_FEET: f32 = STAND_HEIGHT / 2.0 + OFFSET;
 /// How far below the capsule a dynamic body still counts as ground.
 const SNAP_REACH: f32 = OFFSET + 0.05;
-/// ~36 cm autostep handles stair steps and curbs.
-const STEP_HEIGHT: f32 = 2.5;
+/// Highest collision top above the soles the player is lifted onto: original game 2026-11-15,
+/// always lifted at 31.0 game units, never at 32.0; the middle.
+const MAX_STEP_UP: f32 = 3.15;
+/// Free depth the autostep needs on top of an edge.
+const STEP_MIN_WIDTH: f32 = 1.0;
+/// How far a tick that walked off the ground casts down to glue the capsule back onto a walkable
+/// surface. Feel-tuned.
+const GROUND_STICK_REACH: f32 = 2.5;
 /// Nominal player mass for the shove impulse (split with the body's mass as a
 /// reduced mass). Far above typical clutter mass (a bottle is ~2), so the
 /// player shoves light props while heavy ones resist. Feel-tuned.
@@ -176,6 +265,10 @@ pub(crate) struct PlayerState {
     pub crouching: bool,
     /// The last `step_player` launched a jump.
     pub launched: bool,
+    /// Height of the surface point the player last stood on, or of the point it was placed on.
+    /// No autostep lifts the player onto a point more than `MAX_STEP_UP` above
+    /// [`PlayerState::step_reference`], which never trusts it above the soles' reach.
+    footing_height: f32,
     /// The last `step_player` ran to its end (no spawn pending, collision resident).
     pub step_completed: bool,
     pub spawned: bool,
@@ -187,6 +280,7 @@ pub(crate) struct PlayerState {
     /// Drives the coyote window; set to MAX on jump launch to consume it.
     ticks_airborne: u32,
     movement: PlayerMovement,
+    eye_heights: EyeHeights,
     /// Actor values (current). Full and static in this version — no damage or
     /// stamina system exists yet; maxima are the placeholder bridge constants.
     hp: f32,
@@ -197,7 +291,7 @@ pub(crate) struct PlayerState {
 }
 
 impl PlayerState {
-    pub fn new(movement: PlayerMovement) -> Self {
+    pub fn new(movement: PlayerMovement, eye_heights: EyeHeights) -> Self {
         Self {
             pos: Vec3::ZERO,
             prev_pos: Vec3::ZERO,
@@ -206,12 +300,14 @@ impl PlayerState {
             grounded: false,
             crouching: false,
             launched: false,
+            footing_height: 0.0,
             step_completed: false,
             spawned: false,
             pending_spawn: None,
             jump_windup: None,
             ticks_airborne: u32::MAX,
             movement,
+            eye_heights,
             hp: PLACEHOLDER_MAX_HP,
             hp_max: PLACEHOLDER_MAX_HP,
             ap: PLACEHOLDER_MAX_AP,
@@ -221,8 +317,8 @@ impl PlayerState {
                 offset: CharacterLength::Absolute(OFFSET),
                 slide: true,
                 autostep: Some(CharacterAutostep {
-                    max_height: CharacterLength::Absolute(STEP_HEIGHT),
-                    min_width: CharacterLength::Absolute(1.0),
+                    max_height: CharacterLength::Absolute(MAX_STEP_UP),
+                    min_width: CharacterLength::Absolute(STEP_MIN_WIDTH),
                     include_dynamic_bodies: false,
                 }),
                 max_slope_climb_angle: MAX_SLOPE_CLIMB,
@@ -240,7 +336,7 @@ impl PlayerState {
         self.jump_windup = None;
     }
 
-    pub(super) fn height(&self) -> f32 {
+    fn height(&self) -> f32 {
         if self.crouching {
             CROUCH_HEIGHT
         } else {
@@ -258,20 +354,49 @@ impl PlayerState {
     }
 
     /// Where a ray straight down starts and how far it reaches to find what
-    /// the soles stand on: just above the soles, as far as the ground snap.
+    /// the soles stand on: the capsule bottom, as far as the ground snap.
     pub(super) fn sole_probe(&self) -> (Vec3, f32) {
-        let origin = self.pos - Vec3::Y * self.half_height();
+        let origin = self.soles_below(self.pos) + Vec3::Y * OFFSET;
         (origin, SNAP_LEN)
     }
 
-    /// Eye offset above the capsule center.
-    pub fn eye_above_center(&self) -> f32 {
-        self.half_height() - EYE_BELOW_TOP
+    /// Height of the capsule centre above the soles: the controller gap below its bottom.
+    fn center_above_soles(&self) -> f32 {
+        self.half_height() + OFFSET
+    }
+
+    /// Height of the capsule top above the soles.
+    pub(super) fn top_above_soles(&self) -> f32 {
+        self.height() + OFFSET
+    }
+
+    /// Height the autostep limit is measured from: the point the player last stood on, but no
+    /// higher than a footing can lie above the soles: on the steepest walkable slope while
+    /// grounded, at the soles while airborne. A fall, a spawn over the void or a support that
+    /// vanished underfoot so cannot leave it above the player, and a grounded tick on nothing
+    /// walkable has already lowered it to the soles.
+    fn step_reference(&self, soles: f32) -> f32 {
+        let highest_footing = if self.grounded {
+            soles + OFFSET + RADIUS * (1.0 - MAX_SLOPE_CLIMB.cos())
+        } else {
+            soles
+        };
+        self.footing_height.min(highest_footing)
+    }
+
+    /// The soles of the capsule centred at `center`.
+    pub(super) fn soles_below(&self, center: Vec3) -> Vec3 {
+        center - Vec3::Y * self.center_above_soles()
+    }
+
+    /// Eye position of the capsule centred at `center`.
+    pub(super) fn eye_above(&self, center: Vec3) -> Vec3 {
+        self.soles_below(center) + Vec3::Y * self.eye_heights.above_soles(self.crouching)
     }
 
     /// Eye position at the last fixed step.
     pub(super) fn eye(&self) -> Vec3 {
-        self.pos + Vec3::Y * self.eye_above_center()
+        self.eye_above(self.pos)
     }
 
     /// Where the eye will be after a fixed step of `dt` if the player keeps moving: the last
@@ -306,6 +431,113 @@ impl PlayerState {
     }
 }
 
+/// Queries over the static scene the character controller collides with.
+fn static_scene(physics: &PhysicsContext) -> QueryPipeline<'_> {
+    physics
+        .world
+        .query_pipeline_with_filter(static_scene_query_filter())
+}
+
+/// The player's collide-and-slide, with every autostep held to `MAX_STEP_UP` above the player's
+/// step reference. The controller lifts the soles, which sag below that point on a slope, so it
+/// may lift them by that sag more. Its own step limit also grows with the approach angle, so a
+/// move that rose more than `desired` asked for is redone without autostep when the point it
+/// would stand on is higher, or when it would stand on nothing.
+fn move_within_step_limit(
+    state: &PlayerState,
+    physics: &PhysicsContext,
+    capsule: &Capsule,
+    start: Vec3,
+    desired: Vec3,
+    dt: f32,
+) -> EffectiveCharacterMovement {
+    let soles = state.soles_below(start).y;
+    let reference = state.step_reference(soles);
+    let soles_sag = (reference - soles).max(0.0);
+    let controller = KinematicCharacterController {
+        autostep: state.controller.autostep.map(|autostep| CharacterAutostep {
+            max_height: CharacterLength::Absolute(MAX_STEP_UP + soles_sag),
+            ..autostep
+        }),
+        ..state.controller
+    };
+    let movement = move_capsule(&controller, physics, capsule, start, desired, dt);
+    if movement.translation.y <= desired.y {
+        return movement;
+    }
+    let end = start + movement.translation;
+    let within_limit = static_footing(physics, capsule, end, state.soles_below(end).y)
+        .is_some_and(|footing| footing.height - reference <= MAX_STEP_UP);
+    if within_limit {
+        return movement;
+    }
+    let without_autostep = KinematicCharacterController {
+        autostep: None,
+        ..state.controller
+    };
+    move_capsule(&without_autostep, physics, capsule, start, desired, dt)
+}
+
+/// One collide-and-slide of `capsule` from `start` over the static scene.
+fn move_capsule(
+    controller: &KinematicCharacterController,
+    physics: &PhysicsContext,
+    capsule: &Capsule,
+    start: Vec3,
+    desired: Vec3,
+    dt: f32,
+) -> EffectiveCharacterMovement {
+    controller.move_shape(
+        dt,
+        &static_scene(physics),
+        capsule,
+        &Pose::from_translation(start),
+        desired,
+        |_| {},
+    )
+}
+
+/// A static point the capsule rests on.
+struct StaticFooting {
+    height: f32,
+    /// Whether the point touches the rounded bottom no steeper than the controller climbs, so the
+    /// capsule stands on it rather than grazing it at the side.
+    walkable: bool,
+}
+
+/// The static point the capsule centred at `center` with its soles at `soles` rests on: the first
+/// one below it, when that touches the rounded bottom below its rim and lies within the
+/// controller gap of the soles. The rounded bottom rests on an edge itself while the
+/// controller's autostep has only partly lifted it onto a step, so this is the top of whatever it
+/// climbed; a capsule held up only at its side rests on nothing.
+fn static_footing(
+    physics: &PhysicsContext,
+    capsule: &Capsule,
+    center: Vec3,
+    soles: f32,
+) -> Option<StaticFooting> {
+    // A point touching the rounded bottom below its rim more than this far down lies below the
+    // soles less the gap.
+    let deepest_footing = capsule.radius + OFFSET;
+    let (_, hit) = static_scene(physics).cast_shape(
+        &Pose::from_translation(center),
+        -Vec3::Y,
+        capsule,
+        ShapeCastOptions {
+            target_distance: 0.0,
+            stop_at_penetration: false,
+            max_time_of_impact: deepest_footing,
+            compute_impact_geometry_on_penetration: true,
+        },
+    )?;
+    let below_the_rim = -hit.witness2.y - capsule.half_height();
+    let height = center.y - hit.time_of_impact + hit.witness2.y;
+    (below_the_rim > OFFSET && height >= soles - OFFSET).then_some(StaticFooting {
+        height,
+        walkable: below_the_rim >= capsule.radius * MAX_SLOPE_CLIMB.cos(),
+    })
+}
+
 /// Godot's `move_toward`: step `v` toward `target` by at most `delta`.
 fn move_toward(v: f32, target: f32, delta: f32) -> f32 {
     if (target - v).abs() <= delta {
@@ -334,7 +566,7 @@ pub(crate) fn step_player(
         // surface, or the authored start for Settle — by lifting the CENTER half
         // a height plus the controller gap above it, so the capsule rests on the
         // point instead of burying its lower half in it.
-        let foot_lift = state.half_height() + OFFSET;
+        let foot_lift = state.center_above_soles();
         let (pos, grounded) = match snap {
             SpawnSnap::Down => match physics.raycast_down(p, SPAWN_RAY_MAX) {
                 // Stand the capsule on the surface the ray found.
@@ -351,6 +583,7 @@ pub(crate) fn step_player(
         state.pos = pos;
         state.prev_pos = pos;
         state.grounded = grounded;
+        state.footing_height = state.soles_below(pos).y;
         state.spawned = true;
         state.pending_spawn = None;
         physics.sync_player_mirror(state.pos, &state.capsule(), true);
@@ -375,12 +608,16 @@ pub(crate) fn step_player(
     // needs clear headroom; while blocked the key release re-probes every
     // step until the player walks somewhere taller.
     if input.crouch != state.crouching {
-        let feet = state.pos.y - state.half_height();
+        let soles = state.soles_below(state.pos).y;
         if state.crouching {
             // Probe with a slightly shrunk standing capsule lifted off the
             // floor so the ground itself doesn't read as a blocker.
             let probe = Capsule::new_y(STAND_HEIGHT * 0.5 - RADIUS, RADIUS - 0.1);
-            let center = Vec3::new(state.pos.x, feet + STAND_HEIGHT * 0.5 + 0.15, state.pos.z);
+            let center = Vec3::new(
+                state.pos.x,
+                soles + STANDING_CENTER_ABOVE_FEET + 0.15,
+                state.pos.z,
+            );
             let queries = physics
                 .world
                 .query_pipeline_with_filter(physics.player_scene_filter());
@@ -390,12 +627,12 @@ pub(crate) fn step_player(
                 .is_some();
             if !blocked {
                 state.crouching = false;
-                state.pos.y = feet + state.half_height();
+                state.pos.y = soles + state.center_above_soles();
                 state.prev_pos = state.pos; // don't lerp the eye through the swap
             }
         } else {
             state.crouching = true;
-            state.pos.y = feet + state.half_height();
+            state.pos.y = soles + state.center_above_soles();
             state.prev_pos = state.pos;
         }
     }
@@ -482,17 +719,7 @@ pub(crate) fn step_player(
     let was_grounded = state.grounded;
     let movement = {
         let _span = tracing::info_span!("sim_char_move").entered();
-        let queries = physics
-            .world
-            .query_pipeline_with_filter(static_scene_query_filter());
-        state.controller.move_shape(
-            dt,
-            &queries,
-            &capsule,
-            &Pose::from_translation(start),
-            desired,
-            |_| {},
-        )
+        move_within_step_limit(state, physics, &capsule, start, desired, dt)
     };
     let horizontal = Vec3::new(movement.translation.x, 0.0, movement.translation.z);
     let allowed = {
@@ -529,22 +756,19 @@ pub(crate) fn step_player(
     // blocks the move — so it goes airborne and falls from v = 0, taking
     // dozens of ticks to recontact a steep slope: the downhill bounce.
     // Instead: a tick that starts grounded, isn't a jump launch, and ends
-    // airborne casts down one step height and glues onto any walkable
+    // airborne casts down `GROUND_STICK_REACH` and glues onto any walkable
     // surface (the normal check keeps cliff faces from grabbing the capsule
     // at ledge lips). Taller drops — real ledges — still fall naturally.
     if was_grounded && !state.grounded && state.vertical_vel <= 0.0 {
-        let queries = physics
-            .world
-            .query_pipeline_with_filter(static_scene_query_filter());
         let down_pose = Pose::from_translation(state.pos);
-        let hit = queries.cast_shape(
+        let hit = static_scene(physics).cast_shape(
             &down_pose,
             -Vec3::Y,
             &capsule,
             ShapeCastOptions {
                 target_distance: OFFSET,
                 stop_at_penetration: false,
-                max_time_of_impact: STEP_HEIGHT,
+                max_time_of_impact: GROUND_STICK_REACH,
                 compute_impact_geometry_on_penetration: true,
             },
         );
@@ -558,6 +782,18 @@ pub(crate) fn step_player(
 
     if state.grounded {
         state.ticks_airborne = 0;
+        if state.vertical_vel <= 0.0 {
+            let soles = state.soles_below(state.pos).y;
+            state.footing_height = support
+                .as_ref()
+                .map(dynamic_contact::Support::contact_height)
+                .or_else(|| {
+                    static_footing(physics, &capsule, state.pos, soles)
+                        .filter(|footing| footing.walkable)
+                        .map(|footing| footing.height)
+                })
+                .unwrap_or(state.footing_height.min(soles));
+        }
     } else {
         state.ticks_airborne = state.ticks_airborne.saturating_add(1);
     }
@@ -582,7 +818,7 @@ pub(crate) fn step_player(
     dynamic_contact::trace_step(&dynamic_contact::StepTrace {
         start,
         end: state.pos,
-        eye_above_center: state.eye_above_center(),
+        eye_y: state.eye().y,
         static_translation: movement.translation,
         allowed_horizontal: allowed,
         static_grounded,
@@ -603,16 +839,16 @@ mod tests {
     use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
     use std::sync::Arc;
 
-    use glam::Vec3Swizzles;
+    use glam::{Quat, Vec3Swizzles};
 
     use super::*;
     use crate::sim::FIXED_DT;
-    use crate::sim::collision::{CellColliderBatch, TerrainCollision};
+    use crate::sim::collision::{CellColliderBatch, ColShape, TerrainCollision};
     use crate::sim::commands::SimCommand;
     use crate::sim::physics::test_support::{bake, ground_batch, object_group, placement};
     use crate::sim::test_world::{
-        SPAWN_AT, crate_prop, flat_world, hold, position, prop_box, spawned_at, tick, walking,
-        world_in, world_with,
+        Prop, SPAWN_AT, crate_prop, flat_world, flat_world_with_eye_heights, hold, position,
+        prop_box, prop_entity, running, spawned_at, tick, world_in, world_with,
     };
     use crate::sim::{SimWorld, WorldClock};
 
@@ -658,7 +894,7 @@ mod tests {
 
     #[test]
     fn healing_restores_hit_points_up_to_the_maximum() {
-        let mut state = PlayerState::new(PlayerMovement::default());
+        let mut state = PlayerState::new(PlayerMovement::default(), EyeHeights::default());
         let (_, hp_max) = state.health();
         state.hp = hp_max - 30.0;
         state.heal(10.0);
@@ -669,7 +905,7 @@ mod tests {
 
     #[test]
     fn healing_ignores_negative_and_non_finite_amounts() {
-        let mut state = PlayerState::new(PlayerMovement::default());
+        let mut state = PlayerState::new(PlayerMovement::default(), EyeHeights::default());
         let (_, hp_max) = state.health();
         state.hp = hp_max - 30.0;
         for amount in [-5.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0] {
@@ -690,12 +926,123 @@ mod tests {
         );
         assert_eq!((debug.pos.x, debug.pos.z), (200.0, -100.0));
         let eye = sim.player_eye().unwrap();
-        assert!((eye.y - (debug.pos.y + STAND_HEIGHT / 2.0 - EYE_BELOW_TOP)).abs() < 0.01);
+        assert!((eye.y - EyeHeights::default().standing()).abs() < 0.01);
+    }
+
+    fn crouching() -> PlayerInput {
+        PlayerInput {
+            crouch: true,
+            ..PlayerInput::default()
+        }
+    }
+
+    #[test]
+    fn eye_heights_must_be_positive_finite_lengths() {
+        assert!(EyeHeights::new(12.0, 8.0).is_ok());
+        for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert!(
+                matches!(
+                    EyeHeights::new(bad, 8.0),
+                    Err(EyeHeightsError::NotPositive {
+                        pose: EyePose::Standing,
+                        ..
+                    })
+                ),
+                "{bad}"
+            );
+            assert!(
+                matches!(
+                    EyeHeights::new(12.0, bad),
+                    Err(EyeHeightsError::NotPositive {
+                        pose: EyePose::Sneaking,
+                        ..
+                    })
+                ),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_first_person_camera_stands_the_eye_and_its_sneak_shift_lowers_it() {
+        let camera = FirstPersonCamera {
+            standing_height: 12.0,
+            sneak_shift: -4.0,
+        };
+        assert_eq!(
+            EyeHeights::try_from(camera).unwrap(),
+            EyeHeights::new(12.0, 8.0).unwrap()
+        );
+        let shifted_below_the_soles = FirstPersonCamera {
+            sneak_shift: -12.0,
+            ..camera
+        };
+        assert!(matches!(
+            EyeHeights::try_from(shifted_below_the_soles),
+            Err(EyeHeightsError::NotPositive {
+                pose: EyePose::Sneaking,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn the_eye_stands_the_loaded_heights_above_the_soles_standing_and_sneaking() {
+        let heights = EyeHeights::new(15.0, 3.0).unwrap();
+        let mut sim = spawned_at(flat_world_with_eye_heights(heights), SPAWN_AT);
+        let standing = sim.player_eye().unwrap();
+        assert!((standing.y - 15.0).abs() < 0.01, "{standing}");
+        hold(&mut sim, crouching());
+        tick(&mut sim, 5);
+        assert!(sim.player_debug().crouching);
+        let sneaking = sim.player_eye().unwrap();
+        assert!((sneaking.y - 3.0).abs() < 0.01, "{sneaking}");
+    }
+
+    #[test]
+    fn the_eye_of_a_walking_player_is_interpolated_between_the_last_two_steps() {
+        let mut sim = spawned_at(flat_world(), SPAWN_AT);
+        hold(&mut sim, running(0.0));
+        tick(&mut sim, 30);
+        let before = position(&sim);
+        tick(&mut sim, 1);
+        let after = position(&sim);
+        assert!(after.x - before.x > 0.3, "walking: {before} -> {after}");
+        sim.tick(FIXED_DT * 0.5);
+        let eye = sim.player_eye().unwrap();
+        let halfway = f32::midpoint(before.x, after.x);
+        assert!(
+            (eye.x - halfway).abs() < 0.02,
+            "eye {eye}, halfway {halfway}"
+        );
+        assert!(
+            (eye.y - EyeHeights::default().standing()).abs() < 0.01,
+            "{eye}"
+        );
+    }
+
+    #[test]
+    fn swapping_the_capsule_does_not_move_an_eye_whose_heights_are_equal() {
+        let heights = EyeHeights::new(10.0, 10.0).unwrap();
+        let mut sim = spawned_at(flat_world_with_eye_heights(heights), SPAWN_AT);
+        let standing_center = position(&sim).y;
+        let standing_eye = sim.player_eye().unwrap();
+        hold(&mut sim, crouching());
+        tick(&mut sim, 5);
+        assert!(
+            position(&sim).y < standing_center - 1.0,
+            "the capsule shrank"
+        );
+        assert!(sim.player_eye().unwrap().abs_diff_eq(standing_eye, 0.01));
     }
 
     #[test]
     fn a_spawn_waits_until_the_destination_collision_is_installed() {
-        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+        let mut sim = SimWorld::new(
+            PlayerMovement::default(),
+            EyeHeights::default(),
+            WorldClock::fixture(),
+        );
         sim.apply(SimCommand::SpawnPlayer { pos: SPAWN_AT });
         tick(&mut sim, 5);
         let waiting = sim.player_debug();
@@ -726,7 +1073,7 @@ mod tests {
     fn walking_in_a_cell_without_terrain_is_not_frozen_by_the_ready_gate() {
         let mut sim = spawned_at(landless_world(), SPAWN_AT);
         let start = position(&sim);
-        hold(&mut sim, walking(0.0));
+        hold(&mut sim, running(0.0));
         tick(&mut sim, 60);
         let moved = position(&sim) - start;
         assert!(
@@ -750,7 +1097,11 @@ mod tests {
 
     #[test]
     fn a_spawn_waits_forever_for_a_cell_whose_terrain_failed_to_build() {
-        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+        let mut sim = SimWorld::new(
+            PlayerMovement::default(),
+            EyeHeights::default(),
+            WorldClock::fixture(),
+        );
         sim.apply(SimCommand::SpawnPlayer { pos: SPAWN_AT });
         sim.apply(SimCommand::AddCellColliders {
             grid: (0, 0),
@@ -778,7 +1129,7 @@ mod tests {
     fn walking_covers_the_run_speed_per_second_along_the_yaw_direction() {
         let mut sim = spawned_at(flat_world(), SPAWN_AT);
         let start = position(&sim);
-        hold(&mut sim, walking(0.0));
+        hold(&mut sim, running(0.0));
         tick(&mut sim, 60);
         let moved = position(&sim) - start;
         let run_speed = PlayerMovement::default().run_speed;
@@ -793,7 +1144,7 @@ mod tests {
     fn yaw_of_minus_half_pi_walks_towards_minus_z() {
         let mut sim = spawned_at(flat_world(), SPAWN_AT);
         let start = position(&sim);
-        hold(&mut sim, walking(-FRAC_PI_2));
+        hold(&mut sim, running(-FRAC_PI_2));
         tick(&mut sim, 30);
         let moved = position(&sim) - start;
         assert!(moved.z < -15.0 && moved.x.abs() < 0.01, "moved {moved}");
@@ -803,7 +1154,7 @@ mod tests {
     fn diagonal_input_is_not_faster_than_straight_input() {
         let mut straight = spawned_at(flat_world(), SPAWN_AT);
         let mut diagonal = spawned_at(flat_world(), SPAWN_AT);
-        hold(&mut straight, walking(0.0));
+        hold(&mut straight, running(0.0));
         hold(
             &mut diagonal,
             PlayerInput {
@@ -832,7 +1183,7 @@ mod tests {
                 PlayerInput {
                     sprint: true,
                     crouch,
-                    ..walking(0.0)
+                    ..running(0.0)
                 },
             );
             tick(&mut sim, 60);
@@ -850,7 +1201,7 @@ mod tests {
             Vec3::new(1.0, 10.0, 400.0),
         );
         let mut sim = spawned_at(world_with(&[wall]), SPAWN_AT);
-        hold(&mut sim, walking(-FRAC_PI_4));
+        hold(&mut sim, running(-FRAC_PI_4));
         tick(&mut sim, 180);
         let end = position(&sim);
         let face = 259.0;
@@ -870,7 +1221,7 @@ mod tests {
             Vec3::new(30.0, 0.75, 50.0),
         );
         let mut sim = spawned_at(world_with(&[ledge]), SPAWN_AT);
-        hold(&mut sim, walking(0.0));
+        hold(&mut sim, running(0.0));
         tick(&mut sim, 90);
         let end = position(&sim);
         assert!(end.x > 215.0, "x = {}", end.x);
@@ -881,19 +1232,764 @@ mod tests {
         );
     }
 
+    const LEDGE_FACE_X: f32 = 210.0;
+
+    /// One way of moving at a face: the input, whether the player is forced to walk (as when
+    /// carrying something heavy), and the height of the capsule centre above the soles in that
+    /// stance.
+    #[derive(Clone, Copy, Debug)]
+    struct Approach {
+        input: PlayerInput,
+        forced_walk: bool,
+        center_height: f32,
+    }
+
+    impl Approach {
+        fn speed(self) -> f32 {
+            PlayerMovement::default().ground_speed(
+                self.input.sprint,
+                self.input.crouch,
+                self.forced_walk,
+            )
+        }
+
+        /// Gives the player of `sim` this approach's gait. Forced walking is the movement record
+        /// of a player whose every gait is the walk.
+        fn apply(self, sim: &mut SimWorld) {
+            if self.forced_walk {
+                let walk = PlayerMovement::default().walk_speed;
+                sim.player.movement = PlayerMovement {
+                    walk_speed: walk,
+                    run_speed: walk,
+                    sprint_speed: walk,
+                };
+            }
+            hold(sim, self.input);
+        }
+    }
+
+    /// The highest collision top the original game lifted the player onto: 31 game units.
+    const LIFTED_IN_THE_ORIGINAL: f32 = 3.1;
+    /// The lowest collision top the original game refused to lift the player onto: 32 game units.
+    const REFUSED_IN_THE_ORIGINAL: f32 = 3.2;
+
+    struct BlockApproach {
+        end: Vec3,
+        highest_soles: f32,
+        lowest_soles: f32,
+    }
+
+    /// Where the player ends, and the highest and lowest its soles got, after moving with `approach` at a
+    /// block of height `top` whose face is at `LEDGE_FACE_X`, for as long as crossing the face by
+    /// 7 units takes at that gait.
+    fn moved_at_a_block(top: f32, approach: Approach) -> BlockApproach {
+        let block = prop_box(
+            "meshes\\block.glb",
+            Vec3::new(LEDGE_FACE_X + 30.0, top / 2.0, -100.0),
+            Vec3::new(30.0, top / 2.0, 300.0),
+        );
+        let mut sim = spawned_at(world_with(&[block]), SPAWN_AT);
+        let crossing =
+            (LEDGE_FACE_X + 7.0 - SPAWN_AT.x) / (approach.speed() * approach.input.yaw.cos());
+        approach.apply(&mut sim);
+        let (mut highest_soles, mut lowest_soles) = (f32::NEG_INFINITY, f32::INFINITY);
+        for _ in 0..((crossing + 0.5) / FIXED_DT).ceil() as u32 {
+            tick(&mut sim, 1);
+            let soles = sim.player.soles_below(sim.player.pos).y;
+            highest_soles = highest_soles.max(soles);
+            lowest_soles = lowest_soles.min(soles);
+        }
+        BlockApproach {
+            end: position(&sim),
+            highest_soles,
+            lowest_soles,
+        }
+    }
+
+    /// The approach angles from the face normal the original game's step limit was measured at,
+    /// each walking, running, sprinting and crouched.
+    fn ledge_approaches() -> Vec<Approach> {
+        let angles = [0.0, FRAC_PI_4, 70.0_f32.to_radians()];
+        angles
+            .into_iter()
+            .flat_map(|angle| {
+                let standing = |input, forced_walk| Approach {
+                    input,
+                    forced_walk,
+                    center_height: STANDING_CENTER_HEIGHT,
+                };
+                [
+                    standing(running(angle), true),
+                    standing(running(angle), false),
+                    standing(
+                        PlayerInput {
+                            sprint: true,
+                            ..running(angle)
+                        },
+                        false,
+                    ),
+                    Approach {
+                        input: PlayerInput {
+                            crouch: true,
+                            ..running(angle)
+                        },
+                        forced_walk: false,
+                        center_height: CROUCHING_CENTER_HEIGHT,
+                    },
+                ]
+            })
+            .collect()
+    }
+
     #[test]
-    fn a_ledge_taller_than_the_step_height_blocks_the_player() {
-        let height = STEP_HEIGHT + 1.0;
+    fn a_ledge_the_original_lifts_onto_is_climbed_at_any_approach_gait_and_stance() {
+        let top = LIFTED_IN_THE_ORIGINAL;
+        let failures: Vec<String> = ledge_approaches()
+            .into_iter()
+            .filter_map(|approach| {
+                let ledge = moved_at_a_block(top, approach);
+                let end = ledge.end;
+                let on_the_ledge = ledge.lowest_soles > -OFFSET
+                    && end.x > LEDGE_FACE_X + 5.0
+                    && (end.y - (top + approach.center_height)).abs() < 0.1;
+                (!on_the_ledge).then(|| {
+                    format!(
+                        "{approach:?} ended at {end}, its soles down to {}",
+                        ledge.lowest_soles
+                    )
+                })
+            })
+            .collect();
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    #[test]
+    fn a_ledge_the_original_refuses_is_never_stepped_onto_at_any_approach_gait_and_stance() {
+        let top = REFUSED_IN_THE_ORIGINAL;
+        let failures: Vec<String> = ledge_approaches()
+            .into_iter()
+            .filter_map(|approach| {
+                let ledge = moved_at_a_block(top, approach);
+                let end_soles = ledge.end.y - approach.center_height;
+                let blocked = ledge.highest_soles < top
+                    && ledge.lowest_soles > -OFFSET
+                    && end_soles < OFFSET
+                    && ledge.end.x < LEDGE_FACE_X;
+                (!blocked).then(|| {
+                    format!(
+                        "{approach:?} ended at {} with its soles between {} and {}",
+                        ledge.end, ledge.lowest_soles, ledge.highest_soles
+                    )
+                })
+            })
+            .collect();
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    const CURB_TOP: f32 = 1.0;
+    /// Within the step limit of the curb, beyond it from the floor.
+    const LEDGE_ABOVE_THE_CURB: f32 = CURB_TOP + 2.5;
+
+    /// A curb `CURB_TOP` high running from x 150 to `curb_gap` before a ledge face at
+    /// `LEDGE_FACE_X`, the ledge `LEDGE_ABOVE_THE_CURB` high, with the player standing on the
+    /// curb.
+    fn on_a_curb_before_a_ledge(curb_gap: f32) -> SimWorld {
+        let curb_end = LEDGE_FACE_X - curb_gap;
+        let curb = prop_box(
+            "meshes\\curb.glb",
+            Vec3::new(f32::midpoint(150.0, curb_end), CURB_TOP / 2.0, -100.0),
+            Vec3::new((curb_end - 150.0) / 2.0, CURB_TOP / 2.0, 50.0),
+        );
         let ledge = prop_box(
             "meshes\\ledge.glb",
-            Vec3::new(240.0, height / 2.0, -100.0),
-            Vec3::new(30.0, height / 2.0, 50.0),
+            Vec3::new(LEDGE_FACE_X + 30.0, LEDGE_ABOVE_THE_CURB / 2.0, -100.0),
+            Vec3::new(30.0, LEDGE_ABOVE_THE_CURB / 2.0, 50.0),
         );
-        let mut sim = spawned_at(world_with(&[ledge]), SPAWN_AT);
-        hold(&mut sim, walking(0.0));
+        spawned_at(
+            world_with(&[curb, ledge]),
+            Vec3::new(curb_end - 10.0, CURB_TOP + 3.0, -100.0),
+        )
+    }
+
+    #[test]
+    fn running_off_a_curb_onto_the_floor_and_into_a_ledge_too_high_from_the_floor_does_not_climb_it()
+     {
+        let mut sim = on_a_curb_before_a_ledge(15.0);
+        hold(&mut sim, running(0.0));
+        let mut stood_on_the_floor = false;
+        for _ in 0..90 {
+            tick(&mut sim, 1);
+            stood_on_the_floor |= sim.player.grounded
+                && sim.player.soles_below(sim.player.pos).y.abs() < 0.1
+                && position(&sim).x < LEDGE_FACE_X - RADIUS - 1.0;
+        }
+        assert!(stood_on_the_floor, "never landed on the floor");
+        let end = position(&sim);
+        assert!(end.x < LEDGE_FACE_X - RADIUS + 0.2, "x = {}", end.x);
+        assert!(
+            (end.y - STANDING_CENTER_HEIGHT).abs() < 0.1,
+            "y = {}",
+            end.y
+        );
+    }
+
+    #[test]
+    fn running_from_a_curb_against_a_ledge_face_climbs_a_ledge_within_the_step_limit_of_the_curb() {
+        let mut sim = on_a_curb_before_a_ledge(0.0);
+        hold(&mut sim, running(0.0));
+        tick(&mut sim, 60);
+        let end = position(&sim);
+        assert!(end.x > LEDGE_FACE_X + 5.0, "x = {}", end.x);
+        assert!(
+            (end.y - (LEDGE_ABOVE_THE_CURB + STANDING_CENTER_HEIGHT)).abs() < 0.1,
+            "y = {}",
+            end.y
+        );
+    }
+
+    /// How a run at a face at `face_x` went: the most the soles rose in one tick, their height
+    /// when the capsule first came within reach of the face, and where the player ended.
+    struct FaceRun {
+        highest_rise: f32,
+        soles_at_the_face: Option<f32>,
+        end: Vec3,
+    }
+
+    impl FaceRun {
+        /// Problems with a run at a face whose block is `top` high: any lift above the step
+        /// limit in one tick, or ending on the block after reaching the face with the soles too
+        /// far below its top to step onto it.
+        fn problems(&self, top: f32, face_x: f32) -> Option<String> {
+            let lifted_too_far = self.highest_rise > MAX_STEP_UP + OFFSET;
+            let out_of_reach = self
+                .soles_at_the_face
+                .is_some_and(|soles| soles + MAX_STEP_UP < top);
+            let on_the_block =
+                self.end.x >= face_x && self.end.y - STANDING_CENTER_HEIGHT >= top - OFFSET;
+            (lifted_too_far || (out_of_reach && on_the_block)).then(|| {
+                format!(
+                    "rose up to {} in a tick, soles at the face {:?}, ended at {}",
+                    self.highest_rise, self.soles_at_the_face, self.end
+                )
+            })
+        }
+    }
+
+    /// Ticks `sim` for `ticks` with whatever input it holds, following its run at a face at
+    /// `face_x`.
+    fn ran_at_a_face(sim: &mut SimWorld, face_x: f32, ticks: u32) -> FaceRun {
+        let mut soles = sim.player.soles_below(sim.player.pos).y;
+        let mut highest_rise = f32::NEG_INFINITY;
+        let mut soles_at_the_face = None;
+        for _ in 0..ticks {
+            tick(sim, 1);
+            let now = sim.player.soles_below(sim.player.pos).y;
+            highest_rise = highest_rise.max(now - soles);
+            soles = now;
+            if soles_at_the_face.is_none() && position(sim).x >= face_x - RADIUS - 0.2 {
+                soles_at_the_face = Some(now);
+            }
+        }
+        FaceRun {
+            highest_rise,
+            soles_at_the_face,
+            end: position(sim),
+        }
+    }
+
+    /// Ticks `sim` until its player's soles are below `height`.
+    fn fall_below(sim: &mut SimWorld, height: f32) {
+        for _ in 0..600 {
+            if sim.player.soles_below(sim.player.pos).y < height {
+                return;
+            }
+            tick(sim, 1);
+        }
+        panic!("the player never fell below {height}");
+    }
+
+    #[test]
+    fn running_off_a_platform_at_a_block_face_never_lifts_the_player_beyond_the_step_limit() {
+        let edge = 200.0;
+        let mut failures = Vec::new();
+        for platform_top in [5.0, 10.0, 20.0, 40.0] {
+            for block_top in [3.3, 8.0, 16.0, 30.0] {
+                for gap in [6.0, 12.0, 20.0, 30.0] {
+                    for sprint in [false, true] {
+                        let platform = prop_box(
+                            "meshes\\platform.glb",
+                            Vec3::new(edge - 50.0, platform_top / 2.0, -100.0),
+                            Vec3::new(50.0, platform_top / 2.0, 50.0),
+                        );
+                        let face_x = edge + gap;
+                        let block = prop_box(
+                            "meshes\\block.glb",
+                            Vec3::new(face_x + 20.0, block_top / 2.0, -100.0),
+                            Vec3::new(20.0, block_top / 2.0, 50.0),
+                        );
+                        let mut sim = spawned_at(
+                            world_with(&[platform, block]),
+                            Vec3::new(edge - 15.0, platform_top + 3.0, -100.0),
+                        );
+                        hold(
+                            &mut sim,
+                            PlayerInput {
+                                sprint,
+                                ..running(0.0)
+                            },
+                        );
+                        let run = ran_at_a_face(&mut sim, face_x, 120);
+                        if let Some(problem) = run.problems(block_top, face_x) {
+                            failures.push(format!(
+                                "platform {platform_top}, block {block_top}, gap {gap}, \
+                                 sprint {sprint}: {problem}"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// A block `top` high whose face is at `LEDGE_FACE_X`.
+    fn block_of(top: f32) -> Prop {
+        prop_box(
+            "meshes\\block.glb",
+            Vec3::new(LEDGE_FACE_X + 20.0, top / 2.0, -100.0),
+            Vec3::new(20.0, top / 2.0, 50.0),
+        )
+    }
+
+    /// Where the player stands for a fall beside a block face: its front 1 short of the face.
+    const BESIDE_THE_FACE_X: f32 = LEDGE_FACE_X - RADIUS - 1.0;
+
+    #[test]
+    fn falling_from_a_spawn_over_the_void_at_a_block_face_never_lifts_the_player_beyond_the_step_limit()
+     {
+        let top = 20.0;
+        let mut sim = spawned_at(
+            world_in(CellColliderBatch::default(), &[block_of(top)]),
+            Vec3::new(BESIDE_THE_FACE_X, top + 10.0, -100.0),
+        );
+        fall_below(&mut sim, top - MAX_STEP_UP - 1.0);
+        hold(&mut sim, running(0.0));
+        let run = ran_at_a_face(&mut sim, LEDGE_FACE_X, 60);
+        assert!(run.soles_at_the_face.is_some(), "never reached the face");
+        assert_eq!(run.problems(top, LEDGE_FACE_X), None);
+    }
+
+    /// A heavy box resting on the floor that the player can stand on as a dynamic support.
+    fn heavy_box(at_x: f32, top: f32, half_width: f32) -> Prop {
+        Prop {
+            dynamic: true,
+            mass: Some(5000.0),
+            ..prop_box(
+                "meshes\\heavy_box.glb",
+                Vec3::new(at_x, top / 2.0, -100.0),
+                Vec3::new(half_width, top / 2.0, half_width.min(30.0)),
+            )
+        }
+    }
+
+    /// A world of `props` with the player standing on the heavy box at `at_x`, `top` high. The
+    /// box settles before the player arrives: rapier 0.35 wakes a body resting on the floor at
+    /// its first contact and lets it dip into the one-sided terrain for a few ticks, which would
+    /// drop a player spawned on it to the ground.
+    fn standing_on_a_heavy_box(props: &[Prop], at_x: f32, top: f32) -> SimWorld {
+        let mut sim = spawned_at(world_with(props), Vec3::new(120.0, 3.0, -100.0));
+        tick(&mut sim, 30);
+        sim.apply(SimCommand::TeleportPlayer {
+            pos: Vec3::new(at_x, top + 3.0, -100.0),
+        });
+        tick(&mut sim, 30);
+        assert!(
+            (sim.player.footing_height - top).abs() < 0.1,
+            "standing at {} on footing {}",
+            position(&sim),
+            sim.player.footing_height
+        );
+        sim
+    }
+
+    #[test]
+    fn a_support_removed_underfoot_before_a_block_face_never_lifts_the_player_beyond_the_step_limit()
+     {
+        let (support_top, top) = (30.0, 25.0);
+        let support_end = LEDGE_FACE_X - 5.0;
+        let support_x = support_end - 32.5;
+        let support = heavy_box(support_x, support_top, 32.5);
+        let mut sim =
+            standing_on_a_heavy_box(&[support, block_of(top)], support_x - 20.0, support_top);
+        hold(&mut sim, running(0.0));
+        for _ in 0..120 {
+            if position(&sim).x >= LEDGE_FACE_X - 18.0 {
+                break;
+            }
+            tick(&mut sim, 1);
+        }
+        sim.physics.remove_ref(prop_entity(0));
+        let run = ran_at_a_face(&mut sim, LEDGE_FACE_X, 60);
+        assert!(
+            run.soles_at_the_face
+                .is_some_and(|soles| soles < top - MAX_STEP_UP),
+            "reached the face with its soles at {:?}",
+            run.soles_at_the_face
+        );
+        assert_eq!(run.problems(top, LEDGE_FACE_X), None);
+    }
+
+    #[test]
+    fn wedged_between_a_slope_too_steep_to_stand_on_and_a_block_face_never_lifts_the_player_beyond_the_step_limit()
+     {
+        let slope = 62.0_f32.to_radians();
+        let (plateau_top, foot_y, top) = (20.0, 6.0, 18.1);
+        let crest_x = LEDGE_FACE_X - (plateau_top - foot_y) / slope.tan();
+        let along = Vec2::new(slope.cos(), -slope.sin());
+        let normal = Vec2::new(slope.sin(), slope.cos());
+        let half_length = (plateau_top - foot_y + 4.0) / slope.sin() / 2.0;
+        let center = Vec2::new(crest_x, plateau_top) + along * half_length - normal;
+        let mut slope_down = prop_box(
+            "meshes\\steep.glb",
+            Vec3::new(center.x, center.y, -100.0),
+            Vec3::ZERO,
+        );
+        slope_down.shape.shape = ColShape::Box {
+            center: Vec3::ZERO,
+            rotation: Quat::from_rotation_z(-slope),
+            half_extents: Vec3::new(half_length, 1.0, 50.0),
+        };
+        let plateau = prop_box(
+            "meshes\\plateau.glb",
+            Vec3::new(crest_x - 25.0, plateau_top / 2.0, -100.0),
+            Vec3::new(25.0, plateau_top / 2.0, 50.0),
+        );
+        let mut sim = spawned_at(
+            world_with(&[slope_down, plateau, block_of(top)]),
+            Vec3::new(crest_x - 10.0, plateau_top + 3.0, -100.0),
+        );
+        hold(&mut sim, running(0.0));
+        let run = ran_at_a_face(&mut sim, LEDGE_FACE_X, 60);
+        assert!(
+            run.soles_at_the_face
+                .is_some_and(|soles| soles < top - MAX_STEP_UP),
+            "reached the face with its soles at {:?}",
+            run.soles_at_the_face
+        );
+        assert_eq!(run.problems(top, LEDGE_FACE_X), None);
+    }
+
+    const SLAB_TOP: f32 = 1.0;
+    /// The middle of a heavy slab whose far edge is at `LEDGE_FACE_X`.
+    const SLAB_X: f32 = LEDGE_FACE_X - 15.0;
+
+    /// Where the player ends after running at a ledge `above_the_slab` higher than the heavy
+    /// slab it starts on, the slab reaching up to the ledge face.
+    fn ran_from_a_heavy_slab_at_a_ledge(above_the_slab: f32) -> Vec3 {
+        let top = SLAB_TOP + above_the_slab;
+        let ledge = prop_box(
+            "meshes\\ledge.glb",
+            Vec3::new(LEDGE_FACE_X + 30.0, top / 2.0, -100.0),
+            Vec3::new(30.0, top / 2.0, 50.0),
+        );
+        let slab = heavy_box(SLAB_X, SLAB_TOP, 15.0);
+        let mut sim = standing_on_a_heavy_box(&[slab, ledge], SLAB_X, SLAB_TOP);
+        hold(&mut sim, running(0.0));
+        tick(&mut sim, 60);
+        position(&sim)
+    }
+
+    #[test]
+    fn a_ledge_within_the_step_limit_of_a_dynamic_support_is_climbed_from_it() {
+        let end = ran_from_a_heavy_slab_at_a_ledge(3.0);
+        assert!(end.x > LEDGE_FACE_X + 5.0, "x = {}", end.x);
+        assert!(
+            (end.y - (SLAB_TOP + 3.0 + STANDING_CENTER_HEIGHT)).abs() < 0.1,
+            "y = {}",
+            end.y
+        );
+    }
+
+    #[test]
+    fn a_ledge_beyond_the_step_limit_of_a_dynamic_support_blocks_the_player_on_it() {
+        let above_the_slab = 3.3;
+        let end = ran_from_a_heavy_slab_at_a_ledge(above_the_slab);
+        assert!(end.x < LEDGE_FACE_X, "x = {}", end.x);
+        assert!(
+            end.y - STANDING_CENTER_HEIGHT < SLAB_TOP + above_the_slab,
+            "y = {}",
+            end.y
+        );
+    }
+
+    #[test]
+    fn walking_off_a_dynamic_support_takes_the_footing_back_to_the_floor() {
+        let slab = heavy_box(SLAB_X, SLAB_TOP, 15.0);
+        let mut sim = standing_on_a_heavy_box(&[slab], SLAB_X, SLAB_TOP);
+        hold(&mut sim, running(PI));
+        tick(&mut sim, 60);
+        assert!(
+            sim.player.footing_height.abs() < 0.1,
+            "footing {} at {}",
+            sim.player.footing_height,
+            position(&sim)
+        );
+    }
+
+    #[test]
+    fn a_ledge_too_high_to_step_onto_stays_so_after_running_down_off_it() {
+        let top = REFUSED_IN_THE_ORIGINAL;
+        let ledge = prop_box(
+            "meshes\\ledge.glb",
+            Vec3::new(LEDGE_FACE_X + 30.0, top / 2.0, -100.0),
+            Vec3::new(30.0, top / 2.0, 50.0),
+        );
+        let on_the_ledge = Vec3::new(LEDGE_FACE_X + 10.0, top + 3.0, SPAWN_AT.z);
+        let mut sim = spawned_at(world_with(&[ledge]), on_the_ledge);
+        hold(&mut sim, running(PI));
+        tick(&mut sim, 60);
+        assert!(
+            (position(&sim).y - STANDING_CENTER_HEIGHT).abs() < 0.1,
+            "down at {}",
+            position(&sim)
+        );
+        hold(&mut sim, running(0.0));
+        tick(&mut sim, 60);
+        let end = position(&sim);
+        assert!(end.x <= LEDGE_FACE_X - RADIUS, "x = {}", end.x);
+        assert!(end.y - STANDING_CENTER_HEIGHT < top, "y = {}", end.y);
+    }
+
+    /// Where the player ends 4 s after jumping with `run` held from just before a ledge face at
+    /// `LEDGE_FACE_X`, the ledge long and wide enough to stay on at a sprint.
+    fn jumped_at_a_ledge(top: f32, run: PlayerInput) -> Vec3 {
+        let ledge = prop_box(
+            "meshes\\ledge.glb",
+            Vec3::new(LEDGE_FACE_X + 99.5, top / 2.0, -200.0),
+            Vec3::new(99.5, top / 2.0, 180.0),
+        );
+        let near_the_face = Vec3::new(LEDGE_FACE_X - RADIUS - 0.5, SPAWN_AT.y, -200.0);
+        let mut sim = spawned_at(world_with(&[ledge]), near_the_face);
+        hold(&mut sim, PlayerInput { jump: true, ..run });
+        tick(&mut sim, JUMP_WINDUP_TICKS + 2);
+        hold(&mut sim, run);
+        tick(&mut sim, 240 - JUMP_WINDUP_TICKS - 2);
+        position(&sim)
+    }
+
+    fn jump_apex() -> f32 {
+        JUMP_VELOCITY.powi(2) / (2.0 * GRAVITY)
+    }
+
+    #[test]
+    fn a_jump_lands_on_a_ledge_below_its_apex() {
+        let top = jump_apex() - 2.0;
+        let end = jumped_at_a_ledge(top, running(0.0));
+        assert!(end.x > LEDGE_FACE_X + RADIUS, "x = {}", end.x);
+        assert!(
+            (end.y - (top + STANDING_CENTER_HEIGHT)).abs() < 0.1,
+            "y = {}",
+            end.y
+        );
+    }
+
+    /// The ways of running at a ledge a jump is checked with: run and sprint, square to the face
+    /// and at 45 deg.
+    fn jump_runs() -> [PlayerInput; 4] {
+        [false, true]
+            .map(|sprint| {
+                [0.0, FRAC_PI_4].map(|yaw| PlayerInput {
+                    sprint,
+                    ..running(yaw)
+                })
+            })
+            .concat()
+            .try_into()
+            .unwrap()
+    }
+
+    /// The rounded bottom slides up an edge it meets below its centre, and while it stands on that
+    /// edge the jump keeps its rising speed, so a jump gets onto edges nearly a radius above its
+    /// apex; onto none half a radius higher still.
+    #[test]
+    fn a_jump_does_not_get_onto_a_ledge_one_and_a_half_capsule_radii_above_its_apex() {
+        let top = jump_apex() + 1.5 * RADIUS;
+        let failures: Vec<String> = jump_runs()
+            .into_iter()
+            .filter_map(|run| {
+                let end = jumped_at_a_ledge(top, run);
+                let below = end.x < LEDGE_FACE_X && end.y - STANDING_CENTER_HEIGHT < top;
+                (!below).then(|| format!("{run:?}: ended at {end}"))
+            })
+            .collect();
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    #[test]
+    fn a_jump_at_a_ledge_always_ends_standing_on_the_floor_or_on_the_ledge() {
+        let failures: Vec<String> = (0..=50)
+            .map(|step| jump_apex() - 1.0 + 0.1 * step as f32)
+            .flat_map(|top| jump_runs().map(|run| (top, run)))
+            .filter_map(|(top, run)| {
+                let end = jumped_at_a_ledge(top, run);
+                let soles = end.y - STANDING_CENTER_HEIGHT;
+                let standing = soles.abs() < 0.1 || (soles - top).abs() < 0.1;
+                (!standing).then(|| format!("top {top}, {run:?}: ended at {end}"))
+            })
+            .collect();
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// Where the player ends after running 1.5 s up a ramp of `slope` rising from `LEDGE_FACE_X`
+    /// to a plateau 10 high whose edge stands `lip` above the ramp's upper end, with the height
+    /// of that edge and its x.
+    fn ran_up_a_ramp(slope: f32, lip: f32) -> (Vec3, f32, f32) {
+        let ramp_top = 10.0;
+        let foot = Vec2::new(LEDGE_FACE_X, 0.0);
+        let along = Vec2::new(slope.cos(), slope.sin());
+        let normal = Vec2::new(-slope.sin(), slope.cos());
+        let upper_end = foot + along * (ramp_top / slope.sin());
+        let half_length = (ramp_top + 5.0) / slope.sin() / 2.0;
+        let half_thickness = 1.0;
+        let center = upper_end - along * half_length - normal * half_thickness;
+        let mut ramp = prop_box(
+            "meshes\\ramp.glb",
+            Vec3::new(center.x, center.y, -100.0),
+            Vec3::ZERO,
+        );
+        ramp.shape.shape = ColShape::Box {
+            center: Vec3::ZERO,
+            rotation: Quat::from_rotation_z(slope),
+            half_extents: Vec3::new(half_length, half_thickness, 50.0),
+        };
+        let edge = ramp_top + lip;
+        let plateau = prop_box(
+            "meshes\\plateau.glb",
+            Vec3::new(upper_end.x + 30.0, edge / 2.0, -100.0),
+            Vec3::new(30.0, edge / 2.0, 50.0),
+        );
+        let mut sim = spawned_at(world_with(&[ramp, plateau]), SPAWN_AT);
+        hold(&mut sim, running(0.0));
         tick(&mut sim, 90);
-        assert!(position(&sim).x < 210.0 - RADIUS + 0.2);
-        assert!((position(&sim).y - STANDING_CENTER_HEIGHT).abs() < 0.1);
+        (position(&sim), edge, upper_end.x)
+    }
+
+    const RAMP_SLOPES: [f32; 2] = [FRAC_PI_4, 55.0 * PI / 180.0];
+
+    #[test]
+    fn a_lip_within_the_step_limit_at_the_top_of_a_steep_ramp_is_climbed() {
+        let failures: Vec<String> = RAMP_SLOPES
+            .into_iter()
+            .flat_map(|slope| [0.0, 1.5, 2.0].map(|lip| (slope, lip)))
+            .filter_map(|(slope, lip)| {
+                let (end, edge, edge_x) = ran_up_a_ramp(slope, lip);
+                let on_top =
+                    end.x > edge_x + 5.0 && (end.y - (edge + STANDING_CENTER_HEIGHT)).abs() < 0.1;
+                (!on_top).then(|| format!("slope {slope}, lip {lip}: ended at {end}"))
+            })
+            .collect();
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    #[test]
+    fn a_lip_above_the_step_limit_at_the_top_of_a_steep_ramp_blocks_the_player() {
+        let failures: Vec<String> = RAMP_SLOPES
+            .into_iter()
+            .filter_map(|slope| {
+                let (end, edge, edge_x) = ran_up_a_ramp(slope, REFUSED_IN_THE_ORIGINAL);
+                let blocked = end.x < edge_x && end.y - STANDING_CENTER_HEIGHT < edge;
+                (!blocked).then(|| format!("slope {slope}: ended at {end}"))
+            })
+            .collect();
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    const STAIR_STEPS: [&str; 4] = [
+        "meshes\\step1.glb",
+        "meshes\\step2.glb",
+        "meshes\\step3.glb",
+        "meshes\\step4.glb",
+    ];
+    const STAIR_BACK_X: f32 = LEDGE_FACE_X + 90.0;
+
+    /// A stair of `STAIR_STEPS` with `rise` and `tread` whose first riser is at `LEDGE_FACE_X`,
+    /// its top running on to `STAIR_BACK_X`.
+    fn stair(rise: f32, tread: f32) -> Vec<Prop> {
+        STAIR_STEPS
+            .iter()
+            .enumerate()
+            .map(|(index, path)| {
+                let front = LEDGE_FACE_X + tread * index as f32;
+                let top = rise * (index + 1) as f32;
+                prop_box(
+                    path,
+                    Vec3::new(f32::midpoint(front, STAIR_BACK_X), top / 2.0, -100.0),
+                    Vec3::new((STAIR_BACK_X - front) / 2.0, top / 2.0, 50.0),
+                )
+            })
+            .collect()
+    }
+
+    /// Whether `end` stands on the top of the stair of `rise` and `tread`, past its last riser.
+    fn on_top_of_the_stair(end: Vec3, rise: f32, tread: f32) -> bool {
+        let last_riser = LEDGE_FACE_X + tread * (STAIR_STEPS.len() - 1) as f32;
+        end.x > last_riser + RADIUS
+            && (end.y - (rise * STAIR_STEPS.len() as f32 + STANDING_CENTER_HEIGHT)).abs() < 0.1
+    }
+
+    /// Where the player ends after running 2 s at the stair of `rise` and `tread`.
+    fn ran_up_a_stair(rise: f32, tread: f32) -> Vec3 {
+        let mut sim = spawned_at(world_with(&stair(rise, tread)), SPAWN_AT);
+        hold(&mut sim, running(0.0));
+        tick(&mut sim, 120);
+        position(&sim)
+    }
+
+    #[test]
+    fn stairs_with_risers_within_the_step_limit_are_climbed_on_treads_narrower_than_the_capsule() {
+        let failures: Vec<String> = [
+            (3.0, 1.5),
+            (3.0, 2.0),
+            (LIFTED_IN_THE_ORIGINAL, 1.5),
+            (LIFTED_IN_THE_ORIGINAL, 2.0),
+        ]
+        .into_iter()
+        .filter_map(|(rise, tread)| {
+            let end = ran_up_a_stair(rise, tread);
+            (!on_top_of_the_stair(end, rise, tread))
+                .then(|| format!("rise {rise}, tread {tread}: ended at {end}"))
+        })
+        .collect();
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    #[test]
+    fn a_stair_with_risers_above_the_step_limit_blocks_the_player() {
+        let end = ran_up_a_stair(REFUSED_IN_THE_ORIGINAL, 2.0);
+        assert!(end.x < LEDGE_FACE_X - RADIUS + 0.2, "x = {}", end.x);
+        assert!(
+            (end.y - STANDING_CENTER_HEIGHT).abs() < 0.1,
+            "y = {}",
+            end.y
+        );
+    }
+
+    #[test]
+    fn a_stair_run_down_is_climbed_again() {
+        let (rise, tread) = (3.0, 2.0);
+        let on_top = Vec3::new(STAIR_BACK_X - 30.0, 20.0, SPAWN_AT.z);
+        let mut sim = spawned_at(world_with(&stair(rise, tread)), on_top);
+        hold(&mut sim, running(PI));
+        tick(&mut sim, 150);
+        assert!(
+            (position(&sim).y - STANDING_CENTER_HEIGHT).abs() < 0.1,
+            "down at {}",
+            position(&sim)
+        );
+        hold(&mut sim, running(0.0));
+        tick(&mut sim, 150);
+        let end = position(&sim);
+        assert!(on_top_of_the_stair(end, rise, tread), "ended at {end}");
     }
 
     #[test]
@@ -985,7 +2081,7 @@ mod tests {
             &mut sim,
             PlayerInput {
                 crouch: true,
-                ..walking(PI)
+                ..running(PI)
             },
         );
         tick(&mut sim, 40);
@@ -997,7 +2093,12 @@ mod tests {
         hold(&mut sim, PlayerInput::default());
         tick(&mut sim, 10);
         assert!(sim.player_debug().crouching, "blocked by the ceiling");
-        hold(&mut sim, walking(0.0));
+        let eye = sim.player_eye().unwrap();
+        assert!(
+            (eye.y - EyeHeights::default().sneaking()).abs() < 0.01,
+            "the eye stays at the sneak height while blocked: {eye}"
+        );
+        hold(&mut sim, running(0.0));
         tick(&mut sim, 60);
         assert!(!sim.player_debug().crouching, "stood up again in the open");
     }
@@ -1048,7 +2149,11 @@ mod tests {
             None,
         ));
         let baked = bake(&batch, &[(floor.path, vec![floor.shape.clone()])]);
-        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+        let mut sim = SimWorld::new(
+            PlayerMovement::default(),
+            EyeHeights::default(),
+            WorldClock::fixture(),
+        );
         sim.apply(SimCommand::SetInteriorMode(true));
         sim.apply(SimCommand::AddCellColliders {
             grid: (0, 0),
@@ -1101,11 +2206,30 @@ mod tests {
     }
 
     #[test]
+    fn the_body_reaches_from_the_ground_to_the_capsule_top_standing_and_crouched() {
+        let mut sim = spawned_at(flat_world(), SPAWN_AT);
+        for (stance, height) in [(running(0.0), STAND_HEIGHT), (crouching(), CROUCH_HEIGHT)] {
+            hold(
+                &mut sim,
+                PlayerInput {
+                    move_dir: Vec2::ZERO,
+                    ..stance
+                },
+            );
+            tick(&mut sim, 2);
+            let body = sim.player_body().expect("the player stands");
+            let top = position(&sim).y + height / 2.0;
+            assert!(body.feet.y.abs() < 0.01, "feet {}", body.feet);
+            assert!((body.feet.y + body.height - top).abs() < 0.01, "{body:?}");
+        }
+    }
+
+    #[test]
     fn walking_into_a_heavy_crate_pushes_it_by_no_more_than_the_push_force_allows() {
         let crate_mass = 15.0;
         let heavy = crate_prop(Vec3::new(215.0, 0.5, -100.0), crate_mass);
         let mut sim = spawned_at(world_with(&[heavy]), SPAWN_AT);
-        hold(&mut sim, walking(0.0));
+        hold(&mut sim, running(0.0));
         let per_tick_cap = CHAR_PUSH_FORCE * FIXED_DT / crate_mass;
         let mut previous = 0.0_f32;
         let mut pushed_ticks = 0;
@@ -1218,7 +2342,7 @@ mod tests {
         #[test]
         fn running_on_the_ground_steps_right_then_left_on_the_terrain() {
             let mut sim = footstep_world();
-            hold(&mut sim, walking(0.0));
+            hold(&mut sim, running(0.0));
             let events = record(&mut sim, 60);
             assert_eq!(
                 tags(&events),
@@ -1247,7 +2371,7 @@ mod tests {
         #[test]
         fn nothing_plays_when_no_timings_are_installed() {
             let mut sim = spawned_at(flat_world(), SPAWN_AT);
-            hold(&mut sim, walking(0.0));
+            hold(&mut sim, running(0.0));
             assert_eq!(record(&mut sim, 60), []);
         }
 
@@ -1258,7 +2382,7 @@ mod tests {
                 &mut sim,
                 PlayerInput {
                     sprint: true,
-                    ..walking(0.0)
+                    ..running(0.0)
                 },
             );
             let sprint = record(&mut sim, 30);
@@ -1271,7 +2395,7 @@ mod tests {
                 PlayerInput {
                     crouch: true,
                     sprint: true,
-                    ..walking(0.0)
+                    ..running(0.0)
                 },
             );
             let sneak = record(&mut sim, 60);
@@ -1283,7 +2407,7 @@ mod tests {
         fn standing_still_and_released_input_are_silent() {
             let mut sim = footstep_world();
             assert_eq!(record(&mut sim, 60), []);
-            hold(&mut sim, walking(0.0));
+            hold(&mut sim, running(0.0));
             record(&mut sim, 30);
             hold(&mut sim, PlayerInput::default());
             let after_release = record(&mut sim, 60);
@@ -1302,7 +2426,7 @@ mod tests {
             );
             let mut sim = spawned_at(world_with(&[wall]), SPAWN_AT);
             sim.install_gait_timings(timings());
-            hold(&mut sim, walking(0.0));
+            hold(&mut sim, running(0.0));
             record(&mut sim, 40);
             assert!(position(&sim).x > 205.0, "the player should be at the wall");
             assert_eq!(record(&mut sim, 120), []);

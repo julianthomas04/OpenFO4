@@ -86,13 +86,17 @@ mod tests {
 
     use super::*;
     use crate::sim::collision::{CellColliderBatch, TerrainColliderSpec, TerrainCollision};
-    use crate::sim::{FIXED_DT, PlayerMovement, WorldClock};
+    use crate::sim::{EyeHeights, FIXED_DT, PlayerMovement, WorldClock};
     use glam::Vec3;
 
     const SPAWN_CELL: (i32, i32) = (-3, 12);
 
     fn held_sim() -> SimWorld {
-        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+        let mut sim = SimWorld::new(
+            PlayerMovement::default(),
+            EyeHeights::default(),
+            WorldClock::fixture(),
+        );
         sim.set_fold_hold(true);
         sim
     }

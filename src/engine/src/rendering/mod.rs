@@ -111,7 +111,10 @@ use glam::{Mat4, UVec2, UVec4, Vec3};
 use tracing::instrument;
 use winit::{keyboard::KeyCode, window::Window};
 
-use crate::anim::marker_timeline::{FIRST_PERSON_ASSETS_DIR, load_gait_timings};
+use crate::anim::character_assets::FIRST_PERSON_ASSETS_DIR;
+use crate::anim::clip_library::ClipLibrary;
+use crate::anim::first_person_eye::read_first_person_camera;
+use crate::anim::marker_timeline::load_gait_timings;
 use crate::assets::AssetServer;
 use crate::assets::layout;
 use crate::assets::pipboy_art::ArtLibrary;
@@ -211,8 +214,8 @@ use crate::rendering::{
 use crate::sim::commands::{ClockEdit, WeatherEdit};
 use crate::sim::pipboy::PipBoyAction;
 use crate::sim::{
-    ClockFrame, DynamicPose, EntityId, InventoryEvent, MaterialBuoyancy, PickClass, PlayerInput,
-    PlayerMovement, RayHit, SimCommand, SimWorld, refr_entity_id, water_physics,
+    ClockFrame, DynamicPose, EntityId, EyeHeights, InventoryEvent, MaterialBuoyancy, PickClass,
+    PlayerInput, PlayerMovement, RayHit, SimCommand, SimWorld, refr_entity_id, water_physics,
 };
 use crate::spawn_cell::SpawnCellTarget;
 use crate::startup::{StartupError, StartupTimer};
@@ -1893,7 +1896,16 @@ impl State {
         let world_clock = crate::assets::db::DbClient::new(&db_path)
             .and_then(|db| crate::assets::world_clock_start::load_world_clock(&db))
             .map_err(StartupError::WorldClock)?;
-        let mut sim = SimWorld::new(player_movement, world_clock);
+        let mut first_person_clips =
+            ClipLibrary::open(asset_server.asset_location(), FIRST_PERSON_ASSETS_DIR)
+                .map_err(StartupError::FirstPersonAssets)?;
+        let eye_heights = EyeHeights::try_from(read_first_person_camera(&mut first_person_clips)?)?;
+        tracing::info!(
+            "player eye: {:.4} u above the soles standing, {:.4} u sneaking",
+            eye_heights.standing(),
+            eye_heights.sneaking()
+        );
+        let mut sim = SimWorld::new(player_movement, eye_heights, world_clock);
         if let Some(hour) = overrides.hour {
             sim.apply(SimCommand::SetWorldClock(ClockEdit::SetHour(hour)));
         }
@@ -1936,11 +1948,8 @@ impl State {
         let footstep_catalog = crate::assets::db::DbClient::new(&db_path)
             .and_then(|db| db.get_footstep_catalog())
             .map_err(StartupError::Footsteps)?;
-        let gait_timings = load_gait_timings(&format!(
-            "{}/{FIRST_PERSON_ASSETS_DIR}",
-            asset_server.asset_location()
-        ))
-        .map_err(|error| StartupError::Footsteps(error.into()))?;
+        let gait_timings = load_gait_timings(&mut first_person_clips)
+            .map_err(|error| StartupError::Footsteps(error.into()))?;
         if let Some(mismatch) = crate::sim::jump_windup_mismatch(&gait_timings) {
             tracing::warn!("{mismatch}");
         }

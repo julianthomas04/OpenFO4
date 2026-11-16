@@ -23,7 +23,7 @@ pub(super) struct DropLook {
 }
 
 /// The one place the drop numbers live. Source: original-game Pip-Boy sessions 2026-11-12 and
-/// 2026-11-13, flat floor, eye height 118.5 above the feet.
+/// 2026-11-13, flat floor.
 /// - `forward_distance` 90 units: the item lands 81, 85, 118 and about 100 ahead along the facing
 ///   (n = 4, scatter from bounce and roll); the spawn rule fitted to the frames is 80-100 ahead.
 ///   The midpoint of that band. Derived, medium confidence. View pitch does not move it, so the

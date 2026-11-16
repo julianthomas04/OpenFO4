@@ -1407,16 +1407,15 @@ mod tests {
         );
     }
 
-    /// Q4 and the P6 gap (2026-11-14): the eye 118.5 above the floor, the farther item 145 ahead
+    /// Q4 and the P6 gap (2026-11-14): the eye 120.5 above the floor, the farther item 145 ahead
     /// on the floor, the nearer one 90 nearer on the same line, the aim swept down from the
     /// farther one. The farther item was lost where its touched point passed the reach from the
-    /// eye (measured 6.94, from the eye 7.18, along the aim 8.77 degrees below it), and nothing
-    /// was named until the nearer item.
+    /// eye, and nothing was named until the nearer item.
     #[test]
     fn the_far_item_of_a_pair_is_lost_where_its_touched_point_passes_the_reach_from_the_eye_not_along_the_aim()
      {
         let side = Vec3::NEG_Y;
-        let eye = at(EYE.x, game_units(118.5), EYE.z);
+        let eye = at(EYE.x, game_units(120.5), EYE.z);
         let row_y = ABOVE_THE_SURFACE + ITEM_HALF;
         let farther_at = at(eye.x + game_units(145.0), row_y, eye.z);
         let nearer_at = at(eye.x + game_units(145.0 - 90.0), row_y, eye.z);

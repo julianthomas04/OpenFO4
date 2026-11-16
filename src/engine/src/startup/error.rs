@@ -1,3 +1,5 @@
+use crate::anim::character_assets::CharacterAssetsError;
+use crate::anim::first_person_eye::FirstPersonEyeError;
 use crate::assets::ini::IniError;
 use crate::assets::pipboy_art::ArtManifestError;
 use crate::audio::AudioError;
@@ -10,6 +12,7 @@ use crate::rendering::shaders::startup::ShaderStartupError;
 use crate::rendering::shot::ShotConfigError;
 use crate::rendering::ui_fonts::UiFontError;
 use crate::rendering::version_overlay::VersionOverlayError;
+use crate::sim::EyeHeightsError;
 use crate::spawn_cell::SpawnCellError;
 use crate::ui_layout::UiLayoutError;
 
@@ -51,6 +54,12 @@ pub enum StartupError {
     Streamer(anyhow::Error),
     #[error("footsteps: {0:#}")]
     Footsteps(anyhow::Error),
+    #[error("first-person animations: {0}")]
+    FirstPersonAssets(CharacterAssetsError),
+    #[error("first-person camera: {0}")]
+    FirstPersonCamera(#[from] FirstPersonEyeError),
+    #[error("player eye heights: {0}")]
+    EyeHeights(#[from] EyeHeightsError),
     #[error("cannot create the HUD: {0:#}")]
     Hud(anyhow::Error),
     #[error("cannot create the Pip-Boy: {0:#}")]
