@@ -1228,10 +1228,10 @@ impl PhysicsContext {
             return;
         };
         let changed = if teleport {
-            mirror.teleport(&mut self.world, center, capsule);
+            mirror.teleport(&mut self.world, center);
             true
         } else {
-            mirror.follow(&mut self.world, center, capsule)
+            mirror.follow(&mut self.world, center)
         };
         if !changed {
             return;

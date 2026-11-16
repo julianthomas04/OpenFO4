@@ -163,8 +163,7 @@ pub struct PlayerInput {
     /// toggle semantics (Shift arms sprint only while W alone is down and
     /// drops it on Shift/W-release/strafe/sneak; Ctrl toggles crouch, cleared
     /// by sprint start, untouched by jumping). The sim treats these as
-    /// intent — `crouch` waits on the stand-up headroom probe, `sprint` only
-    /// applies once not crouching.
+    /// intent — `sprint` only applies once not crouching.
     pub sprint: bool,
     pub crouch: bool,
 }

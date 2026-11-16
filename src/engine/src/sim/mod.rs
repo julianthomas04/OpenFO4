@@ -56,7 +56,7 @@ pub use footstep_clock::{JumpWindupMismatch, jump_windup_mismatch};
 pub use hud::{CrosshairState, HudSnapshot, MeterFill};
 pub use inventory_event::{InventoryEvent, ItemGrantError};
 pub use physics::pick::{PickClass, PickRay};
-pub use player::{EyeHeights, EyeHeightsError, PlayerMovement, STANDING_CENTER_ABOVE_FEET};
+pub use player::{CENTER_ABOVE_FEET, EyeHeights, EyeHeightsError, PlayerMovement};
 pub use ragdoll::{BodyDelta, MAX_SKINNED_RAGDOLLS, RagdollEntry, RagdollPoses};
 pub use ragdoll_tuning::RagdollSettings;
 pub use water_materials::{MaterialBuoyancy, WaterBodyProps};
@@ -750,8 +750,8 @@ impl SimWorld {
     pub fn player_body(&self) -> Option<PlayerBody> {
         let center = self.interpolated_player_center()?;
         Some(PlayerBody {
-            feet: self.player.soles_below(center),
-            height: self.player.top_above_soles(),
+            feet: player::soles_below(center),
+            height: player::TOP_ABOVE_FEET,
             radius: player::RADIUS,
         })
     }

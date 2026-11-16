@@ -12,8 +12,8 @@ use super::test_world::{
     world_with,
 };
 use super::{
-    CarriedInfo, EntityId, GrabRefusal, PlayerInput, PlayerMovement, ReleaseReason,
-    STANDING_CENTER_ABOVE_FEET, SimCommand, SimWorld, refr_entity_id,
+    CENTER_ABOVE_FEET, CarriedInfo, EntityId, GrabRefusal, PlayerInput, PlayerMovement,
+    ReleaseReason, SimCommand, SimWorld, refr_entity_id,
 };
 
 /// Where the crate rests in most tests: on the ground, ahead of the player along +X.
@@ -458,7 +458,7 @@ fn a_player_standing_on_a_crate_is_never_lifted_by_carrying_it() {
     );
     let on_crate = position(&sim);
     assert!(
-        (on_crate.y - (2.0 + STANDING_CENTER_ABOVE_FEET)).abs() < 0.1,
+        (on_crate.y - (2.0 + CENTER_ABOVE_FEET)).abs() < 0.1,
         "the player starts on the crate: {on_crate}"
     );
     hold(
@@ -479,7 +479,7 @@ fn a_player_standing_on_a_crate_is_never_lifted_by_carrying_it() {
     let end = sim.player_debug();
     assert!(end.grounded);
     assert!(
-        (end.pos.y - STANDING_CENTER_ABOVE_FEET).abs() < 0.1,
+        (end.pos.y - CENTER_ABOVE_FEET).abs() < 0.1,
         "stands on the ground: {}",
         end.pos.y
     );

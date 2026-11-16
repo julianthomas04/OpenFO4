@@ -4850,9 +4850,7 @@ impl State {
                                 || self.walk_keys.right)
                         {
                             self.walk_keys.sprint_active = true;
-                            // Sprinting from sneak stands the player up (the
-                            // sim's headroom probe may delay the actual stand
-                            // under a low ceiling).
+                            // Sprinting from sneak stands the player up.
                             self.walk_keys.crouch_active = false;
                         }
                     }
