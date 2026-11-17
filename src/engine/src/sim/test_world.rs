@@ -121,6 +121,28 @@ fn world_in_with_eye_heights(
     sim
 }
 
+/// Adds a dynamic 1 x 1 x 1 crate centred at `at` to cell (0, 0) as a dropped item enters the
+/// world: awake from its first step.
+pub fn drop_crate(sim: &mut SimWorld, at: Vec3) -> super::EntityId {
+    const DROPPED_REF: &str = "00000A:*dropped";
+    let batch = CellColliderBatch {
+        objects: vec![object_group(
+            "meshes\\crate.glb",
+            vec![placement(DROPPED_REF, at)],
+            true,
+            Some(2.0),
+        )],
+        ..CellColliderBatch::default()
+    };
+    let baked = bake(&batch, &[("meshes\\crate.glb", vec![box_shape(0.5)])]);
+    sim.apply(SimCommand::AddWorldObjects {
+        grid: (0, 0),
+        batch: Arc::new(batch),
+        baked: Some(baked),
+    });
+    super::refr_entity_id(DROPPED_REF)
+}
+
 pub fn flat_world() -> SimWorld {
     world_with(&[])
 }

@@ -83,9 +83,11 @@ mod staging;
 use crate::assets::pipboy_catalog::item_kind_of;
 use crate::shared_cache::SharedCache;
 use crate::sim::collision::{
-    CellColliderBatch, CollisionMeta, ObjectColliderGroup, PartShape, Placement, SidecarData,
-    TerrainColliderSpec, TerrainCollision, load_manifest, load_sidecar_file, manifest_key,
+    CellColliderBatch, CollisionMeta, ObjectColliderGroup, PartLocal, PartShape, Placement,
+    SidecarData, TerrainColliderSpec, TerrainCollision, load_manifest, load_sidecar_file,
+    manifest_key,
 };
+use crate::sim::collision_box::CollisionBox;
 use crate::sim::pipboy::ItemKind;
 use crate::sim::{EntityId, SimCommand, refr_entity_id};
 use crate::utils::{drop_off_thread, warn_once};
@@ -100,11 +102,13 @@ use effect_shapes::{
     classify,
 };
 mod fire_hooks;
+mod item_boxes;
 use fire_hooks::{
     AddonLightSources, LightModelRef, LightSink, StoredParticleHost, particle_hosts_of,
     place_addon_lights,
 };
 pub(crate) use fire_hooks::{LightKey, ModelLight, ParticleHost};
+use item_boxes::ItemBoxes;
 mod load_pacing;
 mod placeholders;
 mod row_poses;
@@ -117,7 +121,8 @@ use weapons::{
     add_weapon_parts, trace_enabled,
 };
 pub(crate) use world_edits::{
-    AbandonedDrop, DroppedItemSpec, PlacedItem, SpawnItemError, WorldItemError,
+    AbandonedDrop, DroppedItemSpec, ItemBoxError, PlacedItem, SpawnItemError, WorldItemError,
+    dropped_item_rotation,
 };
 use world_edits::{
     CellEdits, GroupBody, ItemBaseRole, PendingHide, PendingHides, RuntimeRefKeys, checked_drop,
@@ -1558,6 +1563,7 @@ impl WorldStreamer {
             demand_view: Mutex::new(DemandView::default()),
             mesh_cache: SharedCache::new(MESH_CACHE_CAP),
             collider_cache: SharedCache::new(COLLIDER_CACHE_CAP),
+            item_boxes: ItemBoxes::default(),
             layout_cache: SharedCache::new(LAYOUT_CACHE_CAP),
             dds_cache: SharedCache::new(DDS_CACHE_MAX_BYTES),
             bake_cache: new_bake_cache(asset_root, &player_layers),
@@ -2974,6 +2980,29 @@ impl WorldStreamer {
         self.pending_drops
             .insert(entity, PendingDrop { ref_key, spec });
         Ok(entity)
+    }
+
+    /// Works out the collision box of `form_key` on the thread pool, so its drop finds it ready.
+    pub(crate) fn prepare_item_collision_box(&self, form_key: &str) {
+        if !self.worker_shared.item_boxes.claim_preparation(form_key) {
+            return;
+        }
+        let shared = Arc::clone(&self.worker_shared);
+        let form_key = form_key.to_owned();
+        rayon::spawn(move || {
+            if let Err(error) = item_collision_box(&shared, &form_key) {
+                tracing::debug!("item drop: {error}; a drop of it will be refused");
+            }
+        });
+    }
+
+    /// The box around the collision a dropped `form_key` gets, in its model space. Worked out here
+    /// when [`Self::prepare_item_collision_box`] has not finished it, which may read a sidecar.
+    pub(crate) fn item_collision_box(&self, form_key: &str) -> Result<CollisionBox, ItemBoxError> {
+        if !self.worker_shared.item_boxes.is_known(form_key) {
+            tracing::debug!("item drop: collision box of {form_key} worked out on the main thread");
+        }
+        item_collision_box(&self.worker_shared, form_key)
     }
 
     /// Drops that will never appear since the last call: the world changed or the owning cell
@@ -4899,6 +4928,8 @@ struct WorkerShared {
     /// `.colbin` miss forces a bake; `None` records missing/unreadable sidecars
     /// so absent files aren't re-probed.
     collider_cache: SharedCache<String, Option<SidecarData>>,
+    /// Item base -> the box around the collision a drop of it gets.
+    item_boxes: ItemBoxes,
     /// (Texture path, first mip) -> the mips from there down; a failure records
     /// a missing or broken file — it weighs zero bytes and never evicts.
     ///
@@ -5183,6 +5214,43 @@ fn load_collider_sidecar(
 ) -> Option<SidecarData> {
     let stem = path.strip_suffix(".glb")?;
     load_sidecar_file(&format!("{asset_root}/{stem}.col.json"), layers)
+}
+
+/// The box around the collision a dropped `form_key` gets, in its model space: the base model's,
+/// or the parts of a weapon's default assembly posed as its body poses them.
+fn item_collision_box(shared: &WorkerShared, form_key: &str) -> Result<CollisionBox, ItemBoxError> {
+    shared.item_boxes.get_or_compute(form_key, || {
+        let info = shared
+            .base_object_lookup
+            .get(form_key)
+            .ok_or_else(|| ItemBoxError::UnknownBase(form_key.to_owned()))?;
+        let parts: Vec<(String, Option<PartLocal>)> = if let Some(weapon) = &info.weapon {
+            shared
+                .weapons
+                .placed(weapon, &info.model_path, &shared.collision_manifest)
+                .parts
+                .iter()
+                .filter(|part| part.collision.is_some())
+                .map(|part| (part.mesh_path.clone(), Some(part.collider_pose())))
+                .collect()
+        } else {
+            let mesh_path = glb_key(&info.model_path);
+            let has_collision = shared
+                .collision_manifest
+                .contains_key(&manifest_key(&mesh_path));
+            has_collision
+                .then_some((mesh_path, None))
+                .into_iter()
+                .collect()
+        };
+        parts
+            .iter()
+            .filter_map(|(path, pose)| {
+                CollisionBox::of_shapes(&load_collision_shapes(shared, path), *pose, path)
+            })
+            .reduce(CollisionBox::union)
+            .ok_or_else(|| ItemBoxError::NoCollision(form_key.to_owned()))
+    })
 }
 
 /// `foo.glb` -> `{asset_root}/foo.col.json`, the sidecar carrying the ragdoll bodies.
@@ -5717,20 +5785,24 @@ fn process_request(request: &CellRequest, db: &DbClient, shared: &WorkerShared) 
 
 /// Builds the one-object payload of a dropped item: the reference `PlacedObject::runtime`
 /// describes, assembled like a placed one but always as a moving body.
+/// The reference a dropped stack is built as.
+fn dropped_object(ref_key: &str, spec: &DroppedItemSpec) -> PlacedObject {
+    let position = bethesda_space::position_from_engine(spec.position);
+    PlacedObject::runtime(
+        ref_key.to_owned(),
+        spec.base.clone(),
+        [position.x, position.y, position.z].map(f64::from),
+        f64::from(rotation_z_from_yaw(spec.yaw)),
+        i64::from(spec.count),
+    )
+}
+
 fn runtime_object_payload(
     request: &RuntimeObjectRequest,
     shared: &WorkerShared,
 ) -> RuntimeObjectResult {
     let _span = info_span!("runtime_object", key = request.ref_key.as_str()).entered();
-    let spec = &request.spec;
-    let position = bethesda_space::position_from_engine(spec.position);
-    let object = PlacedObject::runtime(
-        request.ref_key.clone(),
-        spec.base.clone(),
-        [position.x, position.y, position.z].map(f64::from),
-        f64::from(rotation_z_from_yaw(spec.yaw)),
-        i64::from(spec.count),
-    );
+    let object = dropped_object(&request.ref_key, &request.spec);
     let mut payload = CellLoadResult::empty(request.grid, request.epoch);
     assemble_cell_payload(
         &mut payload,
@@ -7287,6 +7359,21 @@ mod tests {
     use crate::sim::pipboy::character::STARTING_LEVEL;
 
     const ROLLS_PER_LIST: u64 = 64;
+
+    #[test]
+    fn a_dropped_stack_is_built_with_the_rotation_its_placement_assumed() {
+        for yaw in [-2.9_f32, -1.0, 0.0, 0.6, 2.2] {
+            let spec = DroppedItemSpec {
+                base: "0F3B01:Test.esm".to_owned(),
+                count: 3,
+                position: Vec3::new(1.0, 2.0, 3.0),
+                yaw,
+            };
+            let built = placement_rotation(&dropped_object("000001:*dropped", &spec));
+            let assumed = Mat4::from_quat(dropped_item_rotation(yaw));
+            assert!(built.abs_diff_eq(assumed, 1e-5), "{yaw}");
+        }
+    }
 
     #[test]
     fn door_bases_are_doors_with_their_name_unless_it_is_blank_and_other_bases_are_not() {

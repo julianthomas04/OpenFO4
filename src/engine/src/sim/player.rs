@@ -365,6 +365,10 @@ impl PlayerState {
         soles_below(center) + Vec3::Y * self.eye_heights.above_soles(self.crouching)
     }
 
+    pub(super) fn eye_heights(&self) -> EyeHeights {
+        self.eye_heights
+    }
+
     /// Eye position at the last fixed step.
     pub(super) fn eye(&self) -> Vec3 {
         self.eye_above(self.pos)

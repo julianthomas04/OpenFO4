@@ -15,11 +15,10 @@ fn game_position(engine_position: Vec3) -> String {
     format!("({:.1},{:.1},{:.1})", position.x, position.y, position.z)
 }
 
-fn spot_name(spot: DropSpot) -> &'static str {
+fn spot_name(spot: DropSpot) -> String {
     match spot {
-        DropSpot::Front => "front",
-        DropSpot::Side => "side",
-        DropSpot::PulledBack => "pulled_back",
+        DropSpot::Toward(angle) => format!("{:.0}", angle.to_degrees()),
+        DropSpot::Behind => "behind".to_owned(),
     }
 }
 
@@ -73,20 +72,21 @@ mod tests {
     fn the_request_line_names_item_spot_positions_and_heading_in_game_units() {
         let placement = DropPlacement {
             position: Vec3::new(10.0, 2.0, -30.0),
-            spot: DropSpot::PulledBack,
+            spot: DropSpot::Behind,
             yaw: -std::f32::consts::FRAC_PI_2,
         };
         assert_eq!(
             drop_request_line(KEY, 30, &placement, Vec3::new(1.25, 3.0, -3.0)),
-            "item drop: base=0F3B01:Test.esm count=30 spot=pulled_back \
+            "item drop: base=0F3B01:Test.esm count=30 spot=behind \
              pos=(100.0,300.0,20.0) player=(12.5,30.0,30.0) yaw=0.0"
         );
     }
 
     #[test]
-    fn every_spot_has_its_own_name() {
-        let names = [DropSpot::Front, DropSpot::Side, DropSpot::PulledBack].map(spot_name);
-        assert_eq!(names, ["front", "side", "pulled_back"]);
+    fn a_free_direction_is_named_by_its_clockwise_degrees() {
+        let names =
+            [0.0_f32, 36.0, 324.0].map(|degrees| spot_name(DropSpot::Toward(degrees.to_radians())));
+        assert_eq!(names, ["0", "36", "324"]);
     }
 
     #[test]

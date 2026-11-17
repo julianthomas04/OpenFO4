@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use glam::Vec3;
+use glam::{Quat, Vec3};
 
 use crate::rendering::game_text::non_blank;
 use crate::rendering::row_pose::{PoseSource, RowPose};
@@ -268,6 +268,14 @@ pub(crate) enum SpawnItemError {
     WorkerChannelClosed,
 }
 
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+pub(crate) enum ItemBoxError {
+    #[error("base {0} is not a base with a world model")]
+    UnknownBase(String),
+    #[error("base {0} has no collision")]
+    NoCollision(String),
+}
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub(crate) enum RuntimeKeyError {
     #[error("the runtime reference keys are exhausted")]
@@ -417,6 +425,11 @@ pub(super) fn join_drop(
 /// `bethesda_space::yaw_from_rotation_z`.
 pub(super) fn rotation_z_from_yaw(yaw: f32) -> f32 {
     yaw + std::f32::consts::FRAC_PI_2
+}
+
+/// The engine rotation a dropped item facing `yaw` is built with.
+pub(crate) fn dropped_item_rotation(yaw: f32) -> Quat {
+    crate::bethesda_space::rotation_to_engine(0.0, 0.0, rotation_z_from_yaw(yaw))
 }
 
 #[cfg(test)]

@@ -109,6 +109,17 @@ pub(super) struct PlacedPart {
     pub collision: Option<PartCollision>,
 }
 
+impl PlacedPart {
+    /// The pose the part's colliders take inside the weapon; the part's own scale is not carried.
+    pub fn collider_pose(&self) -> PartLocal {
+        let (_, rotation, translation) = self.part_to_weapon.to_scale_rotation_translation();
+        PartLocal {
+            translation,
+            rotation,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BodyKind {
     Dynamic,
@@ -312,8 +323,6 @@ pub(super) fn add_weapon_parts(placed: &PlacedWeapon, refr: &WeaponRefr, sinks: 
     let entity = refr.ref_key.map(refr_entity_id);
     for part in &placed.parts {
         if part.collision.is_some() {
-            let (_, part_rotation, part_translation) =
-                part.part_to_weapon.to_scale_rotation_translation();
             sinks
                 .placements_by_path
                 .entry(part.mesh_path.clone())
@@ -324,10 +333,7 @@ pub(super) fn add_weapon_parts(placed: &PlacedWeapon, refr: &WeaponRefr, sinks: 
                     scale: refr.scale,
                     ref_key: refr.ref_key.map(str::to_owned),
                     ragdoll_pose: None,
-                    part_local: Some(PartLocal {
-                        translation: part_translation,
-                        rotation: part_rotation,
-                    }),
+                    part_local: Some(part.collider_pose()),
                 });
         }
         if part.draw {

@@ -4,29 +4,46 @@
 use std::fmt::Display;
 
 use super::drop_log::drop_failure_line;
-use super::world_streamer::{AbandonedDrop, DroppedItemSpec, SpawnItemError};
+use super::world_streamer::{AbandonedDrop, DroppedItemSpec, ItemBoxError, SpawnItemError};
 use crate::sim::{EntityId, ItemGrantError};
+
+/// Why a dropped stack cannot be placed at all.
+#[derive(Debug, thiserror::Error)]
+pub(super) enum DropRefusal {
+    #[error("the player has no body")]
+    NoPlayerBody,
+    #[error(transparent)]
+    NoItemBox(#[from] ItemBoxError),
+}
 
 /// Hands a dropped stack to the world. When the world refuses it the whole count goes back to
 /// the inventory. Returns whether the world took it.
 pub(super) fn settle_drop(
     spec: DroppedItemSpec,
     spawn: impl FnOnce(DroppedItemSpec) -> Result<EntityId, SpawnItemError>,
-    mut restore: impl FnMut(&str, u32) -> Result<(), ItemGrantError>,
+    restore: impl FnMut(&str, u32) -> Result<(), ItemGrantError>,
 ) -> bool {
     let (form_key, count) = (spec.base.clone(), spec.count);
     match spawn(spec) {
         Ok(_) => true,
         Err(error) => {
-            let returned = restore(&form_key, count);
             let reason = format!("refused by the world: {error}");
-            tracing::error!(
-                "{}",
-                drop_failure_line(&form_key, count, &reason, &returned)
-            );
+            refuse_drop(&form_key, count, &reason, restore);
             false
         }
     }
+}
+
+/// Gives the whole count of a drop that cannot reach the world back to the inventory and reports
+/// why.
+pub(super) fn refuse_drop(
+    form_key: &str,
+    count: u32,
+    reason: &impl Display,
+    mut restore: impl FnMut(&str, u32) -> Result<(), ItemGrantError>,
+) {
+    let returned = restore(form_key, count);
+    tracing::error!("{}", drop_failure_line(form_key, count, reason, &returned));
 }
 
 /// Gives back the units of every drop the world never took.
@@ -155,6 +172,16 @@ mod tests {
             },
         );
         assert!(!took);
+    }
+
+    #[test]
+    fn a_refused_drop_returns_its_whole_count() {
+        let mut restored = Restored::default();
+        refuse_drop(KEY, 12, &"base has no collision", |key, count| {
+            restored.restore(key, count);
+            Ok(())
+        });
+        assert_eq!(restored.0, [(KEY.to_owned(), 12)]);
     }
 
     #[test]

@@ -19,7 +19,7 @@ use super::dynamic_body::{
     clamp_linvel, density_for_mass, sanitize_body, state_is_bounded, within_radius,
 };
 use super::kinematic::KinematicBodies;
-use super::mirror::{KinematicMirror, scene_query_filter};
+use super::mirror::{KinematicMirror, scene_query_filter, static_scene_query_filter};
 use super::ragdoll::{RagdollManager, RagdollPlacement, RagdollPoses, RagdollRejection};
 use super::ragdoll_pose::authored_body_poses;
 use super::ragdoll_tuning::RagdollSettings;
@@ -385,6 +385,13 @@ impl PhysicsContext {
             self.probe(origin, dir, max_dist, scene_query_filter())?
                 .into_hit(),
         )
+    }
+
+    pub fn static_ray_distance(&self, origin: Vec3, dir: Vec3, max_dist: f32) -> Option<f32> {
+        let ray = Ray::new(origin, dir);
+        self.world
+            .cast_ray(&ray, max_dist, true, static_scene_query_filter())
+            .map(|(_, dist)| dist)
     }
 
     /// Surface under `origin` along a straight-down ray. Dynamic bodies are

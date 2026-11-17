@@ -9,6 +9,7 @@ mod cache_purge;
 mod carry;
 mod collider_user_data;
 pub mod collision;
+pub mod collision_box;
 mod command_budget;
 pub mod commands;
 mod drop_body_log;
@@ -49,7 +50,6 @@ use command_budget::{Deferred, DeferredQueue};
 use footstep_clock::{FootstepClock, TickObservation};
 use weather::{WeatherCycle, WeatherStep};
 
-pub(crate) use carry::HOLD_INSET;
 pub use carry::{CarriedInfo, GrabRefusal, ReleaseReason};
 pub use commands::{AddedObjects, KinematicPose, PlayerInput, SimCommand, look_direction};
 pub use footstep_clock::{JumpWindupMismatch, jump_windup_mismatch};
@@ -955,6 +955,25 @@ impl SimWorld {
     /// turns "stuck on nothing" into a mesh name.
     pub fn debug_ray_hit(&self, origin: Vec3, dir: Vec3, max_dist: f32) -> Option<RayHit> {
         self.physics.ray_attribution(origin, dir, max_dist)
+    }
+
+    /// How far the ray from `origin` along `dir` runs within `max_dist` before it meets the static
+    /// world; dynamic bodies and the player are passed through.
+    pub fn static_ray_distance(&self, origin: Vec3, dir: Vec3, max_dist: f32) -> Option<f32> {
+        self.physics.static_ray_distance(origin, dir, max_dist)
+    }
+
+    /// Where the tracked body of `entity` is, `None` without one.
+    #[cfg(test)]
+    pub(crate) fn body_translation(&self, entity: EntityId) -> Option<Vec3> {
+        self.physics
+            .body_summary(entity)
+            .map(|(_, translation)| translation)
+    }
+
+    /// The first-person eye heights the player was built with.
+    pub fn eye_heights(&self) -> EyeHeights {
+        self.player.eye_heights()
     }
 
     /// What the player aims at: the exact ray, or the ball swept along it for items and activators
@@ -2073,6 +2092,35 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod static_ray_tests {
+    use super::test_world::{crate_prop, prop_box, tick, world_with};
+    use super::*;
+
+    #[test]
+    fn the_static_ray_meets_static_props_and_passes_dynamic_bodies() {
+        let mut sim = world_with(&[
+            prop_box("meshes\\wall.glb", Vec3::new(100.0, 1.0, -50.0), Vec3::ONE),
+            crate_prop(Vec3::new(120.0, 0.5, -50.0), 2.0),
+        ]);
+        tick(&mut sim, 1);
+        let distance = sim.static_ray_distance(Vec3::new(90.0, 0.5, -50.0), Vec3::X, 20.0);
+        assert!(
+            distance.is_some_and(|d| (d - 9.0).abs() < 1e-3),
+            "{distance:?}"
+        );
+        assert_eq!(
+            sim.static_ray_distance(Vec3::new(110.0, 0.5, -50.0), Vec3::X, 20.0),
+            None
+        );
+        assert!(
+            sim.debug_ray_hit(Vec3::new(110.0, 0.5, -50.0), Vec3::X, 20.0)
+                .is_some(),
+            "the crate stands in the ray"
+        );
     }
 }
 

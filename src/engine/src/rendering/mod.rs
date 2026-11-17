@@ -211,6 +211,7 @@ use crate::rendering::{
     window_surface::WindowSurface,
     world_streamer::{LoadMode, StreamTargets, UploadBudget, WorldStreamer},
 };
+use crate::sim::collision_box::CollisionBox;
 use crate::sim::commands::{ClockEdit, WeatherEdit};
 use crate::sim::pipboy::PipBoyAction;
 use crate::sim::{
@@ -230,13 +231,13 @@ use auto_character::AutoCharacters;
 use boot::{BootParts, GpuContext, StartupInputs, StateInputs};
 use cube_array::CubeArray;
 use door_prompt::{DoorPrompts, ShownEntrance, aim_hud};
-use drop_flow::{handle_all, return_abandoned, settle_drop};
+use drop_flow::{DropRefusal, handle_all, refuse_drop, return_abandoned, settle_drop};
 use drop_log::drop_request_line;
 use effects::stage::{EffectFrameInputs, EffectStage};
 use grab_input::{
     AimTarget, CarryContext, GrabAction, GrabInput, carry_key_counts, spin_gate_open,
 };
-use item_drop::{dropped_spec, placement};
+use item_drop::{Dropper, dropped_spec, placement};
 use item_feedback::{inventory_log_line, item_sound_of, load_item_sounds};
 use item_pickup::plan_pickup;
 use item_prompt::{ItemPromptCache, ItemPrompts, PlayerOwners, catalog_item_prompt};
@@ -1341,7 +1342,10 @@ impl State {
         handle_all(self.sim.drain_inventory_events(), |event| {
             tracing::debug!("{}", inventory_log_line(&event));
             let world_took_it = match &event {
-                InventoryEvent::Added { .. } => true,
+                InventoryEvent::Added { form_key, .. } => {
+                    self.streamer.prepare_item_collision_box(form_key);
+                    true
+                }
                 InventoryEvent::Dropped { form_key, count } => self.place_dropped(form_key, *count),
             };
             if world_took_it {
@@ -1352,15 +1356,22 @@ impl State {
         })
     }
 
-    /// Puts a dropped stack into the world in front of the view; when the world refuses, the units
-    /// go back to the inventory. Returns whether the world took it.
+    /// Puts a dropped stack into the world around the player; without a player body or an item
+    /// collision box, or when the world refuses, the units go back to the inventory. Returns
+    /// whether the world took it.
     fn place_dropped(&mut self, form_key: &str, count: u32) -> bool {
+        let (dropper, item) = match self.drop_inputs(form_key) {
+            Ok(inputs) => inputs,
+            Err(refusal) => {
+                refuse_drop(form_key, count, &refusal, |key, units| {
+                    self.sim.restore_units(key, units)
+                });
+                return false;
+            }
+        };
         let eye = self.camera.eye;
-        let forward = self.camera_controller.forward();
-        let placed = placement(eye, forward, |origin, direction, reach| {
-            self.sim
-                .debug_ray_hit(origin, direction, reach)
-                .map(|hit| hit.dist)
+        let placed = placement(dropper, item, |origin, direction, reach| {
+            self.sim.static_ray_distance(origin, direction, reach)
         });
         tracing::debug!("{}", drop_request_line(form_key, count, &placed, eye));
         let spec = dropped_spec(form_key, count, placed);
@@ -1369,6 +1380,19 @@ impl State {
             |spec| self.streamer.spawn_world_item(spec),
             |form_key, count| self.sim.restore_units(form_key, count),
         )
+    }
+
+    /// The player dropping `form_key` and the box around the item's collision.
+    fn drop_inputs(&self, form_key: &str) -> Result<(Dropper, CollisionBox), DropRefusal> {
+        let body = self.sim.player_body().ok_or(DropRefusal::NoPlayerBody)?;
+        let item = self.streamer.item_collision_box(form_key)?;
+        let dropper = Dropper {
+            feet: body.feet,
+            standing_eye: self.sim.eye_heights().standing(),
+            body_radius: body.radius,
+            yaw: self.camera_controller.yaw(),
+        };
+        Ok((dropper, item))
     }
 
     fn play_item_sound(&mut self, event: &InventoryEvent) -> Result<(), AudioError> {

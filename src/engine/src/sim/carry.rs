@@ -12,7 +12,7 @@ pub(super) const GRAB_MASS_LIMIT: f32 = 110.0;
 /// Havok mass from which carrying forces walking speed. Measured: 70 runs, 80 walks.
 pub(super) const WALK_MASS_THRESHOLD: f32 = 75.0;
 /// How much closer than at grab time the body is held. Measured: about 9 FO4 units.
-pub(crate) const HOLD_INSET: f32 = 9.0 * UNITS_TO_ENGINE;
+const HOLD_INSET: f32 = 9.0 * UNITS_TO_ENGINE;
 /// Separation from the hold point that strains the grip. Measured: between 150 and 200 FO4 units.
 const BREAK_SEPARATION: f32 = 175.0 * UNITS_TO_ENGINE;
 /// How long the strain must last before the body is torn away. Measured: between 0.6 and 1.1 s.
