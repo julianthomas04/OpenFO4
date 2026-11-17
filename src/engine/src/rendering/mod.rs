@@ -2157,13 +2157,12 @@ impl State {
             pending_teleport: spawn_target,
             auto_activate: std::env::var("OPENFO4_AUTO_ACTIVATE")
                 .ok()
-                .map(|s| {
+                .map_or_default(|s| {
                     s.split(',')
                         .map(|x| x.trim().to_string())
                         .filter(|x| !x.is_empty())
                         .collect()
-                })
-                .unwrap_or_default(),
+                }),
             auto_idx: 0,
             auto_cooldown: 0,
             walk_in_hook: WalkInDevHook::from_list(

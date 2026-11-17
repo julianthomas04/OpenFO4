@@ -192,8 +192,8 @@ fn build(case: &Case) -> NavWorld {
         move |col, row| kept[row * cols + col],
     );
     let tri_count = case.kept.iter().filter(|k| **k).count() * 2;
-    for tri in 0..tri_count {
-        builder = builder.flag(tri as u16, case.tri_flags[tri]);
+    for (tri, &flags) in case.tri_flags.iter().enumerate().take(tri_count) {
+        builder = builder.flag(tri as u16, flags);
     }
     single_world(builder)
 }

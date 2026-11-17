@@ -127,7 +127,7 @@ pub fn bake(batch: &CellColliderBatch, shapes: &[(&str, Vec<PartShape>)]) -> Bak
         batch,
         |path| {
             let found = shapes.iter().find(|(known, _)| *known == path);
-            Arc::new(found.map(|(_, parts)| parts.clone()).unwrap_or_default())
+            Arc::new(found.map_or_default(|(_, parts)| parts.clone()))
         },
         |_| None,
         |_| None,

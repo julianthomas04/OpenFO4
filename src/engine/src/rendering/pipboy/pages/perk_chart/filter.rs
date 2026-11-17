@@ -264,8 +264,8 @@ mod tests {
         close(matrix.rows[1][0], 0.0818);
         close(matrix.rows[1][1], 0.4164);
         close(matrix.rows[2][2], 0.2765);
-        for channel in 0..3 {
-            close(matrix.rows[channel][4] * OFFSET_UNITS, 65.32);
+        for row in matrix.rows.iter().take(3) {
+            close(row[4] * OFFSET_UNITS, 65.32);
         }
     }
 

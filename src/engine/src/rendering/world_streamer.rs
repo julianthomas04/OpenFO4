@@ -5287,7 +5287,7 @@ fn load_collision_shapes(shared: &WorkerShared, path: &str) -> Arc<Vec<PartShape
         .cloned()
         .flatten();
     let dropped_for_player = sidecar.as_ref().map_or(0, |sd| sd.dropped_for_player);
-    let shapes = sidecar.map(|sd| sd.shapes).unwrap_or_default();
+    let shapes = sidecar.map_or_default(|sd| sd.shapes);
     if shapes.is_empty() && dropped_for_player > 0 {
         tracing::debug!(
             "collision: every shape of {path} ({dropped_for_player}) sits on a layer that never touches the player; no collider"
@@ -6386,8 +6386,7 @@ fn assemble_cell_payload<'a>(
                     let overrides = swap
                         .as_ref()
                         .and_then(|s| shared.swap_entries.get(s))
-                        .map(|entries| compute_swap_overrides(submeshes, entries))
-                        .unwrap_or_default();
+                        .map_or_default(|entries| compute_swap_overrides(submeshes, entries));
                     if overrides.iter().any(std::option::Option::is_some) {
                         swapped_groups += 1;
                     }

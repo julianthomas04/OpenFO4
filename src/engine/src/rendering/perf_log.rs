@@ -175,8 +175,7 @@ impl PerfLog {
         }
         self.vram
             .as_ref()
-            .map(|(_, fields)| fields.clone())
-            .unwrap_or_default()
+            .map_or_default(|(_, fields)| fields.clone())
     }
 
     /// Gauges as-is, counters as the delta since the previous PERF line.

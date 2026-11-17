@@ -601,9 +601,7 @@ fn object_disk_key(
         SidecarLookup::Hashed(hash) => format!("|s{}", hash.key_component()),
         SidecarLookup::Unreadable => return None,
     };
-    let joints = joint_fingerprint
-        .map(|fingerprint| format!("|j{fingerprint:016x}"))
-        .unwrap_or_default();
+    let joints = joint_fingerprint.map_or_default(|fingerprint| format!("|j{fingerprint:016x}"));
     Some(format!(
         "obj|{mesh_path}|{scale_bits}|{}{joints}{sidecar}|l{layer_table:016x}|v{COLLIDER_CACHE_VERSION}",
         TRIMESH_FLAGS.bits(),

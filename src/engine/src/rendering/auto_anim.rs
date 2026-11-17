@@ -22,14 +22,12 @@ pub(super) struct AutoAnim {
 
 impl AutoAnim {
     pub fn from_env() -> Self {
-        let refs = crate::utils::optional_env_var(ENV_VAR)
-            .map(|list| {
-                list.split(',')
-                    .map(|key| key.trim().to_owned())
-                    .filter(|key| !key.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let refs = crate::utils::optional_env_var(ENV_VAR).map_or_default(|list| {
+            list.split(',')
+                .map(|key| key.trim().to_owned())
+                .filter(|key| !key.is_empty())
+                .collect()
+        });
         Self {
             refs,
             elapsed: 0.0,

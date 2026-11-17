@@ -818,22 +818,19 @@ impl PhysicsContext {
         let mut handles = Vec::new();
         let mut keys = Vec::new();
         // (path, scale) -> pre-baked shapes, consulted on shape-cache misses.
-        let baked_lookup: HashMap<(&str, u32), &Arc<Vec<CachedShape>>> = baked
-            .map(|b| {
+        let baked_lookup: HashMap<(&str, u32), &Arc<Vec<CachedShape>>> =
+            baked.map_or_default(|b| {
                 b.objects
                     .iter()
                     .map(|g| ((g.path.as_str(), g.scale_bits), &g.shapes))
                     .collect()
-            })
-            .unwrap_or_default();
-        let ragdoll_lookup: HashMap<(&str, u32), &RagdollBake> = baked
-            .map(|b| {
-                b.ragdolls
-                    .iter()
-                    .map(|g| ((g.path.as_str(), g.scale_bits), &g.outcome))
-                    .collect()
-            })
-            .unwrap_or_default();
+            });
+        let ragdoll_lookup: HashMap<(&str, u32), &RagdollBake> = baked.map_or_default(|b| {
+            b.ragdolls
+                .iter()
+                .map(|g| ((g.path.as_str(), g.scale_bits), &g.outcome))
+                .collect()
+        });
 
         let compound_dynamic = compound_dynamic_entities(batch);
         let dynamic_groups_first = batch
