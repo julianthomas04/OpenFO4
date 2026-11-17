@@ -455,7 +455,7 @@ fn load_sound_categories(conn: &Connection) -> anyhow::Result<Vec<SoundCategory>
 const COORDINATE_BYTES: usize = 4;
 const POINT_BYTES: usize = 2 * COORDINATE_BYTES;
 
-fn decode_points(blob: &[u8], row: &str) -> anyhow::Result<Vec<(f32, f32)>> {
+pub(super) fn decode_points(blob: &[u8], row: &str) -> anyhow::Result<Vec<(f32, f32)>> {
     anyhow::ensure!(
         blob.len().is_multiple_of(POINT_BYTES),
         "{row}: points blob of {} bytes is not a whole number of f32 pairs",

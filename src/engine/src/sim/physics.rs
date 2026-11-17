@@ -19,14 +19,17 @@ use super::dynamic_body::{
     clamp_linvel, density_for_mass, sanitize_body, state_is_bounded, within_radius,
 };
 use super::kinematic::KinematicBodies;
-use super::mirror::{KinematicMirror, scene_query_filter};
+use super::mirror::{KinematicMirror, scene_query_filter, static_scene_query_filter};
 use super::ragdoll::{RagdollManager, RagdollPlacement, RagdollPoses, RagdollRejection};
 use super::ragdoll_pose::authored_body_poses;
 use super::ragdoll_tuning::RagdollSettings;
+use super::solid_mass::solid_collider;
 use super::sound_pose::{pose_is_sound, vec_is_sound};
 use super::water_materials::{MaterialBuoyancy, WaterBodyProps};
 use super::water_physics::{WaterBodyState, WaterPhysics, WaterQuery, WaterTarget};
-use super::{CellGrid, DynamicPose, EntityId, FIXED_DT, RayHit, refr_entity_id};
+use super::{
+    CellGrid, DynamicPose, EntityId, FIXED_DT, RUNTIME_REF_PLUGIN, RayHit, refr_entity_id,
+};
 use crate::bethesda_space::ENGINE_UNITS_PER_METER;
 use crate::footsteps::events::SurfaceMaterial;
 use crate::utils::warn_once;
@@ -113,6 +116,15 @@ struct DynBody {
     /// Built from the parts of an assembled weapon: further parts of the same
     /// REFR attach their colliders here instead of counting as a duplicate.
     compound: bool,
+    /// A pick-upable item: stays `Fixed` whatever the radius, so it is never grabbable.
+    pinned: bool,
+}
+
+/// Why objects could not be added to a cell.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum AddObjectsError {
+    #[error("cell {0:?} has no registered colliders")]
+    CellNotRegistered(CellGrid),
 }
 
 /// What a scene ray hit, before it is shaped for a caller.
@@ -120,8 +132,19 @@ struct RayProbe {
     mesh_path: String,
     material: u32,
     ref_id: Option<String>,
+    user_data: u128,
     dist: f32,
     terrain: bool,
+}
+
+impl RayProbe {
+    fn into_hit(self) -> RayHit {
+        RayHit {
+            mesh_path: self.mesh_path,
+            ref_id: self.ref_id,
+            dist: self.dist,
+        }
+    }
 }
 
 /// Interns (mesh path, material) pairs into the 32-bit path slot of the
@@ -287,7 +310,7 @@ impl PhysicsContext {
         let ragdolls = RagdollManager::new(&world.integration_parameters);
         let activation = ActivationMode::from_env();
         tracing::info!("physics: clutter activation mode {activation:?}");
-        Self {
+        let mut context = Self {
             world,
             cell_colliders: HashMap::new(),
             ground_ready: HashSet::new(),
@@ -312,7 +335,29 @@ impl PhysicsContext {
             ragdolls,
             water: WaterPhysics::new(),
             carry: carried::Carry::default(),
+        };
+        let runtime_slot = context.plugin_slot(RUNTIME_REF_PLUGIN);
+        debug_assert_eq!(
+            runtime_slot,
+            Some(1),
+            "the runtime plugin takes the first slot"
+        );
+        context
+    }
+
+    /// The interned slot (`index + 1`) of a plugin name; `None` once the slots are exhausted.
+    fn plugin_slot(&mut self, plugin: &str) -> Option<u32> {
+        if let Some(&slot) = self.plugin_index.get(plugin) {
+            return Some(slot);
         }
+        let slot = self.plugin_registry.len() as u32 + 1;
+        if slot > 0xFF {
+            return None;
+        }
+        let arc: Arc<str> = Arc::from(plugin);
+        self.plugin_registry.push(arc.clone());
+        self.plugin_index.insert(arc, slot);
+        Some(slot)
     }
 
     /// Pack a REFR form key ("001ED5:Fallout4.esm") for hit attribution:
@@ -328,30 +373,25 @@ impl PhysicsContext {
         if form_id > 0xFF_FFFF {
             return 0;
         }
-        let slot = if let Some(&slot) = self.plugin_index.get(plugin) {
-            slot
-        } else {
-            let slot = self.plugin_registry.len() as u32 + 1; // index + 1
-            if slot > 0xFF {
-                return 0; // out of plugin slots — drop attribution
-            }
-            let arc: Arc<str> = Arc::from(plugin);
-            self.plugin_registry.push(arc.clone());
-            self.plugin_index.insert(arc, slot);
-            slot
-        };
-        pack_ref(form_id, slot)
+        // Out of plugin slots: drop attribution.
+        self.plugin_slot(plugin)
+            .map_or(0, |slot| pack_ref(form_id, slot))
     }
 
     /// What the ray from `origin` along `dir` hits first: mesh path (or
     /// "terrain"), REFR form key when known, and distance.
     pub fn ray_attribution(&self, origin: Vec3, dir: Vec3, max_dist: f32) -> Option<RayHit> {
-        let probe = self.probe(origin, dir, max_dist, scene_query_filter())?;
-        Some(RayHit {
-            mesh_path: probe.mesh_path,
-            ref_id: probe.ref_id,
-            dist: probe.dist,
-        })
+        Some(
+            self.probe(origin, dir, max_dist, scene_query_filter())?
+                .into_hit(),
+        )
+    }
+
+    pub fn static_ray_distance(&self, origin: Vec3, dir: Vec3, max_dist: f32) -> Option<f32> {
+        let ray = Ray::new(origin, dir);
+        self.world
+            .cast_ray(&ray, max_dist, true, static_scene_query_filter())
+            .map(|(_, dist)| dist)
     }
 
     /// Surface under `origin` along a straight-down ray. Dynamic bodies are
@@ -383,6 +423,11 @@ impl PhysicsContext {
     ) -> Option<RayProbe> {
         let ray = Ray::new(origin, dir);
         let (handle, dist) = self.world.cast_ray(&ray, max_dist, true, filter)?;
+        self.attribute(handle, dist)
+    }
+
+    /// What the collider `handle` is, for a query that reached it at `dist`.
+    fn attribute(&self, handle: ColliderHandle, dist: f32) -> Option<RayProbe> {
         let collider = self.world.colliders.get(handle)?;
         let terrain = self.terrain_colliders.contains(&handle);
         let (mesh_path, material) = if terrain {
@@ -402,18 +447,35 @@ impl PhysicsContext {
                 |(path, material)| (path.to_string(), material),
             )
         };
-        let (form_id, plugin_slot) = unpack_ref(collider.user_data);
-        let ref_id = (plugin_slot != 0)
-            .then(|| self.plugin_registry.get(plugin_slot as usize - 1))
-            .flatten()
-            .map(|plugin| format!("{form_id:06X}:{plugin}"));
         Some(RayProbe {
             mesh_path,
             material,
-            ref_id,
+            ref_id: self.ref_id_of(collider.user_data),
+            user_data: collider.user_data,
             dist,
             terrain,
         })
+    }
+
+    /// The REFR form key a collider's `user_data` names, `None` without attribution.
+    fn ref_id_of(&self, user_data: u128) -> Option<String> {
+        let mut ref_id = String::new();
+        self.write_ref_id(user_data, &mut ref_id).then_some(ref_id)
+    }
+
+    /// [`Self::ref_id_of`] into a caller's buffer, so a query visiting many colliders reuses one
+    /// allocation. False, with `out` untouched, without attribution.
+    fn write_ref_id(&self, user_data: u128, out: &mut String) -> bool {
+        use std::fmt::Write as _;
+        let (form_id, plugin_slot) = unpack_ref(user_data);
+        let Some(plugin) = (plugin_slot != 0)
+            .then(|| self.plugin_registry.get(plugin_slot as usize - 1))
+            .flatten()
+        else {
+            return false;
+        };
+        out.write_fmt(format_args!("{form_id:06X}:{plugin}"))
+            .is_ok()
     }
 
     /// Whether a fixed tick must step the pipeline. Steps on a pending collider
@@ -671,11 +733,25 @@ impl PhysicsContext {
     /// batch (see `sim::bake`). Building shapes here is only the fallback —
     /// the trimesh BVH builds are exactly the main-thread stall the bake
     /// exists to avoid.
+    #[cfg(test)]
     pub fn add_cell(
         &mut self,
         grid: CellGrid,
         batch: &CellColliderBatch,
         baked: Option<&BakedCellColliders>,
+    ) {
+        self.add_cell_skipping(grid, batch, baked, &HashSet::new());
+    }
+
+    /// [`add_cell`](Self::add_cell) for a cell with edits: placements whose reference is in
+    /// `skip` (picked up earlier) are not built at all, so none of them ever exists as a body,
+    /// a collider or a shape-cache count.
+    pub fn add_cell_skipping(
+        &mut self,
+        grid: CellGrid,
+        batch: &CellColliderBatch,
+        baked: Option<&BakedCellColliders>,
+        skip: &HashSet<EntityId>,
     ) {
         if self.cell_colliders.contains_key(&grid) {
             // Shouldn't happen (the streamer removes before re-adding), but
@@ -685,7 +761,6 @@ impl PhysicsContext {
         }
 
         let mut handles = Vec::new();
-        let mut keys = Vec::new();
 
         match &batch.terrain {
             TerrainCollision::Present(terrain) => {
@@ -712,23 +787,50 @@ impl PhysicsContext {
             TerrainCollision::Failed => {}
         }
 
+        let (object_handles, keys) = self.insert_object_groups(grid, batch, baked, skip, false);
+        handles.extend(object_handles);
+
+        if !handles.is_empty() {
+            self.dirty = true;
+        }
+        let dyn_count = self.cell_dyn.get(&grid).map_or(0, std::vec::Vec::len);
+        tracing::debug!(
+            "sim: add_cell {grid:?} colliders={} dynamic={} world_total={} bodies={}",
+            handles.len(),
+            dyn_count,
+            self.world.colliders.len(),
+            self.world.bodies.len()
+        );
+        self.cell_colliders.insert(grid, handles);
+        self.cell_cache_keys.insert(grid, keys);
+    }
+
+    /// The object half of a registration: the static colliders it made and the shape-cache keys
+    /// it took a count on (one per placement). `ever_active` is what its new bodies start with.
+    fn insert_object_groups(
+        &mut self,
+        grid: CellGrid,
+        batch: &CellColliderBatch,
+        baked: Option<&BakedCellColliders>,
+        skip: &HashSet<EntityId>,
+        ever_active: bool,
+    ) -> (Vec<ColliderHandle>, Vec<ShapeKey>) {
+        let mut handles = Vec::new();
+        let mut keys = Vec::new();
         // (path, scale) -> pre-baked shapes, consulted on shape-cache misses.
-        let baked_lookup: HashMap<(&str, u32), &Arc<Vec<CachedShape>>> = baked
-            .map(|b| {
+        let baked_lookup: HashMap<(&str, u32), &Arc<Vec<CachedShape>>> =
+            baked.map_or_default(|b| {
                 b.objects
                     .iter()
                     .map(|g| ((g.path.as_str(), g.scale_bits), &g.shapes))
                     .collect()
-            })
-            .unwrap_or_default();
-        let ragdoll_lookup: HashMap<(&str, u32), &RagdollBake> = baked
-            .map(|b| {
-                b.ragdolls
-                    .iter()
-                    .map(|g| ((g.path.as_str(), g.scale_bits), &g.outcome))
-                    .collect()
-            })
-            .unwrap_or_default();
+            });
+        let ragdoll_lookup: HashMap<(&str, u32), &RagdollBake> = baked.map_or_default(|b| {
+            b.ragdolls
+                .iter()
+                .map(|g| ((g.path.as_str(), g.scale_bits), &g.outcome))
+                .collect()
+        });
 
         let compound_dynamic = compound_dynamic_entities(batch);
         let dynamic_groups_first = batch
@@ -750,6 +852,13 @@ impl PhysicsContext {
                             )
                         },
                     );
+                    continue;
+                }
+                if placement
+                    .ref_key
+                    .as_deref()
+                    .is_some_and(|ref_key| skip.contains(&refr_entity_id(ref_key)))
+                {
                     continue;
                 }
                 let ref_bits = self.pack_ref_key(placement.ref_key.as_deref());
@@ -805,7 +914,8 @@ impl PhysicsContext {
                 // when that rejects the placement it stays static.
                 let joins_compound = part_pose.is_some()
                     && entity.is_some_and(|entity| compound_dynamic.contains_key(&entity));
-                let body_entity = ((group.dynamic || joins_compound) && !ragdoll_capable)
+                let body_entity = ((group.dynamic || group.pinned || joins_compound)
+                    && !ragdoll_capable)
                     .then_some(entity)
                     .flatten()
                     .filter(|_| has_shapes);
@@ -822,9 +932,8 @@ impl PhysicsContext {
                     let density = density_for_mass(&entry.shapes, group.mass);
                     for cached in entry.shapes.iter() {
                         let path_slot = slots.slot(&mut self.paths, cached.material);
-                        let cb = ColliderBuilder::new(cached.shape.clone())
+                        let cb = solid_collider(&cached.shape, density)
                             .position(collider_pose(cached))
-                            .density(density)
                             .user_data(pack_grid(grid) | pack_path(path_slot) | ref_bits);
                         self.world.insert_collider(cb, Some(body_handle));
                     }
@@ -848,9 +957,8 @@ impl PhysicsContext {
                     let density = density_for_mass(&entry.shapes, group.mass);
                     for cached in entry.shapes.iter() {
                         let path_slot = slots.slot(&mut self.paths, cached.material);
-                        let cb = ColliderBuilder::new(cached.shape.clone())
+                        let cb = solid_collider(&cached.shape, density)
                             .position(collider_pose(cached))
-                            .density(density)
                             .user_data(pack_grid(grid) | pack_path(path_slot) | ref_bits);
                         self.world.insert_collider(cb, Some(body_handle));
                     }
@@ -862,10 +970,11 @@ impl PhysicsContext {
                             prev_pose: refr_pose,
                             cur_pose: refr_pose,
                             active: false,
-                            ever_active: false,
+                            ever_active,
                             water_props,
                             water: WaterBodyState::default(),
                             compound: part_pose.is_some(),
+                            pinned: group.pinned,
                         },
                     );
                     self.cell_dyn.entry(grid).or_default().push(entity);
@@ -952,20 +1061,31 @@ impl PhysicsContext {
                 }
             }
         }
+        (handles, keys)
+    }
 
+    /// Registers more objects in the already registered cell `grid` (a runtime-added item):
+    /// placements whose reference is in `skip` are not built, terrain in `batch` is ignored.
+    /// The new bodies have been simulated before and the dynamic radius is reconciled at once, so
+    /// a body inside it is `Dynamic` and awake when this returns.
+    pub fn add_objects(
+        &mut self,
+        grid: CellGrid,
+        batch: &CellColliderBatch,
+        baked: Option<&BakedCellColliders>,
+        skip: &HashSet<EntityId>,
+    ) -> Result<(), AddObjectsError> {
+        if !self.cell_colliders.contains_key(&grid) {
+            return Err(AddObjectsError::CellNotRegistered(grid));
+        }
+        let (handles, keys) = self.insert_object_groups(grid, batch, baked, skip, true);
         if !handles.is_empty() {
             self.dirty = true;
         }
-        let dyn_count = self.cell_dyn.get(&grid).map_or(0, std::vec::Vec::len);
-        tracing::debug!(
-            "sim: add_cell {grid:?} colliders={} dynamic={} world_total={} bodies={}",
-            handles.len(),
-            dyn_count,
-            self.world.colliders.len(),
-            self.world.bodies.len()
-        );
-        self.cell_colliders.insert(grid, handles);
-        self.cell_cache_keys.insert(grid, keys);
+        self.cell_colliders.entry(grid).or_default().extend(handles);
+        self.cell_cache_keys.entry(grid).or_default().extend(keys);
+        self.reconcile_dynamic_radius();
+        Ok(())
     }
 
     /// Parentless (static) colliders have no body for rapier to wake on
@@ -1045,6 +1165,29 @@ impl PhysicsContext {
         }
     }
 
+    /// Removes the body of `entity` with its colliders and its `cell_dyn` entry, letting go of it
+    /// first when it is carried; bodies resting on it wake on the next step, when the narrow phase
+    /// sees the contacts of the removed colliders end. Shape-cache counts stay with the cell.
+    /// The owning cell, or `None` when the entity has no body (a static fallback collider, a
+    /// duplicate, a quarantined or never spawned reference): that is not an error.
+    pub fn remove_ref(&mut self, entity: EntityId) -> Option<CellGrid> {
+        let body = self.dyn_bodies.get(&entity)?;
+        let (grid, handle) = (body.grid, body.handle);
+        self.release_if_carried(&[entity], ReleaseReason::PickedUp);
+        self.dyn_bodies.remove(&entity);
+        if let Some(entities) = self.cell_dyn.get_mut(&grid) {
+            entities.retain(|owned| *owned != entity);
+            if entities.is_empty() {
+                self.cell_dyn.remove(&grid);
+            }
+        }
+        if self.world.remove_body(handle).is_none() {
+            tracing::warn!("physics: the body of {entity:?} was already gone from the world");
+        }
+        self.dirty = true;
+        Some(grid)
+    }
+
     /// Apply a player shove to `handle` (at `point`, or through its centre of
     /// mass) and bound the speed it leaves, so the push can't drive a light
     /// prop faster than soft-CCD can catch in one step.
@@ -1089,10 +1232,10 @@ impl PhysicsContext {
             return;
         };
         let changed = if teleport {
-            mirror.teleport(&mut self.world, center, capsule);
+            mirror.teleport(&mut self.world, center);
             true
         } else {
-            mirror.follow(&mut self.world, center, capsule)
+            mirror.follow(&mut self.world, center)
         };
         if !changed {
             return;
@@ -1155,7 +1298,7 @@ impl PhysicsContext {
         let carried = self.carried_entity();
         for (entity, db) in &mut self.dyn_bodies {
             let in_radius = within_radius(db.grid, self.dyn_center, r);
-            if in_radius == db.active || carried == Some(*entity) {
+            if db.pinned || in_radius == db.active || carried == Some(*entity) {
                 continue;
             }
             let Some(rb) = self.world.bodies.get_mut(db.handle) else {
@@ -1260,7 +1403,23 @@ impl PhysicsContext {
         self.dyn_bodies.values().filter(|db| db.active).count()
     }
 
+    /// Resident bodies that can simulate; pinned items do not count.
     pub fn dynamic_body_count(&self) -> usize {
+        self.dyn_bodies.values().filter(|db| !db.pinned).count()
+    }
+
+    /// The collider count and position of the tracked body of `entity`, `None` without one.
+    pub fn body_summary(&self, entity: EntityId) -> Option<(usize, Vec3)> {
+        let body = self
+            .world
+            .bodies
+            .get(self.dyn_bodies.get(&entity)?.handle)?;
+        Some((body.colliders().len(), body.translation()))
+    }
+
+    /// Every body tracked by entity, pinned items included.
+    #[cfg(test)]
+    pub fn tracked_body_count(&self) -> usize {
         self.dyn_bodies.len()
     }
 }
@@ -1376,6 +1535,7 @@ fn ragdoll_placement(
 
 mod audit;
 mod carried;
+pub(super) mod pick;
 
 #[cfg(test)]
 pub(super) mod test_support;

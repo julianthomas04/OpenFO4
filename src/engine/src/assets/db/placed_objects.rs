@@ -1,6 +1,7 @@
 use crate::assets::db::cells::Cell;
 use crate::assets::db::schema::{
-    DbSchema, placed_object_light_select_list, placed_object_ragdoll_pose_select_list,
+    DbSchema, placed_object_item_select_list, placed_object_light_select_list,
+    placed_object_ragdoll_pose_select_list,
 };
 
 pub struct PlacedObject {
@@ -47,6 +48,15 @@ pub struct PlacedObject {
     /// per bone (`sim::ragdoll_pose` decodes it). `None` when the ref carries
     /// none or the database predates the column.
     pub ragdoll_pose: Option<Vec<u8>>,
+    /// XCNT: the stack count of a placed item; `None` when the ref carries none or the database
+    /// predates the column.
+    pub item_count: Option<i64>,
+    /// Form key of the NPC or faction owning the ref (its own XOWN, else its cell's); `None` when
+    /// unowned or the database predates the column.
+    pub owner: Option<String>,
+    /// XLIB: the leveled item the ref stands for; `None` when absent or the database predates the
+    /// column.
+    pub leveled_item: Option<String>,
 }
 
 fn row_to_placed_object(row: &rusqlite::Row) -> rusqlite::Result<PlacedObject> {
@@ -80,6 +90,9 @@ fn row_to_placed_object(row: &rusqlite::Row) -> rusqlite::Result<PlacedObject> {
         light_volumetric_intensity: row.get(26)?,
         record_flags: row.get(27)?,
         ragdoll_pose: row.get(28)?,
+        item_count: row.get(29)?,
+        owner: row.get(30)?,
+        leveled_item: row.get(31)?,
     })
 }
 
@@ -115,13 +128,60 @@ fn select_columns(schema: DbSchema, prefix: &str) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "{base}, {}, {}",
+        "{base}, {}, {}, {}",
         placed_object_light_select_list(schema, prefix),
-        placed_object_ragdoll_pose_select_list(schema, prefix)
+        placed_object_ragdoll_pose_select_list(schema, prefix),
+        placed_object_item_select_list(schema, prefix)
     )
 }
 
 impl PlacedObject {
+    /// A reference that exists only at runtime (a dropped item): enabled, not persistent, no
+    /// cell, unowned, scale 1, `item_count` set. `position` is in Bethesda space as the stored
+    /// rows carry it; `rotation_z` is the Bethesda Z rotation in radians (x and y are 0).
+    pub fn runtime(
+        form_key: String,
+        base_object: String,
+        position: [f64; 3],
+        rotation_z: f64,
+        item_count: i64,
+    ) -> Self {
+        Self {
+            form_key: Some(form_key),
+            cell_form_key: None,
+            base_object: Some(base_object),
+            object_type: Some("PlacedObject".to_owned()),
+            is_persistent: false,
+            position_x: position[0],
+            position_y: position[1],
+            position_z: position[2],
+            rotation_x: 0.0,
+            rotation_y: 0.0,
+            rotation_z,
+            scale: 1.0,
+            is_initially_disabled: false,
+            enable_parent: None,
+            enable_parent_opposite: false,
+            is_in_precombined: false,
+            has_primitive: false,
+            material_swap: None,
+            extra_data: None,
+            initially_hidden: false,
+            radius_delta: None,
+            light_fov_pm: None,
+            light_fade_pm: None,
+            light_end_distance_cap: None,
+            light_shadow_depth_bias: None,
+            light_near_clip: None,
+            light_volumetric_intensity: None,
+            record_flags: None,
+            ragdoll_pose: None,
+            item_count: Some(item_count),
+            owner: None,
+            leveled_item: None,
+        }
+    }
+
     pub fn get(
         cell: &str,
         conn: &rusqlite::Connection,
@@ -308,5 +368,125 @@ fn median(values: &mut [f64]) -> f64 {
         values[middle]
     } else {
         f64::midpoint(values[middle - 1], values[middle])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assets::db::test_support::{database_with, installed_database};
+
+    const INSERT_REFS: &str = "INSERT INTO placed_objects
+            (form_key, cell_form_key, base_object, object_type, position_x, position_y, position_z,
+             rotation_x, rotation_y, rotation_z, item_count, owner, leveled_item)
+        VALUES
+            ('0A:T.esm', 'C1:T.esm', '0B:T.esm', 'PlacedObject', 1, 2, 3, 0, 0, 0, 12, '0D:T.esm', '0E:T.esm'),
+            ('0F:T.esm', 'C1:T.esm', '0B:T.esm', 'PlacedObject', 1, 2, 3, 0, 0, 0, NULL, NULL, NULL);";
+
+    fn placed<'a>(refs: &'a [PlacedObject], form_key: &str) -> &'a PlacedObject {
+        refs.iter()
+            .find(|r| r.form_key.as_deref() == Some(form_key))
+            .unwrap()
+    }
+
+    #[test]
+    fn item_count_owner_and_leveled_item_are_read() {
+        let db = database_with(INSERT_REFS);
+
+        let refs = db.get_placed_objects("C1:T.esm").unwrap();
+
+        let stocked = placed(&refs, "0A:T.esm");
+        assert_eq!(stocked.item_count, Some(12));
+        assert_eq!(stocked.owner.as_deref(), Some("0D:T.esm"));
+        assert_eq!(stocked.leveled_item.as_deref(), Some("0E:T.esm"));
+        let plain = placed(&refs, "0F:T.esm");
+        assert_eq!(plain.item_count, None);
+        assert_eq!(plain.owner, None);
+        assert_eq!(plain.leveled_item, None);
+    }
+
+    #[test]
+    fn a_database_without_the_item_columns_still_loads_with_nothing_known() {
+        let db = database_with(
+            "ALTER TABLE placed_objects DROP COLUMN item_count;
+             ALTER TABLE placed_objects DROP COLUMN owner;
+             ALTER TABLE placed_objects DROP COLUMN leveled_item;
+             INSERT INTO placed_objects (form_key, cell_form_key, base_object, object_type,
+                 position_x, position_y, position_z, rotation_x, rotation_y, rotation_z)
+             VALUES ('0A:T.esm', 'C1:T.esm', '0B:T.esm', 'PlacedObject', 1, 2, 3, 0, 0, 0);",
+        );
+
+        let refs = db.get_placed_objects("C1:T.esm").unwrap();
+
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].item_count, None);
+        assert_eq!(refs[0].owner, None);
+        assert_eq!(refs[0].leveled_item, None);
+    }
+
+    #[test]
+    fn a_runtime_reference_is_enabled_unowned_and_carries_the_given_placement() {
+        let placed = PlacedObject::runtime(
+            "000001:*dropped".to_owned(),
+            "0B:T.esm".to_owned(),
+            [10.0, 20.0, 30.0],
+            0.3,
+            6,
+        );
+
+        assert_eq!(placed.form_key.as_deref(), Some("000001:*dropped"));
+        assert_eq!(placed.cell_form_key, None);
+        assert_eq!(placed.base_object.as_deref(), Some("0B:T.esm"));
+        assert_eq!(
+            [placed.position_x, placed.position_y, placed.position_z],
+            [10.0, 20.0, 30.0]
+        );
+        assert_eq!(
+            [placed.rotation_x, placed.rotation_y, placed.rotation_z],
+            [0.0, 0.0, 0.3]
+        );
+        assert_eq!(placed.item_count, Some(6));
+        assert!((placed.scale - 1.0).abs() < f64::EPSILON);
+        assert!(!placed.initially_hidden && !placed.is_initially_disabled && !placed.is_persistent);
+        assert_eq!(placed.owner, None);
+        assert_eq!(placed.leveled_item, None);
+        assert_eq!(placed.enable_parent, None);
+    }
+
+    /// The facts about the converted game data the pickup rules rest on: 97 placed refs carry an
+    /// XCNT, and 5,571 item refs are owned (their own owner, else their cell's).
+    #[test]
+    #[ignore = "needs an installation converted with the item pickup columns (OPENFO4_INSTALL_DIR or OPENFO4_DB)"]
+    fn the_installed_database_has_97_counted_and_5571_owned_placed_refs() {
+        let db = installed_database();
+        let mut stmt = db
+            .conn
+            .prepare(&format!(
+                "SELECT {} FROM placed_objects",
+                select_columns(db.schema(), "")
+            ))
+            .unwrap();
+        let refs = stmt
+            .query_map([], row_to_placed_object)
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        let item_keys: std::collections::HashSet<String> = db
+            .get_items()
+            .unwrap()
+            .into_iter()
+            .map(|item| item.form_key)
+            .collect();
+        let item_refs = refs.iter().filter(|r| {
+            r.base_object
+                .as_ref()
+                .is_some_and(|base| item_keys.contains(base))
+        });
+        let counted = refs.iter().filter(|r| r.item_count.is_some()).count();
+        let owned = item_refs.filter(|r| r.owner.is_some()).count();
+
+        assert_eq!(counted, 97);
+        assert_eq!(owned, 5571);
     }
 }

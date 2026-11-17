@@ -23,11 +23,27 @@ use crate::random::RandomSource;
 /// fast `0x10`, envelope slow `0x20` (the Skyrim descriptor layout, assumed to carry over). The
 /// other bits of that byte, set on every footstep layer, do not loop.
 const LOOPING_TYPE_MASK: u32 = 0x3800;
+/// `SoundOutputModel.Type` as Mutagen names it: `UsesHrtf` is a positional source without a speaker
+/// matrix (no channel rows), `DefinedSpeakerOutput` carries one.
+const OUTPUT_TYPE_USES_HRTF: u32 = 0;
+/// What a positional source located at the listener gives each front speaker: no direction and no
+/// distance, so the whole signal. A 3D playback path replaces `listener_position_gain` in one place.
+const FULL_SHARE_AT_LISTENER: f32 = 1.0;
 const FIRST_INPUT_CHANNEL: u32 = 0;
 const LEFT_SPEAKER: &str = "L";
 const RIGHT_SPEAKER: &str = "R";
 const CENTIDB_PER_DB: f32 = 100.0;
 const PERCENT: f32 = 100.0;
+
+/// Where a sound's source sits against the listener, stated by whoever plays it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourcePlacement {
+    /// The model's speaker matrix decides; a positional (HRTF) model has none, so it is an error.
+    Speakers,
+    /// The source is located at the listener: no direction and no distance, so a positional
+    /// (HRTF) model gives the whole signal to both front speakers.
+    AtListener,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LayerMix {
@@ -81,10 +97,27 @@ impl LayerMix {
         categories: &HashMap<String, SoundCategory>,
         rng: &mut dyn RandomSource,
     ) -> Result<Self, MixError> {
+        Self::draw_placed(
+            descriptor,
+            model,
+            categories,
+            SourcePlacement::Speakers,
+            rng,
+        )
+    }
+
+    /// `draw` for a source with the stated placement.
+    pub fn draw_placed(
+        descriptor: &SoundDescriptor,
+        model: &SoundOutputModel,
+        categories: &HashMap<String, SoundCategory>,
+        placement: SourcePlacement,
+        rng: &mut dyn RandomSource,
+    ) -> Result<Self, MixError> {
         let frequency_variance = rng.symmetric(descriptor.freq_variance_pct.unsigned_abs() as f32);
         let playback_rate = playback_rate(descriptor, frequency_variance)?;
         let volume_variance = rng.symmetric(descriptor.db_variance.unsigned_abs() as f32);
-        let gain_db = gain_db(descriptor, model, categories, volume_variance)?;
+        let gain_db = gain_db(descriptor, model, categories, placement, volume_variance)?;
         Ok(Self {
             playback_rate,
             gain_db,
@@ -100,7 +133,13 @@ impl LayerMix {
     ) -> Result<Self, MixError> {
         Ok(Self {
             playback_rate: playback_rate(descriptor, 0.0)?,
-            gain_db: gain_db(descriptor, model, categories, 0.0)?,
+            gain_db: gain_db(
+                descriptor,
+                model,
+                categories,
+                SourcePlacement::Speakers,
+                0.0,
+            )?,
         })
     }
 }
@@ -121,19 +160,24 @@ fn gain_db(
     descriptor: &SoundDescriptor,
     model: &SoundOutputModel,
     categories: &HashMap<String, SoundCategory>,
+    placement: SourcePlacement,
     variance: f32,
 ) -> Result<f32, MixError> {
     Ok(
         -(descriptor.static_attenuation_centidb as f32 / CENTIDB_PER_DB) + variance
             - model.static_attenuation_db
-            + amplitude_to_db(channel_gain(model)?)
+            + amplitude_to_db(channel_gain(model, placement)?)
             + category_chain_db(descriptor, categories)?,
     )
 }
 
-/// The share of input channel 0 that reaches the left and right speaker. Unequal shares are not
-/// decided, so they are an error.
-fn channel_gain(model: &SoundOutputModel) -> Result<f32, MixError> {
+/// The share of input channel 0 that reaches the left and right speaker. A positional (HRTF) model
+/// has no matrix: it mixes only for a source stated to be at the listener, else it is an error, as
+/// are unequal speaker shares (not decided) and a speaker-defined model without its shares.
+fn channel_gain(model: &SoundOutputModel, placement: SourcePlacement) -> Result<f32, MixError> {
+    if placement == SourcePlacement::AtListener && model.output_type == OUTPUT_TYPE_USES_HRTF {
+        return Ok(listener_position_gain());
+    }
     let share = |speaker: &'static str| {
         model
             .channels
@@ -162,6 +206,10 @@ fn channel_gain(model: &SoundOutputModel) -> Result<f32, MixError> {
         });
     }
     Ok(left as f32 / PERCENT)
+}
+
+fn listener_position_gain() -> f32 {
+    FULL_SHARE_AT_LISTENER
 }
 
 fn category_chain_db(
@@ -245,6 +293,13 @@ mod tests {
         }
     }
 
+    fn hrtf_model(attenuation_db: f32) -> SoundOutputModel {
+        SoundOutputModel {
+            output_type: OUTPUT_TYPE_USES_HRTF,
+            ..model(attenuation_db, vec![])
+        }
+    }
+
     fn unity_model() -> SoundOutputModel {
         model(0.0, vec![channel("L", 100), channel("R", 100)])
     }
@@ -287,11 +342,91 @@ mod tests {
         draw(descriptor, model, &unity_categories(), &[MIDDLE, MIDDLE]).unwrap()
     }
 
+    fn mix_placed(
+        descriptor: &SoundDescriptor,
+        model: &SoundOutputModel,
+        placement: SourcePlacement,
+    ) -> Result<LayerMix, MixError> {
+        LayerMix::draw_placed(
+            descriptor,
+            model,
+            &unity_categories(),
+            placement,
+            &mut ScriptedRandom::new(&[], &[MIDDLE, MIDDLE]),
+        )
+    }
+
     fn assert_close(actual: f32, expected: f32) {
         assert!(
             (actual - expected).abs() < TOLERANCE,
             "{actual} is not {expected}"
         );
+    }
+
+    #[test]
+    fn a_positional_model_plays_at_the_listener_with_its_static_attenuation_only() {
+        for (attenuation, expected) in [(0.0, 0.0), (3.0, -3.0)] {
+            let result = mix_placed(
+                &descriptor(),
+                &hrtf_model(attenuation),
+                SourcePlacement::AtListener,
+            )
+            .unwrap();
+            assert_close(result.gain_db, expected);
+        }
+    }
+
+    #[test]
+    fn a_positional_model_without_the_listener_placement_is_an_error() {
+        let result = mix_placed(&descriptor(), &hrtf_model(0.0), SourcePlacement::Speakers);
+        assert!(matches!(
+            result,
+            Err(MixError::MissingChannel { speaker: "L", .. })
+        ));
+        let plain = draw(
+            &descriptor(),
+            &hrtf_model(0.0),
+            &unity_categories(),
+            &[MIDDLE, MIDDLE],
+        );
+        assert!(matches!(plain, Err(MixError::MissingChannel { .. })));
+    }
+
+    #[test]
+    fn a_speaker_model_ignores_the_listener_placement() {
+        let channels = || vec![channel("L", 50), channel("R", 50)];
+        let result = mix_placed(
+            &descriptor(),
+            &model(2.0, channels()),
+            SourcePlacement::AtListener,
+        )
+        .unwrap();
+        assert_eq!(result, mix(&descriptor(), &model(2.0, channels())));
+    }
+
+    #[test]
+    fn a_positional_model_mixes_like_a_full_share_speaker_model() {
+        let positional =
+            mix_placed(&descriptor(), &hrtf_model(2.0), SourcePlacement::AtListener).unwrap();
+        let speakers = mix(
+            &descriptor(),
+            &model(2.0, vec![channel("L", 100), channel("R", 100)]),
+        );
+        assert_eq!(positional, speakers);
+    }
+
+    #[test]
+    fn a_speaker_model_without_channels_is_still_an_error() {
+        let result = draw(
+            &descriptor(),
+            &model(0.0, vec![]),
+            &unity_categories(),
+            &[MIDDLE, MIDDLE],
+        );
+        assert!(matches!(
+            result,
+            Err(MixError::MissingChannel { speaker: "L", .. })
+        ));
     }
 
     #[test]

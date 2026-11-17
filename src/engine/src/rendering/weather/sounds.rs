@@ -66,7 +66,9 @@ mod tests {
     use crate::rendering::weather::library::fixtures::library_of;
     use crate::sim::commands::WeatherEdit;
     use crate::sim::world_clock::WorldClock;
-    use crate::sim::{ClockFrame, LightningStrike, PlayerMovement, SimCommand, SimWorld};
+    use crate::sim::{
+        ClockFrame, EyeHeights, LightningStrike, PlayerMovement, SimCommand, SimWorld,
+    };
     use crate::weather::{SoundKind, WeatherId, WeatherSound};
 
     fn strike(weather: WeatherId) -> LightningStrike {
@@ -168,7 +170,11 @@ mod tests {
     /// A world with the weather `A` of a library of a stormy weather.
     fn storm_world() -> SimWorld {
         let library = library_of(vec![with_thunder(weather("A"), 0.0, 1.0)]);
-        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+        let mut sim = SimWorld::new(
+            PlayerMovement::default(),
+            EyeHeights::default(),
+            WorldClock::fixture(),
+        );
         sim.install_weather(library.roll_table().unwrap(), 7);
         sim
     }

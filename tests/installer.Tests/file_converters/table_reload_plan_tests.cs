@@ -32,6 +32,26 @@ namespace InstallerTests
         }
 
         [Fact]
+        public void Create_NpcFactionsTable_PlansTheNpcJobWithItsFactionRows()
+        {
+            var plan = TableReloadPlan.Create(["npc_factions"]);
+
+            Assert.Equal(["npc_factions", "npcs"], plan.Tables);
+            Assert.Equal(["NPC_"], plan.RecordTypes);
+        }
+
+        [Fact]
+        public void Create_MiscComponentsTable_PlansTheItemJobsThatShareTheItemsTable()
+        {
+            var plan = TableReloadPlan.Create(["misc_components"]);
+
+            Assert.Contains("items", plan.Tables);
+            Assert.Contains("misc_components", plan.Tables);
+            Assert.Contains("MISC", plan.RecordTypes);
+            Assert.Contains("HOLT", plan.RecordTypes);
+        }
+
+        [Fact]
         public void Create_CellsTable_PullsInPlacedObjectsTeleportsAndLandscapesWithRawScans()
         {
             var plan = TableReloadPlan.Create(["cells"]);

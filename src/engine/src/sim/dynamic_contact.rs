@@ -56,7 +56,7 @@ pub(super) struct Support {
 pub(super) struct StepTrace<'a> {
     pub start: Vec3,
     pub end: Vec3,
-    pub eye_above_center: f32,
+    pub eye_y: f32,
     pub static_translation: Vec3,
     pub allowed_horizontal: Vec3,
     pub static_grounded: bool,
@@ -82,7 +82,7 @@ pub(super) fn trace_step(step: &StepTrace) {
         moved.z,
         horizontal.length(),
         step.allowed_horizontal.length(),
-        step.end.y + step.eye_above_center,
+        step.eye_y,
         step.static_grounded,
         step.grounded,
         step.support.map_or_else(
@@ -351,6 +351,13 @@ pub(super) fn support_below(
         body,
         point: contact.point2,
     })
+}
+
+impl Support {
+    /// Height of the point the character touches the supporting body at.
+    pub(super) fn contact_height(&self) -> f32 {
+        self.point.y
+    }
 }
 
 /// Loads the supporting body with the character's weight for one step.

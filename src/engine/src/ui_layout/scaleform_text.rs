@@ -37,6 +37,14 @@ pub enum AutoSize {
     Right,
 }
 
+/// Where a field's text block sits between the field's top and bottom (`TextFieldEx.verticalAlign`).
+/// Only the HUD's text renderer applies it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerticalAlign {
+    Top,
+    Bottom,
+}
+
 /// A text field in stage pixels: its box, insets and the text format scaled by its placement.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FieldGeometry {
@@ -52,6 +60,7 @@ pub struct FieldGeometry {
     pub letter_spacing: f32,
     pub indent: f32,
     pub align: Align,
+    pub valign: VerticalAlign,
     pub wraps: bool,
     pub metrics: FontMetrics,
 }
@@ -77,6 +86,7 @@ impl FieldGeometry {
             letter_spacing: field.letter_spacing * sx,
             indent: field.indent * sx,
             align: field.align,
+            valign: VerticalAlign::Top,
             wraps: field.word_wrap,
             metrics,
         }
@@ -107,6 +117,7 @@ impl FieldGeometry {
             letter_spacing: 0.0,
             indent: 0.0,
             align,
+            valign: VerticalAlign::Top,
             wraps: false,
             metrics,
         }
@@ -122,6 +133,12 @@ impl FieldGeometry {
             bottom: self.bottom + dy,
             ..*self
         }
+    }
+
+    /// The same field with its text block anchored at `valign`.
+    #[must_use]
+    pub fn with_valign(&self, valign: VerticalAlign) -> Self {
+        Self { valign, ..*self }
     }
 
     /// The same field wrapping its text at the content width.

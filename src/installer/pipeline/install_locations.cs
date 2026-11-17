@@ -67,6 +67,11 @@ namespace AssetConverter.Pipeline
             AssetVersionMarker.Update(OwnershipMarker, installed =>
                 (installed ?? new InstalledAssets(installerVersion, new Dictionary<AssetGroup, int>())).Recording(group, AssetGroups.CurrentRevisions[group]) with { Version = installerVersion, Inputs = inputs });
 
+        /// <summary>Records <paramref name="group"/> at its current revision in the marker of an install, keeping the version and game inputs it names; nothing is recorded where there is no readable marker.</summary>
+        /// <exception cref="IOException">The marker could not be written.</exception>
+        public void RecordGroupAtCurrentRevision(AssetGroup group) =>
+            AssetVersionMarker.Update(OwnershipMarker, installed => installed?.Recording(group, AssetGroups.CurrentRevisions[group]));
+
         /// <summary>
         /// Whether the install root is, or has been, an OpenFO4 install: it carries the ownership marker, or (installs from before the
         /// marker existed) both the install log and the database.

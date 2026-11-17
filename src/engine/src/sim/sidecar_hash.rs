@@ -119,7 +119,7 @@ impl SidecarHasher {
     /// (hashes are still memoized for the run).
     pub fn new(index_dir: Option<&Path>, path_base: Option<&Path>) -> Self {
         let index_path = index_dir.map(|dir| dir.join(INDEX_FILE_NAME));
-        let index = index_path.as_deref().map(load_index).unwrap_or_default();
+        let index = index_path.as_deref().map_or_default(load_index);
         Self {
             index_path,
             path_base: path_base.map(Path::to_owned),

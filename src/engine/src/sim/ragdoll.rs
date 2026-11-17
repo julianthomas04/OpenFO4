@@ -35,6 +35,7 @@ use super::ragdoll_tuning::{
     MAX_CONTACT_CORRECTION_DEPTH, RagdollSettings, RestBone, RestTracker, apply_inertia_floor,
     prepare_activation, soften_joint, widen_cone, widen_range,
 };
+use super::solid_mass::solid_collider;
 use super::water_physics::{WaterBodyState, WaterTarget};
 use super::{CellGrid, EntityId};
 use crate::bethesda_space::ENGINE_UNITS_PER_METER;
@@ -1143,9 +1144,8 @@ fn build_ragdoll(
         let handle = world.insert_body(builder.pose(spawn));
         let density = density_for_mass(shapes, mass);
         for cached in shapes {
-            let collider = ColliderBuilder::new(cached.shape.clone())
+            let collider = solid_collider(&cached.shape, density)
                 .position(cached.local_pose)
-                .density(density)
                 .active_hooks(hooks)
                 .user_data(placement.tag.user_data(cached.material));
             world.insert_collider(collider, Some(handle));
@@ -1534,6 +1534,10 @@ fn despawn_bodies(world: &mut PhysicsWorld, live: &LiveRagdoll) {
         world.remove_body(handle);
     }
 }
+
+#[cfg(test)]
+#[path = "ragdoll_radius_tests.rs"]
+mod radius_tests;
 
 #[cfg(test)]
 #[allow(

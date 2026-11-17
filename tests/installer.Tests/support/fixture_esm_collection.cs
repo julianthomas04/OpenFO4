@@ -38,12 +38,16 @@ namespace InstallerTests
         public double? LightVolumetricIntensity { get; init; }
         public long? RecordFlags { get; init; }
         public byte[]? RagdollPose { get; init; }
+        public long? ItemCount { get; init; }
+        public string? Owner { get; init; }
+        public string? LeveledItem { get; init; }
     }
 
     public sealed class CellRow
     {
         public required string FormKey { get; init; }
         public string? EditorId { get; init; }
+        public string? Name { get; init; }
         public string? Worldspace { get; init; }
         public long? GridX { get; init; }
         public long? GridY { get; init; }

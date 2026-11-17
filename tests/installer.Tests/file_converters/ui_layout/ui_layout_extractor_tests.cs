@@ -111,7 +111,7 @@ namespace InstallerTests.UiLayout
         }
 
         /// <summary>The document extractor version and the SHA-256 of the translate and font configuration documents written for the entries below.</summary>
-        private static readonly (int ExtractorVersion, string Sha256) Golden = (5, "9939c03737c798e1f62aa4452aaebbd2ca40eefa46a0d8d7aff5f27fffdd2f6c");
+        private static readonly (int ExtractorVersion, string Sha256) Golden = (6, "6b642e434ad82c7063c4d7b3f195764a79c68df5ea3d641746a04a6770c8bfc0");
 
         [Fact]
         public void Convert_ChangedTableOrConfigurationOutput_RaisesTheExtractorVersion()

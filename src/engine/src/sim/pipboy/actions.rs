@@ -3,6 +3,7 @@
 use glam::Vec3;
 
 use super::PipBoyModel;
+use super::catalog::ItemKind;
 use super::character::ActiveEffect;
 use super::inventory::{
     FAVOURITE_SLOT_COUNT, FavouriteSlot, InventoryCategory, InventoryItem, ItemDetails, ItemId,
@@ -50,11 +51,20 @@ pub enum PipBoyAction {
     RequestInspect(ItemId),
 }
 
+/// Units a drop took out of the inventory, to be put into the world.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DroppedStack {
+    pub form_key: String,
+    pub count: u32,
+}
+
 /// What an accepted action asks the rest of the sim to do; the model itself cannot apply it.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ActionEffects {
     /// Hit points the player receives.
     pub heal_hp: f32,
+    /// The units a drop removed from the inventory.
+    pub dropped: Option<DroppedStack>,
 }
 
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
@@ -75,6 +85,12 @@ pub enum PipBoyActionError {
     NonFinitePosition(Vec3),
     #[error("cannot drop {requested} of {available}")]
     NotEnoughToDrop { requested: u32, available: u32 },
+    #[error("{0:?} is a key and cannot be dropped")]
+    KeyNotDroppable(ItemId),
+    #[error("{0:?} has no catalog record and cannot be dropped")]
+    NotDroppable(ItemId),
+    #[error("cannot drop while airborne")]
+    Airborne,
     #[error("favourite slot {0} is out of range")]
     InvalidFavouriteSlot(u8),
     #[error("{mode:?} is not a sort mode of {category:?}")]
@@ -105,6 +121,39 @@ pub enum PipBoyActionError {
 }
 
 impl PipBoyActionError {
+    /// Every game setting [`refusal_setting`](Self::refusal_setting) can name.
+    pub const REFUSAL_SETTINGS: [&'static str; 2] = ["sNoKeyDropWarning", "sNoJumpWarning"];
+
+    /// The game setting whose string is the refusal text; `None` where
+    /// [`translation_key`](Self::translation_key) or the log is the only text.
+    pub fn refusal_setting(&self) -> Option<&'static str> {
+        match self {
+            Self::KeyNotDroppable(_) => Some(Self::REFUSAL_SETTINGS[0]),
+            Self::Airborne => Some(Self::REFUSAL_SETTINGS[1]),
+            Self::UnknownItem(_)
+            | Self::NotEquippable(_)
+            | Self::NotEquipped(_)
+            | Self::NotUsable(_)
+            | Self::NoneLeft
+            | Self::ZeroQuantity
+            | Self::NonFinitePosition(_)
+            | Self::NotEnoughToDrop { .. }
+            | Self::NotDroppable(_)
+            | Self::InvalidFavouriteSlot(_)
+            | Self::InvalidSortMode { .. }
+            | Self::UnknownPerk(_)
+            | Self::NoPerkPoints
+            | Self::PerkAtMaxRank(_)
+            | Self::PerkLevelTooLow { .. }
+            | Self::PerkSpecialTooLow { .. }
+            | Self::UnknownQuest(_)
+            | Self::UnknownStation(_)
+            | Self::StationOutOfRange(_)
+            | Self::UnknownMarker(_)
+            | Self::CannotFastTravel(_) => None,
+        }
+    }
+
     /// The translation key of the game's own refusal text for this rejection; `None` where the
     /// game has no text for it (the error then reaches the log, not the player).
     pub fn translation_key(&self) -> Option<&'static str> {
@@ -118,6 +167,9 @@ impl PipBoyActionError {
             | Self::ZeroQuantity
             | Self::NonFinitePosition(_)
             | Self::NotEnoughToDrop { .. }
+            | Self::KeyNotDroppable(_)
+            | Self::NotDroppable(_)
+            | Self::Airborne
             | Self::InvalidFavouriteSlot(_)
             | Self::InvalidSortMode { .. }
             | Self::UnknownPerk(_)
@@ -149,7 +201,9 @@ impl PipBoyModel {
             PipBoyAction::UseFirstRadAway => {
                 effects = self.use_first_with_form_key(RADAWAY_FORM_KEY)?;
             }
-            PipBoyAction::Drop { item, count } => self.drop_item(item, count)?,
+            PipBoyAction::Drop { item, count } => {
+                effects.dropped = Some(self.drop_item(item, count)?);
+            }
             PipBoyAction::SetFavourite { item, slot } => self.set_favourite(item, slot)?,
             PipBoyAction::SetSortMode { category, mode } => self.set_sort_mode(category, mode)?,
             PipBoyAction::ToggleComponentSearchTag(component) => {
@@ -176,11 +230,17 @@ impl PipBoyModel {
                 effects
             }
             Err(error) => {
-                tracing::warn!("Pip-Boy action rejected: {error}");
-                self.last_rejection = Some(error);
+                self.reject(error);
                 ActionEffects::default()
             }
         }
+    }
+
+    /// Records a rejection the sim made itself, as `submit` records one of `apply`'s.
+    pub(crate) fn reject(&mut self, error: PipBoyActionError) {
+        tracing::warn!("Pip-Boy action rejected: {error}");
+        self.last_rejection = Some(error);
+        self.rejection_count += 1;
     }
 
     fn item(&self, id: ItemId) -> Result<&InventoryItem, PipBoyActionError> {
@@ -269,7 +329,10 @@ impl PipBoyModel {
             .collect();
         self.character.effects.extend(timed);
         self.remove_units(id, 1);
-        Ok(ActionEffects { heal_hp: healed })
+        Ok(ActionEffects {
+            heal_hp: healed,
+            ..ActionEffects::default()
+        })
     }
 
     /// Removes up to `count` units of a validated stack; an emptied stack goes away together
@@ -284,8 +347,11 @@ impl PipBoyModel {
         });
     }
 
-    fn drop_item(&mut self, id: ItemId, count: u32) -> Result<(), PipBoyActionError> {
-        let available = self.item(id)?.count;
+    /// Takes `count` units out of a stack the world can take back: one with a record the catalog
+    /// knows, and not a key.
+    fn drop_item(&mut self, id: ItemId, count: u32) -> Result<DroppedStack, PipBoyActionError> {
+        let stack = self.item(id)?;
+        let available = stack.count;
         if count == 0 {
             return Err(PipBoyActionError::ZeroQuantity);
         }
@@ -295,8 +361,21 @@ impl PipBoyModel {
                 available,
             });
         }
+        let form_key = stack
+            .form_key
+            .clone()
+            .ok_or(PipBoyActionError::NotDroppable(id))?;
+        match self
+            .catalog
+            .item(&form_key)
+            .map(|definition| definition.kind)
+        {
+            None => return Err(PipBoyActionError::NotDroppable(id)),
+            Some(ItemKind::Key) => return Err(PipBoyActionError::KeyNotDroppable(id)),
+            Some(_) => {}
+        }
         self.remove_units(id, count);
-        Ok(())
+        Ok(DroppedStack { form_key, count })
     }
 
     fn set_favourite(
@@ -410,13 +489,25 @@ mod tests {
     use super::super::quests::{Quest, QuestStatus};
     use super::super::radio::RadioStation;
     use super::super::test_support::{
-        aid, apparel, catalog_with, empty_model, gun_nut, item, marker, perk_model, weapon,
+        aid, apparel, catalog_with, definition, empty_model, gun_nut, item, marker, perk_model,
+        weapon,
     };
     use super::super::{PipBoyCatalog, Special};
     use super::*;
+    use std::sync::Arc;
 
     fn add(model: &mut PipBoyModel, item: InventoryItem) -> ItemId {
         model.inventory.insert(item)
+    }
+
+    /// Adds the stack and registers its record, of the given kind, in the model's catalog.
+    fn add_listed(model: &mut PipBoyModel, mut item: InventoryItem, kind: ItemKind) -> ItemId {
+        let form_key = format!("{}:Test.esm", item.name);
+        let mut record = definition(&form_key, &item.name);
+        record.kind = kind;
+        Arc::make_mut(&mut model.catalog).items.push(record);
+        item.form_key = Some(form_key);
+        add(model, item)
     }
 
     #[test]
@@ -699,7 +790,7 @@ mod tests {
         let mut model = empty_model();
         let mut cram = aid("Cram", 20.0, None);
         cram.count = 5;
-        let id = add(&mut model, cram);
+        let id = add_listed(&mut model, cram, ItemKind::Misc);
         model
             .apply(PipBoyAction::Drop { item: id, count: 2 })
             .unwrap();
@@ -711,9 +802,161 @@ mod tests {
     }
 
     #[test]
+    fn an_accepted_drop_reports_the_record_and_the_units_taken() {
+        let mut model = empty_model();
+        let mut cram = aid("Cram", 20.0, None);
+        cram.count = 5;
+        let id = add_listed(&mut model, cram, ItemKind::Aid);
+
+        let effects = model
+            .apply(PipBoyAction::Drop { item: id, count: 2 })
+            .unwrap();
+
+        assert_eq!(
+            effects.dropped,
+            Some(DroppedStack {
+                form_key: "Cram:Test.esm".to_owned(),
+                count: 2
+            })
+        );
+        assert!(effects.heal_hp.abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_key_cannot_be_dropped_and_nothing_changes() {
+        let mut model = empty_model();
+        let key = add_listed(
+            &mut model,
+            item("Vault Key", InventoryCategory::Misc, ItemDetails::Misc),
+            ItemKind::Key,
+        );
+        assert_rejected(
+            &mut model,
+            PipBoyAction::Drop {
+                item: key,
+                count: 1,
+            },
+            PipBoyActionError::KeyNotDroppable(key),
+        );
+    }
+
+    #[test]
+    fn a_stack_without_a_record_or_a_catalog_entry_cannot_be_dropped() {
+        let mut model = empty_model();
+        let recordless = add(&mut model, aid("Homebrew", 1.0, None));
+        let mut unlisted = aid("Mystery", 1.0, None);
+        unlisted.form_key = Some("0AA001:Test.esm".to_owned());
+        let unlisted = add(&mut model, unlisted);
+        for id in [recordless, unlisted] {
+            assert_rejected(
+                &mut model,
+                PipBoyAction::Drop { item: id, count: 1 },
+                PipBoyActionError::NotDroppable(id),
+            );
+        }
+    }
+
+    #[test]
+    fn the_quantity_checks_come_before_the_droppability_checks() {
+        let mut model = empty_model();
+        let key = add_listed(
+            &mut model,
+            item("Vault Key", InventoryCategory::Misc, ItemDetails::Misc),
+            ItemKind::Key,
+        );
+        assert_rejected(
+            &mut model,
+            PipBoyAction::Drop {
+                item: key,
+                count: 0,
+            },
+            PipBoyActionError::ZeroQuantity,
+        );
+        assert_rejected(
+            &mut model,
+            PipBoyAction::Drop {
+                item: key,
+                count: 3,
+            },
+            PipBoyActionError::NotEnoughToDrop {
+                requested: 3,
+                available: 1,
+            },
+        );
+    }
+
+    #[test]
+    fn only_the_two_refusals_with_a_setting_name_one_and_every_name_is_listed() {
+        let key = ItemId(1);
+        assert_eq!(
+            PipBoyActionError::KeyNotDroppable(key).refusal_setting(),
+            Some("sNoKeyDropWarning")
+        );
+        assert_eq!(
+            PipBoyActionError::Airborne.refusal_setting(),
+            Some("sNoJumpWarning")
+        );
+        let without = [
+            PipBoyActionError::NotDroppable(key),
+            PipBoyActionError::ZeroQuantity,
+            PipBoyActionError::NotEnoughToDrop {
+                requested: 2,
+                available: 1,
+            },
+            PipBoyActionError::UnknownItem(key),
+        ];
+        assert!(without.iter().all(|e| e.refusal_setting().is_none()));
+        let named: Vec<&str> = [
+            PipBoyActionError::KeyNotDroppable(key),
+            PipBoyActionError::Airborne,
+        ]
+        .iter()
+        .filter_map(PipBoyActionError::refusal_setting)
+        .collect();
+        assert_eq!(named, PipBoyActionError::REFUSAL_SETTINGS);
+    }
+
+    #[test]
+    fn the_drop_refusals_have_no_translation_key() {
+        let key = ItemId(1);
+        for error in [
+            PipBoyActionError::KeyNotDroppable(key),
+            PipBoyActionError::NotDroppable(key),
+            PipBoyActionError::Airborne,
+        ] {
+            assert_eq!(error.translation_key(), None, "{error}");
+        }
+    }
+
+    #[test]
+    fn reject_stores_the_error_and_counts_every_rejection_even_a_repeat() {
+        let mut model = empty_model();
+        assert_eq!(model.rejection_count, 0);
+
+        model.reject(PipBoyActionError::Airborne);
+        model.reject(PipBoyActionError::Airborne);
+
+        assert_eq!(model.last_rejection, Some(PipBoyActionError::Airborne));
+        assert_eq!(model.rejection_count, 2);
+    }
+
+    #[test]
+    fn submit_counts_its_rejections_and_an_accepted_action_clears_without_counting() {
+        let mut model = empty_model();
+        model.submit(PipBoyAction::Equip(ItemId(7)));
+        model.submit(PipBoyAction::Equip(ItemId(7)));
+        assert_eq!(model.rejection_count, 2);
+
+        model.submit(PipBoyAction::Open);
+
+        assert_eq!(model.last_rejection, None);
+        assert_eq!(model.rejection_count, 2);
+    }
+
+    #[test]
     fn dropping_the_last_unit_of_an_equipped_item_unequips_it() {
         let mut model = empty_model();
-        let pistol = add(&mut model, weapon("Pistol", 10.0, 1.0));
+        let pistol = add_listed(&mut model, weapon("Pistol", 10.0, 1.0), ItemKind::Weapon);
         model.apply(PipBoyAction::Equip(pistol)).unwrap();
         model
             .apply(PipBoyAction::Drop {
@@ -725,11 +968,32 @@ mod tests {
     }
 
     #[test]
+    fn an_equipped_weapon_drops_like_any_single_item_with_its_record_and_no_refusal() {
+        let mut model = empty_model();
+        let pistol = add_listed(&mut model, weapon("Pistol", 10.0, 1.0), ItemKind::Weapon);
+        model.apply(PipBoyAction::Equip(pistol)).unwrap();
+        let effects = model
+            .apply(PipBoyAction::Drop {
+                item: pistol,
+                count: 1,
+            })
+            .unwrap();
+        assert_eq!(
+            effects.dropped,
+            Some(DroppedStack {
+                form_key: "Pistol:Test.esm".to_owned(),
+                count: 1
+            })
+        );
+        assert!(model.inventory.items.iter().all(|item| !item.equipped));
+    }
+
+    #[test]
     fn dropping_part_of_an_equipped_stack_keeps_it_equipped() {
         let mut model = empty_model();
         let mut pistol = weapon("Pistol", 10.0, 1.0);
         pistol.count = 2;
-        let id = add(&mut model, pistol);
+        let id = add_listed(&mut model, pistol, ItemKind::Weapon);
         model.apply(PipBoyAction::Equip(id)).unwrap();
         model
             .apply(PipBoyAction::Drop { item: id, count: 1 })
@@ -740,7 +1004,7 @@ mod tests {
     #[test]
     fn drop_rejects_more_than_carried_and_unknown_items() {
         let mut model = empty_model();
-        let id = add(&mut model, aid("Cram", 20.0, None));
+        let id = add_listed(&mut model, aid("Cram", 20.0, None), ItemKind::Aid);
         assert_rejected(
             &mut model,
             PipBoyAction::Drop { item: id, count: 2 },
@@ -762,7 +1026,7 @@ mod tests {
     #[test]
     fn dropping_zero_units_is_rejected_and_recorded() {
         let mut model = empty_model();
-        let id = add(&mut model, aid("Cram", 20.0, None));
+        let id = add_listed(&mut model, aid("Cram", 20.0, None), ItemKind::Aid);
         assert_rejected(
             &mut model,
             PipBoyAction::Drop { item: id, count: 0 },

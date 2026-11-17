@@ -83,7 +83,7 @@ jobs:
           CARGO_PROFILE_DEV_DEBUG: line-tables-only
         run: |
           New-Item -ItemType Directory -Force ../../coverage/rust | Out-Null
-          cargo llvm-cov --locked --lcov --output-path ../../coverage/rust/lcov.info
+          cargo llvm-cov --no-rustc-wrapper --locked --lcov --output-path ../../coverage/rust/lcov.info
       - name: Coverage summary
         if: ${{ !cancelled() }}
         working-directory: src/engine

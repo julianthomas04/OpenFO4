@@ -109,8 +109,19 @@ pub(super) struct PlacedPart {
     pub collision: Option<PartCollision>,
 }
 
+impl PlacedPart {
+    /// The pose the part's colliders take inside the weapon; the part's own scale is not carried.
+    pub fn collider_pose(&self) -> PartLocal {
+        let (_, rotation, translation) = self.part_to_weapon.to_scale_rotation_translation();
+        PartLocal {
+            translation,
+            rotation,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BodyKind {
+pub(super) enum BodyKind {
     Dynamic,
     Static,
     None,
@@ -122,6 +133,16 @@ impl BodyKind {
             Self::Dynamic => "dynamic",
             Self::Static => "static",
             Self::None => "none",
+        }
+    }
+
+    /// Whether a weapon with this body holds a body the player can take: a dynamic one, or a
+    /// static-only one that is dropped (a dropped weapon is always built dynamic).
+    pub fn holds_item_body(self, dropped: bool) -> bool {
+        match self {
+            Self::Dynamic => true,
+            Self::Static => dropped,
+            Self::None => false,
         }
     }
 }
@@ -170,7 +191,7 @@ impl PlacedWeapon {
         self.parts.iter().filter_map(|part| part.collision)
     }
 
-    fn body_kind(&self) -> BodyKind {
+    pub fn body_kind(&self) -> BodyKind {
         let mut collisions = self.collisions().peekable();
         if collisions.peek().is_none() {
             BodyKind::None
@@ -302,8 +323,6 @@ pub(super) fn add_weapon_parts(placed: &PlacedWeapon, refr: &WeaponRefr, sinks: 
     let entity = refr.ref_key.map(refr_entity_id);
     for part in &placed.parts {
         if part.collision.is_some() {
-            let (_, part_rotation, part_translation) =
-                part.part_to_weapon.to_scale_rotation_translation();
             sinks
                 .placements_by_path
                 .entry(part.mesh_path.clone())
@@ -314,10 +333,7 @@ pub(super) fn add_weapon_parts(placed: &PlacedWeapon, refr: &WeaponRefr, sinks: 
                     scale: refr.scale,
                     ref_key: refr.ref_key.map(str::to_owned),
                     ragdoll_pose: None,
-                    part_local: Some(PartLocal {
-                        translation: part_translation,
-                        rotation: part_rotation,
-                    }),
+                    part_local: Some(part.collider_pose()),
                 });
         }
         if part.draw {
@@ -479,6 +495,16 @@ mod tests {
 
     use super::*;
     use crate::assets::types::weapon_assembly::ParentPoint;
+
+    #[test]
+    fn a_placed_weapon_holds_an_item_body_when_dynamic_and_a_dropped_one_also_when_static() {
+        assert!(BodyKind::Dynamic.holds_item_body(false));
+        assert!(BodyKind::Dynamic.holds_item_body(true));
+        assert!(!BodyKind::Static.holds_item_body(false));
+        assert!(BodyKind::Static.holds_item_body(true));
+        assert!(!BodyKind::None.holds_item_body(false));
+        assert!(!BodyKind::None.holds_item_body(true));
+    }
 
     const BASE_MODEL: &str = "weapons\\gun\\dummy.nif";
     const GRIP_MODEL: &str = "weapons\\gun\\grip.nif";

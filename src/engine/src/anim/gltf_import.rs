@@ -589,20 +589,7 @@ mod tests {
             views.join(","),
             accessors.join(",")
         );
-        let mut json = json.into_bytes();
-        json.resize(json.len().next_multiple_of(4), b' ');
-        let total = 12 + 8 + json.len() + 8 + bin.len();
-        let mut out = Vec::with_capacity(total);
-        out.extend(b"glTF");
-        out.extend(2_u32.to_le_bytes());
-        out.extend((total as u32).to_le_bytes());
-        out.extend((json.len() as u32).to_le_bytes());
-        out.extend(b"JSON");
-        out.extend(&json);
-        out.extend((bin.len() as u32).to_le_bytes());
-        out.extend(b"BIN\0");
-        out.extend(&bin);
-        out
+        crate::anim::test_glb::glb_container(&json, &bin)
     }
 
     fn import(nodes: &str, rest: &str) -> Result<AnimationAsset, ImportError> {

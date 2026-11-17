@@ -154,7 +154,8 @@ pub struct PipBoyScreen {
     actions: Vec<PipBoyAction>,
     requests: Vec<ShellRequest>,
     notice: NoticeLine,
-    shown_rejection: Option<PipBoyActionError>,
+    /// `PipBoyModel::rejection_count` as of the last rejection shown.
+    shown_rejection_count: u64,
     pointer_sync_pending: bool,
     window_px: Vec2,
     seconds_open: f64,
@@ -193,7 +194,7 @@ impl PipBoyScreen {
             actions: Vec::new(),
             requests: Vec::new(),
             notice: NoticeLine::default(),
-            shown_rejection: None,
+            shown_rejection_count: 0,
             pointer_sync_pending: false,
             window_px: stages.shell(),
             seconds_open: 0.0,
@@ -430,27 +431,30 @@ impl PipBoyScreen {
         PaintedFrame { output, fit }
     }
 
-    /// Puts a rejection the sim reports onto the message line once per change.
+    /// Puts a rejection the sim reports onto the message line once per rejection, so a repeated
+    /// identical refusal shows its text again.
     fn show_new_rejection(&mut self, snapshot: &PipBoySnapshot<'_>) {
-        let current = &snapshot.model.last_rejection;
-        if *current != self.shown_rejection {
-            if let Some(error) = current {
-                self.show_rejection_text(error);
-            }
-            self.shown_rejection.clone_from(current);
+        let count = snapshot.model.rejection_count;
+        if count == self.shown_rejection_count {
+            return;
+        }
+        self.shown_rejection_count = count;
+        if let Some(error) = &snapshot.model.last_rejection {
+            self.show_rejection_text(error);
         }
     }
 
-    /// Shows the game's own refusal text for `error`; a rejection the game has no text for only
-    /// reaches the log.
+    /// Shows the game's own refusal text for `error` by its translation. A refusal that has a game
+    /// setting is shown by the HUD message list, not here; a rejection the game has no text for
+    /// only reaches the log.
     fn show_rejection_text(&mut self, error: &PipBoyActionError) {
-        let Some(key) = error.translation_key() else {
+        if let Some(key) = error.translation_key() {
+            match self.layout.get(&TranslateKey::text(key)) {
+                Ok(text) => self.notice.show(text, self.seconds_open),
+                Err(error) => tracing::error!("Pip-Boy refusal text '{key}': {error}"),
+            }
+        } else if error.refusal_setting().is_none() {
             tracing::warn!("Pip-Boy action rejected: {error}");
-            return;
-        };
-        match self.layout.get(&TranslateKey::text(key)) {
-            Ok(text) => self.notice.show(text, self.seconds_open),
-            Err(error) => tracing::error!("Pip-Boy refusal text '{key}': {error}"),
         }
     }
 

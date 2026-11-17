@@ -1,20 +1,20 @@
 use std::collections::HashMap;
-use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use glam::{Mat4, Vec3};
-use serde::Deserialize;
 
 use super::gpu_mesh::GpuSkinnedMesh;
 use super::materials::{CharacterGpuContext, MaterialOverride, PartPolicy};
-use crate::anim::{AnimationAsset, Clip, ImportError, PoseError, Skeleton, local_to_model};
-use crate::assets::layout::MESHES_DIR;
+use crate::anim::character_assets::{
+    AnimationFileError, CharacterAssets, CharacterAssetsError, ClipPackEntry, SkeletonLoadError,
+    load_animation_file, rest_model_pose,
+};
+use crate::anim::{Clip, PoseError, Skeleton};
 use crate::assets::types::skinned_mesh::{SkinnedMesh, SkinnedMeshError};
 use crate::rendering::frustum::Aabb;
 
 pub const CHARACTER_ASSETS_DIR: &str = "CharacterAssets";
-pub const ANIM_INDEX_FILE: &str = "skeleton.anims.json";
 /// Slack around the animated joints for what the offset bound does not cover (engine units).
 const BOUNDS_PAD: f32 = 1.0;
 
@@ -26,48 +26,12 @@ pub struct CreatureDef {
     pub bodies: Vec<String>,
 }
 
-/// One clip pack as listed by the converter's index: the clip names are known
-/// without opening the (possibly huge) pack file.
-#[derive(Debug, Deserialize)]
-pub struct ClipPackEntry {
-    pub file: String,
-    pub clips: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AnimIndex {
-    /// The converted NIF skeleton: the full render hierarchy the bodies are
-    /// skinned to. The clips (Havok, a subset of its bones) bind to it by name.
-    skeleton: String,
-    packs: Vec<ClipPackEntry>,
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum CreatureLoadError {
-    #[error("animation index '{path}' does not exist; run the installer's animation conversion")]
-    IndexMissing { path: String },
-    #[error("animation index '{path}' cannot be read: {source}")]
-    IndexUnreadable {
-        path: String,
-        source: std::io::Error,
-    },
-    #[error("animation index '{path}' is malformed: {source}")]
-    IndexMalformed {
-        path: String,
-        source: serde_json::Error,
-    },
-    #[error("animation index '{path}' names skeleton '{name}', which is not a relative path")]
-    SkeletonPathInvalid { path: String, name: String },
-    #[error(
-        "animation index '{path}' names skeleton '{name}', which leaves the '{MESHES_DIR}' folder"
-    )]
-    SkeletonEscapesMeshes { path: String, name: String },
-    #[error("skeleton '{path}' does not exist")]
-    SkeletonMissing { path: String },
-    #[error("skeleton '{path}': {source}")]
-    Skeleton { path: String, source: ImportError },
-    #[error("skeleton '{0}' has no joints")]
-    EmptySkeleton(String),
+    #[error(transparent)]
+    Assets(#[from] CharacterAssetsError),
+    #[error(transparent)]
+    Skeleton(#[from] SkeletonLoadError),
     #[error(transparent)]
     RestPose(#[from] PoseError),
     #[error("creature has no body meshes")]
@@ -85,10 +49,8 @@ pub enum CreatureLoadError {
 pub enum PackLoadError {
     #[error("clip pack index {index} is out of range, the creature has {count} packs")]
     UnknownPack { index: usize, count: usize },
-    #[error("clip pack '{path}' does not exist")]
-    Missing { path: String },
-    #[error("clip pack '{path}': {source}")]
-    Import { path: String, source: ImportError },
+    #[error("clip pack {0}")]
+    File(#[from] AnimationFileError),
 }
 
 /// The clips of one pack file, as imported.
@@ -135,22 +97,18 @@ impl CreatureRig {
         asset_root: &str,
         gpu: &mut CharacterGpuContext,
     ) -> Result<Self, CreatureLoadError> {
-        let pack_dir = format!("{asset_root}/{}", def.assets_dir);
-        let index_path = format!("{pack_dir}/{ANIM_INDEX_FILE}");
-        let index = read_index(&index_path)?;
-        let skeleton_path = resolve_skeleton_path(&def.assets_dir, &index.skeleton)
-            .map_err(|fault| fault.into_error(&index_path, &index.skeleton))?;
-        let skeleton = load_skeleton(&format!("{asset_root}/{skeleton_path}"))?;
+        let assets = CharacterAssets::open(asset_root, &def.assets_dir)?;
+        let skeleton = assets.load_skeleton()?;
 
         let rest_model_pose = rest_model_pose(&skeleton)?;
-        let meshes = upload_bodies(def, &pack_dir, &skeleton, gpu)?;
+        let meshes = upload_bodies(def, &assets.dir, &skeleton, gpu)?;
         Ok(Self::assemble(
             def.name.clone(),
             skeleton,
             rest_model_pose,
             meshes,
-            pack_dir,
-            index.packs,
+            assets.dir,
+            assets.packs,
         ))
     }
 
@@ -244,13 +202,7 @@ impl CreatureRig {
         if let Some(existing) = loaded.get(&pack) {
             return Ok(Arc::clone(existing));
         }
-        let path = format!("{}/{}", self.pack_dir, entry.file);
-        if !Path::new(&path).is_file() {
-            return Err(PackLoadError::Missing { path });
-        }
-        let clips = AnimationAsset::load(&path)
-            .map_err(|source| PackLoadError::Import { path, source })?
-            .clips;
+        let clips = load_animation_file(&format!("{}/{}", self.pack_dir, entry.file))?.clips;
         let pack_clips = Arc::new(LoadedPack::new(clips));
         loaded.insert(pack, Arc::clone(&pack_clips));
         Ok(pack_clips)
@@ -320,82 +272,6 @@ fn release_mesh_textures(meshes: &[GpuSkinnedMesh], gpu: &mut CharacterGpuContex
     gpu.release_textures(&references);
 }
 
-fn read_index(path: &str) -> Result<AnimIndex, CreatureLoadError> {
-    let text = std::fs::read_to_string(path).map_err(|source| match source.kind() {
-        ErrorKind::NotFound => CreatureLoadError::IndexMissing {
-            path: path.to_owned(),
-        },
-        _ => CreatureLoadError::IndexUnreadable {
-            path: path.to_owned(),
-            source,
-        },
-    })?;
-    serde_json::from_str(&text).map_err(|source| CreatureLoadError::IndexMalformed {
-        path: path.to_owned(),
-        source,
-    })
-}
-
-enum SkeletonPathFault {
-    NotRelative,
-    EscapesMeshes,
-}
-
-impl SkeletonPathFault {
-    fn into_error(self, index_path: &str, name: &str) -> CreatureLoadError {
-        let (path, name) = (index_path.to_owned(), name.to_owned());
-        match self {
-            Self::NotRelative => CreatureLoadError::SkeletonPathInvalid { path, name },
-            Self::EscapesMeshes => CreatureLoadError::SkeletonEscapesMeshes { path, name },
-        }
-    }
-}
-
-/// Resolves the index's `skeleton` against the index folder (both relative to
-/// the asset root) into a normalized asset-root-relative path, lexically: `..`
-/// may climb out of the unit but never out of the meshes folder.
-fn resolve_skeleton_path(assets_dir: &str, skeleton: &str) -> Result<String, SkeletonPathFault> {
-    let name = skeleton.replace('\\', "/");
-    if name.is_empty() || name.starts_with('/') || name.contains(':') {
-        return Err(SkeletonPathFault::NotRelative);
-    }
-    let mut resolved: Vec<&str> = assets_dir
-        .split('/')
-        .filter(|part| !part.is_empty())
-        .collect();
-    for part in name.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                resolved.pop().ok_or(SkeletonPathFault::EscapesMeshes)?;
-            }
-            normal => resolved.push(normal),
-        }
-    }
-    if resolved.len() < 2 || resolved[0] != MESHES_DIR {
-        return Err(SkeletonPathFault::EscapesMeshes);
-    }
-    Ok(resolved.join("/"))
-}
-
-fn load_skeleton(path: &str) -> Result<Skeleton, CreatureLoadError> {
-    if !Path::new(path).is_file() {
-        return Err(CreatureLoadError::SkeletonMissing {
-            path: path.to_owned(),
-        });
-    }
-    let skeleton = AnimationAsset::load(path)
-        .map_err(|source| CreatureLoadError::Skeleton {
-            path: path.to_owned(),
-            source,
-        })?
-        .skeleton;
-    if skeleton.is_empty() {
-        return Err(CreatureLoadError::EmptySkeleton(path.to_owned()));
-    }
-    Ok(skeleton)
-}
-
 /// A failing body releases the textures of the bodies uploaded before it.
 fn upload_bodies(
     def: &CreatureDef,
@@ -424,11 +300,7 @@ fn upload_body(
     skeleton: &Skeleton,
     gpu: &mut CharacterGpuContext,
 ) -> Result<GpuSkinnedMesh, CreatureLoadError> {
-    if !Path::new(path).is_file() {
-        return Err(CreatureLoadError::BodyMissing {
-            path: path.to_owned(),
-        });
-    }
+    require_body_file(path)?;
     let into_error = |source| CreatureLoadError::Body {
         path: path.to_owned(),
         source,
@@ -437,10 +309,14 @@ fn upload_body(
     GpuSkinnedMesh::upload(&skinned, PartPolicy::Creature, gpu).map_err(into_error)
 }
 
-fn rest_model_pose(skeleton: &Skeleton) -> Result<Vec<Mat4>, PoseError> {
-    let mut pose = vec![Mat4::IDENTITY; skeleton.len()];
-    local_to_model(skeleton, skeleton.rest_pose(), &mut pose)?;
-    Ok(pose)
+fn require_body_file(path: &str) -> Result<(), CreatureLoadError> {
+    if Path::new(path).is_file() {
+        Ok(())
+    } else {
+        Err(CreatureLoadError::BodyMissing {
+            path: path.to_owned(),
+        })
+    }
 }
 
 /// A placed prop's model as read from disk: pure CPU data, so it can be parsed
@@ -455,18 +331,14 @@ pub struct PropModel {
 impl PropModel {
     /// `path` is the full file path.
     pub fn parse(path: &str) -> Result<Self, CreatureLoadError> {
-        if !Path::new(path).is_file() {
-            return Err(CreatureLoadError::BodyMissing {
-                path: path.to_owned(),
-            });
-        }
+        require_body_file(path)?;
         let (skeleton, mesh) =
             SkinnedMesh::load_with_skeleton(path).map_err(|source| CreatureLoadError::Body {
                 path: path.to_owned(),
                 source,
             })?;
         if skeleton.is_empty() {
-            return Err(CreatureLoadError::EmptySkeleton(path.to_owned()));
+            return Err(SkeletonLoadError::Empty(path.to_owned()).into());
         }
         let rest_model_pose = rest_model_pose(&skeleton)?;
         Ok(Self {
@@ -474,40 +346,5 @@ impl PropModel {
             mesh,
             rest_model_pose,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn resolved(assets_dir: &str, skeleton: &str) -> Option<String> {
-        resolve_skeleton_path(assets_dir, skeleton).ok()
-    }
-
-    #[test]
-    fn a_skeleton_beside_the_index_resolves_below_the_meshes_folder() {
-        assert_eq!(
-            resolved("meshes/Actors/Dog/CharacterAssets", "skeleton.glb").as_deref(),
-            Some("meshes/Actors/Dog/CharacterAssets/skeleton.glb")
-        );
-    }
-
-    #[test]
-    fn a_skeleton_may_climb_out_of_its_unit_but_not_out_of_the_meshes_folder() {
-        assert_eq!(
-            resolved(
-                "meshes/Actors/Turret/CharacterAssets/Mounted",
-                "..\\TurretMountedSkeleton.glb"
-            )
-            .as_deref(),
-            Some("meshes/Actors/Turret/CharacterAssets/TurretMountedSkeleton.glb")
-        );
-        assert!(resolved("meshes/Actors/Dog", "../../../skeleton.glb").is_none());
-    }
-
-    #[test]
-    fn a_unit_outside_the_meshes_folder_of_the_layout_is_rejected() {
-        assert!(resolved("textures/Actors/Dog", "skeleton.glb").is_none());
     }
 }

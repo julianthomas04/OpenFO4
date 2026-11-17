@@ -9,8 +9,9 @@ use openfo4::assets::db::DbClient;
 use openfo4::assets::db::music::MusicCatalog;
 use openfo4::assets::layout::audio_dir;
 use openfo4::audio::music_stack::PlaceSource;
-use openfo4::audio::place::{Candidate, PlaceSnapshot, polygon_contains};
+use openfo4::audio::place::{Candidate, PlaceSnapshot};
 use openfo4::audio::world_music::WorldMusic;
+use openfo4::bethesda_space::polygon_contains;
 
 const COMMONWEALTH: &str = "00003C:Fallout4.esm";
 const DIAMOND_CITY: &str = "000F94:Fallout4.esm";

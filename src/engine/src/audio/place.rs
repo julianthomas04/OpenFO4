@@ -23,6 +23,7 @@ use std::collections::HashMap;
 
 use super::music_stack::PlaceSource;
 use crate::assets::db::music::{CellPlace, MusicCatalog, RegionMusic};
+use crate::bethesda_space::polygon_contains;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlaceSnapshot {
@@ -210,32 +211,6 @@ fn winning_region_music<'a>(containing: &[&'a RegionMusic]) -> Option<&'a str> {
         .map(|region| region.music_type.as_str())
 }
 
-/// Ray casting with the boundary counted as inside.
-pub fn polygon_contains(polygon: &[(f32, f32)], point: (f32, f32)) -> bool {
-    let (px, py) = (f64::from(point.0), f64::from(point.1));
-    let mut inside = false;
-    for (index, &(ax, ay)) in polygon.iter().enumerate() {
-        let (bx, by) = polygon[(index + 1) % polygon.len()];
-        let (ax, ay, bx, by) = (f64::from(ax), f64::from(ay), f64::from(bx), f64::from(by));
-        if on_segment((ax, ay), (bx, by), (px, py)) {
-            return true;
-        }
-        if (ay > py) != (by > py) && px < (bx - ax) * (py - ay) / (by - ay) + ax {
-            inside = !inside;
-        }
-    }
-    inside
-}
-
-fn on_segment(a: (f64, f64), b: (f64, f64), p: (f64, f64)) -> bool {
-    let cross = (b.0 - a.0) * (p.1 - a.1) - (b.1 - a.1) * (p.0 - a.0);
-    cross == 0.0
-        && p.0 >= a.0.min(b.0)
-        && p.0 <= a.0.max(b.0)
-        && p.1 >= a.1.min(b.1)
-        && p.1 <= a.1.max(b.1)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,35 +220,6 @@ mod tests {
 
     fn square(offset: f32) -> Vec<(f32, f32)> {
         SQUARE.iter().map(|&(x, y)| (x + offset, y)).collect()
-    }
-
-    #[test]
-    fn polygon_inside_outside_and_edges() {
-        let polygon = square(0.0);
-        assert!(polygon_contains(&polygon, (50.0, 50.0)));
-        assert!(!polygon_contains(&polygon, (150.0, 50.0)));
-        assert!(!polygon_contains(&polygon, (50.0, -0.5)));
-        assert!(polygon_contains(&polygon, (100.0, 50.0)));
-        assert!(polygon_contains(&polygon, (50.0, 0.0)));
-        assert!(polygon_contains(&polygon, (0.0, 0.0)));
-    }
-
-    #[test]
-    fn concave_polygon_excludes_its_notch() {
-        let u_shape = [
-            (0.0, 0.0),
-            (30.0, 0.0),
-            (30.0, 70.0),
-            (70.0, 70.0),
-            (70.0, 0.0),
-            (100.0, 0.0),
-            (100.0, 100.0),
-            (0.0, 100.0),
-        ];
-        assert!(!polygon_contains(&u_shape, (50.0, 30.0)));
-        assert!(polygon_contains(&u_shape, (50.0, 85.0)));
-        assert!(polygon_contains(&u_shape, (10.0, 30.0)));
-        assert!(polygon_contains(&u_shape, (90.0, 30.0)));
     }
 
     fn region(music: &str, priority: u8, override_flag: bool, offset: f32) -> SoundRegion {

@@ -340,6 +340,14 @@ impl GameIni {
         })
     }
 
+    /// Like [`Self::require_non_negative`], and `None` when no INI sets the key; the same rule as
+    /// [`Self::optional_positive`] for a setting where 0 is a real value.
+    pub fn optional_non_negative(&self, key: IniKey) -> Result<Option<f32>, IniError> {
+        self.optional_valid(key, "a finite number, 0 or more", |v: &f32| {
+            v.is_finite() && *v >= 0.0
+        })
+    }
+
     /// Like [`Self::require_valid`], and `None` when no INI sets the key; the same rule as
     /// [`Self::optional_positive`] for a setting with any other validity.
     pub fn optional_valid<T: IniValue>(
@@ -767,6 +775,33 @@ fWord=big
         ));
         assert!(matches!(
             ini.optional_positive(key("fWord")),
+            Err(IniError::Unparsable { .. })
+        ));
+    }
+
+    #[test]
+    fn an_optional_non_negative_setting_takes_zero_and_rejects_the_rest() {
+        let ini = ini("fZero=0
+fSet=2.5
+fNegative=-1
+fNan=NaN
+fInf=inf
+fWord=big
+");
+        assert_eq!(ini.optional_non_negative(key("fZero")).unwrap(), Some(0.0));
+        assert_eq!(ini.optional_non_negative(key("fSet")).unwrap(), Some(2.5));
+        assert_eq!(ini.optional_non_negative(key("fAbsent")).unwrap(), None);
+        for name in ["fNegative", "fNan", "fInf"] {
+            assert!(
+                matches!(
+                    ini.optional_non_negative(key(name)),
+                    Err(IniError::Invalid { .. })
+                ),
+                "{name}"
+            );
+        }
+        assert!(matches!(
+            ini.optional_non_negative(key("fWord")),
             Err(IniError::Unparsable { .. })
         ));
     }

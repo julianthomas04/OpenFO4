@@ -1,5 +1,5 @@
 //! Walk-in doors and player collision layers against a converted installation that was converted
-//! with door trigger bounds and collision layer extraction.
+//! with collision layer extraction.
 //!
 //! Ignored by default (needs an installation). Run with
 //! `cargo test --test teleports_real_install -- --ignored --nocapture`; the installation comes
@@ -67,14 +67,9 @@ fn player_layers() -> PlayerCollisionLayers {
 
 #[test]
 #[ignore = "needs a converted installation"]
-fn every_active_walk_in_door_has_usable_trigger_bounds_and_a_teleport() {
+fn every_active_walk_in_door_has_a_teleport() {
     let db = database();
     let doors = db.get_walk_in_doors().unwrap();
-    assert_eq!(
-        doors.without_bounds,
-        Vec::<String>::new(),
-        "doors without trigger bounds; re-run the installer"
-    );
     assert!(doors.rejected.is_empty(), "{:?}", doors.rejected);
     assert!(!doors.doors.is_empty(), "no active walk-in doors found");
 
@@ -85,15 +80,6 @@ fn every_active_walk_in_door_has_usable_trigger_bounds_and_a_teleport() {
         .map(|teleport| teleport.source_ref)
         .collect();
     for door in &doors.doors {
-        let extents: Vec<f64> = (0..3)
-            .map(|axis| door.bounds.max[axis] - door.bounds.min[axis])
-            .collect();
-        assert!(
-            extents.iter().all(|extent| *extent > 0.0),
-            "{} has degenerate trigger bounds {:?}",
-            door.source_ref,
-            door.bounds
-        );
         assert!(
             teleport_sources.contains(&door.source_ref),
             "{} has no resolved teleport entry",
@@ -101,17 +87,6 @@ fn every_active_walk_in_door_has_usable_trigger_bounds_and_a_teleport() {
         );
     }
     println!("{} active walk-in doors", doors.doors.len());
-}
-
-#[test]
-#[ignore = "needs a converted installation"]
-fn every_walk_in_door_trigger_is_the_doorway_slab() {
-    let doors = database().get_walk_in_doors().unwrap();
-    assert!(!doors.doors.is_empty(), "no active walk-in doors found");
-    for door in &doors.doors {
-        assert_eq!(door.bounds.min, [-64.0, -8.0, 0.0], "{}", door.source_ref);
-        assert_eq!(door.bounds.max, [64.0, 8.0, 192.0], "{}", door.source_ref);
-    }
 }
 
 #[test]

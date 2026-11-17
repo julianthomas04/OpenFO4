@@ -31,6 +31,10 @@ const PLACED_OBJECT_LIGHT_COLUMNS: &[&str] = &[
 ];
 
 const PLACED_OBJECT_RAGDOLL_POSE_COLUMNS: &[&str] = &["ragdoll_pose"];
+const PLACED_OBJECT_ITEM_COLUMNS: &[&str] = &["item_count", "owner", "leveled_item"];
+const ITEM_MARKER_COLUMNS: &[&str] = &["is_marker"];
+const MISC_COMPONENT_COLUMNS: &[&str] = &["form_key", "component", "count"];
+const NPC_FACTION_COLUMNS: &[&str] = &["npc", "faction", "rank"];
 const MATERIAL_SWAP_COLUMNS: &[&str] = &["material_name"];
 const WORLDSPACE_WEATHER_COLUMNS: &[&str] = &["climate"];
 const WEATHER_COLUMNS: &[&str] = &["directional_ambient"];
@@ -81,12 +85,14 @@ const WEATHER_FOG_SCALES_TABLES_FIX: &str = "esm-only --tables weather";
 pub const WEATHER_LIBRARY_TABLES_FIX: &str =
     "esm-only --tables weather,climates,shader_particle_geometries";
 
+/// The installer command that fills the cell names and the region map entries.
+const CELL_AND_REGION_TABLES_FIX: &str = "esm-only --tables cells,regions";
+
 /// The installer command that fills the Pip-Boy tables and columns.
 const PIPBOY_TABLES_FIX: &str =
     "esm-only --tables worldspaces,map_markers,perks,perk_chart,special_attributes";
 const WEAPON_DEFAULT_MODS_COLUMNS: &[&str] = &["default_mods"];
 const OBJECT_MOD_MODEL_COLUMNS: &[&str] = &["model_path", "attach_point_name"];
-const DOOR_TRIGGER_BOUNDS_COLUMNS: &[&str] = &["trigger_bounds"];
 const LOAD_SCREEN_COLUMNS: &[&str] = &[
     "tip",
     "model",
@@ -120,6 +126,9 @@ const TRANSFORM_COLUMNS: &[&str] = &[
     "pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "scale", "flags", "zoom_min", "zoom_max",
 ];
 const WORLDSPACE_LOCATION_COLUMNS: &[&str] = &["location"];
+const CELL_NAME_COLUMNS: &[&str] = &["name"];
+/// `regions.name` exists in every schema; only the map priority arrived later.
+const REGION_MAP_COLUMNS: &[&str] = &["map_priority"];
 const TELEPORT_FLAGS_COLUMNS: &[&str] = &["flags"];
 const COLLISION_LAYER_COLUMNS: &[&str] = &["layer_index", "flags", "collides_with"];
 const NAVMESH_COLUMNS: &[&str] = &[
@@ -145,6 +154,10 @@ pub enum ColumnGroup {
     Light,
     PlacedObjectLight,
     PlacedObjectRagdollPose,
+    PlacedObjectItem,
+    ItemMarker,
+    MiscComponent,
+    NpcFaction,
     MaterialSwap,
     WorldspaceWeather,
     Weather,
@@ -167,12 +180,13 @@ pub enum ColumnGroup {
     ObjectModModel,
     Navmesh,
     CollisionLayer,
-    DoorTriggerBounds,
     LoadScreen,
     LoadScreenCondition,
     Transform,
     TeleportFlags,
     WorldspaceLocation,
+    CellName,
+    RegionMap,
 }
 
 impl std::fmt::Display for ColumnGroup {
@@ -181,6 +195,10 @@ impl std::fmt::Display for ColumnGroup {
             Self::Light => "light",
             Self::PlacedObjectLight => "placed object light",
             Self::PlacedObjectRagdollPose => "placed object ragdoll pose",
+            Self::PlacedObjectItem => "placed object item",
+            Self::ItemMarker => "item marker",
+            Self::MiscComponent => "misc component",
+            Self::NpcFaction => "NPC faction",
             Self::MaterialSwap => "material swap",
             Self::WorldspaceWeather => "worldspace weather",
             Self::Weather => "weather",
@@ -203,12 +221,13 @@ impl std::fmt::Display for ColumnGroup {
             Self::ObjectModModel => "object modification model",
             Self::Navmesh => "navmesh",
             Self::CollisionLayer => "collision layer",
-            Self::DoorTriggerBounds => "door trigger bounds",
             Self::LoadScreen => "load screen",
             Self::LoadScreenCondition => "load screen condition",
             Self::Transform => "transform",
             Self::TeleportFlags => "teleport flags",
             Self::WorldspaceLocation => "worldspace location",
+            Self::CellName => "cell name",
+            Self::RegionMap => "region map",
         })
     }
 }
@@ -410,6 +429,11 @@ pub struct DbSchema {
     pub light_columns_present: bool,
     pub placed_object_light_columns_present: bool,
     pub placed_object_ragdoll_pose_column_present: bool,
+    /// `placed_objects.item_count`, `owner` and `leveled_item`, all or none.
+    pub placed_object_item_columns_present: bool,
+    pub item_marker_column_present: bool,
+    pub misc_components_table_present: bool,
+    pub npc_factions_table_present: bool,
     pub material_swap_name_column_present: bool,
     pub weather_columns_present: bool,
     pub weather_fog_column_present: bool,
@@ -432,12 +456,13 @@ pub struct DbSchema {
     pub object_mod_model_columns_present: bool,
     pub navmesh_columns_present: bool,
     pub collision_layer_columns_present: bool,
-    pub door_trigger_bounds_column_present: bool,
     /// The load screen, load screen condition and transform tables the loading screen catalog
     /// reads, all or none.
     pub load_screen_columns_present: bool,
     pub teleport_flags_column_present: bool,
     pub worldspace_location_column_present: bool,
+    pub cell_name_column_present: bool,
+    pub region_map_column_present: bool,
 }
 
 impl DbSchema {
@@ -460,6 +485,30 @@ impl DbSchema {
                 ColumnGroup::PlacedObjectRagdollPose,
                 "placed_objects",
                 PLACED_OBJECT_RAGDOLL_POSE_COLUMNS,
+            )?,
+            placed_object_item_columns_present: column_group_present(
+                conn,
+                ColumnGroup::PlacedObjectItem,
+                "placed_objects",
+                PLACED_OBJECT_ITEM_COLUMNS,
+            )?,
+            item_marker_column_present: column_group_present(
+                conn,
+                ColumnGroup::ItemMarker,
+                "items",
+                ITEM_MARKER_COLUMNS,
+            )?,
+            misc_components_table_present: column_group_present(
+                conn,
+                ColumnGroup::MiscComponent,
+                "misc_components",
+                MISC_COMPONENT_COLUMNS,
+            )?,
+            npc_factions_table_present: column_group_present(
+                conn,
+                ColumnGroup::NpcFaction,
+                "npc_factions",
+                NPC_FACTION_COLUMNS,
             )?,
             material_swap_name_column_present: column_group_present(
                 conn,
@@ -590,12 +639,6 @@ impl DbSchema {
                 "collision_layers",
                 COLLISION_LAYER_COLUMNS,
             )?,
-            door_trigger_bounds_column_present: column_group_present(
-                conn,
-                ColumnGroup::DoorTriggerBounds,
-                "doors",
-                DOOR_TRIGGER_BOUNDS_COLUMNS,
-            )?,
             load_screen_columns_present: load_screen_tables_present(conn)?,
             teleport_flags_column_present: column_group_present(
                 conn,
@@ -608,6 +651,18 @@ impl DbSchema {
                 ColumnGroup::WorldspaceLocation,
                 "worldspaces",
                 WORLDSPACE_LOCATION_COLUMNS,
+            )?,
+            cell_name_column_present: column_group_present(
+                conn,
+                ColumnGroup::CellName,
+                "cells",
+                CELL_NAME_COLUMNS,
+            )?,
+            region_map_column_present: column_group_present(
+                conn,
+                ColumnGroup::RegionMap,
+                "regions",
+                REGION_MAP_COLUMNS,
             )?,
         })
     }
@@ -633,6 +688,26 @@ impl DbSchema {
             if !self.placed_object_ragdoll_pose_column_present {
                 tracing::warn!(
                     "placed_objects.ragdoll_pose column missing (database predates ragdoll pose conversion); ragdoll props show and collide in their model's rest pose"
+                );
+            }
+            if !self.placed_object_item_columns_present {
+                tracing::warn!(
+                    "placed_objects.item_count/owner/leveled_item columns missing (database predates item pickup conversion); every placed item counts as one unit and none is owned"
+                );
+            }
+            if !self.item_marker_column_present {
+                tracing::warn!(
+                    "items.is_marker column missing (database predates item pickup conversion); whether an item is a CK-only marker is unknown, so no non-weapon item spawns in the world"
+                );
+            }
+            if !self.misc_components_table_present {
+                tracing::warn!(
+                    "misc_components table missing (database predates item pickup conversion); no miscellaneous item is listed as junk"
+                );
+            }
+            if !self.npc_factions_table_present {
+                tracing::warn!(
+                    "npc_factions table missing (database predates item pickup conversion); NPC faction memberships are unknown, so faction-owned items read as not belonging to the player"
                 );
             }
             if !(self.cell_water_columns_present
@@ -696,6 +771,16 @@ impl DbSchema {
                     "placed_teleports.flags column missing (database predates the teleport flags export); every load door shows its loading screen"
                 );
             }
+            if !self.cell_name_column_present {
+                tracing::warn!(
+                    "cells.name column missing (database predates the cell name export); doors into interior cells show no name. Fix: run the installer with `{CELL_AND_REGION_TABLES_FIX}`"
+                );
+            }
+            if !self.region_map_column_present {
+                tracing::warn!(
+                    "regions.map_priority column missing (database predates the region map export); doors into the open world show the worldspace name instead of the map region. Fix: run the installer with `{CELL_AND_REGION_TABLES_FIX}`"
+                );
+            }
         });
     }
 }
@@ -736,6 +821,22 @@ pub fn placed_object_ragdoll_pose_select_list(schema: DbSchema, prefix: &str) ->
     )
 }
 
+pub fn placed_object_item_select_list(schema: DbSchema, prefix: &str) -> String {
+    select_list(
+        PLACED_OBJECT_ITEM_COLUMNS,
+        schema.placed_object_item_columns_present,
+        prefix,
+    )
+}
+
+pub fn item_marker_select_list(schema: DbSchema, prefix: &str) -> String {
+    select_list(
+        ITEM_MARKER_COLUMNS,
+        schema.item_marker_column_present,
+        prefix,
+    )
+}
+
 pub fn cell_water_select_list(schema: DbSchema) -> String {
     select_list(CELL_WATER_COLUMNS, schema.cell_water_columns_present, "")
 }
@@ -756,20 +857,16 @@ pub fn activator_water_select_list(schema: DbSchema, prefix: &str) -> String {
     )
 }
 
-pub fn door_trigger_bounds_select_list(schema: DbSchema, prefix: &str) -> String {
-    select_list(
-        DOOR_TRIGGER_BOUNDS_COLUMNS,
-        schema.door_trigger_bounds_column_present,
-        prefix,
-    )
-}
-
 pub fn teleport_flags_select_list(schema: DbSchema, prefix: &str) -> String {
     select_list(
         TELEPORT_FLAGS_COLUMNS,
         schema.teleport_flags_column_present,
         prefix,
     )
+}
+
+pub fn cell_name_select_list(schema: DbSchema, prefix: &str) -> String {
+    select_list(CELL_NAME_COLUMNS, schema.cell_name_column_present, prefix)
 }
 
 pub fn placed_object_light_select_list(schema: DbSchema, prefix: &str) -> String {

@@ -2,14 +2,13 @@
 //! maximum extent and a text label. Every geometry value comes from the converted `HUDMenu`
 //! movie; HP fills from the left at the bottom-left, AP from the right at the bottom-right.
 
-use super::field_text::{ScreenMap, Shadow, TextItem};
+use super::field_text::{ScreenMap, TextItem};
 use super::layout::{Anchor, Layout};
 use super::quad::{PxRect, QuadBuilder};
-use super::shadow;
 use super::shape::{StageRect, shown_fill, stage_rect};
+use super::text_face::TextFace;
 use crate::rendering::ui_colour::UiTint;
 use crate::sim::MeterFill;
-use crate::ui_layout::scaleform_text::FieldGeometry;
 use crate::ui_layout::set_text::SetTextKeys;
 use crate::ui_layout::{
     LiteralKey, ShapeKey, TextKey, TranslateKey, UiLayout, UiLayoutError, key_check_fields,
@@ -76,9 +75,7 @@ key_check_fields!(MeterKeys {
 pub struct LabelSpec {
     /// The text as the game's text-setting rule shows it.
     pub text: String,
-    pub family: String,
-    pub geometry: FieldGeometry,
-    pub colour: [u8; 3],
+    pub face: TextFace,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -153,16 +150,10 @@ impl MeterSpec {
 
 impl LabelSpec {
     fn resolve(layout: &UiLayout, keys: &MeterKeys) -> Result<Self, UiLayoutError> {
-        let field = layout.get(&keys.label)?;
-        let colour = field.color.ok_or_else(|| {
-            UiLayoutError::unresolved(MOVIE, keys.label.path, "the text field has no colour")
-        })?;
         let rules = SET_TEXT.resolve(layout)?;
         Ok(Self {
             text: rules.apply(layout, keys.label_text.path, false, false),
-            family: layout.font_family(&field.font)?,
-            geometry: FieldGeometry::of(&field, layout.font_metrics(&field.font)?),
-            colour: [colour[0], colour[1], colour[2]],
+            face: TextFace::resolve(layout, &keys.label, None)?,
         })
     }
 }
@@ -182,25 +173,13 @@ pub fn bar_rect(layout: &Layout, spec: &MeterSpec) -> PxRect {
 pub fn label_item(layout: &Layout, spec: &MeterSpec, bar: PxRect, tint: &UiTint) -> TextItem {
     let scale = layout.scale();
     let label = &spec.label;
-    let [_, _, _, alpha] = tint.text_rgba();
-    let [r, g, b] = tint.apply_to(label.colour);
-    TextItem {
-        text: label.text.clone(),
-        family: label.family.clone(),
-        geometry: label.geometry,
-        map: ScreenMap {
-            origin: (bar.x - scale * spec.bar.x, bar.y - scale * spec.bar.y),
-            scale,
-        },
-        shrink: false,
-        colour: [r, g, b, alpha],
-        shadow: Some(Shadow {
-            offset: label.geometry.size * scale * shadow::TEXT_OFFSET_EM,
-            colour: [0, 0, 0, tint.shadow_alpha(shadow::TEXT_ALPHA)],
-        }),
-        wrap_width: None,
-        max_height: None,
-    }
+    let map = ScreenMap {
+        origin: (bar.x - scale * spec.bar.x, bar.y - scale * spec.bar.y),
+        scale,
+    };
+    label
+        .face
+        .item(label.face.geometry, label.text.clone(), map, tint)
 }
 
 /// Emits a meter: the bracket, then the fill.
@@ -263,7 +242,7 @@ pub fn emit(
     clippy::float_cmp,
     reason = "the fixture arithmetic stays on exactly representable values"
 )]
-mod tests {
+pub(super) mod tests {
     use serde_json::{Value, json};
 
     use super::*;
@@ -354,6 +333,12 @@ mod tests {
         MeterSpec::resolve(layout, &AP_KEYS, Anchor::Br, STAGE)
     }
 
+    /// The synthetic meters (HP, AP) and their 640 x 360 stage, for the scene tests of the HUD.
+    pub(in crate::rendering::hud) fn synthetic_meters() -> (MeterSpec, MeterSpec) {
+        let layout = layout(&parts(102.0));
+        (hp(&layout).unwrap(), ap(&layout).unwrap())
+    }
+
     #[test]
     fn a_meter_is_read_from_its_bar_bracket_and_label() {
         let spec = hp(&layout(&parts(102.0))).unwrap();
@@ -365,7 +350,7 @@ mod tests {
         assert_close(spec.thickness, 2.0);
         assert_eq!(spec.justify, Justify::Left);
         assert_eq!(spec.label.text, "Hit");
-        assert_eq!(spec.label.family, "Fixture Sans");
+        assert_eq!(spec.label.face.family, "Fixture Sans");
     }
 
     #[test]

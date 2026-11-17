@@ -70,7 +70,7 @@ namespace InstallerTests.UiLayout
         private static JsonDocument Write(byte[] swf) => JsonDocument.Parse(Convert(swf));
 
         /// <summary>The extractor version and the SHA-256 of the synthetic movie's document it writes.</summary>
-        private static readonly (int ExtractorVersion, string Sha256) Golden = (5, "a7a2f8c32a030ecebb42ca0dc3cdd950bb831fa96f78fef9377d3e8da789aade");
+        private static readonly (int ExtractorVersion, string Sha256) Golden = (6, "1bd5cc173e4fa2adb2e583418430c3f13472cac5c660b1d30b71d27ee40f099a");
 
         [Fact]
         public void Write_ChangedOutput_RaisesTheExtractorVersion()

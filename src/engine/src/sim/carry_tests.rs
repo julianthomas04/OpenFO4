@@ -8,12 +8,12 @@ use super::carry::{View, throw_speed};
 use super::physics::test_support::{BodyProbe, body_probe, box_shape};
 use super::pipboy::PipBoyAction;
 use super::test_world::{
-    Prop, SPAWN_AT, crate_prop, hold, position, prop_box, prop_entity, spawned_at, tick, walking,
+    Prop, SPAWN_AT, crate_prop, hold, position, prop_box, prop_entity, running, spawned_at, tick,
     world_with,
 };
 use super::{
-    CarriedInfo, EntityId, GrabRefusal, PlayerInput, PlayerMovement, ReleaseReason,
-    STANDING_CENTER_ABOVE_FEET, SimCommand, SimWorld, refr_entity_id,
+    CENTER_ABOVE_FEET, CarriedInfo, EntityId, GrabRefusal, PlayerInput, PlayerMovement,
+    ReleaseReason, SimCommand, SimWorld, refr_entity_id,
 };
 
 /// Where the crate rests in most tests: on the ground, ahead of the player along +X.
@@ -169,7 +169,7 @@ fn a_wall_stops_the_carried_crate_and_pushing_into_it_never_tears_it_away() {
         PlayerInput {
             yaw: view.yaw,
             pitch: view.pitch,
-            ..walking(view.yaw)
+            ..running(view.yaw)
         },
     );
     for _ in 0..240 {
@@ -367,7 +367,7 @@ fn travelled_in_one_second(sim: &mut SimWorld, sprint: bool) -> f32 {
         PlayerInput {
             sprint,
             pitch: view.pitch,
-            ..walking(view.yaw)
+            ..running(view.yaw)
         },
     );
     let start = position(sim);
@@ -458,7 +458,7 @@ fn a_player_standing_on_a_crate_is_never_lifted_by_carrying_it() {
     );
     let on_crate = position(&sim);
     assert!(
-        (on_crate.y - (2.0 + STANDING_CENTER_ABOVE_FEET)).abs() < 0.1,
+        (on_crate.y - (2.0 + CENTER_ABOVE_FEET)).abs() < 0.1,
         "the player starts on the crate: {on_crate}"
     );
     hold(
@@ -479,7 +479,7 @@ fn a_player_standing_on_a_crate_is_never_lifted_by_carrying_it() {
     let end = sim.player_debug();
     assert!(end.grounded);
     assert!(
-        (end.pos.y - STANDING_CENTER_ABOVE_FEET).abs() < 0.1,
+        (end.pos.y - CENTER_ABOVE_FEET).abs() < 0.1,
         "stands on the ground: {}",
         end.pos.y
     );
@@ -574,7 +574,7 @@ fn the_hold_distance_does_not_change_while_running_or_sprinting() {
             PlayerInput {
                 sprint,
                 pitch: view.pitch,
-                ..walking(view.yaw)
+                ..running(view.yaw)
             },
         );
         for frame in 1..=60 {
@@ -651,7 +651,7 @@ fn walking_the_carried_crate_into_a_wall_brings_the_player_up_to_the_wall_with_i
         &mut sim,
         PlayerInput {
             pitch: at_chest.pitch,
-            ..walking(at_chest.yaw)
+            ..running(at_chest.yaw)
         },
     );
     tick(&mut sim, 180);

@@ -3,7 +3,7 @@
 //! ("E)") followed by its upper-cased label; hints are spaced by a fixed gap, the row is centred
 //! on the bar and bracketed. A flashing hint animates only its key, a disabled one is greyed out.
 //!
-//! Every menu that shows hints (the Pip-Boy shell, the perk chart, later the HUD) resolves one
+//! Every menu that shows hints (the Pip-Boy shell, the perk chart) resolves one
 //! [`HintBarLayout`]. A menu whose bar sits at the bottom of the screen paints it with
 //! [`HintBarLayout::paint`] on a painter set up by [`ScreenFit`]; a menu that places the bar in its
 //! own movie and shades it (the perk chart) paints it with [`HintBarLayout::paint_in_movie`].
@@ -18,12 +18,13 @@ use super::scaleform_text::{FieldSpec, FieldStyle, TextAutoSize, natural_width, 
 use super::shapes::{Bracket, Shade, alpha_at_frame, rect_of};
 use super::tab::ButtonHint;
 use crate::rendering::game_settings::SafeZone;
-use crate::ui_layout::scaleform_text::AutoSize;
+use crate::ui_layout::button_hint::{ButtonHintKeys, ButtonHintRules};
+use crate::ui_layout::scaleform_text::{AutoSize, FieldGeometry};
 use crate::ui_layout::set_text::{SetTextKeys, SetTextRules};
 use crate::ui_layout::values::{ColorTransform, TrackKey};
 use crate::ui_layout::{
     LiteralKey, ModuleKeys, NumberKey, PlacementKey, ShapeKey, StageKey, SymbolTimelineKey,
-    TextKey, UiLayout, UiLayoutError, key_check_fields,
+    UiLayout, UiLayoutError, key_check_fields,
 };
 
 const MOVIE: &str = "ButtonBarMenu";
@@ -33,18 +34,10 @@ struct HintBarKeys {
     bar: PlacementKey,
     left_bracket: ShapeKey,
     right_bracket: ShapeKey,
-    key_field: TextKey,
-    key_y: LiteralKey,
-    key_font: LiteralKey,
-    key_suffix: LiteralKey,
-    label: TextKey,
-    icon_holder: PlacementKey,
-    icon_holder_x: LiteralKey,
+    hint: ButtonHintKeys,
     flash: PlacementKey,
     holder_symbol: SymbolTimelineKey,
     flash_loop: LiteralKey,
-    gap: LiteralKey,
-    centre_divisor: LiteralKey,
     disabled_alpha: NumberKey,
     set_text: SetTextKeys,
 }
@@ -63,24 +56,7 @@ static KEYS: HintBarKeys = HintBarKeys {
         MOVIE,
         "[Shared.AS3.BSButtonHintBar]/ButtonBracket_Right_mc/@1",
     ),
-    key_field: TextKey::new(
-        MOVIE,
-        "[Shared.AS3.BSButtonHint]/IconHolderInstance/IconAnimInstance/Icon_tf",
-    ),
-    key_y: LiteralKey::new(MOVIE, "Shared.AS3.BSButtonHint.UpdateIconTextField#$5=", 2),
-    key_font: LiteralKey::texts(MOVIE, "Shared.AS3.BSButtonHint.GetExpectedFont#$1=", 3),
-    key_suffix: LiteralKey::texts(
-        MOVIE,
-        "Shared.AS3.BSButtonHint.get:PCKey#_buttonHintData.PCKey+",
-        1,
-    ),
-    label: TextKey::new(MOVIE, "[Shared.AS3.BSButtonHint]/textField_tf"),
-    icon_holder: PlacementKey::new(MOVIE, "[Shared.AS3.BSButtonHint]/IconHolderInstance"),
-    icon_holder_x: LiteralKey::new(
-        MOVIE,
-        "Shared.AS3.BSButtonHint.redrawPrimaryButton#IconHolderInstance.x=",
-        1,
-    ),
+    hint: ButtonHintKeys::of(MOVIE),
     flash: PlacementKey::new(
         MOVIE,
         "[Shared.AS3.BSButtonHint]/IconHolderInstance:Flashing/IconAnimInstance",
@@ -89,16 +65,6 @@ static KEYS: HintBarKeys = HintBarKeys {
     flash_loop: LiteralKey::texts(
         MOVIE,
         "ButtonBarMenu_fla.BSButtonHint_IconHolder_8.frame60#gotoAndPlay(0)",
-        1,
-    ),
-    gap: LiteralKey::new(
-        MOVIE,
-        "Shared.AS3.BSButtonHintBar.redrawUIComponent#$6.width+",
-        1,
-    ),
-    centre_divisor: LiteralKey::new(
-        MOVIE,
-        "Shared.AS3.BSButtonHintBar.redrawUIComponent#-(ButtonHintBarInternal_mc.width)/",
         1,
     ),
     disabled_alpha: NumberKey::new(MOVIE, "Shared.AS3.BSButtonHint.DISABLED_GREY_OUT_ALPHA"),
@@ -110,18 +76,10 @@ key_check_fields!(HintBarKeys {
     bar,
     left_bracket,
     right_bracket,
-    key_field,
-    key_y,
-    key_font,
-    key_suffix,
-    label,
-    icon_holder,
-    icon_holder_x,
+    hint,
     flash,
     holder_symbol,
     flash_loop,
-    gap,
-    centre_divisor,
     disabled_alpha,
     set_text,
 });
@@ -173,20 +131,13 @@ pub struct HintBarLayout {
     left_bracket: Bracket,
     right_bracket: Bracket,
     key_field: FieldSpec,
-    key_suffix: String,
-    /// The key holder's x as the code sets it, where the key field's box starts inside the
-    /// holder, and the label field's authored x, which the code replaces by the holder's width.
-    icon_holder_x: f32,
-    key_x_in_holder: f32,
-    label_x: f32,
+    hint: ButtonHintRules,
     label: FieldSpec,
     /// The top and bottom of a hint's fields relative to the bar's registration point.
     row_extent: [f32; 2],
     /// The key's opacity on each frame of the flashing loop, from the loop's first frame.
     flash_alphas: Vec<f32>,
     fps: f32,
-    gap: f32,
-    centre_divisor: f32,
     disabled_alpha: f32,
     rules: SetTextRules,
 }
@@ -248,38 +199,36 @@ fn flash_alphas(layout: &UiLayout) -> Result<Vec<f32>, UiLayoutError> {
     ))
 }
 
+/// The top and bottom, relative to the bar, of the band both fields of a hint lie in: what the
+/// backdrop of the bar covers.
+fn row_extent(key: &FieldGeometry, label: &FieldGeometry) -> [f32; 2] {
+    [key.top.min(label.top), key.bottom.max(label.bottom)]
+}
+
 impl HintBarLayout {
     pub fn resolve(layout: &UiLayout) -> Result<Self, UiLayoutError> {
         let stage = layout.get(&KEYS.stage)?;
         let bar = layout.get(&KEYS.bar)?.local.matrix;
-        let key_placement = layout.get(&KEYS.key_field)?.placement;
-        let key_clip = key_placement.local.matrix;
-        let holder = layout.get(&KEYS.icon_holder)?;
-        let key_y = layout.lit_number(&KEYS.key_y, 0)? as f32;
-        let key_font = layout.lit_string(&KEYS.key_font, 0)?;
-        let key_field =
-            FieldSpec::resolve_in_font(layout, &KEYS.key_field, TextAutoSize::None, &key_font)?
-                .translated(Vec2::new(0.0, key_y - key_clip.ty));
-        let label = FieldSpec::resolve(layout, &KEYS.label, TextAutoSize::None)?;
+        let hint = KEYS.hint.resolve(layout)?;
+        let key_field = FieldSpec::resolve_in_font(
+            layout,
+            &KEYS.hint.key_field,
+            TextAutoSize::None,
+            &hint.key_font,
+        )?
+        .translated(Vec2::new(0.0, hint.key_y_offset));
+        let label = FieldSpec::resolve(layout, &KEYS.hint.label, TextAutoSize::None)?;
         Ok(Self {
             stage: rect_of(stage.rect),
             bar_offset: Vec2::new(bar.tx, bar.ty),
             left_bracket: Bracket::resolve(layout, &KEYS.left_bracket, false)?,
             right_bracket: Bracket::resolve(layout, &KEYS.right_bracket, false)?,
             key_field,
-            key_suffix: layout.lit_string(&KEYS.key_suffix, 0)?,
-            icon_holder_x: layout.lit_number(&KEYS.icon_holder_x, 0)? as f32,
-            key_x_in_holder: key_placement.world.matrix.tx - holder.world.matrix.tx,
-            label_x: layout.get(&KEYS.label)?.placement.local.matrix.tx,
-            row_extent: [
-                key_field.geometry.top.min(label.geometry.top),
-                key_field.geometry.bottom.max(label.geometry.bottom),
-            ],
+            hint,
+            row_extent: row_extent(&key_field.geometry, &label.geometry),
             label,
             flash_alphas: flash_alphas(layout)?,
             fps: stage.fps,
-            gap: layout.lit_number(&KEYS.gap, 0)? as f32,
-            centre_divisor: layout.lit_number(&KEYS.centre_divisor, 0)? as f32,
             disabled_alpha: layout.get(&KEYS.disabled_alpha)? as f32,
             rules: KEYS.set_text.resolve(layout)?,
         })
@@ -314,28 +263,23 @@ impl HintBarLayout {
     }
 
     fn measure(&self, painter: &Painter, layout: &UiLayout, hint: &ButtonHint) -> HintRow {
-        let key = format!("{}{}", hint.key.label(), self.key_suffix);
-        let label = self.rules.apply(layout, &hint.label, true, false);
+        let key = self.hint.key_caption(hint.key.label());
+        let label = self.hint.label_text(&self.rules, layout, &hint.label);
         let key_box = Self::sized_width(painter, &self.key_field, &key);
         let label_box = Self::sized_width(painter, &self.label, &label);
-        let label_shift = label_shift(
-            self.icon_holder_x,
-            self.key_x_in_holder + key_box,
-            self.label_x,
+        let label_shift = self.hint.label_shift(key_box);
+        let bounds = self.hint.row_bounds(
+            self.key_field.geometry.left,
+            key_box,
+            self.label.geometry.left,
+            label_box,
         );
-        let left = self
-            .key_field
-            .geometry
-            .left
-            .min(self.label.geometry.left + label_shift);
-        let right = (self.key_field.geometry.left + key_box)
-            .max(self.label.geometry.left + label_shift + label_box);
         HintRow {
             key,
             label,
             label_shift,
-            left,
-            right,
+            left: bounds.left,
+            right: bounds.right,
         }
     }
 
@@ -408,13 +352,13 @@ impl HintBarLayout {
             .iter()
             .map(|hint| self.measure(painter, layout, hint))
             .collect();
-        let positions = row_positions(&rows, self.gap);
+        let positions = row_positions(&rows, self.hint.gap);
         let (Some(first), Some(last)) = (rows.first(), rows.last()) else {
             return;
         };
         let last_x = positions[positions.len() - 1];
         let width = last_x + last.right - first.left;
-        let internal_x = bar.x - width / self.centre_divisor;
+        let internal_x = self.hint.centred_origin(bar.x, width);
         let left = internal_x + first.left;
         let right = internal_x + last_x + last.right;
         let left_origin = Pos2::new(left - self.left_bracket.bounds().width(), bar.y);
@@ -484,13 +428,6 @@ impl HintBarLayout {
     }
 }
 
-/// How far the code moves a hint's label: it sets the label's x to the key holder's width, which
-/// reaches from the holder's origin to the right edge of the key field, and the holder sits at
-/// `holder_x`.
-fn label_shift(holder_x: f32, holder_width: f32, authored_label_x: f32) -> f32 {
-    holder_x + holder_width - authored_label_x
-}
-
 /// One hint measured: its texts, how far the code moves its label, and its bounds relative to
 /// its registration point.
 struct HintRow {
@@ -542,14 +479,6 @@ mod tests {
     }
 
     #[test]
-    fn the_label_follows_the_right_edge_of_the_key_field_inside_its_holder() {
-        let key_x_in_holder = 2.0;
-        let key_box = 30.0;
-        assert_close(label_shift(0.0, key_x_in_holder + key_box, 2.0), 30.0);
-        assert_close(label_shift(5.0, key_x_in_holder + key_box, 2.0), 35.0);
-    }
-
-    #[test]
     fn each_hint_starts_its_predecessors_width_plus_the_gap_further() {
         let rows = [row(-1.0, 9.0), row(0.0, 5.0), row(2.0, 4.0)];
         assert_eq!(row_positions(&rows, 3.0), [0.0, 13.0, 21.0]);
@@ -587,6 +516,51 @@ mod tests {
         let alphas = loop_alphas(&track, &base, 3..5);
         assert_close(alphas[0], 0.75);
         assert_close(alphas[1], 0.7);
+    }
+
+    fn field_at(y: f32, height: f32) -> FieldGeometry {
+        let metrics = crate::ui_layout::scaleform_text::FontMetrics {
+            ascent: 0.9,
+            descent: 0.2,
+        };
+        FieldGeometry::content_box(
+            (0.0, y),
+            10.0,
+            height,
+            16.0,
+            crate::ui_layout::values::Align::Left,
+            metrics,
+        )
+    }
+
+    #[test]
+    fn the_row_extent_spans_both_fields_whichever_reaches_further() {
+        let label = field_at(2.0, 20.0);
+        let lower_key = field_at(10.0, 20.0);
+        let higher_key = field_at(-6.0, 20.0);
+        assert_eq!(
+            row_extent(&lower_key, &label),
+            [label.top, lower_key.bottom]
+        );
+        assert_eq!(
+            row_extent(&higher_key, &label),
+            [higher_key.top, label.bottom]
+        );
+        assert_eq!(row_extent(&label, &label), [label.top, label.bottom]);
+    }
+
+    #[test]
+    #[ignore = "needs OPENFO4_INSTALL_DIR with the converted interface"]
+    fn the_installed_backdrop_band_is_pinned_to_the_authored_fields() {
+        let bar = HintBarLayout::resolve(&crate::ui_layout::test_support::installed_layout())
+            .expect("the installed hint bar resolves");
+        let (key, label) = (&bar.key_field.geometry, &bar.label.geometry);
+        println!(
+            "key {}..{} label {}..{} extent {:?}",
+            key.top, key.bottom, label.top, label.bottom, bar.row_extent
+        );
+        assert_close(bar.row_extent[0], 2.0);
+        assert_close(bar.row_extent[1], 28.85);
     }
 
     #[test]

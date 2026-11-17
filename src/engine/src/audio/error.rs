@@ -4,6 +4,7 @@ use kira::sound::FromFileError;
 use kira::{PlaySoundError, ResourceLimitReached};
 
 use super::footsteps::FootstepError;
+use super::item_sounds::ItemSoundError;
 use super::world_music::WorldMusicError;
 use crate::assets::layout::AudioKeyError;
 
@@ -61,4 +62,6 @@ pub enum AudioError {
     FootSurface(anyhow::Error),
     #[error(transparent)]
     Footsteps(#[from] FootstepError),
+    #[error(transparent)]
+    ItemSounds(#[from] ItemSoundError),
 }

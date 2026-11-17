@@ -11,19 +11,24 @@ pub mod furniture;
 pub mod game_settings;
 pub mod globals;
 pub mod grass;
+pub mod item_components;
+pub mod item_sounds;
 pub mod items;
 pub mod landscape_textures;
 pub mod landscapes;
+pub mod leveled_items;
 pub mod lighting_templates;
 pub mod lights;
 pub mod load_screens;
 pub mod map_markers;
+pub mod map_regions;
 pub mod material_swaps;
 pub mod material_types;
 pub mod movable_statics;
 pub mod movement_types;
 pub mod music;
 pub mod navigation_meshes;
+pub mod npc_factions;
 pub mod perks;
 pub mod placed_objects;
 mod rows;
@@ -33,6 +38,8 @@ pub mod special_attributes;
 pub mod static_collections;
 pub mod statics;
 pub mod teleports;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod trees;
 pub mod water_placement;
 pub mod waters;
@@ -156,6 +163,14 @@ impl DbClient {
         footsteps::FootstepCatalog::from_connection(&self.conn)
     }
 
+    /// The pick-up and put-down sound descriptors of the items and the default-object slots they fall
+    /// back on, with the sound tables they reach; errors when a slot is unassigned or a descriptor is
+    /// missing.
+    #[instrument(skip(self))]
+    pub fn get_item_sound_catalog(&self) -> anyhow::Result<item_sounds::ItemSoundCatalog> {
+        item_sounds::ItemSoundCatalog::from_connection(&self.conn)
+    }
+
     /// The sound descriptors reachable from the weather sound descriptors `roots`, with the output
     /// models and categories they name; errors when the installer has not extracted the sound
     /// tables, a root is not a sound descriptor or a row is malformed.
@@ -222,7 +237,48 @@ impl DbClient {
 
     #[instrument(skip(self))]
     pub fn get_items(&self) -> anyhow::Result<Vec<items::ItemRow>> {
-        items::ItemRow::list_all(&self.conn)
+        items::ItemRow::list_all(&self.conn, self.schema)
+    }
+
+    /// Every component entry of every miscellaneous item, or `None` for a database converted
+    /// before the installer extracted them.
+    #[instrument(skip(self))]
+    pub fn get_item_components(
+        &self,
+    ) -> anyhow::Result<Option<Vec<item_components::ItemComponentRow>>> {
+        item_components::ItemComponentRow::list_all(&self.conn, self.schema)
+    }
+
+    /// The display name of each named component record, by form key.
+    #[instrument(skip(self))]
+    pub fn get_component_names(&self) -> anyhow::Result<std::collections::HashMap<String, String>> {
+        item_components::component_names(&self.conn)
+    }
+
+    /// The factions of an NPC base record, or `None` for a database converted before the
+    /// installer extracted them.
+    #[instrument(skip(self))]
+    pub fn get_npc_factions(
+        &self,
+        npc: &str,
+    ) -> anyhow::Result<Option<Vec<npc_factions::NpcFactionRow>>> {
+        npc_factions::NpcFactionRow::for_npc(&self.conn, self.schema, npc)
+    }
+
+    /// The form key of the keyword with this editor id; `None` when no keyword has it, an error
+    /// when several do.
+    #[instrument(skip(self))]
+    pub fn get_keyword_form_key(&self, editor_id: &str) -> anyhow::Result<Option<String>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT form_key FROM keywords WHERE editor_id = ?")?;
+        let mut form_keys = stmt
+            .query_map(rusqlite::params![editor_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        match form_keys.len() {
+            0 | 1 => Ok(form_keys.pop()),
+            count => anyhow::bail!("{count} keywords have the editor id '{editor_id}'"),
+        }
     }
 
     #[instrument(skip(self))]
@@ -234,6 +290,12 @@ impl DbClient {
             return Ok(Vec::new());
         }
         map_markers::MapMarkerRow::list_for_worldspace(worldspace, &self.conn)
+    }
+
+    /// Regions with a map entry; none for a database without the map priority column.
+    #[instrument(skip(self))]
+    pub fn get_map_regions(&self) -> anyhow::Result<Vec<map_regions::MapRegion>> {
+        map_regions::get_all(&self.conn, self.schema)
     }
 
     #[instrument(skip(self))]
@@ -408,10 +470,10 @@ impl DbClient {
         teleports::get_all(&self.conn, self.schema)
     }
 
-    /// Enabled automatic load doors with their trigger volumes.
+    /// Enabled automatic load doors with their placements.
     #[instrument(skip(self))]
     pub fn get_walk_in_doors(&self) -> anyhow::Result<teleports::WalkInDoors> {
-        teleports::get_walk_in_doors(&self.conn, self.schema)
+        teleports::get_walk_in_doors(&self.conn)
     }
 
     #[instrument(skip(self))]
@@ -550,15 +612,15 @@ impl DbClient {
     /// The form key the default object manager assigns to `slot` (`LSIS`, ...); `None` when the
     /// slot is unassigned or absent.
     pub fn get_default_object(&self, slot: &str) -> rusqlite::Result<Option<String>> {
-        use rusqlite::OptionalExtension;
-        self.conn
-            .query_row(
-                "SELECT target FROM default_object_slots WHERE slot = ?",
-                rusqlite::params![slot],
-                |row| row.get(0),
-            )
-            .optional()
-            .map(Option::flatten)
+        rows::default_object_slot(&self.conn, slot).map(|assigned| match assigned {
+            rows::DefaultObjectSlot::Target(target) => Some(target),
+            rows::DefaultObjectSlot::Absent | rows::DefaultObjectSlot::Empty => None,
+        })
+    }
+
+    /// Every leveled item list; errors on the first malformed row, naming the list.
+    pub fn get_leveled_items(&self) -> anyhow::Result<Vec<leveled_items::LeveledItemRow>> {
+        leveled_items::LeveledItemRow::list_all(&self.conn)
     }
 
     pub fn get_weather(&self, form_key: &str) -> rusqlite::Result<weather::WeatherRow> {
@@ -618,6 +680,12 @@ impl DbClient {
     #[instrument(skip(self))]
     pub fn get_game_setting_number(&self, editor_id: &str) -> anyhow::Result<Option<f32>> {
         game_settings::get_game_setting_number(editor_id, &self.conn)
+    }
+
+    /// `Ok(None)` when the database has no game setting with this editor id.
+    #[instrument(skip(self))]
+    pub fn get_game_setting_string(&self, editor_id: &str) -> anyhow::Result<Option<String>> {
+        game_settings::get_game_setting_string(editor_id, &self.conn)
     }
 
     #[instrument(skip(self))]
@@ -706,5 +774,34 @@ impl DbClient {
         std::collections::HashMap<String, std::sync::Arc<Vec<material_swaps::SwapEntry>>>,
     > {
         material_swaps::get_material_swap_entries(&self.conn, self.schema)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::database_with;
+
+    #[test]
+    fn a_keyword_is_found_by_its_editor_id() {
+        let db = database_with(
+            "INSERT INTO keywords (form_key, editor_id) VALUES ('0A:T.esm', 'Alpha'), ('0B:T.esm', 'Beta');",
+        );
+
+        assert_eq!(
+            db.get_keyword_form_key("Beta").unwrap().as_deref(),
+            Some("0B:T.esm")
+        );
+        assert_eq!(db.get_keyword_form_key("Gamma").unwrap(), None);
+    }
+
+    #[test]
+    fn two_keywords_with_one_editor_id_are_an_error() {
+        let db = database_with(
+            "INSERT INTO keywords (form_key, editor_id) VALUES ('0A:T.esm', 'Alpha'), ('0B:T.esm', 'Alpha');",
+        );
+
+        let error = db.get_keyword_form_key("Alpha").unwrap_err().to_string();
+
+        assert_eq!(error, "2 keywords have the editor id 'Alpha'");
     }
 }

@@ -122,6 +122,80 @@ namespace InstallerTests
         }
 
         [Fact]
+        public async Task Reload_CellsAndRegions_FillsTheDisplayNamesAndMapColumns()
+        {
+            Execute("UPDATE cells SET name = NULL");
+            Execute("UPDATE regions SET name = NULL, map_priority = NULL");
+
+            await Reload("cells", "regions");
+
+            Assert.Equal(LoadedFixtureDatabase.InteriorName, Scalar<string>("SELECT name FROM cells WHERE form_key = @key", new { key = _fixture.KeyOf("FixtureInterior") }));
+            Assert.Equal((LoadedFixtureDatabase.MapRegionName, (long)LoadedFixtureDatabase.MapRegionPriority),
+                Scalar<(string, long)>("SELECT name, map_priority FROM regions WHERE form_key = @key", new { key = _fixture.KeyOf("MapRegion") }));
+        }
+
+        [Fact]
+        public async Task Reload_CellsAndRegions_AddsTheColumnsAnOlderDatabaseLacks()
+        {
+            Execute("ALTER TABLE cells DROP COLUMN name");
+            Execute("ALTER TABLE regions DROP COLUMN map_priority");
+
+            await Reload("cells", "regions");
+
+            Assert.Equal(LoadedFixtureDatabase.InteriorName, Scalar<string>("SELECT name FROM cells WHERE form_key = @key", new { key = _fixture.KeyOf("FixtureInterior") }));
+            Assert.Equal((long)LoadedFixtureDatabase.MapRegionPriority, Scalar<long>("SELECT map_priority FROM regions WHERE form_key = @key", new { key = _fixture.KeyOf("MapRegion") }));
+        }
+
+        [Fact]
+        public async Task Reload_NpcFactions_ReplacesTamperedRowsWithTheRecordLists()
+        {
+            var before = Dump("SELECT * FROM npc_factions ORDER BY npc, faction");
+            Execute("DELETE FROM npc_factions");
+            Execute("INSERT INTO npc_factions (npc, faction, rank) VALUES ('0FFFFF:Fixture.esm', '0FFFFE:Fixture.esm', 9)");
+
+            await Reload("npc_factions");
+
+            Assert.Equal(before, Dump("SELECT * FROM npc_factions ORDER BY npc, faction"));
+            Assert.NotEmpty(before);
+        }
+
+        [Fact]
+        public async Task Reload_MiscComponents_ReplacesTamperedRowsWithTheRecordLists()
+        {
+            var before = Dump("SELECT * FROM misc_components ORDER BY form_key, component");
+            Execute("UPDATE misc_components SET count = 999");
+
+            await Reload("misc_components");
+
+            Assert.Equal(before, Dump("SELECT * FROM misc_components ORDER BY form_key, component"));
+            Assert.NotEmpty(before);
+        }
+
+        [Fact]
+        public async Task Reload_Items_AddsTheMarkerColumnAnOlderDatabaseLacks()
+        {
+            Execute("ALTER TABLE items DROP COLUMN is_marker");
+
+            await Reload("items");
+
+            Assert.Equal(1, Scalar<long>("SELECT is_marker FROM items WHERE form_key = @key", new { key = _fixture.KeyOf("MarkerMisc") }));
+        }
+
+        [Fact]
+        public async Task Reload_Cells_AddsTheItemReferenceColumnsAnOlderDatabaseLacks()
+        {
+            var before = Dump("SELECT form_key, item_count, owner, leveled_item FROM placed_objects ORDER BY form_key");
+            Execute("ALTER TABLE placed_objects DROP COLUMN item_count");
+            Execute("ALTER TABLE placed_objects DROP COLUMN owner");
+            Execute("ALTER TABLE placed_objects DROP COLUMN leveled_item");
+
+            await Reload("cells");
+
+            Assert.Equal(before, Dump("SELECT form_key, item_count, owner, leveled_item FROM placed_objects ORDER BY form_key"));
+            Assert.Equal(_fixture.KeyOf("CellFaction"), Scalar<string>("SELECT owner FROM placed_objects WHERE form_key = @key", new { key = _fixture.KeyOf("CellOwnedRef") }));
+        }
+
+        [Fact]
         public async Task Reload_FailureInsideJob_RollsBackToThePreviousContents()
         {
             Execute("INSERT INTO records (form_key, record_type, editor_id, source_plugin) VALUES ('0FFFFF:Fixture.esm', 'STAT', 'Stale', 'Fixture.esm')");

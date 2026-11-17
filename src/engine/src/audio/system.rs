@@ -8,6 +8,7 @@ use super::backend::AudioBackend;
 use super::backend_errors::BackendErrorReporter;
 use super::error::AudioError;
 use super::footsteps::Footsteps;
+use super::item_sounds::{ItemSoundKind, ItemSounds};
 use super::music::{MusicCommand, MusicDirector};
 use super::music_output::{MusicOutput, Playing, SoundSettings, open_music_file};
 use super::place::PlaceSnapshot;
@@ -57,9 +58,10 @@ pub struct AudioSystem<B: AudioBackend = DefaultBackend> {
     sfx: SfxOutput,
     weather_output: WeatherOutput,
     footsteps: Option<Footsteps>,
+    item_sounds: Option<ItemSounds>,
     /// `None` while there are no weather sounds, and for good once their data failed.
     weather: Option<WeatherAudio>,
-    /// The phase of the latest frame; footsteps and weather play only in a gameplay phase.
+    /// The phase of the latest frame; footsteps, item sounds and weather play only in a gameplay phase.
     phase: Phase,
     menu: Option<Playing>,
     world: Option<WorldPlayback>,
@@ -112,6 +114,7 @@ impl<B: AudioBackend> AudioSystem<B> {
             sfx,
             weather_output,
             footsteps: None,
+            item_sounds: None,
             weather: None,
             phase: Phase::MainMenu,
             menu: None,
@@ -135,6 +138,11 @@ impl<B: AudioBackend> AudioSystem<B> {
         self.footsteps = Some(footsteps);
     }
 
+    /// Lets `play_item_sound` play the item pick-up and put-down sounds.
+    pub fn set_item_sounds(&mut self, sounds: ItemSounds) {
+        self.item_sounds = Some(sounds);
+    }
+
     /// Lets the frames' weather play as loops and thunder; replaces the weather sounds set before.
     pub fn set_weather(&mut self, weather: WeatherAudio) {
         self.weather = Some(weather);
@@ -156,6 +164,22 @@ impl<B: AudioBackend> AudioSystem<B> {
             return Ok(());
         };
         for layer in footsteps.step(event, material)? {
+            self.sfx.play_layer(&layer)?;
+        }
+        Ok(())
+    }
+
+    /// Plays the sound of one inventory change; dropped outside the gameplay phases (`in_world`)
+    /// and while no item sounds are set, like `play_footstep`. An error is fatal: item sound data
+    /// that cannot be used, or a file that cannot be decoded or played.
+    pub fn play_item_sound(&mut self, item: &str, kind: ItemSoundKind) -> Result<(), AudioError> {
+        if !in_world(self.phase) {
+            return Ok(());
+        }
+        let Some(sounds) = &mut self.item_sounds else {
+            return Ok(());
+        };
+        if let Some(layer) = sounds.sound(item, kind)? {
             self.sfx.play_layer(&layer)?;
         }
         Ok(())

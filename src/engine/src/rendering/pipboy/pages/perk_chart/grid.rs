@@ -382,6 +382,7 @@ mod tests {
             letter_spacing: 0.0,
             indent: 0.0,
             align: crate::ui_layout::values::Align::Center,
+            valign: crate::ui_layout::scaleform_text::VerticalAlign::Top,
             wraps: false,
             metrics: crate::ui_layout::test_support::FIXTURE_METRICS,
         };

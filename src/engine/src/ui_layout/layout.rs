@@ -142,6 +142,15 @@ impl UiLayout {
         whole(self.get(key)?, key.movie, key.path)
     }
 
+    pub fn lit_flag(&self, key: &LiteralKey, index: usize) -> Result<bool, UiLayoutError> {
+        match self.lit_at(key, index)? {
+            Scalar::Flag(value) => Ok(value),
+            other => Err(self
+                .movie(key.movie)?
+                .wrong_scalar(key.path, "a boolean", &other)),
+        }
+    }
+
     pub fn lit_string(&self, key: &LiteralKey, index: usize) -> Result<String, UiLayoutError> {
         match self.lit_at(key, index)? {
             Scalar::Text(value) => Ok(value),

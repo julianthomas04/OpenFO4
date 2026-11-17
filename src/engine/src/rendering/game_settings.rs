@@ -11,6 +11,7 @@ use crate::audio::MenuMusicSettings;
 use crate::rendering::grass::FadeLimits;
 use crate::rendering::loading_screen::{LoadScreenLut, ModelControls, SceneLights};
 use crate::rendering::local_lights::LightFade;
+use crate::rendering::pick_settings::PickSettings;
 use crate::rendering::post::depth_of_field::BokehGate;
 use crate::rendering::post::night_sky::SunSizes;
 use crate::rendering::shadows::lamps::LampShadowConfig;
@@ -68,6 +69,8 @@ pub struct GameSettings {
     pub loading_model: ModelControls,
     pub menu_music: MenuMusicSettings,
     pub menu_video: MenuVideoSettings,
+    /// What E reaches and how long a hold grabs.
+    pub pick: PickSettings,
 }
 
 impl GameSettings {
@@ -102,6 +105,7 @@ impl GameSettings {
             loading_model: ModelControls::from_ini(ini)?,
             menu_music: MenuMusicSettings::from_ini(ini)?,
             menu_video: MenuVideoSettings::from_ini(ini)?,
+            pick: PickSettings::from_ini(ini)?,
         })
     }
 }
@@ -140,6 +144,21 @@ mod tests {
         assert!(settings.menu_music.enabled);
         assert!(settings.menu_video.enabled);
         assert_eq!(settings.safe_zone, SafeZone { x: 50.0, y: 36.0 });
+        assert_eq!(
+            settings.pick,
+            crate::rendering::pick_settings::ORIGINAL_PICK_DEFAULTS
+        );
+    }
+
+    #[test]
+    fn the_pick_settings_an_ini_sets_reach_the_game_settings() {
+        let settings = GameSettings::from_ini(&ini_with(
+            "[Interface]\nfActivatePickLength=300\nfActivatePickRadius=40\n[Controls]\nfZKeyDelay=1.0\n",
+        ))
+        .unwrap();
+        assert!((settings.pick.reach() - 30.0).abs() < 1e-5);
+        assert!((settings.pick.radius() - 4.0).abs() < 1e-5);
+        assert_eq!(settings.pick.grab_hold(), std::time::Duration::from_secs(1));
     }
 
     #[test]

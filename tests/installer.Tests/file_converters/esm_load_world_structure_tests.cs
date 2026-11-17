@@ -23,6 +23,24 @@ namespace InstallerTests
         }
 
         [Fact]
+        public void Cell_Interior_StoresItsDisplayName()
+        {
+            Assert.Equal(LoadedFixtureDatabase.InteriorName, Cell("FixtureInterior").Name);
+        }
+
+        [Fact]
+        public void Cell_WithoutADisplayName_StoresNull()
+        {
+            Assert.Null(Cell("FixtureExterior").Name);
+        }
+
+        [Fact]
+        public void Cell_WithAWhitespaceOnlyName_StoresNull()
+        {
+            Assert.Null(Cell("FixtureWorldTopCell").Name);
+        }
+
+        [Fact]
         public void Cell_WorldspaceTopCell_IsFlaggedPersistentSoGridQueriesCanExcludeIt()
         {
             var cell = Cell("FixtureWorldTopCell");

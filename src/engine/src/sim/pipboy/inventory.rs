@@ -1,5 +1,6 @@
 //! The player's inventory as the INV page shows it.
 
+use super::catalog::ItemDefinition;
 use super::character::Limb;
 
 /// Session-stable handle of one inventory stack, allocated by the model.
@@ -204,6 +205,14 @@ impl InventoryItem {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum InventoryError {
+    #[error("cannot add zero units of {form_key}")]
+    ZeroUnits { form_key: String },
+    #[error("the stack of {form_key} would exceed {max} units")]
+    CountOverflow { form_key: String, max: u32 },
+}
+
 impl Inventory {
     /// The items of `category` in the order the list shows them (the category's sort mode).
     /// Alphabetical ascending; every other mode descending by its metric, ties by name.
@@ -239,6 +248,48 @@ impl Inventory {
         id
     }
 
+    /// Adds `count` units of `definition`: into the first stack of its `form_key` that is not
+    /// `legendary` (leaving that stack's `equipped`, `favourite` and `legendary` as they are),
+    /// else as a new stack. Returns the stack's id; the inventory is unchanged on `Err`.
+    pub fn add_units(
+        &mut self,
+        definition: &ItemDefinition,
+        count: u32,
+    ) -> Result<ItemId, InventoryError> {
+        if count == 0 {
+            return Err(InventoryError::ZeroUnits {
+                form_key: definition.form_key.clone(),
+            });
+        }
+        let stack = self.items.iter_mut().find(|item| {
+            item.form_key.as_deref() == Some(definition.form_key.as_str()) && !item.legendary
+        });
+        let Some(stack) = stack else {
+            return Ok(self.insert(InventoryItem {
+                id: ItemId(0),
+                form_key: Some(definition.form_key.clone()),
+                name: definition.name.clone(),
+                category: definition.category,
+                count,
+                weight: definition.weight,
+                value: definition.value,
+                equipped: false,
+                favourite: None,
+                legendary: false,
+                details: definition.details.clone(),
+            }));
+        };
+        stack.count =
+            stack
+                .count
+                .checked_add(count)
+                .ok_or_else(|| InventoryError::CountOverflow {
+                    form_key: definition.form_key.clone(),
+                    max: u32::MAX,
+                })?;
+        Ok(stack.id)
+    }
+
     pub fn item(&self, id: ItemId) -> Option<&InventoryItem> {
         self.items.iter().find(|item| item.id == id)
     }
@@ -250,7 +301,7 @@ impl Inventory {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::{aid, weapon};
+    use super::super::test_support::{aid, definition, weapon};
     use super::*;
 
     fn inventory_of(items: Vec<InventoryItem>) -> Inventory {
@@ -407,5 +458,135 @@ mod tests {
         }
         assert!(SortMode::Range.is_valid_for(InventoryCategory::Weapons));
         assert!(!SortMode::Range.is_valid_for(InventoryCategory::Aid));
+    }
+
+    const WRENCH: &str = "0AA001:Test.esm";
+
+    fn stacks_of(inventory: &Inventory, form_key: &str) -> Vec<(u32, bool)> {
+        inventory
+            .items
+            .iter()
+            .filter(|item| item.form_key.as_deref() == Some(form_key))
+            .map(|item| (item.count, item.legendary))
+            .collect()
+    }
+
+    #[test]
+    fn adding_a_new_item_creates_a_fresh_unequipped_stack_from_the_definition() {
+        let mut inventory = Inventory::default();
+        let mut wrench = definition(WRENCH, "Pipe Wrench");
+        wrench.category = InventoryCategory::Junk;
+        wrench.details = ItemDetails::Junk(vec![ComponentAmount {
+            component: "Steel".to_owned(),
+            count: 3,
+        }]);
+
+        let id = inventory.add_units(&wrench, 4).unwrap();
+
+        let stack = inventory.item(id).unwrap();
+        assert_eq!(stack.form_key.as_deref(), Some(WRENCH));
+        assert_eq!(stack.name, "Pipe Wrench");
+        assert_eq!(stack.category, InventoryCategory::Junk);
+        assert_eq!(stack.count, 4);
+        assert!((stack.weight - 2.0).abs() < f32::EPSILON && stack.value == 7);
+        assert!(!stack.equipped && stack.favourite.is_none() && !stack.legendary);
+        assert_eq!(stack.details, wrench.details);
+        assert_eq!(inventory.items.len(), 1);
+    }
+
+    #[test]
+    fn adding_units_of_a_held_item_grows_its_stack_and_keeps_equipped_and_favourite() {
+        let mut inventory = Inventory::default();
+        let wrench = definition(WRENCH, "Pipe Wrench");
+        let id = inventory.add_units(&wrench, 2).unwrap();
+        let stack = inventory.item_mut(id).unwrap();
+        stack.equipped = true;
+        stack.favourite = Some(FavouriteSlot(5));
+
+        let merged = inventory.add_units(&wrench, 3).unwrap();
+
+        assert_eq!(merged, id);
+        let stack = inventory.item(id).unwrap();
+        assert_eq!(stack.count, 5);
+        assert!(stack.equipped);
+        assert_eq!(stack.favourite, Some(FavouriteSlot(5)));
+        assert_eq!(inventory.items.len(), 1);
+    }
+
+    #[test]
+    fn a_legendary_stack_never_absorbs_units_but_a_plain_one_beside_it_does() {
+        let mut inventory = Inventory::default();
+        let wrench = definition(WRENCH, "Pipe Wrench");
+        let legendary = inventory.add_units(&wrench, 1).unwrap();
+        inventory.item_mut(legendary).unwrap().legendary = true;
+
+        let plain = inventory.add_units(&wrench, 2).unwrap();
+        assert_ne!(plain, legendary);
+        let again = inventory.add_units(&wrench, 5).unwrap();
+
+        assert_eq!(again, plain);
+        assert_eq!(stacks_of(&inventory, WRENCH), [(1, true), (7, false)]);
+    }
+
+    #[test]
+    fn merging_picks_the_first_plain_stack_of_the_same_record_only() {
+        let mut inventory = Inventory::default();
+        let other = inventory
+            .add_units(&definition("0AA002:Test.esm", "Spanner"), 9)
+            .unwrap();
+        let first = inventory
+            .add_units(&definition(WRENCH, "Pipe Wrench"), 1)
+            .unwrap();
+        let mut duplicate = weapon("Pipe Wrench", 1.0, 1.0);
+        duplicate.form_key = Some(WRENCH.to_owned());
+        inventory.insert(duplicate);
+
+        let merged = inventory
+            .add_units(&definition(WRENCH, "Pipe Wrench"), 1)
+            .unwrap();
+
+        assert_eq!(merged, first);
+        assert_eq!(inventory.item(other).unwrap().count, 9);
+        assert_eq!(stacks_of(&inventory, WRENCH), [(2, false), (1, false)]);
+    }
+
+    #[test]
+    fn adding_zero_units_is_rejected_and_changes_nothing() {
+        let mut inventory = Inventory::default();
+        let wrench = definition(WRENCH, "Pipe Wrench");
+        inventory.add_units(&wrench, 2).unwrap();
+        let before = inventory.clone();
+
+        let error = inventory.add_units(&wrench, 0).unwrap_err();
+
+        assert_eq!(
+            error,
+            InventoryError::ZeroUnits {
+                form_key: WRENCH.to_owned()
+            }
+        );
+        assert_eq!(inventory, before);
+        assert_eq!(Inventory::default().add_units(&wrench, 0), Err(error));
+    }
+
+    #[test]
+    fn a_stack_that_would_overflow_is_rejected_and_unchanged() {
+        let mut inventory = Inventory::default();
+        let wrench = definition(WRENCH, "Pipe Wrench");
+        inventory.add_units(&wrench, u32::MAX - 1).unwrap();
+        let before = inventory.clone();
+
+        let error = inventory.add_units(&wrench, 2).unwrap_err();
+
+        assert_eq!(
+            error,
+            InventoryError::CountOverflow {
+                form_key: WRENCH.to_owned(),
+                max: u32::MAX
+            }
+        );
+        assert_eq!(inventory, before);
+        inventory.add_units(&wrench, 1).unwrap();
+        assert_eq!(stacks_of(&inventory, WRENCH), [(u32::MAX, false)]);
     }
 }

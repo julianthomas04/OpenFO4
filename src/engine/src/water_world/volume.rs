@@ -232,8 +232,7 @@ mod tests {
         assert!(!volume.contains(Vec3::new(0.0, -1.0, 0.0)));
     }
 
-    #[test]
-    fn a_convex_sidecar_shape_is_a_volume_too() {
+    fn convex_volume(radius: f32) -> PlacedWaterVolume {
         let hull = part(ColShape::Convex {
             center: Vec3::ZERO,
             rotation: Quat::IDENTITY,
@@ -247,11 +246,25 @@ mod tests {
                 Vec3::new(-1.0, -2.0, 1.0),
                 Vec3::new(1.0, -2.0, 1.0),
             ],
+            radius,
         });
         let shapes = Arc::new(VolumeShapes::from_sidecar(&[hull], "hull").unwrap());
-        let volume = PlacedWaterVolume::new(Mat4::IDENTITY, None, Some(shapes));
+        PlacedWaterVolume::new(Mat4::IDENTITY, None, Some(shapes))
+    }
+
+    #[test]
+    fn a_convex_sidecar_shape_is_a_volume_too() {
+        let volume = convex_volume(0.0);
         assert!(volume.contains(Vec3::new(0.0, -1.0, 0.0)));
         assert!(!volume.contains(Vec3::new(0.0, 1.0, 0.0)));
+    }
+
+    #[test]
+    fn a_convex_volume_is_grown_by_its_radius_like_every_other_convex_collision() {
+        let beside_the_hull = Vec3::new(1.05, -1.0, 0.0);
+        assert!(!convex_volume(0.0).contains(beside_the_hull));
+        assert!(convex_volume(0.1).contains(beside_the_hull));
+        assert!(!convex_volume(0.1).contains(Vec3::new(1.2, -1.0, 0.0)));
     }
 
     #[test]

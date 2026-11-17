@@ -42,7 +42,6 @@ pub(crate) struct KinematicMirror {
     body: RigidBodyHandle,
     collider: ColliderHandle,
     target: Vec3,
-    shape_source: Capsule,
 }
 
 impl KinematicMirror {
@@ -63,7 +62,6 @@ impl KinematicMirror {
             body,
             collider,
             target: center,
-            shape_source: *capsule,
         }
     }
 
@@ -72,18 +70,18 @@ impl KinematicMirror {
     }
 
     /// Instant placement (spawn, teleport): no sweep through the world.
-    pub fn teleport(&mut self, world: &mut PhysicsWorld, center: Vec3, capsule: &Capsule) {
-        self.place(world, center, capsule, |body| {
+    pub fn teleport(&mut self, world: &mut PhysicsWorld, center: Vec3) {
+        self.place(world, center, |body| {
             body.set_translation(center, true);
         });
     }
 
     /// Aim at `center` for the next step; false when nothing changed.
-    pub fn follow(&mut self, world: &mut PhysicsWorld, center: Vec3, capsule: &Capsule) -> bool {
-        if center == self.target && !self.shape_differs(capsule) {
+    pub fn follow(&mut self, world: &mut PhysicsWorld, center: Vec3) -> bool {
+        if center == self.target {
             return false;
         }
-        self.place(world, center, capsule, |body| {
+        self.place(world, center, |body| {
             body.set_next_kinematic_translation(center);
         });
         true
@@ -109,32 +107,14 @@ impl KinematicMirror {
         &mut self,
         world: &mut PhysicsWorld,
         center: Vec3,
-        capsule: &Capsule,
         move_body: impl FnOnce(&mut RigidBody),
     ) {
-        if self.shape_differs(capsule) {
-            if let Some(collider) = world.colliders.get_mut(self.collider) {
-                collider.set_shape(inflated(capsule));
-            } else {
-                tracing::error!("physics: player mirror collider is missing");
-            }
-            self.shape_source = *capsule;
-        }
         if let Some(body) = world.bodies.get_mut(self.body) {
             move_body(body);
         } else {
             tracing::error!("physics: player mirror body is missing");
         }
         self.target = center;
-    }
-
-    #[allow(
-        clippy::float_cmp,
-        reason = "change detection: the shape source is a verbatim copy of the last capsule"
-    )]
-    fn shape_differs(&self, capsule: &Capsule) -> bool {
-        capsule.radius != self.shape_source.radius
-            || capsule.half_height() != self.shape_source.half_height()
     }
 }
 
@@ -228,23 +208,16 @@ mod tests {
     fn follow_reports_no_change_for_an_identical_target() {
         let mut world = world_without_gravity();
         let mut mirror = KinematicMirror::new(&mut world, Vec3::ZERO, &capsule());
-        assert!(!mirror.follow(&mut world, Vec3::ZERO, &capsule()));
-        assert!(mirror.follow(&mut world, Vec3::X, &capsule()));
-        assert!(!mirror.follow(&mut world, Vec3::X, &capsule()));
-    }
-
-    #[test]
-    fn follow_reports_a_change_when_only_the_capsule_shape_changed() {
-        let mut world = world_without_gravity();
-        let mut mirror = KinematicMirror::new(&mut world, Vec3::ZERO, &capsule());
-        assert!(mirror.follow(&mut world, Vec3::ZERO, &Capsule::new_y(0.4, 0.5)));
+        assert!(!mirror.follow(&mut world, Vec3::ZERO));
+        assert!(mirror.follow(&mut world, Vec3::X));
+        assert!(!mirror.follow(&mut world, Vec3::X));
     }
 
     #[test]
     fn teleport_places_the_body_immediately() {
         let mut world = world_without_gravity();
         let mut mirror = KinematicMirror::new(&mut world, Vec3::ZERO, &capsule());
-        mirror.teleport(&mut world, Vec3::new(10.0, 2.0, -3.0), &capsule());
+        mirror.teleport(&mut world, Vec3::new(10.0, 2.0, -3.0));
         let (_, body) = world.bodies.iter().next().unwrap();
         assert_eq!(body.translation(), Vec3::new(10.0, 2.0, -3.0));
     }
@@ -253,7 +226,7 @@ mod tests {
     fn a_followed_target_is_reached_by_the_next_step() {
         let mut world = world_without_gravity();
         let mut mirror = KinematicMirror::new(&mut world, Vec3::ZERO, &capsule());
-        mirror.follow(&mut world, Vec3::new(3.0, 0.0, 0.0), &capsule());
+        mirror.follow(&mut world, Vec3::new(3.0, 0.0, 0.0));
         world.step();
         let (_, body) = world.bodies.iter().next().unwrap();
         assert!(

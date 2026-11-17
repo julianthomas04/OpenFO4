@@ -11,8 +11,8 @@ use tracing::{debug, error, info};
 use super::anim_debug_panel::{SPAWN_DISTANCE, ground_position};
 use super::camera::Camera;
 use super::skinning::character::CharacterId;
-use super::skinning::rig::ClipPackEntry;
 use super::skinning::{CharacterSystem, SpawnRequest, rig::CreatureRig};
+use crate::anim::character_assets::ClipPackEntry;
 use crate::sim::SimWorld;
 
 const ENV_VAR: &str = "OPENFO4_AUTO_CHARACTER";
