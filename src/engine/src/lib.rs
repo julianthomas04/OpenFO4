@@ -15,6 +15,7 @@ pub mod footsteps;
 pub mod game_flow;
 #[cfg(test)]
 pub(crate) mod installer_source;
+pub mod leveled_items;
 pub mod loading_screen;
 pub mod navmesh;
 pub mod platform;

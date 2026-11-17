@@ -170,6 +170,7 @@ namespace InstallerTests
             plugin.AddLandscapeTexture("GrassTexture");
             DescribeGrass(plugin);
             DescribeWeather(plugin);
+            DescribeItems(plugin);
             DescribeExteriorRefs(plugin);
             DescribeLandscape(plugin);
             DescribeInterior(plugin);
@@ -312,6 +313,78 @@ namespace InstallerTests
             plugin.AddWeapon("TestPistolNoDefault", @"Weapons\Test\Dummy.nif", weapon =>
                 weapon.ObjectTemplates = [new ObjectTemplate<Weapon.Property> { Name = "Only", AddonIndex = -1 }]);
             plugin.AddWeapon("TestGrenade", @"Weapons\Grenade.nif");
+        }
+
+        public const int StackCount = 37;
+        public const int OwnerFactionRank = 4;
+        public const int SecondFactionRank = 1;
+        public const int ComponentCount = 3;
+        public const int SecondComponentCount = 12;
+        public const int LeveledListChanceNone = 80;
+
+        static void DescribeItems(TinyPlugin plugin)
+        {
+            plugin.AddFaction("OwnerFaction");
+            plugin.AddFaction("SecondFaction");
+            plugin.AddFaction("CellFaction");
+            plugin.AddNpc("OwnerNpc", npc =>
+            {
+                npc.Factions.Add(MembershipOf(plugin, "OwnerFaction", OwnerFactionRank));
+                npc.Factions.Add(MembershipOf(plugin, "SecondFaction", SecondFactionRank));
+            });
+            plugin.AddNpc("FactionlessNpc");
+
+            plugin.AddComponent("ScrapComponent");
+            plugin.AddComponent("WireComponent");
+            plugin.AddMiscItem("ComponentMisc", @"Items\Tin.nif", misc =>
+            {
+                misc.Components = [ComponentOf(plugin, "ScrapComponent", ComponentCount), ComponentOf(plugin, "WireComponent", SecondComponentCount)];
+            });
+            plugin.AddMiscItem("PlainMisc", @"Items\Pebble.nif");
+            plugin.AddMiscItem("MarkerMisc", @"Markers\Dummy.nif");
+            plugin.AddMiscItem("SlashedMarkerMisc", "markers/dummymarkers/trapdummy.nif");
+            plugin.AddMiscItem("MeshesPrefixedMarkerMisc", @"Meshes\MARKERS\Dummy.nif");
+            plugin.AddMiscItem("NestedMarkersMisc", @"Props\Markers\Prop.nif");
+            plugin.AddMiscItem("ModellessMisc", null);
+            plugin.AddWeapon("MarkerWeapon", @"markers\dummymarkers\Dummy.nif");
+            plugin.AddArmor("MarkerArmor", armor => armor.WorldModel = WorldModelOf(@"Markers\Dummy.nif"));
+            plugin.AddArmor("PlainArmor", armor => armor.WorldModel = WorldModelOf(@"Armor\Plain.nif"));
+            plugin.AddLeveledNpc("ChanceLeveledNpcList", list => list.ChanceNone = new Percent(LeveledListChanceNone / 100.0));
+
+            plugin.AddSoundDescriptor("ItemPickupSound", descriptor => descriptor.Data = new SoundDescriptorStandardData());
+            plugin.AddSoundDescriptor("ItemPutDownSound", descriptor => descriptor.Data = new SoundDescriptorStandardData());
+            plugin.AddArmor("SoundArmor", armor =>
+            {
+                armor.PickUpSound.FormKey = plugin.FormKeyOf("ItemPickupSound");
+                armor.PutDownSound.FormKey = plugin.FormKeyOf("ItemPutDownSound");
+            });
+            plugin.AddArmor("SilentArmor");
+            plugin.AddLeveledItem("FixtureLeveledList");
+            plugin.AddLeveledItem("ChanceLeveledList", list => list.ChanceNone = new Percent(LeveledListChanceNone / 100.0));
+        }
+
+        static GenderedItem<ArmorModel?> WorldModelOf(string model) =>
+            new(new ArmorModel { Model = new Model { File = model } }, null);
+
+        static RankPlacement MembershipOf(TinyPlugin plugin, string factionEditorId, int rank)
+        {
+            var membership = new RankPlacement { Rank = (sbyte)rank };
+            membership.Faction.FormKey = plugin.FormKeyOf(factionEditorId);
+            return membership;
+        }
+
+        static MiscItemComponent ComponentOf(TinyPlugin plugin, string componentEditorId, uint count)
+        {
+            var component = new MiscItemComponent { Count = count };
+            component.Component.FormKey = plugin.FormKeyOf(componentEditorId);
+            return component;
+        }
+
+        static Ownership OwnershipOf(TinyPlugin plugin, string ownerEditorId)
+        {
+            var ownership = new Ownership();
+            ownership.Owner.FormKey = plugin.FormKeyOf(ownerEditorId);
+            return ownership;
         }
 
         static void DescribeGrass(TinyPlugin plugin)
@@ -494,6 +567,10 @@ namespace InstallerTests
                 npc.Position = new P3Float(7f, 8f, 9f);
             });
             plugin.PlaceInPersistentCell("WorldPersistentRef", "WallStatic");
+            plugin.PlaceInExterior("CountedRef", "PlainMisc", r => r.ItemCount = StackCount);
+            plugin.PlaceInExterior("NpcOwnedRef", "PlainMisc", r => r.Ownership = OwnershipOf(plugin, "OwnerNpc"));
+            plugin.PlaceInExterior("FactionOwnedRef", "PlainMisc", r => r.Ownership = OwnershipOf(plugin, "OwnerFaction"));
+            plugin.PlaceInExterior("LeveledRef", "PlainMisc", r => r.LeveledItemBaseObject.FormKey = plugin.FormKeyOf("FixtureLeveledList"));
         }
 
         static LayerHeader LayerOf(TinyPlugin plugin, Quadrant quadrant, ushort layerNumber)
@@ -526,6 +603,9 @@ namespace InstallerTests
         static void DescribeInterior(TinyPlugin plugin)
         {
             plugin.Interior.Name = new TranslatedString(Language.English, InteriorName);
+            plugin.Interior.Ownership = OwnershipOf(plugin, "CellFaction");
+            plugin.PlaceInInterior("CellOwnedRef", "PlainMisc");
+            plugin.PlaceInInterior("OwnRefInOwnedCell", "PlainMisc", r => r.Ownership = OwnershipOf(plugin, "OwnerNpc"));
             plugin.PersistentCell.Name = new TranslatedString(Language.English, "  ");
             plugin.Interior.Lighting = new CellLighting
             {

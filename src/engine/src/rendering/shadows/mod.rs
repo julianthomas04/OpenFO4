@@ -117,7 +117,7 @@ impl ShadowRenderer {
         lamp_views: &[LampView],
     ) {
         self.views = ShadowViewSet {
-            cascades: cascades.map(CascadeSet::views).unwrap_or_default(),
+            cascades: cascades.map_or_default(CascadeSet::views),
             lamps: lamp_views.iter().map(|lamp| lamp.view).collect(),
         };
         self.lamp_tiles = lamp_views.iter().map(|lamp| lamp.tile).collect();

@@ -242,7 +242,7 @@ pub fn emit(
     clippy::float_cmp,
     reason = "the fixture arithmetic stays on exactly representable values"
 )]
-mod tests {
+pub(super) mod tests {
     use serde_json::{Value, json};
 
     use super::*;
@@ -331,6 +331,12 @@ mod tests {
 
     fn ap(layout: &UiLayout) -> Result<MeterSpec, UiLayoutError> {
         MeterSpec::resolve(layout, &AP_KEYS, Anchor::Br, STAGE)
+    }
+
+    /// The synthetic meters (HP, AP) and their 640 x 360 stage, for the scene tests of the HUD.
+    pub(in crate::rendering::hud) fn synthetic_meters() -> (MeterSpec, MeterSpec) {
+        let layout = layout(&parts(102.0));
+        (hp(&layout).unwrap(), ap(&layout).unwrap())
     }
 
     #[test]

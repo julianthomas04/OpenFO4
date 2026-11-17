@@ -2,7 +2,8 @@ use std::path::Path;
 
 use tracing::{debug, warn};
 
-use super::rig::{ANIM_INDEX_FILE, CHARACTER_ASSETS_DIR, CreatureDef};
+use super::rig::{CHARACTER_ASSETS_DIR, CreatureDef};
+use crate::anim::character_assets::ANIM_INDEX_FILE;
 use crate::assets::layout::MESHES_DIR;
 
 /// The game's own folder of actor models below the meshes folder.

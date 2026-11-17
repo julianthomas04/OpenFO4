@@ -112,6 +112,61 @@ namespace InstallerTests
             return record;
         }
 
+        public Faction AddFaction(string editorId)
+        {
+            var record = _mod.Factions.AddNew(editorId);
+            Register(editorId, record.FormKey);
+            return record;
+        }
+
+        public Npc AddNpc(string editorId, Action<Npc>? configure = null)
+        {
+            var record = _mod.Npcs.AddNew(editorId);
+            configure?.Invoke(record);
+            Register(editorId, record.FormKey);
+            return record;
+        }
+
+        public MiscItem AddMiscItem(string editorId, string? model, Action<MiscItem>? configure = null)
+        {
+            var record = _mod.MiscItems.AddNew(editorId);
+            if (model != null) record.Model = new Model { File = model };
+            configure?.Invoke(record);
+            Register(editorId, record.FormKey);
+            return record;
+        }
+
+        public Armor AddArmor(string editorId, Action<Armor>? configure = null)
+        {
+            var record = _mod.Armors.AddNew(editorId);
+            configure?.Invoke(record);
+            Register(editorId, record.FormKey);
+            return record;
+        }
+
+        public Component AddComponent(string editorId)
+        {
+            var record = _mod.Components.AddNew(editorId);
+            Register(editorId, record.FormKey);
+            return record;
+        }
+
+        public LeveledNpc AddLeveledNpc(string editorId, Action<LeveledNpc>? configure = null)
+        {
+            var record = _mod.LeveledNpcs.AddNew(editorId);
+            configure?.Invoke(record);
+            Register(editorId, record.FormKey);
+            return record;
+        }
+
+        public LeveledItem AddLeveledItem(string editorId, Action<LeveledItem>? configure = null)
+        {
+            var record = _mod.LeveledItems.AddNew(editorId);
+            configure?.Invoke(record);
+            Register(editorId, record.FormKey);
+            return record;
+        }
+
         public WeaponModification AddWeaponModification(string editorId, Action<WeaponModification>? configure = null)
         {
             var record = new WeaponModification(_mod) { EditorID = editorId };

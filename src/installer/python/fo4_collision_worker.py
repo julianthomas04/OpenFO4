@@ -13,7 +13,9 @@ Sidecar schema:
       { "type": "sphere",  "center": [x,y,z], "radius": r },
       { "type": "capsule", "center": [x,y,z], "rotation": [x,y,z,w], "radius": r,
         "height": h },       // h = full height incl. both caps, axis = local Y
-      { "type": "convex",  "vertices": [[x,y,z], ...] },
+      { "type": "convex",  "vertices": [[x,y,z], ...],
+        "convex_radius": r },   // Havok convex radius, same unit and scale as the vertices; the
+                                // collision surface is the hull grown by r; 0.0 = none
       { "type": "trimesh", "vertices": [[x,y,z], ...], "indices": [[a,b,c], ...] },
       // every shape also carries "node": the name of the NiNode that owns the
       // collision object, matching the node name in the converted GLB, and
@@ -221,6 +223,9 @@ _IDENTITY_ROT = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
 _IDENTITY_EPSILON = 1e-6
 _BONE_SCALE_TOLERANCE = 1e-3
 _CAPSULE_AXIS = (0.0, 1.0, 0.0)
+# A convex radius above this (Havok metres, 1 m = 7 output units) is taken for corrupt data: the largest one surveyed in the game's own
+# meshes is 0.1 m, so this is ten times that.
+_MAX_CONVEX_RADIUS = 1.0
 _DEGENERATE_CAPSULE_LENGTH = 1e-6
 # A constraint's two pivots must meet at the rest pose within this fraction of the bone
 # length (but never tighter than the floor, for bones that start at the same point).
@@ -374,6 +379,16 @@ def _quat_from_axis(direction):
     return [x / norm, y / norm, z / norm, w / norm]
 
 
+def _output_convex_radius(shape) -> float:
+    """The Havok convex radius of a hull-carrying shape in output units (scaled like its vertices). Raises
+    ValueError for a negative, non-finite or absurd radius, so the shape is reported and skipped like any
+    other undecodable one instead of being written."""
+    radius = shape.convex_radius
+    if not (math.isfinite(radius) and 0.0 <= radius <= _MAX_CONVEX_RADIUS):
+        raise ValueError(f"convex radius {radius} of {shape.name} is not within 0..{_MAX_CONVEX_RADIUS}")
+    return radius * S
+
+
 def _capsule_entry(a, b, radius: float, material: int) -> dict:
     """Sidecar capsule for the segment a-b with the given radius (all in output units);
     a point-like segment degenerates to a sphere."""
@@ -433,7 +448,10 @@ def _place_entries(entries, rot, scale, offset) -> list:
                 return {**e, "center": place(e["center"])}
             a, b = _capsule_segment(e)
             return _capsule_entry(place(a), place(b), e["radius"] * scale, e["material"])
-        return {**e, "vertices": place_all(e["vertices"])}
+        moved = {**e, "vertices": place_all(e["vertices"])}
+        if "convex_radius" in e and not pure_shift:
+            moved["convex_radius"] = e["convex_radius"] * scale
+        return moved
 
     return [placed(e) for e in entries]
 
@@ -594,6 +612,7 @@ def _shape_to_entries(shape, parent_transform, out, material: int = 0):
         out.append({
             "type": "convex",
             "vertices": _bake_verts(tr, shape.verts),
+            "convex_radius": _output_convex_radius(shape),
             "material": material,
         })
         return

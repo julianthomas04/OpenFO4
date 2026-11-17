@@ -108,6 +108,15 @@ pub fn object_group(
         mass,
         ragdoll_sidecar: None,
         water: None,
+        pinned: false,
+    }
+}
+
+/// A static group whose placements become pinned bodies.
+pub fn pinned_group(path: &str, placements: Vec<Placement>) -> ObjectColliderGroup {
+    ObjectColliderGroup {
+        pinned: true,
+        ..object_group(path, placements, false, None)
     }
 }
 
@@ -118,7 +127,7 @@ pub fn bake(batch: &CellColliderBatch, shapes: &[(&str, Vec<PartShape>)]) -> Bak
         batch,
         |path| {
             let found = shapes.iter().find(|(known, _)| *known == path);
-            Arc::new(found.map(|(_, parts)| parts.clone()).unwrap_or_default())
+            Arc::new(found.map_or_default(|(_, parts)| parts.clone()))
         },
         |_| None,
         |_| None,

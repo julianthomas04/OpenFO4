@@ -258,3 +258,111 @@ fn music_that_fails_to_decode_while_playing_is_a_fatal_error_from_sync() {
 
     assert!(matches!(result, Err(AudioError::MusicStream { .. })));
 }
+
+mod item_sounds {
+    use super::*;
+    use crate::audio::item_sounds::{ItemSoundError, ItemSoundKind, ItemSounds};
+    use crate::audio::test_support::item_sounds::{
+        PISTOL, PISTOL_PICKUP_FILE, UNKNOWN_ITEM, all_files, catalog,
+    };
+    use crate::audio::test_support::{SEED, write_audio_file};
+
+    struct Rig {
+        root: tempfile::TempDir,
+        audio: MockAudio,
+        peak: PeakReader,
+    }
+
+    fn rig(with_item_sounds: bool) -> Rig {
+        let root = install_with_music();
+        for file in all_files() {
+            write_audio_file(
+                root.path(),
+                &file,
+                &sine_flac(SAMPLE_RATE, HALF_SECOND_SAMPLES),
+            );
+        }
+        let (mut audio, peak) = open_metered(root.path(), settings(false, 300)).unwrap();
+        if with_item_sounds {
+            let sounds = ItemSounds::new(catalog(), &root.path().join("audio"), SEED).unwrap();
+            audio.set_item_sounds(sounds);
+        }
+        Rig { root, audio, peak }
+    }
+
+    fn audible_after_playing(rig: &mut Rig, phase: Phase) -> f32 {
+        rig.audio.sync(phase).unwrap();
+        rig.peak.take();
+        rig.audio
+            .play_item_sound(PISTOL, ItemSoundKind::PickUp)
+            .unwrap();
+        for _ in 0..4 {
+            render_buffer(&mut rig.audio);
+        }
+        rig.peak.take()
+    }
+
+    #[test]
+    fn gameplay_phases_play_and_every_other_phase_drops_the_sound() {
+        let cases = [
+            (Phase::MainMenu, false),
+            (Phase::SpawnSelect, false),
+            (Phase::Loading, false),
+            (Phase::Revealing, true),
+            (Phase::InGame, true),
+        ];
+        for (phase, plays) in cases {
+            let mut rig = rig(true);
+            let peak = audible_after_playing(&mut rig, phase);
+            assert_eq!(peak > 0.0, plays, "{phase:?} peaked at {peak}");
+        }
+    }
+
+    #[test]
+    fn a_system_without_item_sounds_drops_the_sound() {
+        let mut rig = rig(false);
+        assert!(audible_after_playing(&mut rig, Phase::InGame) <= 0.0);
+    }
+
+    #[test]
+    fn an_unknown_item_plays_nothing_and_is_no_error() {
+        let mut rig = rig(true);
+        rig.audio.sync(Phase::InGame).unwrap();
+        rig.peak.take();
+        rig.audio
+            .play_item_sound(UNKNOWN_ITEM, ItemSoundKind::PutDown)
+            .unwrap();
+        render_buffer(&mut rig.audio);
+        assert!(rig.peak.take() <= 0.0);
+    }
+
+    #[test]
+    fn a_file_that_vanished_after_startup_is_fatal() {
+        let mut rig = rig(true);
+        rig.audio.sync(Phase::InGame).unwrap();
+        std::fs::remove_file(rig.root.path().join("audio").join(PISTOL_PICKUP_FILE)).unwrap();
+        let error = rig
+            .audio
+            .play_item_sound(PISTOL, ItemSoundKind::PickUp)
+            .unwrap_err();
+        assert!(matches!(error, AudioError::SfxFile { .. }), "{error}");
+    }
+
+    #[test]
+    fn item_sound_data_that_cannot_be_used_is_a_fatal_error() {
+        let mut rig = rig(true);
+        rig.audio.sync(Phase::InGame).unwrap();
+        let mut broken = catalog();
+        broken.defaults.remove("PDSW");
+        let sounds = ItemSounds::new(broken, &rig.root.path().join("audio"), SEED).unwrap();
+        rig.audio.set_item_sounds(sounds);
+        let error = rig
+            .audio
+            .play_item_sound(PISTOL, ItemSoundKind::PutDown)
+            .unwrap_err();
+        assert!(
+            matches!(error, AudioError::ItemSounds(ItemSoundError::Resolve(_))),
+            "{error}"
+        );
+    }
+}

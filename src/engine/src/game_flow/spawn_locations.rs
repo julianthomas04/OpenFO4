@@ -7,7 +7,7 @@ use glam::Vec3;
 
 use crate::assets::db::{DbClient, placed_objects::MarkerRef};
 use crate::bethesda_space::{position_from_engine, rotation_z_from_compass_heading_degrees};
-use crate::sim::STANDING_CENTER_ABOVE_FEET;
+use crate::sim::CENTER_ABOVE_FEET;
 
 /// The Commonwealth worldspace.
 pub const COMMONWEALTH: &str = "00003C:Fallout4.esm";
@@ -274,7 +274,7 @@ fn interior_cell_form_key(
 /// body there again, then lifts the spawn by [`SPAWN_LIFT`].
 fn body_spawn(name: &'static str, place: SpawnPlace, body: BodyPose) -> SpawnLocation {
     let [x, y, z] = body.engine_position;
-    let soles = position_from_engine(Vec3::new(x, y - STANDING_CENTER_ABOVE_FEET, z));
+    let soles = position_from_engine(Vec3::new(x, y - CENTER_ABOVE_FEET, z));
     SpawnLocation {
         name,
         place,
@@ -544,7 +544,7 @@ mod tests {
             ("BUNKER HILL", Vec3::new(1827.5, 107.7, -1216.2)),
         ] {
             let soles = unlifted_engine_position(location(&locations, name));
-            let body_centre = soles + Vec3::Y * STANDING_CENTER_ABOVE_FEET;
+            let body_centre = soles + Vec3::Y * CENTER_ABOVE_FEET;
             assert!(
                 body_centre.abs_diff_eq(reported, 1e-2),
                 "{name}: {body_centre:?} vs {reported:?}"
@@ -557,7 +557,7 @@ mod tests {
         assert_eq!(SPAWN_LIFT, 100.0);
         let locations = picker();
         let castle = location(&locations, "THE CASTLE");
-        let soles_z = 654.0 - f64::from(STANDING_CENTER_ABOVE_FEET) * 10.0;
+        let soles_z = 654.0 - f64::from(CENTER_ABOVE_FEET) * 10.0;
         assert!((castle.position[2] - (soles_z + SPAWN_LIFT)).abs() < 1e-2);
     }
 

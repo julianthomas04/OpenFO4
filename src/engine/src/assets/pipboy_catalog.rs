@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Context;
 
 use crate::assets::db::DbClient;
+use crate::assets::db::item_components::ItemComponentRow;
 use crate::assets::db::items::ItemRow;
 use crate::assets::db::map_markers::MapMarkerRow;
 use crate::assets::db::perks::{PerkChartRow, PerkRow};
@@ -14,12 +15,12 @@ use crate::bethesda_space::position_to_engine;
 use crate::game_flow::spawn_locations::COMMONWEALTH as COMMONWEALTH_WORLDSPACE;
 use crate::sim::pipboy::character::{SpecialText, SpecialTexts};
 use crate::sim::pipboy::inventory::{
-    ApparelStats, DamageType, DamageValue, ItemDetails, WeaponStats,
+    ApparelStats, ComponentAmount, DamageType, DamageValue, ItemDetails, WeaponStats,
 };
 use crate::sim::pipboy::perks::{PerkChartSlot, PerkRank};
 use crate::sim::pipboy::{
-    InventoryCategory, ItemDefinition, Limb, MapMarker, MapMarkerId, PerkDefinition, PerkId,
-    PipBoyCatalog, Sex, Special, WorldMap, WorldMapProjection,
+    InventoryCategory, ItemDefinition, ItemKind, Limb, MapMarker, MapMarkerId, PerkDefinition,
+    PerkId, PipBoyCatalog, Sex, Special, WorldMap, WorldMapProjection,
 };
 
 const MARKER_DISCOVERED_FLAG: u8 = 0x01;
@@ -32,7 +33,10 @@ pub fn load_pipboy_catalog(db: &DbClient) -> anyhow::Result<PipBoyCatalog> {
         &db.get_perks().context("reading perks")?,
         &db.get_perk_chart().context("reading the perk chart")?,
     )?;
-    let items = build_items(&db.get_items().context("reading items")?)?;
+    let items = build_items(
+        &db.get_items().context("reading items")?,
+        &load_item_context(db)?,
+    )?;
     let special_texts = build_special_texts(
         &db.get_special_attributes()
             .context("reading the SPECIAL attributes")?,
@@ -218,14 +222,106 @@ fn rank_chain(first: &PerkRow, by_key: &HashMap<&str, &PerkRow>) -> Vec<PerkRank
     ranks
 }
 
-fn category_of(item_type: &str) -> Option<InventoryCategory> {
+/// Editor id of the keyword that marks a miscellaneous item as a loose weapon mod.
+pub const LOOSE_MOD_KEYWORD_EDITOR_ID: &str = "ObjectTypeLooseMod";
+
+/// What the classification of miscellaneous items needs beyond the item rows.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ItemContext {
+    /// Form key of the loose-mod keyword; `None` when the database has no such keyword.
+    pub loose_mod_keyword: Option<String>,
+    /// The components of each item, by item form key; absent for items that list none.
+    pub components: HashMap<String, Vec<ComponentAmount>>,
+}
+
+/// The kind of item a record signature stands for; `None` for signatures the Pip-Boy never lists.
+pub(crate) fn item_kind_of(item_type: &str) -> Option<ItemKind> {
     Some(match item_type {
-        "WEAP" => InventoryCategory::Weapons,
-        "ARMO" => InventoryCategory::Apparel,
-        "ALCH" => InventoryCategory::Aid,
-        "AMMO" => InventoryCategory::Ammo,
-        "MISC" | "BOOK" | "KEYM" => InventoryCategory::Misc,
+        "WEAP" => ItemKind::Weapon,
+        "ARMO" => ItemKind::Armor,
+        "ALCH" => ItemKind::Aid,
+        "AMMO" => ItemKind::Ammo,
+        "MISC" => ItemKind::Misc,
+        "BOOK" => ItemKind::Book,
+        "HOLT" => ItemKind::Holotape,
+        "KEYM" => ItemKind::Key,
         _ => return None,
+    })
+}
+
+/// The Pip-Boy tab of an item. A miscellaneous item is a mod when it carries the loose-mod
+/// keyword, else junk when it lists components; the keyword wins, though the data never has both.
+pub(crate) fn category_of(
+    kind: ItemKind,
+    keywords: Option<&[String]>,
+    has_components: bool,
+    loose_mod_keyword: Option<&str>,
+) -> InventoryCategory {
+    match kind {
+        ItemKind::Weapon => InventoryCategory::Weapons,
+        ItemKind::Armor => InventoryCategory::Apparel,
+        ItemKind::Aid => InventoryCategory::Aid,
+        ItemKind::Ammo => InventoryCategory::Ammo,
+        ItemKind::Misc => {
+            let is_loose_mod = loose_mod_keyword.is_some_and(|loose_mod| {
+                keywords.is_some_and(|keywords| keywords.iter().any(|key| key == loose_mod))
+            });
+            if is_loose_mod {
+                InventoryCategory::Mods
+            } else if has_components {
+                InventoryCategory::Junk
+            } else {
+                InventoryCategory::Misc
+            }
+        }
+        ItemKind::Book | ItemKind::Holotape | ItemKind::Key => InventoryCategory::Misc,
+    }
+}
+
+/// The component lists per item, each component named when `names` resolves its record and
+/// otherwise shown by its form key.
+fn component_amounts(
+    rows: &[ItemComponentRow],
+    names: &HashMap<String, String>,
+) -> HashMap<String, Vec<ComponentAmount>> {
+    let mut amounts: HashMap<String, Vec<ComponentAmount>> = HashMap::new();
+    for row in rows {
+        amounts
+            .entry(row.item_form_key.clone())
+            .or_default()
+            .push(ComponentAmount {
+                component: names.get(&row.component).unwrap_or(&row.component).clone(),
+                count: row.count,
+            });
+    }
+    amounts
+}
+
+/// Reads the loose-mod keyword and the item components; each one the database lacks leaves
+/// its tab empty (the schema's missing-group report covers the tables).
+fn load_item_context(db: &DbClient) -> anyhow::Result<ItemContext> {
+    let loose_mod_keyword = db
+        .get_keyword_form_key(LOOSE_MOD_KEYWORD_EDITOR_ID)
+        .context("reading the loose-mod keyword")?;
+    if loose_mod_keyword.is_none() {
+        tracing::warn!(
+            "no keyword '{LOOSE_MOD_KEYWORD_EDITOR_ID}' in the database; the Mods tab stays empty"
+        );
+    }
+    let components = match db
+        .get_item_components()
+        .context("reading item components")?
+    {
+        Some(rows) => component_amounts(
+            &rows,
+            &db.get_component_names()
+                .context("reading component names")?,
+        ),
+        None => HashMap::new(),
+    };
+    Ok(ItemContext {
+        loose_mod_keyword,
+        components,
     })
 }
 
@@ -312,6 +408,7 @@ fn details_of(
     category: InventoryCategory,
     row: &ItemRow,
     names: &HashMap<&str, &str>,
+    components: &[ComponentAmount],
 ) -> anyhow::Result<ItemDetails> {
     Ok(match category {
         InventoryCategory::Weapons => weapon_details(row, names)?,
@@ -319,33 +416,44 @@ fn details_of(
         InventoryCategory::Aid => ItemDetails::Aid(Vec::new()),
         InventoryCategory::Ammo => ItemDetails::Ammo,
         InventoryCategory::Misc => ItemDetails::Misc,
-        InventoryCategory::Junk => ItemDetails::Junk(Vec::new()),
+        InventoryCategory::Junk => ItemDetails::Junk(components.to_vec()),
         InventoryCategory::Mods => ItemDetails::Mod,
     })
 }
 
 /// One definition per named item of a category the Pip-Boy lists. An item whose record lacks a
 /// stat its category shows, or holds an impossible one, fails the load.
-pub fn build_items(rows: &[ItemRow]) -> anyhow::Result<Vec<ItemDefinition>> {
+pub fn build_items(rows: &[ItemRow], context: &ItemContext) -> anyhow::Result<Vec<ItemDefinition>> {
     let names: HashMap<&str, &str> = rows
         .iter()
         .filter_map(|r| Some((r.form_key.as_str(), r.name.as_deref()?)))
         .collect();
     rows.iter()
         .filter_map(|row| {
-            let category = category_of(&row.item_type)?;
+            let kind = item_kind_of(&row.item_type)?;
             let name = row.name.as_deref().filter(|n| !n.is_empty())?;
-            Some((row, category, name))
+            Some((row, kind, name))
         })
-        .map(|(row, category, name)| {
+        .map(|(row, kind, name)| {
+            let components = context
+                .components
+                .get(&row.form_key)
+                .map_or(&[][..], Vec::as_slice);
+            let category = category_of(
+                kind,
+                row.keywords.as_deref(),
+                !components.is_empty(),
+                context.loose_mod_keyword.as_deref(),
+            );
             Ok(ItemDefinition {
                 form_key: row.form_key.clone(),
+                kind,
                 editor_id: row.editor_id.clone(),
                 name: name.to_owned(),
                 category,
                 weight: row.weight as f32,
                 value: non_negative(row, "value", row.value)?,
-                details: details_of(category, row, &names)?,
+                details: details_of(category, row, &names, components)?,
             })
         })
         .collect()
@@ -424,6 +532,9 @@ mod tests {
             weight: 1.5,
             weapon: None,
             armor: None,
+            model_path: None,
+            keywords: None,
+            is_marker: None,
         }
     }
 
@@ -671,12 +782,12 @@ mod tests {
     #[test]
     fn item_types_map_to_inventory_categories() {
         let rows: Vec<ItemRow> = [
-            "WEAP", "ARMO", "ALCH", "AMMO", "MISC", "BOOK", "KEYM", "LIGH",
+            "WEAP", "ARMO", "ALCH", "AMMO", "MISC", "BOOK", "HOLT", "KEYM", "LIGH",
         ]
         .iter()
         .map(|t| complete_row(t, t))
         .collect();
-        let categories: Vec<InventoryCategory> = build_items(&rows)
+        let categories: Vec<InventoryCategory> = build_items(&rows, &ItemContext::default())
             .unwrap()
             .iter()
             .map(|d| d.category)
@@ -691,19 +802,192 @@ mod tests {
                 InventoryCategory::Misc,
                 InventoryCategory::Misc,
                 InventoryCategory::Misc,
+                InventoryCategory::Misc,
             ]
         );
+    }
+
+    #[test]
+    fn record_signatures_map_to_item_kinds() {
+        let kinds: Vec<Option<ItemKind>> = [
+            "WEAP", "ARMO", "ALCH", "AMMO", "MISC", "BOOK", "HOLT", "KEYM", "LIGH", "INGR",
+        ]
+        .iter()
+        .map(|signature| item_kind_of(signature))
+        .collect();
+        assert_eq!(
+            kinds,
+            [
+                Some(ItemKind::Weapon),
+                Some(ItemKind::Armor),
+                Some(ItemKind::Aid),
+                Some(ItemKind::Ammo),
+                Some(ItemKind::Misc),
+                Some(ItemKind::Book),
+                Some(ItemKind::Holotape),
+                Some(ItemKind::Key),
+                None,
+                None,
+            ]
+        );
+    }
+
+    const LOOSE_MOD: &str = "0L1:Test.esm";
+
+    fn keywords(keys: &[&str]) -> Vec<String> {
+        keys.iter().map(|key| (*key).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_misc_item_is_a_mod_with_the_loose_mod_keyword_junk_with_components_else_misc() {
+        let loose = keywords(&["0K1:Test.esm", LOOSE_MOD]);
+        let other = keywords(&["0K1:Test.esm"]);
+        let cases = [
+            (Some(&loose[..]), false, InventoryCategory::Mods),
+            (Some(&other[..]), false, InventoryCategory::Misc),
+            (Some(&other[..]), true, InventoryCategory::Junk),
+            (None, true, InventoryCategory::Junk),
+            (None, false, InventoryCategory::Misc),
+            (Some(&[][..]), false, InventoryCategory::Misc),
+            (Some(&loose[..]), true, InventoryCategory::Mods),
+        ];
+        for (item_keywords, has_components, expected) in cases {
+            assert_eq!(
+                category_of(
+                    ItemKind::Misc,
+                    item_keywords,
+                    has_components,
+                    Some(LOOSE_MOD)
+                ),
+                expected,
+                "{item_keywords:?} {has_components}"
+            );
+        }
+    }
+
+    #[test]
+    fn without_a_loose_mod_keyword_nothing_is_a_mod() {
+        let loose = keywords(&[LOOSE_MOD]);
+        assert_eq!(
+            category_of(ItemKind::Misc, Some(&loose), false, None),
+            InventoryCategory::Misc
+        );
+        assert_eq!(
+            category_of(ItemKind::Misc, Some(&loose), true, None),
+            InventoryCategory::Junk
+        );
+    }
+
+    #[test]
+    fn books_holotapes_and_keys_stay_misc_whatever_they_carry() {
+        let loose = keywords(&[LOOSE_MOD]);
+        for kind in [ItemKind::Book, ItemKind::Holotape, ItemKind::Key] {
+            assert_eq!(
+                category_of(kind, Some(&loose), true, Some(LOOSE_MOD)),
+                InventoryCategory::Misc,
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_other_kinds_have_their_own_tab() {
+        let expectations = [
+            (ItemKind::Weapon, InventoryCategory::Weapons),
+            (ItemKind::Armor, InventoryCategory::Apparel),
+            (ItemKind::Aid, InventoryCategory::Aid),
+            (ItemKind::Ammo, InventoryCategory::Ammo),
+        ];
+        for (kind, expected) in expectations {
+            assert_eq!(category_of(kind, None, true, Some(LOOSE_MOD)), expected);
+        }
+    }
+
+    fn component_row(item: &str, component: &str, count: u32) -> ItemComponentRow {
+        ItemComponentRow {
+            item_form_key: item.to_owned(),
+            component: component.to_owned(),
+            count,
+        }
+    }
+
+    #[test]
+    fn components_are_named_when_their_record_resolves_and_keyed_otherwise() {
+        let rows = [
+            component_row("0A", "0C1", 3),
+            component_row("0B", "0C1", 1),
+            component_row("0A", "0C2", 8),
+        ];
+        let names = HashMap::from([("0C1".to_owned(), "Brass".to_owned())]);
+
+        let amounts = component_amounts(&rows, &names);
+
+        let of = |component: &str, count: u32| ComponentAmount {
+            component: component.to_owned(),
+            count,
+        };
+        assert_eq!(amounts["0A"], [of("Brass", 3), of("0C2", 8)]);
+        assert_eq!(amounts["0B"], [of("Brass", 1)]);
+        assert_eq!(amounts.len(), 2);
+    }
+
+    #[test]
+    fn build_items_classifies_misc_rows_by_the_context_and_lists_junk_components() {
+        let mut mod_row = item_row("M", "MISC", Some("Barrel"));
+        mod_row.keywords = Some(keywords(&[LOOSE_MOD]));
+        let junk_row = item_row("J", "MISC", Some("Wrench"));
+        let plain_row = item_row("P", "MISC", Some("Doll"));
+        let tape_row = item_row("T", "HOLT", Some("Tape"));
+        let context = ItemContext {
+            loose_mod_keyword: Some(LOOSE_MOD.to_owned()),
+            components: HashMap::from([(
+                "J".to_owned(),
+                vec![ComponentAmount {
+                    component: "Steel".to_owned(),
+                    count: 2,
+                }],
+            )]),
+        };
+
+        let defs = build_items(&[mod_row, junk_row, plain_row, tape_row], &context).unwrap();
+
+        let summary: Vec<_> = defs
+            .iter()
+            .map(|def| (def.form_key.as_str(), def.kind, def.category))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("M", ItemKind::Misc, InventoryCategory::Mods),
+                ("J", ItemKind::Misc, InventoryCategory::Junk),
+                ("P", ItemKind::Misc, InventoryCategory::Misc),
+                ("T", ItemKind::Holotape, InventoryCategory::Misc),
+            ]
+        );
+        assert_eq!(defs[0].details, ItemDetails::Mod);
+        assert_eq!(
+            defs[1].details,
+            ItemDetails::Junk(vec![ComponentAmount {
+                component: "Steel".to_owned(),
+                count: 2
+            }])
+        );
+        assert_eq!(defs[2].details, ItemDetails::Misc);
+        assert_eq!(defs[3].details, ItemDetails::Misc);
     }
 
     #[test]
     fn nameless_items_are_skipped_and_scalars_carried_over() {
         let mut priced = item_row("B", "MISC", Some("Thing"));
         priced.value = 5;
-        let defs = build_items(&[
-            item_row("A", "MISC", None),
-            item_row("C", "MISC", Some("")),
-            priced,
-        ])
+        let defs = build_items(
+            &[
+                item_row("A", "MISC", None),
+                item_row("C", "MISC", Some("")),
+                priced,
+            ],
+            &ItemContext::default(),
+        )
         .unwrap();
         assert_eq!(defs.len(), 1);
         assert_eq!(defs[0].value, 5);
@@ -716,7 +1000,9 @@ mod tests {
         let mut debt = item_row("B", "MISC", Some("Debt"));
         debt.value = -5;
 
-        let error = build_items(&[debt]).unwrap_err().to_string();
+        let error = build_items(&[debt], &ItemContext::default())
+            .unwrap_err()
+            .to_string();
 
         assert!(
             error.contains("'B'") && error.contains("value -5"),
@@ -735,7 +1021,7 @@ mod tests {
             ammo_type: Some("AM".to_owned()),
         });
         let ammo = item_row("AM", "AMMO", Some(".45 Round"));
-        let defs = build_items(&[rifle, ammo]).unwrap();
+        let defs = build_items(&[rifle, ammo], &ItemContext::default()).unwrap();
         let ItemDetails::Weapon(stats) = &defs[0].details else {
             panic!("not a weapon");
         };
@@ -764,7 +1050,9 @@ mod tests {
     fn a_weapon_with_zero_damage_has_no_damage_entries() {
         let mut bat = item_row("W", "WEAP", Some("Bat"));
         bat.weapon = Some(weapon_stats(Some(0), Some(1.0)));
-        let ItemDetails::Weapon(stats) = &build_items(&[bat]).unwrap()[0].details else {
+        let ItemDetails::Weapon(stats) =
+            &build_items(&[bat], &ItemContext::default()).unwrap()[0].details
+        else {
             panic!("not a weapon");
         };
         assert_eq!(stats.damage, []);
@@ -787,7 +1075,9 @@ mod tests {
             (negative, "'W3' has damage -1"),
             (no_record, "'W4' has no weapon record"),
         ] {
-            let error = build_items(&[row]).unwrap_err().to_string();
+            let error = build_items(&[row], &ItemContext::default())
+                .unwrap_err()
+                .to_string();
             assert!(error.contains(needle), "{error}");
         }
     }
@@ -799,7 +1089,9 @@ mod tests {
             armor_rating: Some(30),
             body_slot: Some((1 << 11) | (1 << 12)),
         });
-        let ItemDetails::Apparel(stats) = &build_items(&[vest]).unwrap()[0].details else {
+        let ItemDetails::Apparel(stats) =
+            &build_items(&[vest], &ItemContext::default()).unwrap()[0].details
+        else {
             panic!("not apparel");
         };
         assert_eq!(stats.slot_mask, (1 << 11) | (1 << 12));
@@ -825,7 +1117,9 @@ mod tests {
             (armor(Some(1), Some(i64::MAX)), "body slot"),
             (item_row("V", "ARMO", Some("Vest")), "no armor record"),
         ] {
-            let error = build_items(&[row]).unwrap_err().to_string();
+            let error = build_items(&[row], &ItemContext::default())
+                .unwrap_err()
+                .to_string();
             assert!(error.contains(needle), "{error}");
         }
     }
@@ -838,7 +1132,9 @@ mod tests {
             body_slot: Some(i64::from(i32::MIN)),
         });
 
-        let ItemDetails::Apparel(stats) = &build_items(&[skin]).unwrap()[0].details else {
+        let ItemDetails::Apparel(stats) =
+            &build_items(&[skin], &ItemContext::default()).unwrap()[0].details
+        else {
             panic!("not apparel");
         };
 
@@ -873,6 +1169,82 @@ mod tests {
         let position = map.markers[0].position;
         assert!((position - glam::Vec3::new(-8076.8, 50.0, -8817.5)).length() < 0.01);
         assert_eq!(map.markers[0].marker_type, 11);
+    }
+
+    /// The facts about the converted game data the item tabs rest on: 620 miscellaneous bases list
+    /// components, 1,297 carry the loose-mod keyword, none both.
+    #[test]
+    #[ignore = "needs an installation converted with misc_components (OPENFO4_INSTALL_DIR or OPENFO4_DB)"]
+    fn the_installed_database_has_620_misc_bases_with_components_and_1297_loose_mods() {
+        let db = crate::assets::db::test_support::installed_database();
+        let misc: Vec<ItemRow> = db
+            .get_items()
+            .unwrap()
+            .into_iter()
+            .filter(|row| row.item_type == "MISC")
+            .collect();
+        let with_components: HashSet<String> = db
+            .get_item_components()
+            .unwrap()
+            .expect("misc_components table")
+            .into_iter()
+            .map(|row| row.item_form_key)
+            .collect();
+        let loose_mod = db
+            .get_keyword_form_key(LOOSE_MOD_KEYWORD_EDITOR_ID)
+            .unwrap()
+            .expect("the loose-mod keyword");
+        let is_loose_mod = |row: &ItemRow| {
+            row.keywords
+                .as_deref()
+                .is_some_and(|keywords| keywords.contains(&loose_mod))
+        };
+
+        let components = misc
+            .iter()
+            .filter(|row| with_components.contains(&row.form_key))
+            .count();
+        let loose_mods = misc.iter().filter(|row| is_loose_mod(row)).count();
+        let both = misc
+            .iter()
+            .filter(|row| is_loose_mod(row) && with_components.contains(&row.form_key))
+            .count();
+
+        assert_eq!(components, 620);
+        assert_eq!(loose_mods, 1297);
+        assert_eq!(both, 0);
+    }
+
+    /// Facts about the converted item rows: 922 component entries, the loose-mod keyword's form
+    /// key, 116 marker bases (114 MISC, 2 WEAP), and the keyword column's NULL / array split.
+    #[test]
+    #[ignore = "needs an installation converted with misc_components and items.is_marker (OPENFO4_INSTALL_DIR or OPENFO4_DB)"]
+    fn the_installed_database_has_922_component_rows_116_marker_bases_and_the_loose_mod_keyword() {
+        let db = crate::assets::db::test_support::installed_database();
+        let rows = db.get_items().unwrap();
+
+        let component_rows = db
+            .get_item_components()
+            .unwrap()
+            .expect("misc_components table");
+        let markers: Vec<&ItemRow> = rows.iter().filter(|r| r.is_marker == Some(true)).collect();
+        let marker_count_of =
+            |item_type: &str| markers.iter().filter(|r| r.item_type == item_type).count();
+        let without_keywords = rows.iter().filter(|r| r.keywords.is_none()).count();
+        let with_keywords = rows.iter().filter(|r| r.keywords.is_some()).count();
+
+        assert_eq!(component_rows.len(), 922);
+        assert_eq!(markers.len(), 116);
+        assert_eq!(marker_count_of("MISC"), 114);
+        assert_eq!(marker_count_of("WEAP"), 2);
+        assert_eq!(
+            db.get_keyword_form_key(LOOSE_MOD_KEYWORD_EDITOR_ID)
+                .unwrap()
+                .as_deref(),
+            Some("135C17:Fallout4.esm")
+        );
+        assert_eq!(without_keywords, 1307);
+        assert_eq!(with_keywords, 2769);
     }
 
     /// Developer check against a real install: every item the database lists converts, and the

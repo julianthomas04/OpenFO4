@@ -27,6 +27,31 @@ pub(super) fn real32(value: f64) -> f32 {
     value as f32
 }
 
+pub(super) enum DefaultObjectSlot {
+    Absent,
+    Empty,
+    Target(String),
+}
+
+pub(super) fn default_object_slot(
+    conn: &Connection,
+    slot: &str,
+) -> rusqlite::Result<DefaultObjectSlot> {
+    use rusqlite::OptionalExtension;
+    let row: Option<Option<String>> = conn
+        .query_row(
+            "SELECT target FROM default_object_slots WHERE slot = ?",
+            rusqlite::params![slot],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(match row {
+        None => DefaultObjectSlot::Absent,
+        Some(None) => DefaultObjectSlot::Empty,
+        Some(Some(target)) => DefaultObjectSlot::Target(target),
+    })
+}
+
 pub(super) fn collect_rows<T>(
     conn: &Connection,
     sql: &str,

@@ -474,9 +474,7 @@ impl<T: KeyCheck, const N: usize> KeyCheck for [T; N] {
 
 impl<T: KeyCheck> KeyCheck for Option<T> {
     fn failures(&self, layout: &UiLayout) -> Vec<UiLayoutError> {
-        self.as_ref()
-            .map(|check| check.failures(layout))
-            .unwrap_or_default()
+        self.as_ref().map_or_default(|check| check.failures(layout))
     }
 
     fn declare(&self, out: &mut Vec<Declaration>) {

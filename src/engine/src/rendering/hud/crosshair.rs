@@ -10,6 +10,7 @@
 use super::clip::{ClipRect, flatten_clip};
 use super::layout::Layout;
 use super::quad::{PxRect, QuadBuilder};
+use super::warning::warning_linear;
 use crate::sim::CrosshairState;
 use crate::ui_layout::{KeyGroup, Movie, TimelineKey, UiLayout, UiLayoutError};
 
@@ -62,6 +63,27 @@ impl CrosshairSpec {
             dot_to_activate: flatten(layout, &movie, &DOT_TO_ACTIVATE)?,
             activate_to_dot: flatten(layout, &movie, &ACTIVATE_TO_DOT)?,
         })
+    }
+}
+
+#[cfg(test)]
+impl CrosshairSpec {
+    /// A one-rect reticle at a steady rate, for the scene tests of the HUD.
+    pub(super) fn synthetic() -> Self {
+        let rect = ClipRect {
+            x: -2.0,
+            y: -2.0,
+            w: 4.0,
+            h: 4.0,
+            colour: [1.0; 3],
+            alpha: 1.0,
+        };
+        Self {
+            frame_rate: 30.0,
+            dot_loop: vec![vec![rect]],
+            dot_to_activate: vec![vec![rect], vec![rect]],
+            activate_to_dot: vec![vec![rect], vec![rect]],
+        }
     }
 }
 
@@ -209,7 +231,9 @@ impl CrosshairWidget {
         }
     }
 
-    pub fn emit(&self, qb: &mut QuadBuilder, layout: &Layout) {
+    /// Draws the current frame; a `warning` crosshair takes the warning colour, which the HUD
+    /// tint does not multiply, in place of the art colour.
+    pub fn emit(&self, qb: &mut QuadBuilder, layout: &Layout, warning: bool) {
         let (cx, cy) = layout.center();
         let frame: &Frame = match self.playing {
             Some(p) => &self.clip(p.clip)[p.frame],
@@ -220,15 +244,18 @@ impl CrosshairWidget {
             },
         };
         for r in frame {
-            qb.rect(
-                PxRect {
-                    x: cx + layout.s(r.x),
-                    y: cy + layout.s(r.y),
-                    w: layout.s(r.w),
-                    h: layout.s(r.h),
-                },
-                [r.colour[0], r.colour[1], r.colour[2], r.alpha],
-            );
+            let rect = PxRect {
+                x: cx + layout.s(r.x),
+                y: cy + layout.s(r.y),
+                w: layout.s(r.w),
+                h: layout.s(r.h),
+            };
+            if warning {
+                let [red, green, blue] = warning_linear();
+                qb.rect_untinted(rect, [red, green, blue, r.alpha]);
+            } else {
+                qb.rect(rect, [r.colour[0], r.colour[1], r.colour[2], r.alpha]);
+            }
         }
     }
 }
@@ -244,4 +271,54 @@ fn last_non_empty(frames: &[Frame]) -> Frame {
         .find(|f| !f.is_empty())
         .cloned()
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rendering::hud::quad::{HudVertex, TINTED, UNTINTED};
+    use crate::rendering::hud::warning::warning_linear;
+
+    const ART_COLOUR: [f32; 3] = [0.2, 0.4, 0.6];
+    const ART_ALPHA: f32 = 0.5;
+    const FB: (u32, u32) = (1280, 720);
+
+    fn emitted(warning: bool) -> Vec<HudVertex> {
+        let rect = ClipRect {
+            x: -2.0,
+            y: -2.0,
+            w: 4.0,
+            h: 4.0,
+            colour: ART_COLOUR,
+            alpha: ART_ALPHA,
+        };
+        let mut widget = CrosshairWidget::new(CrosshairSpec {
+            frame_rate: 30.0,
+            dot_loop: vec![vec![rect]],
+            dot_to_activate: vec![vec![rect], vec![rect]],
+            activate_to_dot: vec![vec![rect], vec![rect]],
+        });
+        widget.update(CrosshairState::Dot, MAX_ANIM_CATCHUP);
+        let mut verts = Vec::new();
+        let mut quads = QuadBuilder::new(&mut verts, FB.0 as f32, FB.1 as f32, 0.0, [0.0; 4]);
+        widget.emit(&mut quads, &Layout::hud_stage(FB), warning);
+        quads.finish();
+        verts
+    }
+
+    #[test]
+    fn a_crosshair_keeps_the_alpha_of_its_art_and_is_tinted_unless_it_warns() {
+        let [red, green, blue] = warning_linear();
+        for (warning, colour, tint_weight) in [
+            (false, ART_COLOUR, TINTED),
+            (true, [red, green, blue], UNTINTED),
+        ] {
+            let verts = emitted(warning);
+            assert!(!verts.is_empty(), "{warning}");
+            for vertex in verts {
+                assert_eq!(vertex.color, [colour[0], colour[1], colour[2], ART_ALPHA]);
+                assert_eq!(vertex.tint_weight, tint_weight, "{warning}");
+            }
+        }
+    }
 }

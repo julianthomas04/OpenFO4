@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use super::catalog::{ItemDefinition, ItemKind};
 use super::character::SpecialTexts;
 use super::inventory::{
     AidEffect, ApparelStats, DamageType, DamageValue, InventoryCategory, InventoryItem,
@@ -24,6 +25,20 @@ pub fn item(name: &str, category: InventoryCategory, details: ItemDetails) -> In
         favourite: None,
         legendary: false,
         details,
+    }
+}
+
+/// A miscellaneous definition of 2 weight and 7 value; tests adjust the fields they care about.
+pub fn definition(form_key: &str, name: &str) -> ItemDefinition {
+    ItemDefinition {
+        form_key: form_key.to_owned(),
+        kind: ItemKind::Misc,
+        editor_id: None,
+        name: name.to_owned(),
+        category: InventoryCategory::Misc,
+        weight: 2.0,
+        value: 7,
+        details: ItemDetails::Misc,
     }
 }
 

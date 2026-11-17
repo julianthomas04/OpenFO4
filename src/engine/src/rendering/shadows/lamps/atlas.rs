@@ -79,9 +79,9 @@ impl TileAtlas {
             .pop_first()
             .expect("the source level has a free block");
         let mut block = self.resolution >> source;
-        for split_level in source + 1..=level {
+        for free in &mut self.free[source + 1..=level] {
             block /= 2;
-            self.free[split_level].extend([(x + block, y), (x, y + block), (x + block, y + block)]);
+            free.extend([(x + block, y), (x, y + block), (x + block, y + block)]);
         }
         self.used_texels += u64::from(size) * u64::from(size);
         Ok(Tile { x, y, size })

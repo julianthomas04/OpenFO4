@@ -12,11 +12,11 @@ fn load(spec: DdsSpec) -> Result<super::CubeImage, TextureError> {
 fn assert_faces_match(spec: &DdsSpec, image: &super::CubeImage) {
     assert_eq!(image.size, spec.width);
     assert_eq!(image.mip_count, spec.mips);
-    for face in 0..6 {
-        assert_eq!(image.faces[face].len(), spec.mips as usize);
+    for (face, mips) in image.faces.iter().enumerate() {
+        assert_eq!(mips.len(), spec.mips as usize);
         for level in 0..spec.mips {
             assert_eq!(
-                image.faces[face][level as usize],
+                mips[level as usize],
                 spec.mip_pixels(face, level),
                 "face {face} mip {level}"
             );

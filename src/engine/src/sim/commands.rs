@@ -6,6 +6,7 @@
 //! gameplay mutation, so the bake is just an accelerator.
 //! Everything that mutates the sim flows through [`SimCommand`].
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use glam::{Quat, Vec2, Vec3};
@@ -17,6 +18,13 @@ use super::ragdoll_tuning::RagdollSettings;
 use super::{CellGrid, EntityId};
 use crate::weather::WeatherId;
 
+/// The colliders of objects added to a cell after its authored content.
+#[derive(Clone)]
+pub struct AddedObjects {
+    pub batch: Arc<CellColliderBatch>,
+    pub baked: Option<BakedCellColliders>,
+}
+
 pub enum SimCommand {
     /// Register a streamed cell's static colliders (terrain + objects). The
     /// batch is built on the streaming worker thread; the sim turns it into
@@ -25,6 +33,25 @@ pub enum SimCommand {
     /// While the sim holds its fold (`SimWorld::set_fold_hold`) the add is
     /// queued and inserted by `SimWorld::drain_pending_colliders`.
     AddCellColliders {
+        grid: CellGrid,
+        batch: Arc<CellColliderBatch>,
+        baked: Option<BakedCellColliders>,
+    },
+    /// [`AddCellColliders`](Self::AddCellColliders) for a cell with edits: placements whose
+    /// `ref_key` maps (`refr_entity_id`) to an entity in `skip` are not built at all (no body, no
+    /// collider, no shape-cache count). One command is one deferred queue entry, so there is
+    /// never a frame in which a skipped body exists.
+    AddCellCollidersSkipping {
+        grid: CellGrid,
+        batch: Arc<CellColliderBatch>,
+        baked: Option<BakedCellColliders>,
+        skip: Arc<HashSet<EntityId>>,
+        /// Items dropped into the cell, built after the authored objects with the same skip set.
+        added: Vec<AddedObjects>,
+    },
+    /// Registers more colliders in an already registered cell (a dropped item). Takes the same
+    /// defer branch as `AddCellColliders`, so it never overtakes the registration it follows.
+    AddWorldObjects {
         grid: CellGrid,
         batch: Arc<CellColliderBatch>,
         baked: Option<BakedCellColliders>,
@@ -136,8 +163,7 @@ pub struct PlayerInput {
     /// toggle semantics (Shift arms sprint only while W alone is down and
     /// drops it on Shift/W-release/strafe/sneak; Ctrl toggles crouch, cleared
     /// by sprint start, untouched by jumping). The sim treats these as
-    /// intent — `crouch` waits on the stand-up headroom probe, `sprint` only
-    /// applies once not crouching.
+    /// intent — `sprint` only applies once not crouching.
     pub sprint: bool,
     pub crouch: bool,
 }

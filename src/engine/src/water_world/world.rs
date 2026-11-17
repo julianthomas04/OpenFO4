@@ -681,12 +681,12 @@ mod tests {
         assert_eq!(empty.cell_surfaces(), []);
     }
 
-    /// Against a converted database: `OPENFO4_DB=<data.db> cargo test
-    /// real_database -- --ignored`.
+    /// Against a converted database: `OPENFO4_INSTALL_DIR=<install> cargo test
+    /// real_database -- --ignored` (or `OPENFO4_DB=<data.db>`).
     #[test]
-    #[ignore = "needs a converted data.db (OPENFO4_DB)"]
+    #[ignore = "needs a converted data.db (OPENFO4_INSTALL_DIR or OPENFO4_DB)"]
     fn real_database_answers_the_commonwealth_ocean_and_an_interior() {
-        let db_path = std::env::var("OPENFO4_DB").expect("OPENFO4_DB names a data.db");
+        let db_path = crate::assets::db::test_support::installed_database_path();
         let mut world = WaterWorld::new(&db_path);
         world.set_scope(Scope::Exterior("00003C:Fallout4.esm"));
         let ocean = world.surface_at(at(2048.0, -2048.0, 300.0)).unwrap();

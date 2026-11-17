@@ -486,7 +486,7 @@ fn a_new_sim_rejection_is_shown_as_the_games_text_once_per_change() {
     let dir = tempfile::tempdir().unwrap();
     let mut screen = screen(dir.path());
     let mut model = populated_model();
-    model.last_rejection = Some(crate::sim::pipboy::PipBoyActionError::PerkSpecialTooLow {
+    model.reject(crate::sim::pipboy::PipBoyActionError::PerkSpecialTooLow {
         perk: crate::sim::pipboy::PerkId("perk".to_owned()),
     });
     let snapshot = PipBoySnapshot {
@@ -504,11 +504,31 @@ fn a_new_sim_rejection_is_shown_as_the_games_text_once_per_change() {
 }
 
 #[test]
+fn a_refusal_with_a_game_setting_is_left_to_the_hud_message_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut screen = screen(dir.path());
+    for error in [
+        crate::sim::pipboy::PipBoyActionError::Airborne,
+        crate::sim::pipboy::PipBoyActionError::KeyNotDroppable(ItemId(4)),
+    ] {
+        let mut model = populated_model();
+        model.reject(error);
+        let snapshot = PipBoySnapshot {
+            model: &model,
+            clock: crate::sim::WorldClock::fixture().date(),
+            vitals: vitals(),
+        };
+        paint(&mut screen, &snapshot, 0.0);
+        assert_eq!(screen.notice.text(), None);
+    }
+}
+
+#[test]
 fn a_rejection_the_game_has_no_text_for_is_not_shown_to_the_player() {
     let dir = tempfile::tempdir().unwrap();
     let mut screen = screen(dir.path());
     let mut model = populated_model();
-    model.last_rejection = Some(crate::sim::pipboy::PipBoyActionError::UnknownItem(ItemId(
+    model.reject(crate::sim::pipboy::PipBoyActionError::UnknownItem(ItemId(
         9,
     )));
     let snapshot = PipBoySnapshot {

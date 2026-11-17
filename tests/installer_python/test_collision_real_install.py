@@ -120,3 +120,49 @@ class RealShapeLayerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(os.environ.get("OPENFO4_FO4_PATH"), "OPENFO4_FO4_PATH names no Fallout 4 install.")
+class RealConvexRadiusTests(unittest.TestCase):
+    """The radius offset read by the decoder against real hulls, which the synthetic packfile cannot prove: a wrong
+    offset reads a float of the hull data (a plane or a vertex) instead. The Havok radius of an item hull is 1 cm for
+    most items and 0.1 m at most (surveyed over 35 item meshes)."""
+
+    FUSE = "meshes/props/fuse01.nif"
+    NUKA_BOTTLE = "meshes/props/nukacolabottleempty.nif"
+    SURVEYED_MAX_RADIUS = 0.1 * worker.S
+    ONE_CENTIMETRE = 0.01 * worker.S
+
+    @classmethod
+    def setUpClass(cls):
+        data_dir = Path(os.environ["OPENFO4_FO4_PATH"]) / "Data"
+        wanted = {cls.FUSE, cls.NUKA_BOTTLE}
+        nifs: Dict[str, bytes] = {}
+        for archive in MESH_ARCHIVES:
+            nifs.update(read_general_ba2_entries(data_dir / archive, wanted - set(nifs)))
+        cls.radii: Dict[str, list] = {}
+        for name in wanted:
+            with tempfile.TemporaryDirectory() as folder:
+                nif = Path(folder) / "mesh.nif"
+                sidecar = Path(folder) / "mesh.col.json"
+                nif.write_bytes(nifs[name])
+                worker.process_nif(nif, sidecar)
+                shapes = json.loads(sidecar.read_text())["shapes"]
+            cls.radii[name] = [shape["convex_radius"] for shape in shapes if shape["type"] == "convex"]
+
+    def test_every_item_hull_has_a_radius_within_the_surveyed_range(self):
+        for name, radii in self.radii.items():
+            with self.subTest(name):
+                self.assertTrue(radii)
+                for radius in radii:
+                    self.assertGreater(radius, 0.0)
+                    self.assertLessEqual(radius, self.SURVEYED_MAX_RADIUS)
+
+    def test_the_fuse_hull_is_one_centimetre_rounded(self):
+        self.assertEqual(len(self.radii[self.FUSE]), 1)
+        self.assertAlmostEqual(self.radii[self.FUSE][0], self.ONE_CENTIMETRE, places=3)
+
+    def test_the_bottle_hulls_are_one_centimetre_rounded(self):
+        for radius in self.radii[self.NUKA_BOTTLE]:
+            self.assertAlmostEqual(radius, self.ONE_CENTIMETRE, places=3)
+

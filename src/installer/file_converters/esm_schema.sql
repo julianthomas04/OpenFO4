@@ -125,6 +125,9 @@ CREATE TABLE IF NOT EXISTS placed_objects (
     record_flags INTEGER,               -- raw major record flags (CastsShadows 0x200, NeverFades 0x10000, ...)
     ragdoll_pose BLOB,                  -- XRGD: raw N x 28-byte ragdoll pose, NULL when absent
     water_currents TEXT,                -- JSON [[x,y,z,w],...]: XWCN count + XWCU entries (16 B each), NULL when absent
+    item_count INTEGER,                 -- XCNT: stack count of the reference, NULL when absent
+    owner TEXT,                         -- effective owner form_key (NPC or faction): the ref's XOWN, else the cell's; NULL when unowned
+    leveled_item TEXT,                  -- XLIB: leveled item form_key the ref stands for, NULL when absent
     extra_data TEXT                     -- JSON
 );
 
@@ -180,6 +183,15 @@ CREATE TABLE IF NOT EXISTS npcs (
 CREATE INDEX IF NOT EXISTS idx_npcs_race ON npcs(race);
 CREATE INDEX IF NOT EXISTS idx_npcs_class ON npcs(class);
 
+-- Faction memberships of an NPC (its faction list)
+CREATE TABLE IF NOT EXISTS npc_factions (
+    npc TEXT NOT NULL,                  -- npcs.form_key
+    faction TEXT NOT NULL,              -- factions.form_key
+    rank INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_npc_factions_npc ON npc_factions(npc);
+
 -- Factions
 CREATE TABLE IF NOT EXISTS factions (
     form_key TEXT PRIMARY KEY REFERENCES records(form_key),
@@ -221,8 +233,18 @@ CREATE TABLE IF NOT EXISTS items (
     model_path TEXT,
     pickup_sound TEXT,
     drop_sound TEXT,
-    keywords TEXT                       -- JSON
+    keywords TEXT,                      -- JSON
+    is_marker INTEGER DEFAULT 0         -- model path under markers\: editor-only stand-in, never rendered in-game
 );
+
+-- Components a misc item is made of (CVPA)
+CREATE TABLE IF NOT EXISTS misc_components (
+    form_key TEXT NOT NULL,             -- items.form_key of the MISC
+    component TEXT NOT NULL,            -- form_key of the component
+    count INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_misc_components_item ON misc_components(form_key);
 
 CREATE INDEX IF NOT EXISTS idx_items_type ON items(item_type);
 CREATE INDEX IF NOT EXISTS idx_items_name ON items(name);

@@ -176,6 +176,42 @@ namespace InstallerTests
         public void PlacedObject_WithoutMaterialSwapLink_LeavesColumnNull() =>
             Assert.Null(Placed("PlainRef").MaterialSwap);
 
+        [Fact]
+        public void PlacedObject_WithStackCount_StoresTheCount() =>
+            Assert.Equal((long)LoadedFixtureDatabase.StackCount, Placed("CountedRef").ItemCount);
+
+        [Fact]
+        public void PlacedObject_WithoutStackCount_LeavesCountNull() =>
+            Assert.Null(Placed("PlainRef").ItemCount);
+
+        [Fact]
+        public void PlacedObject_OwnedByNpc_StoresTheNpcAsOwner() =>
+            Assert.Equal(db.KeyOf("OwnerNpc"), Placed("NpcOwnedRef").Owner);
+
+        [Fact]
+        public void PlacedObject_OwnedByFaction_StoresTheFactionAsOwner() =>
+            Assert.Equal(db.KeyOf("OwnerFaction"), Placed("FactionOwnedRef").Owner);
+
+        [Fact]
+        public void PlacedObject_WithoutOwnerInOwnedCell_TakesTheCellOwner() =>
+            Assert.Equal(db.KeyOf("CellFaction"), Placed("CellOwnedRef").Owner);
+
+        [Fact]
+        public void PlacedObject_OwnerOfTheRef_WinsOverTheCellOwner() =>
+            Assert.Equal(db.KeyOf("OwnerNpc"), Placed("OwnRefInOwnedCell").Owner);
+
+        [Fact]
+        public void PlacedObject_WithoutOwnerInUnownedCell_LeavesOwnerNull() =>
+            Assert.Null(Placed("PlainRef").Owner);
+
+        [Fact]
+        public void PlacedObject_WithLeveledItemLink_StoresTheLeveledItem() =>
+            Assert.Equal(db.KeyOf("FixtureLeveledList"), Placed("LeveledRef").LeveledItem);
+
+        [Fact]
+        public void PlacedObject_WithoutLeveledItemLink_LeavesColumnNull() =>
+            Assert.Null(Placed("PlainRef").LeveledItem);
+
         static float[] ReadFloats(ReadOnlySpan<byte> bytes) =>
             [BitConverter.ToSingle(bytes[..4]), BitConverter.ToSingle(bytes[4..8]), BitConverter.ToSingle(bytes[8..12])];
     }

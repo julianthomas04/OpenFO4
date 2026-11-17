@@ -67,6 +67,13 @@ impl PhysicsContext {
         self.grabbable_handle(entity).is_some()
     }
 
+    /// [`is_grabbable`](Self::is_grabbable) and the body's mass is within what a grab lifts.
+    pub fn can_carry(&self, entity: EntityId) -> bool {
+        self.grabbable_handle(entity)
+            .and_then(|handle| self.world.bodies.get(handle))
+            .is_some_and(|rb| carry::can_grab(rb.mass()))
+    }
+
     fn grabbable_handle(&self, entity: EntityId) -> Option<RigidBodyHandle> {
         let body = self.dyn_bodies.get(&entity).filter(|body| body.active)?;
         self.world

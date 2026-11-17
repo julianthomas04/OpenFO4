@@ -538,6 +538,10 @@ namespace AssetConverter
             ("placed_objects", "light_volumetric_intensity", "REAL"),
             ("placed_objects", "record_flags", "INTEGER"),
             ("placed_objects", "ragdoll_pose", "BLOB"),
+            ("placed_objects", "item_count", "INTEGER"),
+            ("placed_objects", "owner", "TEXT"),
+            ("placed_objects", "leveled_item", "TEXT"),
+            ("items", "is_marker", "INTEGER DEFAULT 0"),
             ("cells", "is_worldspace_persistent_cell", "INTEGER DEFAULT 0"),
             ("cells", "lighting_template", "TEXT"),
             ("cells", "name", "TEXT"),
@@ -776,6 +780,7 @@ namespace AssetConverter
             "radius_override", "light_fov_pm", "light_fade_pm",
             "light_end_distance_cap", "light_shadow_depth_bias", "light_near_clip",
             "light_volumetric_intensity", "record_flags", "ragdoll_pose", "water_currents",
+            "item_count", "owner", "leveled_item",
         };
         public static readonly string[] PlacedTeleports =
         {
@@ -1380,6 +1385,10 @@ namespace AssetConverter
                 Appearance = SafeSerialize(record.Weight),
                 AiData = aiData
             }, transaction);
+
+            const string factionSql = "INSERT INTO npc_factions (npc, faction, rank) VALUES (@Npc, @Faction, @Rank)";
+            foreach (var membership in record.Factions)
+                await conn.ExecuteAsync(factionSql, new { Npc = formKey, Faction = membership.Faction.FormKey.ToString(), Rank = (int)membership.Rank }, transaction);
         }
 
         protected override void PrintSummary()
@@ -1396,8 +1405,8 @@ namespace AssetConverter
         protected override async Task ProcessSpecificRecordAsync(IWeaponGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
         {
             const string itemSql = @"
-                INSERT OR REPLACE INTO items (form_key, item_type, editor_id, name, value, weight, model_path, pickup_sound, drop_sound, keywords)
-                VALUES (@FormKey, 'WEAP', @EditorId, @Name, @Value, @Weight, @ModelPath, @PickupSound, @DropSound, @Keywords)";
+                INSERT OR REPLACE INTO items (form_key, item_type, editor_id, name, value, weight, model_path, pickup_sound, drop_sound, keywords, is_marker)
+                VALUES (@FormKey, 'WEAP', @EditorId, @Name, @Value, @Weight, @ModelPath, @PickupSound, @DropSound, @Keywords, @IsMarker)";
 
             await conn.ExecuteAsync(itemSql, new
             {
@@ -1409,7 +1418,8 @@ namespace AssetConverter
                 ModelPath = record.Model?.File,
                 PickupSound = record.PickUpSound.IsNull ? (string?)null : record.PickUpSound.FormKey.ToString(),
                 DropSound = record.PutDownSound.IsNull ? (string?)null : record.PutDownSound.FormKey.ToString(),
-                Keywords = SafeSerialize(FormKeyStrings.Of(record.Keywords))
+                Keywords = SafeSerialize(FormKeyStrings.Of(record.Keywords)),
+                IsMarker = MarkerModels.IsMarker(record.Model?.File)
             }, transaction);
 
             const string weapSql = @"
@@ -1452,8 +1462,8 @@ namespace AssetConverter
         protected override async Task ProcessSpecificRecordAsync(IArmorGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
         {
             const string itemSql = @"
-                INSERT OR REPLACE INTO items (form_key, item_type, editor_id, name, value, weight, model_path, keywords)
-                VALUES (@FormKey, 'ARMO', @EditorId, @Name, @Value, @Weight, @ModelPath, @Keywords)";
+                INSERT OR REPLACE INTO items (form_key, item_type, editor_id, name, value, weight, model_path, pickup_sound, drop_sound, keywords, is_marker)
+                VALUES (@FormKey, 'ARMO', @EditorId, @Name, @Value, @Weight, @ModelPath, @PickupSound, @DropSound, @Keywords, @IsMarker)";
 
             // Armor uses WorldModel (GenderedItem) usually
             string? modelPath = null;
@@ -1470,7 +1480,10 @@ namespace AssetConverter
                 Value = record.Value,
                 Weight = record.Weight,
                 ModelPath = modelPath,
-                Keywords = SafeSerialize(FormKeyStrings.Of(record.Keywords))
+                PickupSound = record.PickUpSound.IsNull ? (string?)null : record.PickUpSound.FormKey.ToString(),
+                DropSound = record.PutDownSound.IsNull ? (string?)null : record.PutDownSound.FormKey.ToString(),
+                Keywords = SafeSerialize(FormKeyStrings.Of(record.Keywords)),
+                IsMarker = MarkerModels.IsMarker(modelPath)
             }, transaction);
 
             const string armorSql = @"
@@ -1506,8 +1519,8 @@ namespace AssetConverter
         protected override async Task ProcessSpecificRecordAsync(IAmmunitionGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
         {
             const string itemSql = @"
-                INSERT OR REPLACE INTO items (form_key, item_type, editor_id, name, value, weight, model_path, pickup_sound, drop_sound, keywords)
-                VALUES (@FormKey, 'AMMO', @EditorId, @Name, @Value, @Weight, @ModelPath, @PickupSound, @DropSound, @Keywords)";
+                INSERT OR REPLACE INTO items (form_key, item_type, editor_id, name, value, weight, model_path, pickup_sound, drop_sound, keywords, is_marker)
+                VALUES (@FormKey, 'AMMO', @EditorId, @Name, @Value, @Weight, @ModelPath, @PickupSound, @DropSound, @Keywords, @IsMarker)";
 
             await conn.ExecuteAsync(itemSql, new
             {
@@ -1519,7 +1532,8 @@ namespace AssetConverter
                 ModelPath = record.Model?.File,
                 PickupSound = record.PickUpSound.IsNull ? (string?)null : record.PickUpSound.FormKey.ToString(),
                 DropSound = record.PutDownSound.IsNull ? (string?)null : record.PutDownSound.FormKey.ToString(),
-                Keywords = SafeSerialize(FormKeyStrings.Of(record.Keywords))
+                Keywords = SafeSerialize(FormKeyStrings.Of(record.Keywords)),
+                IsMarker = MarkerModels.IsMarker(record.Model?.File)
             }, transaction);
         }
     }
@@ -1529,8 +1543,8 @@ namespace AssetConverter
         protected override async Task ProcessSpecificRecordAsync(IMiscItemGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
         {
             const string itemSql = @"
-                INSERT OR REPLACE INTO items (form_key, item_type, editor_id, name, value, weight, model_path, pickup_sound, drop_sound, keywords)
-                VALUES (@FormKey, 'MISC', @EditorId, @Name, @Value, @Weight, @ModelPath, @PickupSound, @DropSound, @Keywords)";
+                INSERT OR REPLACE INTO items (form_key, item_type, editor_id, name, value, weight, model_path, pickup_sound, drop_sound, keywords, is_marker)
+                VALUES (@FormKey, 'MISC', @EditorId, @Name, @Value, @Weight, @ModelPath, @PickupSound, @DropSound, @Keywords, @IsMarker)";
 
             await conn.ExecuteAsync(itemSql, new
             {
@@ -1542,8 +1556,13 @@ namespace AssetConverter
                 ModelPath = record.Model?.File,
                 PickupSound = record.PickUpSound.IsNull ? (string?)null : record.PickUpSound.FormKey.ToString(),
                 DropSound = record.PutDownSound.IsNull ? (string?)null : record.PutDownSound.FormKey.ToString(),
-                Keywords = SafeSerialize(FormKeyStrings.Of(record.Keywords))
+                Keywords = SafeSerialize(FormKeyStrings.Of(record.Keywords)),
+                IsMarker = MarkerModels.IsMarker(record.Model?.File)
             }, transaction);
+
+            const string componentSql = "INSERT INTO misc_components (form_key, component, count) VALUES (@FormKey, @Component, @Count)";
+            foreach (var component in record.Components ?? [])
+                await conn.ExecuteAsync(componentSql, new { FormKey = formKey, Component = component.Component.FormKey.ToString(), Count = (long)component.Count }, transaction);
         }
     }
 
@@ -1552,8 +1571,8 @@ namespace AssetConverter
         protected override async Task ProcessSpecificRecordAsync(IBookGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
         {
             const string itemSql = @"
-                INSERT OR REPLACE INTO items (form_key, item_type, editor_id, name, value, weight, model_path, pickup_sound, drop_sound, keywords)
-                VALUES (@FormKey, 'BOOK', @EditorId, @Name, @Value, @Weight, @ModelPath, @PickupSound, @DropSound, @Keywords)";
+                INSERT OR REPLACE INTO items (form_key, item_type, editor_id, name, value, weight, model_path, pickup_sound, drop_sound, keywords, is_marker)
+                VALUES (@FormKey, 'BOOK', @EditorId, @Name, @Value, @Weight, @ModelPath, @PickupSound, @DropSound, @Keywords, @IsMarker)";
 
             await conn.ExecuteAsync(itemSql, new
             {
@@ -1565,7 +1584,8 @@ namespace AssetConverter
                 ModelPath = record.Model?.File,
                 PickupSound = record.PickUpSound.IsNull ? (string?)null : record.PickUpSound.FormKey.ToString(),
                 DropSound = record.PutDownSound.IsNull ? (string?)null : record.PutDownSound.FormKey.ToString(),
-                Keywords = SafeSerialize(FormKeyStrings.Of(record.Keywords))
+                Keywords = SafeSerialize(FormKeyStrings.Of(record.Keywords)),
+                IsMarker = MarkerModels.IsMarker(record.Model?.File)
             }, transaction);
         }
     }
@@ -1575,8 +1595,8 @@ namespace AssetConverter
         protected override async Task ProcessSpecificRecordAsync(IIngestibleGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
         {
             const string itemSql = @"
-                INSERT OR REPLACE INTO items (form_key, item_type, editor_id, name, value, weight, model_path, pickup_sound, drop_sound, keywords)
-                VALUES (@FormKey, 'ALCH', @EditorId, @Name, @Value, @Weight, @ModelPath, @PickupSound, @DropSound, @Keywords)";
+                INSERT OR REPLACE INTO items (form_key, item_type, editor_id, name, value, weight, model_path, pickup_sound, drop_sound, keywords, is_marker)
+                VALUES (@FormKey, 'ALCH', @EditorId, @Name, @Value, @Weight, @ModelPath, @PickupSound, @DropSound, @Keywords, @IsMarker)";
 
             await conn.ExecuteAsync(itemSql, new
             {
@@ -1588,7 +1608,8 @@ namespace AssetConverter
                 ModelPath = record.Model?.File,
                 PickupSound = record.PickUpSound.IsNull ? (string?)null : record.PickUpSound.FormKey.ToString(),
                 DropSound = record.PutDownSound.IsNull ? (string?)null : record.PutDownSound.FormKey.ToString(),
-                Keywords = SafeSerialize(FormKeyStrings.Of(record.Keywords))
+                Keywords = SafeSerialize(FormKeyStrings.Of(record.Keywords)),
+                IsMarker = MarkerModels.IsMarker(record.Model?.File)
             }, transaction);
         }
     }
@@ -2021,6 +2042,20 @@ namespace AssetConverter
             }
         }
 
+        // XCNT stack count, XLIB leveled-item base and the effective owner (the ref's XOWN, else the cell's) of an item ref.
+        // All null for refs that carry none of them.
+        private readonly record struct PlacedItemFields(int? ItemCount, string? Owner, string? LeveledItem)
+        {
+            public static PlacedItemFields From(IPlacedGetter obj, string? cellOwner)
+            {
+                if (obj is not IPlacedObjectGetter placedObject) return new PlacedItemFields(null, cellOwner, null);
+                return new PlacedItemFields(
+                    placedObject.ItemCount,
+                    OwnerKeys.Of(placedObject.Ownership) ?? cellOwner,
+                    placedObject.LeveledItemBaseObject.IsNull ? null : placedObject.LeveledItemBaseObject.FormKey.ToString());
+            }
+        }
+
         // XRGD ragdoll pose: one 28-byte entry per skeleton bone (bone id byte, 3 unused
         // bytes, 3 f32 position, 3 f32 euler rotation), serialized back to the raw layout.
         private static class PlacedRagdollPose
@@ -2080,14 +2115,16 @@ namespace AssetConverter
             public readonly int RecordFlags;
             public readonly byte[]? RagdollPose;
             public readonly string? WaterCurrents;
+            public readonly PlacedItemFields Item;
 
-            public PlacedObjectRow(IPlacedGetter src, string cellFk, bool isPersistent,
+            public PlacedObjectRow(IPlacedGetter src, string cellFk, string? cellOwner, bool isPersistent,
                 string baseObj, float px, float py, float pz,
                 float rx, float ry, float rz, float scale,
                 int initiallyDisabled, string? enableParent, int enableParentOpposite,
                 int hasPrimitive, string? materialSwap, string? waterCurrents)
             {
                 Light = PlacedLightFields.From(src);
+                Item = PlacedItemFields.From(src, cellOwner);
                 RecordFlags = src.MajorRecordFlagsRaw;
                 RagdollPose = PlacedRagdollPose.From(src);
                 WaterCurrents = waterCurrents;
@@ -2116,7 +2153,8 @@ namespace AssetConverter
                 HasPrimitive, MaterialSwap,
                 Light.RadiusOverride, Light.FovPlusMinus, Light.FadePlusMinus,
                 Light.EndDistanceCap, Light.ShadowDepthBias, Light.NearClip,
-                Light.VolumetricIntensity, RecordFlags, RagdollPose, WaterCurrents
+                Light.VolumetricIntensity, RecordFlags, RagdollPose, WaterCurrents,
+                Item.ItemCount, Item.Owner, Item.LeveledItem
             };
 
             public object?[] ToRecordValues() => new object?[] { FormKey, "REFR", EditorId, SourcePlugin };
@@ -2183,6 +2221,7 @@ namespace AssetConverter
                 var cellWaterType = new string?[cellCount];
                 var cellWaterEnvMap = new string?[cellCount];
                 var cellWaterCurrents = new string?[cellCount];
+                var cellOwners = new string?[cellCount];
 
                 long cellFieldsStart = EsmTiming.Now();
                 for (int ci = 0; ci < cellCount; ci++)
@@ -2220,6 +2259,7 @@ namespace AssetConverter
                     cellWaterType[ci] = cell.Water.IsNull ? null : cell.Water.FormKey.ToString();
                     cellWaterEnvMap[ci] = cell.WaterEnvironmentMap;
                     cellWaterCurrents[ci] = _waterCurrents.GetValueOrDefault(cellFormKeys[ci]);
+                    cellOwners[ci] = OwnerKeys.Of(cell.Ownership);
                 }
                 EsmTiming.Add("cells.fields", cellFieldsStart, cellCount);
 
@@ -2252,8 +2292,8 @@ namespace AssetConverter
                 for (int ci = 0; ci < cellCount; ci++)
                 {
                     var cell = list[ci];
-                    if (cell.Persistent != null) ExtractPlaced(cell.Persistent, cellFormKeys[ci], true, _refrMaterialSwaps, _waterCurrents, allPlaced, allTeleports);
-                    if (cell.Temporary != null) ExtractPlaced(cell.Temporary, cellFormKeys[ci], false, _refrMaterialSwaps, _waterCurrents, allPlaced, allTeleports);
+                    if (cell.Persistent != null) ExtractPlaced(cell.Persistent, cellFormKeys[ci], cellOwners[ci], true, _refrMaterialSwaps, _waterCurrents, allPlaced, allTeleports);
+                    if (cell.Temporary != null) ExtractPlaced(cell.Temporary, cellFormKeys[ci], cellOwners[ci], false, _refrMaterialSwaps, _waterCurrents, allPlaced, allTeleports);
                 }
                 int poCount = allPlaced.Count;
                 EsmTiming.Add("cells.flatten", flattenStart, poCount);
@@ -2337,7 +2377,7 @@ namespace AssetConverter
             }
         }
 
-        private static void ExtractPlaced(IEnumerable<IPlacedGetter> objects, string cellFk, bool isPersistent, Dictionary<string, string> refrSwaps, Dictionary<string, string> waterCurrents, List<PlacedObjectRow> results, List<TeleportRow> teleports)
+        private static void ExtractPlaced(IEnumerable<IPlacedGetter> objects, string cellFk, string? cellOwner, bool isPersistent, Dictionary<string, string> refrSwaps, Dictionary<string, string> waterCurrents, List<PlacedObjectRow> results, List<TeleportRow> teleports)
         {
             foreach (var obj in objects)
             {
@@ -2411,7 +2451,7 @@ namespace AssetConverter
                         dest.Rotation.X, dest.Rotation.Y, dest.Rotation.Z, (int)dest.Flags));
                 }
 
-                results.Add(new PlacedObjectRow(obj, cellFk, isPersistent,
+                results.Add(new PlacedObjectRow(obj, cellFk, cellOwner, isPersistent,
                     baseObj, px, py, pz, rx, ry, rz, scale, disabled, enableParent, enableParentOpposite,
                     hasPrimitive, materialSwap, waterCurrents.GetValueOrDefault(obj.FormKey.ToString())));
             }
@@ -3317,7 +3357,7 @@ namespace AssetConverter
             {
                 FormKey = formKey,
                 EditorId = record.EditorID,
-                ChanceNone = 0,
+                ChanceNone = (int)Math.Round(record.ChanceNone.Value * 100),
                 Flags = SafeSerialize(record.Flags),
                 Entries = SafeSerialize(entries)
             }, transaction);
@@ -3340,7 +3380,7 @@ namespace AssetConverter
             {
                 FormKey = formKey,
                 EditorId = record.EditorID,
-                ChanceNone = 0,
+                ChanceNone = (int)Math.Round(record.ChanceNone.Value * 100),
                 Flags = SafeSerialize(record.Flags),
                 Entries = SafeSerialize(entries)
             }, transaction);
@@ -3586,8 +3626,8 @@ namespace AssetConverter
     {
         protected override async Task ProcessSpecificRecordAsync(IIngredientGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
         {
-            const string sql = @"INSERT OR REPLACE INTO items (form_key, item_type, editor_id, name, value, weight, model_path, pickup_sound, drop_sound, keywords)
-                VALUES (@FormKey, 'INGR', @EditorId, @Name, @Value, @Weight, @ModelPath, @PickupSound, @DropSound, @Keywords)";
+            const string sql = @"INSERT OR REPLACE INTO items (form_key, item_type, editor_id, name, value, weight, model_path, pickup_sound, drop_sound, keywords, is_marker)
+                VALUES (@FormKey, 'INGR', @EditorId, @Name, @Value, @Weight, @ModelPath, @PickupSound, @DropSound, @Keywords, @IsMarker)";
             await conn.ExecuteAsync(sql, new
             {
                 FormKey = formKey,
@@ -3598,7 +3638,8 @@ namespace AssetConverter
                 ModelPath = record.Model?.File,
                 PickupSound = record.PickUpSound.IsNull ? (string?)null : record.PickUpSound.FormKey.ToString(),
                 DropSound = record.PutDownSound.IsNull ? (string?)null : record.PutDownSound.FormKey.ToString(),
-                Keywords = SafeSerialize(FormKeyStrings.Of(record.Keywords))
+                Keywords = SafeSerialize(FormKeyStrings.Of(record.Keywords)),
+                IsMarker = MarkerModels.IsMarker(record.Model?.File)
             }, transaction);
         }
     }
@@ -3607,8 +3648,8 @@ namespace AssetConverter
     {
         protected override async Task ProcessSpecificRecordAsync(IKeyGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
         {
-            const string sql = @"INSERT OR REPLACE INTO items (form_key, item_type, editor_id, name, value, weight, model_path, pickup_sound, drop_sound, keywords)
-                VALUES (@FormKey, 'KEYM', @EditorId, @Name, @Value, @Weight, @ModelPath, @PickupSound, @DropSound, @Keywords)";
+            const string sql = @"INSERT OR REPLACE INTO items (form_key, item_type, editor_id, name, value, weight, model_path, pickup_sound, drop_sound, keywords, is_marker)
+                VALUES (@FormKey, 'KEYM', @EditorId, @Name, @Value, @Weight, @ModelPath, @PickupSound, @DropSound, @Keywords, @IsMarker)";
             await conn.ExecuteAsync(sql, new
             {
                 FormKey = formKey,
@@ -3619,7 +3660,8 @@ namespace AssetConverter
                 ModelPath = record.Model?.File,
                 PickupSound = record.PickUpSound.IsNull ? (string?)null : record.PickUpSound.FormKey.ToString(),
                 DropSound = record.PutDownSound.IsNull ? (string?)null : record.PutDownSound.FormKey.ToString(),
-                Keywords = SafeSerialize(FormKeyStrings.Of(record.Keywords))
+                Keywords = SafeSerialize(FormKeyStrings.Of(record.Keywords)),
+                IsMarker = MarkerModels.IsMarker(record.Model?.File)
             }, transaction);
         }
     }
@@ -3628,8 +3670,8 @@ namespace AssetConverter
     {
         protected override async Task ProcessSpecificRecordAsync(IHolotapeGetter record, string formKey, SqliteConnection conn, SqliteTransaction transaction)
         {
-            const string sql = @"INSERT OR REPLACE INTO items (form_key, item_type, editor_id, name, value, weight, model_path, pickup_sound, drop_sound, keywords)
-                VALUES (@FormKey, 'HOLT', @EditorId, @Name, @Value, @Weight, @ModelPath, @PickupSound, @DropSound, @Keywords)";
+            const string sql = @"INSERT OR REPLACE INTO items (form_key, item_type, editor_id, name, value, weight, model_path, pickup_sound, drop_sound, keywords, is_marker)
+                VALUES (@FormKey, 'HOLT', @EditorId, @Name, @Value, @Weight, @ModelPath, @PickupSound, @DropSound, @Keywords, @IsMarker)";
             await conn.ExecuteAsync(sql, new
             {
                 FormKey = formKey,
@@ -3640,7 +3682,8 @@ namespace AssetConverter
                 ModelPath = record.Model?.File,
                 PickupSound = record.PickUpSound.IsNull ? (string?)null : record.PickUpSound.FormKey.ToString(),
                 DropSound = record.PutDownSound.IsNull ? (string?)null : record.PutDownSound.FormKey.ToString(),
-                Keywords = (string?)null
+                Keywords = (string?)null,
+                IsMarker = MarkerModels.IsMarker(record.Model?.File)
             }, transaction);
         }
     }

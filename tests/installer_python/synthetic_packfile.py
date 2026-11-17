@@ -1,4 +1,4 @@
-"""Builds a minimal Havok 2014.1 packfile around one hknpCompressedMeshShape, from plain numbers.
+"""Builds a minimal Havok 2014.1 packfile around one hknpCompressedMeshShape or one hknpConvexPolytopeShape, from plain numbers.
 
 Only the fields the collision decoder reads are written; every byte is synthetic.
 """
@@ -13,8 +13,9 @@ MATERIAL_PROPERTIES_SIZE = 0x40
 MESH_DATA_SIZE = 0xB0
 SECTION_SIZE = 0x60
 HEADER_SIZE = 0x100
+POLYTOPE_SHAPE_SIZE = 0x50
 CLASSNAMES = ("hknpCompressedMeshShape", "hkRefCountedProperties", "hknpBSMaterialProperties",
-              "hknpCompressedMeshShapeData")
+              "hknpCompressedMeshShapeData", "hknpConvexPolytopeShape")
 NO_USER_DATA = 0xFCB37EA0
 
 
@@ -96,6 +97,33 @@ def build_compressed_mesh_packfile(
     if with_materials:
         objects += [(properties, CLASSNAMES[1]), (material_properties, CLASSNAMES[2])]
     return _assemble(data, objects)
+
+
+def build_polytope_packfile(vertices: Sequence[Tuple[float, float, float]],
+                            faces: Sequence[Sequence[int]], radius: float, user_data: int = 0) -> bytes:
+    """One standalone hknpConvexPolytopeShape: `vertices` in Havok metres, `faces` as vertex index polygons,
+    `radius` at +0x14, `user_data` (the material hash) at +0x18."""
+    data = _DataSection()
+    shape = data.reserve(POLYTOPE_SHAPE_SIZE)
+    vertex_array = data.reserve(16 * len(vertices))
+    face_array = data.reserve(4 * len(faces))
+    face_vertex_indices = [index for face in faces for index in face]
+    index_array = data.reserve(len(face_vertex_indices))
+
+    data.put(shape + 0x14, "f", radius)
+    data.put(shape + 0x18, "I", user_data)
+    data.put(shape + 0x30, "HH", len(vertices), vertex_array - (shape + 0x30))
+    data.put(shape + 0x44, "HH", len(faces), face_array - (shape + 0x44))
+    data.put(shape + 0x48, "HH", len(face_vertex_indices), index_array - (shape + 0x48))
+    for i, (x, y, z) in enumerate(vertices):
+        data.put(vertex_array + 16 * i, "ffff", x, y, z, 0.0)
+    first = 0
+    for i, face in enumerate(faces):
+        data.put(face_array + 4 * i, "HB", first, len(face))
+        first += len(face)
+    for i, index in enumerate(face_vertex_indices):
+        data.put(index_array + i, "B", index)
+    return _assemble(data, [(shape, CLASSNAMES[4])])
 
 
 def _assemble(data: _DataSection, objects: List[Tuple[int, str]]) -> bytes:

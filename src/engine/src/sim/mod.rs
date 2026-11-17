@@ -9,12 +9,15 @@ mod cache_purge;
 mod carry;
 mod collider_user_data;
 pub mod collision;
+pub mod collision_box;
 mod command_budget;
 pub mod commands;
+mod drop_body_log;
 mod dynamic_body;
 mod dynamic_contact;
 mod footstep_clock;
 pub mod hud;
+mod inventory_event;
 mod kinematic;
 mod mirror;
 mod physics;
@@ -24,19 +27,23 @@ mod ragdoll;
 mod ragdoll_pose;
 pub mod ragdoll_spec;
 mod ragdoll_tuning;
+mod rounded_hull;
 mod sidecar_hash;
+mod solid_mass;
 mod sound_pose;
 mod water_materials;
 pub mod water_physics;
 pub mod weather;
 pub mod world_clock;
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use glam::{Quat, Vec3};
 
 use crate::footsteps::{FootstepEvent, GaitTimings, SurfaceMaterial};
+use crate::utils::warn_once;
 use crate::weather::WeatherRollTable;
 
 use command_budget::{Deferred, DeferredQueue};
@@ -44,10 +51,12 @@ use footstep_clock::{FootstepClock, TickObservation};
 use weather::{WeatherCycle, WeatherStep};
 
 pub use carry::{CarriedInfo, GrabRefusal, ReleaseReason};
-pub use commands::{KinematicPose, PlayerInput, SimCommand, look_direction};
+pub use commands::{AddedObjects, KinematicPose, PlayerInput, SimCommand, look_direction};
 pub use footstep_clock::{JumpWindupMismatch, jump_windup_mismatch};
 pub use hud::{CrosshairState, HudSnapshot, MeterFill};
-pub use player::{PlayerMovement, STANDING_CENTER_ABOVE_FEET};
+pub use inventory_event::{InventoryEvent, ItemGrantError};
+pub use physics::pick::{PickClass, PickRay};
+pub use player::{CENTER_ABOVE_FEET, EyeHeights, EyeHeightsError, PlayerMovement};
 pub use ragdoll::{BodyDelta, MAX_SKINNED_RAGDOLLS, RagdollEntry, RagdollPoses};
 pub use ragdoll_tuning::RagdollSettings;
 pub use water_materials::{MaterialBuoyancy, WaterBodyProps};
@@ -74,6 +83,10 @@ pub struct ClockFrame {
 pub struct EntityId(pub u64);
 
 pub const PLAYER_ENTITY: EntityId = EntityId(1);
+
+/// The plugin name of references that exist only at runtime (dropped items); no plugin file can
+/// carry it. The physics reserves its attribution slot before any cell loads.
+pub const RUNTIME_REF_PLUGIN: &str = "*dropped";
 
 /// Stable entity id for a placed reference, derived from its globally-unique
 /// form key ("001ED5:Fallout4.esm") by FNV-1a so the sim (which keys dynamic
@@ -163,6 +176,8 @@ pub struct RayHit {
     /// placement id, distinguishing copies of the same mesh. `None` for
     /// terrain.
     pub ref_id: Option<String>,
+    /// From the ray origin to the surface point hit: for an aim with a radius, to the point the
+    /// ball touches.
     pub dist: f32,
 }
 
@@ -179,10 +194,27 @@ pub struct SimStats {
 }
 
 /// A cell's collider payload waiting in the budgeted queue.
-type CellPayload = (
-    Arc<collision::CellColliderBatch>,
-    Option<bake::BakedCellColliders>,
-);
+struct CellPayload {
+    batch: Arc<collision::CellColliderBatch>,
+    baked: Option<bake::BakedCellColliders>,
+    skip: Arc<HashSet<EntityId>>,
+    added: Vec<AddedObjects>,
+}
+
+impl CellPayload {
+    /// A payload without edits.
+    fn plain(
+        batch: Arc<collision::CellColliderBatch>,
+        baked: Option<bake::BakedCellColliders>,
+    ) -> Self {
+        Self {
+            batch,
+            baked,
+            skip: Arc::default(),
+            added: Vec::new(),
+        }
+    }
+}
 
 pub struct SimWorld {
     physics: physics::PhysicsContext,
@@ -200,17 +232,18 @@ pub struct SimWorld {
     pending_colliders: DeferredQueue<CellPayload>,
     footstep_clock: FootstepClock,
     footsteps: Vec<FootstepEvent>,
+    inventory_events: Vec<InventoryEvent>,
     /// Why the latest refused grab was refused, until taken.
     grab_refusal: Option<GrabRefusal>,
 }
 
 impl SimWorld {
-    pub fn new(movement: PlayerMovement, world_clock: WorldClock) -> Self {
+    pub fn new(movement: PlayerMovement, eye_heights: EyeHeights, world_clock: WorldClock) -> Self {
         let mut physics = physics::PhysicsContext::new();
         physics.set_water_query(water_physics::test_plane_from_env());
         Self {
             physics,
-            player: player::PlayerState::new(movement),
+            player: player::PlayerState::new(movement, eye_heights),
             input: commands::PlayerInput::default(),
             accumulator: 0.0,
             steps_last_tick: 0,
@@ -222,6 +255,7 @@ impl SimWorld {
             pending_colliders: DeferredQueue::new(),
             footstep_clock: FootstepClock::default(),
             footsteps: Vec::new(),
+            inventory_events: Vec::new(),
             grab_refusal: None,
         }
     }
@@ -235,6 +269,11 @@ impl SimWorld {
     /// Footstep events since the last drain, in the order they happened.
     pub fn drain_footsteps(&mut self) -> Vec<FootstepEvent> {
         std::mem::take(&mut self.footsteps)
+    }
+
+    /// Inventory events since the last drain, in the order they happened.
+    pub fn drain_inventory_events(&mut self) -> Vec<InventoryEvent> {
+        std::mem::take(&mut self.inventory_events)
     }
 
     /// Holds (or releases) the physics step and the player step. While held,
@@ -370,16 +409,28 @@ impl SimWorld {
     pub fn apply(&mut self, cmd: SimCommand) {
         match cmd {
             SimCommand::AddCellColliders { grid, batch, baked } => {
+                self.add_cell_payload(grid, CellPayload::plain(batch, baked));
+            }
+            SimCommand::AddCellCollidersSkipping {
+                grid,
+                batch,
+                baked,
+                skip,
+                added,
+            } => self.add_cell_payload(
+                grid,
+                CellPayload {
+                    skip,
+                    added,
+                    ..CellPayload::plain(batch, baked)
+                },
+            ),
+            SimCommand::AddWorldObjects { grid, batch, baked } => {
+                let payload = CellPayload::plain(batch, baked);
                 if self.defers_colliders() {
-                    self.pending_colliders.push_add(grid, (batch, baked));
+                    self.pending_colliders.push_add_objects(grid, payload);
                 } else {
-                    apply_collider_work(
-                        &mut self.physics,
-                        Deferred::AddCell {
-                            grid,
-                            payload: (batch, baked),
-                        },
-                    );
+                    apply_collider_work(&mut self.physics, Deferred::AddObjects { grid, payload });
                 }
             }
             SimCommand::RemoveCellColliders { grid } => {
@@ -445,6 +496,14 @@ impl SimWorld {
         }
     }
 
+    fn add_cell_payload(&mut self, grid: CellGrid, payload: CellPayload) {
+        if self.defers_colliders() {
+            self.pending_colliders.push_add(grid, payload);
+        } else {
+            apply_collider_work(&mut self.physics, Deferred::AddCell { grid, payload });
+        }
+    }
+
     fn grab_body(&mut self, entity: EntityId) {
         let placed = self.player.spawned && self.player.pending_spawn.is_none();
         let grabbed = if self.pipboy.open || self.fold_hold {
@@ -487,6 +546,55 @@ impl SimWorld {
         self.physics.is_grabbable(entity)
     }
 
+    /// [`is_grabbable`](Self::is_grabbable) and the body's mass is within what a grab lifts.
+    pub fn can_carry(&self, entity: EntityId) -> bool {
+        self.physics.can_carry(entity)
+    }
+
+    /// The player takes a placed item: `count` units of `form_key` join the inventory and the
+    /// body of `entity` leaves the physics world. On `Err` nothing changed: the units are added
+    /// first (the only step that can fail), the body removal cannot fail, the event comes last.
+    /// A method and not a command, so the caller commits its own edit only after `Ok`.
+    pub fn pick_up_item(
+        &mut self,
+        entity: EntityId,
+        form_key: &str,
+        count: u32,
+    ) -> Result<(), ItemGrantError> {
+        self.grant_units(form_key, count)?;
+        if self.physics.remove_ref(entity).is_none() {
+            warn_once("sim: pickup without body", || {
+                format!(
+                    "sim: picked up {form_key} (entity {entity:?}) which has no physics body; \
+                     only the inventory changed"
+                )
+            });
+        }
+        self.inventory_events.push(InventoryEvent::Added {
+            form_key: form_key.to_owned(),
+            count,
+        });
+        Ok(())
+    }
+
+    /// Puts units back that the world did not take (a failed drop). No body, no event; on `Err`
+    /// nothing changed.
+    pub fn restore_units(&mut self, form_key: &str, count: u32) -> Result<(), ItemGrantError> {
+        self.grant_units(form_key, count)
+    }
+
+    fn grant_units(&mut self, form_key: &str, count: u32) -> Result<(), ItemGrantError> {
+        let definition =
+            self.pipboy
+                .catalog
+                .item(form_key)
+                .ok_or_else(|| ItemGrantError::UnknownItem {
+                    form_key: form_key.to_owned(),
+                })?;
+        self.pipboy.inventory.add_units(definition, count)?;
+        Ok(())
+    }
+
     fn apply_clock_edit(&mut self, edit: commands::ClockEdit) {
         let result = match edit {
             commands::ClockEdit::SetHour(hour) => self.world_clock.set_hour(hour),
@@ -512,8 +620,18 @@ impl SimWorld {
     }
 
     fn apply_pipboy(&mut self, action: pipboy::PipBoyAction) {
-        let effects = self.pipboy.submit(action);
+        if matches!(action, pipboy::PipBoyAction::Drop { .. }) && !self.player.grounded {
+            self.pipboy.reject(pipboy::PipBoyActionError::Airborne);
+            return;
+        }
+        let mut effects = self.pipboy.submit(action);
         self.player.heal(effects.heal_hp);
+        if let Some(stack) = effects.dropped.take() {
+            self.inventory_events.push(InventoryEvent::Dropped {
+                form_key: stack.form_key,
+                count: stack.count,
+            });
+        }
         if self.pipboy.open {
             self.input = self.input.without_movement();
             self.physics.release(ReleaseReason::MenuOpened);
@@ -623,27 +741,32 @@ impl SimWorld {
     /// streamer) back to the old cell, unloading the very colliders the
     /// pending ground-snap is waiting on.
     pub fn player_eye(&self) -> Option<Vec3> {
-        if !self.player.spawned || self.player.pending_spawn.is_some() {
-            return None;
-        }
-        let center = self
-            .player
-            .prev_pos
-            .lerp(self.player.pos, self.interp_alpha());
-        Some(center + Vec3::Y * self.player.eye_above_center())
+        self.interpolated_player_center()
+            .map(|center| self.player.eye_above(center))
     }
 
     /// The interpolated body of the player; `None` under the same conditions as
     /// [`player_eye`](Self::player_eye).
     pub fn player_body(&self) -> Option<PlayerBody> {
-        let eye = self.player_eye()?;
-        let height = self.player.height();
-        let feet = eye - Vec3::Y * (self.player.eye_above_center() + height * 0.5);
+        let center = self.interpolated_player_center()?;
         Some(PlayerBody {
-            feet,
-            height,
+            feet: player::soles_below(center),
+            height: player::TOP_ABOVE_FEET,
             radius: player::RADIUS,
         })
+    }
+
+    /// The capsule centre between the last two fixed steps; `None` under the same conditions as
+    /// [`player_eye`](Self::player_eye).
+    fn interpolated_player_center(&self) -> Option<Vec3> {
+        if !self.player.spawned || self.player.pending_spawn.is_some() {
+            return None;
+        }
+        Some(
+            self.player
+                .prev_pos
+                .lerp(self.player.pos, self.interp_alpha()),
+        )
     }
 
     /// Moves the bodies' water entries since the last call into `out`
@@ -834,6 +957,31 @@ impl SimWorld {
         self.physics.ray_attribution(origin, dir, max_dist)
     }
 
+    /// How far the ray from `origin` along `dir` runs within `max_dist` before it meets the static
+    /// world; dynamic bodies and the player are passed through.
+    pub fn static_ray_distance(&self, origin: Vec3, dir: Vec3, max_dist: f32) -> Option<f32> {
+        self.physics.static_ray_distance(origin, dir, max_dist)
+    }
+
+    /// Where the tracked body of `entity` is, `None` without one.
+    #[cfg(test)]
+    pub(crate) fn body_translation(&self, entity: EntityId) -> Option<Vec3> {
+        self.physics
+            .body_summary(entity)
+            .map(|(_, translation)| translation)
+    }
+
+    /// The first-person eye heights the player was built with.
+    pub fn eye_heights(&self) -> EyeHeights {
+        self.player.eye_heights()
+    }
+
+    /// What the player aims at: the exact ray, or the ball swept along it for items and activators
+    /// (see `PhysicsContext::pick_attribution`). `classify` tells items from activators and solids.
+    pub fn pick_hit(&self, aim: PickRay, classify: impl Fn(&str) -> PickClass) -> Option<RayHit> {
+        self.physics.pick_attribution(aim, classify)
+    }
+
     /// The first surface straight below `origin` within `max_dist`.
     pub fn ground_point_below(&self, origin: Vec3, max_dist: f32) -> Option<Vec3> {
         let hit = self.debug_ray_hit(origin, Vec3::NEG_Y, max_dist)?;
@@ -845,15 +993,68 @@ fn apply_collider_work(physics: &mut physics::PhysicsContext, work: Deferred<Cel
     match work {
         Deferred::AddCell {
             grid,
-            payload: (batch, baked),
+            payload:
+                CellPayload {
+                    batch,
+                    baked,
+                    skip,
+                    added,
+                },
         } => {
             let _span = tracing::trace_span!("sim_add_cell", gx = grid.0, gy = grid.1).entered();
-            physics.add_cell(grid, &batch, baked.as_ref());
+            physics.add_cell_skipping(grid, &batch, baked.as_ref(), &skip);
+            for objects in &added {
+                add_objects_reporting(physics, grid, &objects.batch, objects.baked.as_ref(), &skip);
+            }
+        }
+        Deferred::AddObjects {
+            grid,
+            payload: CellPayload {
+                batch, baked, skip, ..
+            },
+        } => {
+            let _span = tracing::trace_span!("sim_add_objects", gx = grid.0, gy = grid.1).entered();
+            add_objects_reporting(physics, grid, &batch, baked.as_ref(), &skip);
         }
         Deferred::PhysicsCenter { grid, radius } => {
             let _span = tracing::trace_span!("sim_set_physics_center").entered();
             physics.set_physics_center(grid, radius);
         }
+    }
+}
+
+/// A drop into a cell that has no colliders yields a drawn item without a body: reported, not fatal.
+fn add_objects_reporting(
+    physics: &mut physics::PhysicsContext,
+    grid: CellGrid,
+    batch: &collision::CellColliderBatch,
+    baked: Option<&bake::BakedCellColliders>,
+    skip: &HashSet<EntityId>,
+) {
+    if let Err(error) = physics.add_objects(grid, batch, baked, skip) {
+        tracing::warn!("sim: dropped item has no body: {error}");
+        return;
+    }
+    trace_dropped_bodies(physics, batch);
+}
+
+fn trace_dropped_bodies(physics: &physics::PhysicsContext, batch: &collision::CellColliderBatch) {
+    if !tracing::enabled!(target: drop_body_log::DROP_BODY_TRACE_TARGET, tracing::Level::TRACE) {
+        return;
+    }
+    let ref_keys = batch
+        .objects
+        .iter()
+        .flat_map(|group| &group.placements)
+        .filter_map(|placement| placement.ref_key.as_deref());
+    for ref_key in ref_keys {
+        let line = match physics.body_summary(refr_entity_id(ref_key)) {
+            Some((colliders, position)) => {
+                drop_body_log::dropped_body_line(ref_key, colliders, position)
+            }
+            None => drop_body_log::dropped_without_body_line(ref_key),
+        };
+        tracing::trace!(target: drop_body_log::DROP_BODY_TRACE_TARGET, "{line}");
     }
 }
 
@@ -918,14 +1119,22 @@ mod tests {
 
     #[test]
     fn one_fixed_step_of_time_runs_exactly_one_step() {
-        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+        let mut sim = SimWorld::new(
+            PlayerMovement::default(),
+            EyeHeights::default(),
+            WorldClock::fixture(),
+        );
         sim.tick(FIXED_DT);
         assert_eq!(sim.stats().steps_last_tick, 1);
     }
 
     #[test]
     fn partial_steps_accumulate_across_ticks() {
-        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+        let mut sim = SimWorld::new(
+            PlayerMovement::default(),
+            EyeHeights::default(),
+            WorldClock::fixture(),
+        );
         sim.tick(FIXED_DT * 0.6);
         assert_eq!(sim.stats().steps_last_tick, 0);
         sim.tick(FIXED_DT * 0.6);
@@ -934,7 +1143,11 @@ mod tests {
 
     #[test]
     fn a_long_frame_is_clamped_to_the_substep_cap() {
-        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+        let mut sim = SimWorld::new(
+            PlayerMovement::default(),
+            EyeHeights::default(),
+            WorldClock::fixture(),
+        );
         sim.tick(10.0);
         assert_eq!(sim.stats().steps_last_tick, MAX_SUBSTEPS_PER_TICK);
         sim.tick(0.0);
@@ -947,7 +1160,11 @@ mod tests {
 
     #[test]
     fn negative_frame_time_runs_no_steps() {
-        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+        let mut sim = SimWorld::new(
+            PlayerMovement::default(),
+            EyeHeights::default(),
+            WorldClock::fixture(),
+        );
         sim.tick(-1.0);
         assert_eq!(sim.stats().steps_last_tick, 0);
     }
@@ -958,7 +1175,11 @@ mod tests {
 
     #[test]
     fn no_steps_run_while_the_pipboy_is_open() {
-        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+        let mut sim = SimWorld::new(
+            PlayerMovement::default(),
+            EyeHeights::default(),
+            WorldClock::fixture(),
+        );
         pipboy(&mut sim, pipboy::PipBoyAction::Open);
         sim.tick(FIXED_DT * 3.0);
         assert_eq!(sim.stats().steps_last_tick, 0);
@@ -966,7 +1187,11 @@ mod tests {
 
     #[test]
     fn closing_the_pipboy_resumes_stepping_without_a_catch_up_burst() {
-        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+        let mut sim = SimWorld::new(
+            PlayerMovement::default(),
+            EyeHeights::default(),
+            WorldClock::fixture(),
+        );
         pipboy(&mut sim, pipboy::PipBoyAction::Open);
         sim.tick(5.0);
         pipboy(&mut sim, pipboy::PipBoyAction::Close);
@@ -976,7 +1201,11 @@ mod tests {
 
     #[test]
     fn opening_the_pipboy_clears_the_latched_movement_input() {
-        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+        let mut sim = SimWorld::new(
+            PlayerMovement::default(),
+            EyeHeights::default(),
+            WorldClock::fixture(),
+        );
         sim.apply(SimCommand::SetPlayerInput(PlayerInput {
             move_dir: Vec2::Y,
             jump: true,
@@ -992,7 +1221,11 @@ mod tests {
 
     #[test]
     fn a_rejected_pipboy_action_is_recorded_on_the_snapshot_model() {
-        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+        let mut sim = SimWorld::new(
+            PlayerMovement::default(),
+            EyeHeights::default(),
+            WorldClock::fixture(),
+        );
         pipboy(&mut sim, pipboy::PipBoyAction::UseFirstStimpak);
         assert_eq!(
             sim.pipboy_snapshot().model.last_rejection,
@@ -1002,7 +1235,11 @@ mod tests {
 
     #[test]
     fn the_snapshot_reports_full_vitals_the_heading_and_no_position_before_spawn() {
-        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+        let mut sim = SimWorld::new(
+            PlayerMovement::default(),
+            EyeHeights::default(),
+            WorldClock::fixture(),
+        );
         sim.apply(SimCommand::SetPlayerInput(PlayerInput {
             yaw: 0.75,
             ..PlayerInput::default()
@@ -1015,7 +1252,11 @@ mod tests {
     }
 
     fn sim_with_stimpaks(heal: f32, count: u32) -> SimWorld {
-        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+        let mut sim = SimWorld::new(
+            PlayerMovement::default(),
+            EyeHeights::default(),
+            WorldClock::fixture(),
+        );
         let mut model = pipboy::PipBoyModel::new(Arc::default());
         model.inventory.insert(pipboy::InventoryItem {
             id: pipboy::ItemId(0),
@@ -1060,7 +1301,11 @@ mod tests {
 
     #[test]
     fn a_rejected_use_heals_nothing() {
-        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+        let mut sim = SimWorld::new(
+            PlayerMovement::default(),
+            EyeHeights::default(),
+            WorldClock::fixture(),
+        );
         let hp_max = sim.player.health().1;
         sim.player.set_health(hp_max - 50.0);
         pipboy(&mut sim, pipboy::PipBoyAction::UseFirstStimpak);
@@ -1069,7 +1314,11 @@ mod tests {
 
     #[test]
     fn player_input_sent_while_the_pipboy_is_open_keeps_the_heading_but_not_the_movement() {
-        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+        let mut sim = SimWorld::new(
+            PlayerMovement::default(),
+            EyeHeights::default(),
+            WorldClock::fixture(),
+        );
         pipboy(&mut sim, pipboy::PipBoyAction::Open);
         sim.apply(SimCommand::SetPlayerInput(PlayerInput {
             move_dir: Vec2::Y,
@@ -1085,7 +1334,11 @@ mod tests {
 
     #[test]
     fn player_input_is_applied_again_once_the_pipboy_closed() {
-        let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+        let mut sim = SimWorld::new(
+            PlayerMovement::default(),
+            EyeHeights::default(),
+            WorldClock::fixture(),
+        );
         pipboy(&mut sim, pipboy::PipBoyAction::Open);
         pipboy(&mut sim, pipboy::PipBoyAction::Close);
         sim.apply(SimCommand::SetPlayerInput(PlayerInput {
@@ -1114,7 +1367,11 @@ mod tests {
         }
 
         fn held_sim() -> SimWorld {
-            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let mut sim = SimWorld::new(
+                PlayerMovement::default(),
+                EyeHeights::default(),
+                WorldClock::fixture(),
+            );
             sim.set_fold_hold(true);
             sim
         }
@@ -1125,7 +1382,11 @@ mod tests {
 
         #[test]
         fn without_a_hold_and_with_an_empty_queue_an_add_is_inserted_at_once() {
-            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let mut sim = SimWorld::new(
+                PlayerMovement::default(),
+                EyeHeights::default(),
+                WorldClock::fixture(),
+            );
             add_ground(&mut sim, SPAWN_GRID);
             assert_eq!(inserted_cells(&sim), 1);
             assert!(!sim.has_pending_colliders());
@@ -1171,7 +1432,11 @@ mod tests {
 
         #[test]
         fn removing_a_resident_cell_still_removes_it_while_held() {
-            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let mut sim = SimWorld::new(
+                PlayerMovement::default(),
+                EyeHeights::default(),
+                WorldClock::fixture(),
+            );
             add_ground(&mut sim, (0, 0));
             sim.set_fold_hold(true);
             sim.apply(SimCommand::RemoveCellColliders { grid: (0, 0) });
@@ -1251,7 +1516,11 @@ mod tests {
 
         #[test]
         fn a_held_tick_leaves_the_sub_step_remainder_untouched() {
-            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let mut sim = SimWorld::new(
+                PlayerMovement::default(),
+                EyeHeights::default(),
+                WorldClock::fixture(),
+            );
             sim.tick(FIXED_DT * 0.5);
             let before = sim.interp_alpha();
             assert!((before - 0.5).abs() < 1e-4, "{before}");
@@ -1356,7 +1625,11 @@ mod tests {
 
     #[test]
     fn there_is_no_eye_and_no_hud_before_the_player_spawns() {
-        let sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+        let sim = SimWorld::new(
+            PlayerMovement::default(),
+            EyeHeights::default(),
+            WorldClock::fixture(),
+        );
         assert!(sim.player_eye().is_none());
         let hud = sim.hud_snapshot();
         assert!(!hud.visible);
@@ -1391,14 +1664,22 @@ mod tests {
 
         #[test]
         fn one_in_game_frame_advances_the_clock_exactly_once() {
-            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let mut sim = SimWorld::new(
+                PlayerMovement::default(),
+                EyeHeights::default(),
+                WorldClock::fixture(),
+            );
             let advanced = minutes_advanced_by(&mut sim, |sim| frame(sim, true, 0.15));
             assert!((advanced - 0.15 * 20.0 / 60.0).abs() < 1e-6, "{advanced}");
         }
 
         #[test]
         fn a_five_second_hitch_advances_a_quarter_second_of_game_time_at_scale_20() {
-            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let mut sim = SimWorld::new(
+                PlayerMovement::default(),
+                EyeHeights::default(),
+                WorldClock::fixture(),
+            );
             let advanced = minutes_advanced_by(&mut sim, |sim| frame(sim, true, 5.0));
             let quarter_second = 0.25 * 20.0 / 60.0;
             assert!((advanced - quarter_second).abs() < 1e-6, "{advanced}");
@@ -1407,7 +1688,11 @@ mod tests {
 
         #[test]
         fn outside_gameplay_the_clock_stands_still() {
-            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let mut sim = SimWorld::new(
+                PlayerMovement::default(),
+                EyeHeights::default(),
+                WorldClock::fixture(),
+            );
             assert_eq!(
                 minutes_advanced_by(&mut sim, |sim| frame(sim, false, 0.1)),
                 0.0
@@ -1416,7 +1701,11 @@ mod tests {
 
         #[test]
         fn a_held_load_stops_the_clock_until_released() {
-            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let mut sim = SimWorld::new(
+                PlayerMovement::default(),
+                EyeHeights::default(),
+                WorldClock::fixture(),
+            );
             sim.set_fold_hold(true);
             assert_eq!(
                 minutes_advanced_by(&mut sim, |sim| frame(sim, true, 0.1)),
@@ -1428,7 +1717,11 @@ mod tests {
 
         #[test]
         fn an_open_pipboy_stops_the_clock_and_the_world_time_of_the_frame() {
-            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let mut sim = SimWorld::new(
+                PlayerMovement::default(),
+                EyeHeights::default(),
+                WorldClock::fixture(),
+            );
             pipboy(&mut sim, pipboy::PipBoyAction::Open);
             assert_eq!(sim.world_dt(0.1), 0.0);
             assert_eq!(
@@ -1442,7 +1735,11 @@ mod tests {
 
         #[test]
         fn a_negative_or_nan_frame_time_does_not_move_the_clock() {
-            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let mut sim = SimWorld::new(
+                PlayerMovement::default(),
+                EyeHeights::default(),
+                WorldClock::fixture(),
+            );
             for dt in [-1.0, f32::NAN] {
                 assert_eq!(
                     minutes_advanced_by(&mut sim, |sim| frame(sim, true, dt)),
@@ -1453,7 +1750,11 @@ mod tests {
 
         #[test]
         fn setting_the_hour_moves_the_clock_the_pipboy_shows() {
-            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let mut sim = SimWorld::new(
+                PlayerMovement::default(),
+                EyeHeights::default(),
+                WorldClock::fixture(),
+            );
             edit(&mut sim, ClockEdit::SetHour(3.5));
             assert_eq!(sim.world_clock().hour(), 3.5);
             assert_eq!(sim.pipboy_snapshot().clock.minute_of_day, 3 * 60 + 30);
@@ -1461,7 +1762,11 @@ mod tests {
 
         #[test]
         fn an_invalid_hour_is_rejected_and_the_clock_stays() {
-            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let mut sim = SimWorld::new(
+                PlayerMovement::default(),
+                EyeHeights::default(),
+                WorldClock::fixture(),
+            );
             let before = sim.world_clock().clone();
             edit(&mut sim, ClockEdit::SetHour(f32::NAN));
             edit(&mut sim, ClockEdit::SetHour(30.0));
@@ -1470,7 +1775,11 @@ mod tests {
 
         #[test]
         fn pausing_stops_the_advance_and_resuming_restarts_it() {
-            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let mut sim = SimWorld::new(
+                PlayerMovement::default(),
+                EyeHeights::default(),
+                WorldClock::fixture(),
+            );
             let start = sim.world_clock().minute_of_day();
             edit(&mut sim, ClockEdit::SetPaused(true));
             run_seconds(&mut sim, 60.0);
@@ -1482,7 +1791,11 @@ mod tests {
 
         #[test]
         fn a_time_scale_edit_changes_the_rate_and_an_invalid_one_keeps_it() {
-            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let mut sim = SimWorld::new(
+                PlayerMovement::default(),
+                EyeHeights::default(),
+                WorldClock::fixture(),
+            );
             let start = sim.world_clock().minute_of_day();
             edit(&mut sim, ClockEdit::SetTimeScale(60.0));
             edit(&mut sim, ClockEdit::SetTimeScale(0.0));
@@ -1497,7 +1810,7 @@ mod tests {
                 ..world_clock::ClockStart::fixture()
             })
             .unwrap();
-            let sim = SimWorld::new(PlayerMovement::default(), clock);
+            let sim = SimWorld::new(PlayerMovement::default(), EyeHeights::default(), clock);
             assert_eq!(sim.world_clock().hour(), 6.0);
         }
     }
@@ -1520,7 +1833,11 @@ mod tests {
         }
 
         fn sim_with(table: WeatherRollTable) -> SimWorld {
-            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let mut sim = SimWorld::new(
+                PlayerMovement::default(),
+                EyeHeights::default(),
+                WorldClock::fixture(),
+            );
             sim.install_weather(table, 7);
             sim
         }
@@ -1599,7 +1916,11 @@ mod tests {
 
         #[test]
         fn a_sim_without_a_climate_has_no_weather_and_ignores_weather_edits() {
-            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let mut sim = SimWorld::new(
+                PlayerMovement::default(),
+                EyeHeights::default(),
+                WorldClock::fixture(),
+            );
             edit(&mut sim, WeatherEdit::Force(B));
             frame(&mut sim, true, 0.25);
             assert!(sim.weather_snapshot().is_none());
@@ -1616,7 +1937,11 @@ mod tests {
 
         #[test]
         fn the_first_roll_counts_from_the_hour_the_climate_was_installed_at() {
-            let mut sim = SimWorld::new(PlayerMovement::default(), WorldClock::fixture());
+            let mut sim = SimWorld::new(
+                PlayerMovement::default(),
+                EyeHeights::default(),
+                WorldClock::fixture(),
+            );
             run_seconds(&mut sim, true, 1500.0);
             sim.install_weather(calm_climate(), 7);
             frame(&mut sim, true, 0.0);
@@ -1767,5 +2092,612 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod static_ray_tests {
+    use super::test_world::{crate_prop, prop_box, tick, world_with};
+    use super::*;
+
+    #[test]
+    fn the_static_ray_meets_static_props_and_passes_dynamic_bodies() {
+        let mut sim = world_with(&[
+            prop_box("meshes\\wall.glb", Vec3::new(100.0, 1.0, -50.0), Vec3::ONE),
+            crate_prop(Vec3::new(120.0, 0.5, -50.0), 2.0),
+        ]);
+        tick(&mut sim, 1);
+        let distance = sim.static_ray_distance(Vec3::new(90.0, 0.5, -50.0), Vec3::X, 20.0);
+        assert!(
+            distance.is_some_and(|d| (d - 9.0).abs() < 1e-3),
+            "{distance:?}"
+        );
+        assert_eq!(
+            sim.static_ray_distance(Vec3::new(110.0, 0.5, -50.0), Vec3::X, 20.0),
+            None
+        );
+        assert!(
+            sim.debug_ray_hit(Vec3::new(110.0, 0.5, -50.0), Vec3::X, 20.0)
+                .is_some(),
+            "the crate stands in the ray"
+        );
+    }
+}
+
+#[cfg(test)]
+mod item_pickup_tests {
+    use super::pipboy::{
+        InventoryCategory, InventoryError, ItemDefinition, ItemKind, PipBoyCatalog,
+    };
+    use super::test_world::{
+        SPAWN_AT, pinned_prop, prop_box, prop_entity, spawned_at, tick, world_with,
+    };
+    use super::*;
+    use crate::sim::collision::{CellColliderBatch, ColShape, PartShape};
+    use crate::sim::physics::test_support::{
+        bake, box_shape, ground_batch, object_group, pinned_group, placement,
+    };
+
+    const WIDGET_KEY: &str = "0F3B01:Test.esm";
+    const WIDGET_NAME: &str = "Brass Widget";
+    const UNLISTED_KEY: &str = "0F3BFF:Test.esm";
+    const QUEUED_PATH: &str = "meshes\\queued.glb";
+
+    fn definition() -> ItemDefinition {
+        ItemDefinition {
+            form_key: WIDGET_KEY.to_owned(),
+            kind: ItemKind::Misc,
+            editor_id: None,
+            name: WIDGET_NAME.to_owned(),
+            category: InventoryCategory::Misc,
+            weight: 3.5,
+            value: 41,
+            details: pipboy::inventory::ItemDetails::Misc,
+        }
+    }
+
+    fn sim_with_item_on_the_ground() -> SimWorld {
+        let mut sim = world_with(&[pinned_prop(SPAWN_AT + Vec3::new(5.0, -2.5, 0.0))]);
+        sim.set_pipboy_catalog(Arc::new(PipBoyCatalog {
+            items: vec![definition()],
+            ..PipBoyCatalog::default()
+        }));
+        sim
+    }
+
+    fn stacks(sim: &SimWorld) -> Vec<(String, u32)> {
+        sim.pipboy_snapshot()
+            .model
+            .inventory
+            .items
+            .iter()
+            .map(|item| (item.name.clone(), item.count))
+            .collect()
+    }
+
+    fn body_count(sim: &SimWorld) -> usize {
+        sim.physics.tracked_body_count()
+    }
+
+    #[test]
+    fn picking_up_adds_the_units_removes_the_body_and_emits_one_added_event() {
+        let mut sim = sim_with_item_on_the_ground();
+        assert_eq!(body_count(&sim), 1);
+
+        assert_eq!(sim.pick_up_item(prop_entity(0), WIDGET_KEY, 3), Ok(()));
+
+        assert_eq!(stacks(&sim), vec![(WIDGET_NAME.to_owned(), 3)]);
+        assert_eq!(body_count(&sim), 0);
+        assert_eq!(
+            sim.drain_inventory_events(),
+            vec![InventoryEvent::Added {
+                form_key: WIDGET_KEY.to_owned(),
+                count: 3
+            }]
+        );
+        assert_eq!(sim.drain_inventory_events(), []);
+    }
+
+    #[test]
+    fn picking_up_more_of_the_same_item_merges_into_its_stack() {
+        let mut sim = sim_with_item_on_the_ground();
+        sim.pick_up_item(prop_entity(0), WIDGET_KEY, 3).unwrap();
+        sim.pick_up_item(EntityId(0xDEAD), WIDGET_KEY, 2).unwrap();
+        assert_eq!(stacks(&sim), vec![(WIDGET_NAME.to_owned(), 5)]);
+        assert_eq!(sim.drain_inventory_events().len(), 2);
+    }
+
+    #[test]
+    fn picking_up_an_item_without_a_catalog_entry_changes_nothing() {
+        let mut sim = sim_with_item_on_the_ground();
+
+        assert_eq!(
+            sim.pick_up_item(prop_entity(0), UNLISTED_KEY, 1),
+            Err(ItemGrantError::UnknownItem {
+                form_key: UNLISTED_KEY.to_owned()
+            })
+        );
+
+        assert_eq!(stacks(&sim), []);
+        assert_eq!(body_count(&sim), 1);
+        assert_eq!(sim.drain_inventory_events(), []);
+    }
+
+    #[test]
+    fn units_the_inventory_refuses_leave_the_body_and_the_events_alone() {
+        let mut sim = sim_with_item_on_the_ground();
+        sim.pipboy
+            .inventory
+            .add_units(&definition(), u32::MAX)
+            .unwrap();
+
+        let zero = sim.pick_up_item(prop_entity(0), WIDGET_KEY, 0);
+        let overflow = sim.pick_up_item(prop_entity(0), WIDGET_KEY, 1);
+
+        assert_eq!(
+            zero,
+            Err(ItemGrantError::Inventory(InventoryError::ZeroUnits {
+                form_key: WIDGET_KEY.to_owned()
+            }))
+        );
+        assert_eq!(
+            overflow,
+            Err(ItemGrantError::Inventory(InventoryError::CountOverflow {
+                form_key: WIDGET_KEY.to_owned(),
+                max: u32::MAX
+            }))
+        );
+        assert_eq!(stacks(&sim), vec![(WIDGET_NAME.to_owned(), u32::MAX)]);
+        assert_eq!(body_count(&sim), 1);
+        assert_eq!(sim.drain_inventory_events(), []);
+    }
+
+    #[test]
+    fn an_item_without_a_body_still_joins_the_inventory() {
+        let mut sim = sim_with_item_on_the_ground();
+        assert_eq!(sim.pick_up_item(EntityId(0xBEEF), WIDGET_KEY, 1), Ok(()));
+        assert_eq!(stacks(&sim), vec![(WIDGET_NAME.to_owned(), 1)]);
+        assert_eq!(body_count(&sim), 1);
+        assert_eq!(sim.drain_inventory_events().len(), 1);
+    }
+
+    fn pinned_pair(refs: [&str; 2]) -> CellColliderBatch {
+        let mut batch = ground_batch();
+        batch.objects.push(pinned_group(
+            QUEUED_PATH,
+            refs.iter()
+                .zip([50.0, 90.0])
+                .map(|(key, x)| placement(key, Vec3::new(x, 0.5, -50.0)))
+                .collect(),
+        ));
+        batch
+    }
+
+    fn plain_cell() -> CellColliderBatch {
+        let mut batch = CellColliderBatch::default();
+        batch.objects.push(object_group(
+            QUEUED_PATH,
+            vec![placement("0F3C09:Test.esm", Vec3::new(500.0, 0.5, -50.0))],
+            false,
+            None,
+        ));
+        batch
+    }
+
+    #[test]
+    fn a_skipping_registration_split_from_the_next_command_by_the_budget_never_shows_the_body() {
+        let picked = "0F3C01:Test.esm";
+        let kept = "0F3C02:Test.esm";
+        let batch = pinned_pair([picked, kept]);
+        let shapes = [(QUEUED_PATH, vec![box_shape(0.5)])];
+        let baked = bake(&batch, &shapes);
+        let neighbour = plain_cell();
+        let neighbour_baked = bake(&neighbour, &shapes);
+
+        let mut sim = SimWorld::new(
+            PlayerMovement::default(),
+            EyeHeights::default(),
+            WorldClock::fixture(),
+        );
+        sim.set_fold_hold(true);
+        sim.apply(SimCommand::AddCellCollidersSkipping {
+            grid: (0, 0),
+            batch: Arc::new(batch),
+            baked: Some(baked),
+            skip: Arc::new(HashSet::from([refr_entity_id(picked)])),
+            added: Vec::new(),
+        });
+        sim.apply(SimCommand::AddCellColliders {
+            grid: (1, 0),
+            batch: Arc::new(neighbour),
+            baked: Some(neighbour_baked),
+        });
+        assert_eq!(body_count(&sim), 0);
+
+        sim.drain_pending_colliders(Duration::ZERO);
+        assert!(sim.has_pending_colliders(), "the second command waits");
+        sim.set_fold_hold(false);
+        sim.tick(FIXED_DT);
+
+        assert_eq!(body_count(&sim), 1);
+        assert!(!sim.physics.is_grabbable(refr_entity_id(picked)));
+        assert!(sim.physics.remove_ref(refr_entity_id(picked)).is_none());
+        sim.drain_pending_colliders(Duration::ZERO);
+        assert!(!sim.has_pending_colliders());
+        assert_eq!(body_count(&sim), 1);
+        assert!(sim.physics.remove_ref(refr_entity_id(kept)).is_some());
+    }
+
+    #[test]
+    fn re_registering_an_edited_cell_through_the_commands_keeps_the_picked_up_item_gone() {
+        let picked = "0F3C01:Test.esm";
+        let kept = "0F3C02:Test.esm";
+        let batch = Arc::new(pinned_pair([picked, kept]));
+        let baked = bake(&batch, &[(QUEUED_PATH, vec![box_shape(0.5)])]);
+        let mut sim = SimWorld::new(
+            PlayerMovement::default(),
+            EyeHeights::default(),
+            WorldClock::fixture(),
+        );
+        let register = |sim: &mut SimWorld| {
+            sim.apply(SimCommand::AddCellCollidersSkipping {
+                grid: (0, 0),
+                batch: Arc::clone(&batch),
+                baked: Some(baked.clone()),
+                skip: Arc::new(HashSet::from([refr_entity_id(picked)])),
+                added: Vec::new(),
+            });
+        };
+        register(&mut sim);
+        sim.apply(SimCommand::RemoveCellColliders { grid: (0, 0) });
+        register(&mut sim);
+
+        assert_eq!(body_count(&sim), 1);
+        assert!(sim.physics.remove_ref(refr_entity_id(kept)).is_some());
+    }
+
+    #[test]
+    fn the_event_queue_keeps_the_order_things_happened_in() {
+        let mut sim = sim_with_item_on_the_ground();
+        sim.pick_up_item(prop_entity(0), WIDGET_KEY, 1).unwrap();
+        sim.inventory_events.push(InventoryEvent::Dropped {
+            form_key: WIDGET_KEY.to_owned(),
+            count: 1,
+        });
+        sim.pick_up_item(EntityId(0xBEEF), WIDGET_KEY, 2).unwrap();
+        let counts: Vec<u32> = sim
+            .drain_inventory_events()
+            .iter()
+            .map(|event| match event {
+                InventoryEvent::Added { count, .. } | InventoryEvent::Dropped { count, .. } => {
+                    *count
+                }
+            })
+            .collect();
+        assert_eq!(counts, [1, 1, 2]);
+    }
+
+    const STOCK: u32 = 5;
+    const DROPPED_UNITS: u32 = 2;
+
+    /// A grounded player holding `STOCK` units of the widget.
+    fn sim_with_stock() -> (SimWorld, pipboy::ItemId) {
+        let mut sim = world_with(&[]);
+        sim.set_pipboy_catalog(Arc::new(PipBoyCatalog {
+            items: vec![definition()],
+            ..PipBoyCatalog::default()
+        }));
+        let stack = sim
+            .pipboy
+            .inventory
+            .add_units(&definition(), STOCK)
+            .unwrap();
+        let mut sim = spawned_at(sim, SPAWN_AT);
+        tick(&mut sim, 30);
+        assert!(
+            sim.player.grounded,
+            "the fixture player stands on the ground"
+        );
+        (sim, stack)
+    }
+
+    fn drop_action(stack: pipboy::ItemId, count: u32) -> SimCommand {
+        SimCommand::PipBoy(pipboy::PipBoyAction::Drop { item: stack, count })
+    }
+
+    #[test]
+    fn a_grounded_drop_takes_the_units_and_emits_exactly_one_dropped_event() {
+        let (mut sim, stack) = sim_with_stock();
+
+        sim.apply(drop_action(stack, DROPPED_UNITS));
+
+        assert_eq!(
+            stacks(&sim),
+            vec![(WIDGET_NAME.to_owned(), STOCK - DROPPED_UNITS)]
+        );
+        assert_eq!(
+            sim.drain_inventory_events(),
+            vec![InventoryEvent::Dropped {
+                form_key: WIDGET_KEY.to_owned(),
+                count: DROPPED_UNITS
+            }]
+        );
+        assert_eq!(sim.pipboy.last_rejection, None);
+    }
+
+    #[test]
+    fn an_airborne_drop_changes_nothing_and_reports_the_refusal() {
+        let (mut sim, stack) = sim_with_stock();
+        sim.player.grounded = false;
+
+        sim.apply(drop_action(stack, DROPPED_UNITS));
+
+        assert_eq!(stacks(&sim), vec![(WIDGET_NAME.to_owned(), STOCK)]);
+        assert_eq!(sim.drain_inventory_events(), []);
+        assert_eq!(
+            sim.pipboy.last_rejection,
+            Some(pipboy::PipBoyActionError::Airborne)
+        );
+    }
+
+    #[test]
+    fn only_a_drop_is_refused_while_airborne() {
+        let (mut sim, _) = sim_with_stock();
+        sim.player.grounded = false;
+
+        sim.apply(SimCommand::PipBoy(pipboy::PipBoyAction::Open));
+
+        assert!(sim.pipboy.open);
+        assert_eq!(sim.pipboy.last_rejection, None);
+    }
+
+    #[test]
+    fn a_refused_drop_emits_no_event() {
+        let (mut sim, stack) = sim_with_stock();
+        sim.apply(drop_action(stack, STOCK + 1));
+        assert_eq!(stacks(&sim), vec![(WIDGET_NAME.to_owned(), STOCK)]);
+        assert_eq!(sim.drain_inventory_events(), []);
+        assert!(sim.pipboy.last_rejection.is_some());
+    }
+
+    #[test]
+    fn restoring_returns_exactly_what_a_failed_drop_took_without_an_event() {
+        let (mut sim, stack) = sim_with_stock();
+        sim.apply(drop_action(stack, DROPPED_UNITS));
+        sim.drain_inventory_events();
+
+        assert_eq!(sim.restore_units(WIDGET_KEY, DROPPED_UNITS), Ok(()));
+
+        assert_eq!(stacks(&sim), vec![(WIDGET_NAME.to_owned(), STOCK)]);
+        assert_eq!(sim.drain_inventory_events(), []);
+    }
+
+    #[test]
+    fn restoring_an_unknown_item_or_zero_units_changes_nothing() {
+        let (mut sim, _) = sim_with_stock();
+        assert_eq!(
+            sim.restore_units(UNLISTED_KEY, 1),
+            Err(ItemGrantError::UnknownItem {
+                form_key: UNLISTED_KEY.to_owned()
+            })
+        );
+        assert_eq!(
+            sim.restore_units(WIDGET_KEY, 0),
+            Err(ItemGrantError::Inventory(InventoryError::ZeroUnits {
+                form_key: WIDGET_KEY.to_owned()
+            }))
+        );
+        assert_eq!(stacks(&sim), vec![(WIDGET_NAME.to_owned(), STOCK)]);
+    }
+
+    const DROPPED_REF: &str = "00000A:*dropped";
+
+    fn dropped_objects() -> (Arc<CellColliderBatch>, Option<bake::BakedCellColliders>) {
+        let batch = CellColliderBatch {
+            objects: vec![object_group(
+                QUEUED_PATH,
+                vec![placement(DROPPED_REF, Vec3::new(120.0, 20.0, -50.0))],
+                true,
+                Some(4.0),
+            )],
+            ..CellColliderBatch::default()
+        };
+        let baked = bake(&batch, &[(QUEUED_PATH, vec![box_shape(0.5)])]);
+        (Arc::new(batch), Some(baked))
+    }
+
+    #[test]
+    fn a_world_object_added_to_a_registered_cell_falls() {
+        let mut sim = world_with(&[]);
+        let (batch, baked) = dropped_objects();
+
+        sim.apply(SimCommand::AddWorldObjects {
+            grid: (0, 0),
+            batch,
+            baked,
+        });
+        let start = physics::test_support::body_probe(&sim.physics, refr_entity_id(DROPPED_REF));
+        tick(&mut sim, 20);
+        let later = physics::test_support::body_probe(&sim.physics, refr_entity_id(DROPPED_REF));
+
+        assert!(!start.sleeping);
+        assert!(later.translation.y < start.translation.y - 1.0);
+    }
+
+    /// The tall single-round capsule and the small hull of the 10mm ammo model: a body that
+    /// cannot rest upright and tilts where it lands.
+    fn tipping_item_shapes() -> Vec<PartShape> {
+        use glam::Quat;
+        let capsule = ColShape::Capsule {
+            center: Vec3::new(0.0, 0.16, 0.0),
+            rotation: Quat::IDENTITY,
+            radius: 0.06,
+            height: 0.4,
+        };
+        let hull = ColShape::Box {
+            center: Vec3::new(0.0, 0.2, 0.0),
+            rotation: Quat::IDENTITY,
+            half_extents: Vec3::new(0.06, 0.04, 0.05),
+        };
+        [capsule, hull]
+            .into_iter()
+            .map(|shape| PartShape {
+                shape,
+                node: None,
+                joint: None,
+                material: 0,
+            })
+            .collect()
+    }
+
+    const SHELF_TOP: f32 = 1.0;
+
+    fn tick_until_asleep(sim: &mut SimWorld, entity: EntityId) {
+        for _ in 0..600 {
+            if physics::test_support::body_probe(&sim.physics, entity).sleeping {
+                return;
+            }
+            tick(sim, 1);
+        }
+        panic!("the dropped body never fell asleep");
+    }
+
+    #[test]
+    fn a_world_object_that_starts_inside_a_shelf_comes_to_rest_on_it_and_is_the_first_thing_aimed_at()
+     {
+        let shelf_half_thickness = 0.2;
+        let shelf = || {
+            prop_box(
+                "meshes_shelf.glb",
+                Vec3::new(150.0, SHELF_TOP - shelf_half_thickness, -50.0),
+                Vec3::new(5.0, shelf_half_thickness, 5.0),
+            )
+        };
+        for sunk in [0.0, 0.05, 0.15] {
+            let mut sim = world_with(&[shelf()]);
+            let batch = CellColliderBatch {
+                objects: vec![object_group(
+                    QUEUED_PATH,
+                    vec![placement(
+                        DROPPED_REF,
+                        Vec3::new(150.0, SHELF_TOP - sunk, -50.0),
+                    )],
+                    true,
+                    Some(0.01),
+                )],
+                ..CellColliderBatch::default()
+            };
+            let baked = bake(&batch, &[(QUEUED_PATH, tipping_item_shapes())]);
+            sim.apply(SimCommand::AddWorldObjects {
+                grid: (0, 0),
+                batch: Arc::new(batch),
+                baked: Some(baked),
+            });
+            let entity = refr_entity_id(DROPPED_REF);
+
+            tick_until_asleep(&mut sim, entity);
+
+            let rest = physics::test_support::body_probe(&sim.physics, entity);
+            assert!(
+                rest.translation.y > SHELF_TOP - 0.01,
+                "sunk {sunk}: rests at {:?}",
+                rest.translation
+            );
+            let above = rest.translation + Vec3::new(-2.0, 2.2, 0.0);
+            let hit = sim
+                .debug_ray_hit(
+                    above,
+                    (rest.translation + Vec3::Y * 0.2 - above).normalize(),
+                    15.0,
+                )
+                .expect("the ray reaches the shelf area");
+            assert_eq!(hit.ref_id.as_deref(), Some(DROPPED_REF), "sunk {sunk}");
+        }
+    }
+
+    #[test]
+    fn world_objects_wait_behind_a_held_fold_and_go_with_their_cell() {
+        let mut sim = SimWorld::new(
+            PlayerMovement::default(),
+            EyeHeights::default(),
+            WorldClock::fixture(),
+        );
+        sim.set_fold_hold(true);
+        sim.apply(SimCommand::AddCellColliders {
+            grid: (0, 0),
+            batch: Arc::new(ground_batch()),
+            baked: None,
+        });
+        let (batch, baked) = dropped_objects();
+        sim.apply(SimCommand::AddWorldObjects {
+            grid: (0, 0),
+            batch: Arc::clone(&batch),
+            baked: baked.clone(),
+        });
+        assert_eq!(body_count(&sim), 0);
+
+        sim.drain_pending_colliders(Duration::MAX);
+        assert_eq!(body_count(&sim), 1);
+
+        sim.apply(SimCommand::RemoveCellColliders { grid: (0, 0) });
+        sim.apply(SimCommand::AddCellColliders {
+            grid: (0, 0),
+            batch: Arc::new(ground_batch()),
+            baked: None,
+        });
+        sim.apply(SimCommand::AddWorldObjects {
+            grid: (0, 0),
+            batch,
+            baked,
+        });
+        sim.apply(SimCommand::RemoveCellColliders { grid: (0, 0) });
+        sim.drain_pending_colliders(Duration::MAX);
+        assert_eq!(body_count(&sim), 0);
+        assert!(!sim.has_pending_colliders());
+    }
+
+    #[test]
+    fn a_registration_builds_its_dropped_items_but_not_the_picked_up_ones() {
+        let picked_again = "00000B:*dropped";
+        let (batch, baked) = dropped_objects();
+        let (second, second_baked) = {
+            let batch = CellColliderBatch {
+                objects: vec![object_group(
+                    QUEUED_PATH,
+                    vec![placement(picked_again, Vec3::new(130.0, 20.0, -50.0))],
+                    true,
+                    Some(4.0),
+                )],
+                ..CellColliderBatch::default()
+            };
+            let baked = bake(&batch, &[(QUEUED_PATH, vec![box_shape(0.5)])]);
+            (Arc::new(batch), Some(baked))
+        };
+        let mut sim = SimWorld::new(
+            PlayerMovement::default(),
+            EyeHeights::default(),
+            WorldClock::fixture(),
+        );
+
+        sim.apply(SimCommand::AddCellCollidersSkipping {
+            grid: (0, 0),
+            batch: Arc::new(ground_batch()),
+            baked: None,
+            skip: Arc::new(HashSet::from([refr_entity_id(picked_again)])),
+            added: vec![
+                AddedObjects { batch, baked },
+                AddedObjects {
+                    batch: second,
+                    baked: second_baked,
+                },
+            ],
+        });
+
+        assert_eq!(body_count(&sim), 1);
+        assert!(
+            sim.physics
+                .remove_ref(refr_entity_id(DROPPED_REF))
+                .is_some()
+        );
     }
 }

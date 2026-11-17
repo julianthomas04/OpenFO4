@@ -1,6 +1,7 @@
 mod activation;
 pub mod adapter;
 pub mod addon_nodes;
+mod aim_log;
 pub mod anim_debug_panel;
 pub mod animated_objects;
 mod auto_anim;
@@ -16,6 +17,8 @@ pub mod debug_view;
 pub mod device;
 pub mod device_loss;
 mod door_prompt;
+mod drop_flow;
+mod drop_log;
 pub mod effects;
 pub mod egui_pass;
 pub mod fatal_runtime_error;
@@ -27,6 +30,7 @@ pub mod free_list;
 pub mod frustum;
 pub mod game_frame;
 pub mod game_settings;
+mod game_text;
 pub mod gpu_cull;
 pub mod gpu_driven;
 pub mod gpu_profiler;
@@ -39,6 +43,10 @@ pub mod grass_streaming;
 pub mod hiz;
 pub mod hud;
 pub mod instance;
+mod item_drop;
+mod item_feedback;
+mod item_pickup;
+mod item_prompt;
 pub mod light_anim;
 pub mod lighting;
 mod line_buffer;
@@ -53,6 +61,7 @@ pub mod mouse_capture;
 pub mod navmesh_overlay;
 pub mod particles;
 pub mod perf_log;
+mod pick_settings;
 pub mod pipboy;
 pub mod pipboy_capture;
 pub mod placed_light;
@@ -64,8 +73,10 @@ pub mod rain;
 mod rain_stage;
 pub mod readback_ring;
 pub mod refraction;
+mod refusal_texts;
 pub mod render_pipelines;
 mod reveal_texture_check;
+mod rollover_prompt;
 pub(crate) mod row_pose;
 pub mod scene_copy;
 pub mod scene_overrides;
@@ -100,7 +111,10 @@ use glam::{Mat4, UVec2, UVec4, Vec3};
 use tracing::instrument;
 use winit::{keyboard::KeyCode, window::Window};
 
-use crate::anim::marker_timeline::{FIRST_PERSON_ASSETS_DIR, load_gait_timings};
+use crate::anim::character_assets::FIRST_PERSON_ASSETS_DIR;
+use crate::anim::clip_library::ClipLibrary;
+use crate::anim::first_person_eye::read_first_person_camera;
+use crate::anim::marker_timeline::load_gait_timings;
 use crate::assets::AssetServer;
 use crate::assets::layout;
 use crate::assets::pipboy_art::ArtLibrary;
@@ -197,11 +211,12 @@ use crate::rendering::{
     window_surface::WindowSurface,
     world_streamer::{LoadMode, StreamTargets, UploadBudget, WorldStreamer},
 };
+use crate::sim::collision_box::CollisionBox;
 use crate::sim::commands::{ClockEdit, WeatherEdit};
 use crate::sim::pipboy::PipBoyAction;
 use crate::sim::{
-    ClockFrame, DynamicPose, MaterialBuoyancy, PlayerInput, PlayerMovement, SimCommand, SimWorld,
-    refr_entity_id, water_physics,
+    ClockFrame, DynamicPose, EntityId, EyeHeights, InventoryEvent, MaterialBuoyancy, PickClass,
+    PlayerInput, PlayerMovement, RayHit, SimCommand, SimWorld, refr_entity_id, water_physics,
 };
 use crate::spawn_cell::SpawnCellTarget;
 use crate::startup::{StartupError, StartupTimer};
@@ -215,11 +230,17 @@ use auto_anim::AutoAnim;
 use auto_character::AutoCharacters;
 use boot::{BootParts, GpuContext, StartupInputs, StateInputs};
 use cube_array::CubeArray;
-use door_prompt::{DoorPrompts, ShownEntrance, door_hud};
+use door_prompt::{DoorPrompts, ShownEntrance, aim_hud};
+use drop_flow::{DropRefusal, handle_all, refuse_drop, return_abandoned, settle_drop};
+use drop_log::drop_request_line;
 use effects::stage::{EffectFrameInputs, EffectStage};
 use grab_input::{
     AimTarget, CarryContext, GrabAction, GrabInput, carry_key_counts, spin_gate_open,
 };
+use item_drop::{Dropper, dropped_spec, placement};
+use item_feedback::{inventory_log_line, item_sound_of, load_item_sounds};
+use item_pickup::plan_pickup;
+use item_prompt::{ItemPromptCache, ItemPrompts, PlayerOwners, catalog_item_prompt};
 use light_anim::LightAnimator;
 use lighting::frame_uniform::FrameUniform;
 use load_transition::{
@@ -230,9 +251,12 @@ use loading_screen::{GradeSource, LoadingScene};
 use material_rebuild::MaterialDirt;
 use menu::{MenuRenderer, OverlayForeground, PanelContent};
 use particles::CameraBasis;
+use pick_settings::PickSettings;
 use ragdoll_objects::RagdollObjects;
 use refraction::{RefractionFrameInputs, RefractionStage};
+use refusal_texts::{RefusalMessages, apply_each};
 use reveal_texture_check::{Draw, RevealTextureCheck};
+use rollover_prompt::RolloverPrompt;
 use shaders::startup::EffectValidation;
 use startup_reads::StartupDbReads;
 use ui_colour::UiColourSet;
@@ -289,11 +313,6 @@ struct InteriorOption {
     grid: (i32, i32),
     start_pos: Vec3,
 }
-
-/// How far (engine units) the activation ray reaches when looking for a load
-/// door under the crosshair. ~150 Bethesda units (SCALE 0.1), near vanilla
-/// `fActivatePickLength`; the debug inspector ray (2000) is far longer.
-const ACTIVATE_REACH: f32 = 15.0;
 
 /// Frames the `OPENFO4_AUTO_ACTIVATE` dev hook waits between hops (~3s at 60fps)
 /// as a floor; the real gate is `player_eye().is_some()` (the prior teleport's
@@ -688,6 +707,19 @@ pub struct State {
     teleports: std::collections::HashMap<String, ResolvedTarget>,
     /// The text shown while aiming at a door, resolved at boot.
     door_prompts: DoorPrompts,
+    /// The verbs shown while aiming at a placed item, resolved at boot.
+    item_prompts: ItemPrompts,
+    /// The owners that make taking an item no theft, resolved at boot.
+    player_owners: PlayerOwners,
+    /// The line shown while E is held on an item too heavy to carry, resolved at boot.
+    too_heavy_text: Arc<str>,
+    /// Turns the Pip-Boy's refusals into HUD message lines.
+    refusal_messages: RefusalMessages,
+    /// The same catalog the sim holds, so the item prompt never goes through the Pip-Boy.
+    pipboy_catalog: Arc<crate::sim::pipboy::PipBoyCatalog>,
+    /// The prompt of the item aimed at, built once per aimed entity.
+    item_prompt_cache: ItemPromptCache,
+    aim_trace: aim_log::AimTrace,
     /// The entrances of the walk-in (automatic) load doors; their sources are keys of
     /// `teleports`.
     walk_in: WalkInTriggers,
@@ -725,6 +757,8 @@ pub struct State {
     freeze_camera: bool,
     walk_keys: WalkKeys,
     grab_input: GrabInput,
+    /// Reach and grab hold of the E key, from one source.
+    pick: PickSettings,
     /// Base world FOV in Bethesda convention (horizontal at a 16:9 base),
     /// from the INI cascade (`fDefaultWorldFOV`).
     world_fov_beth: f32,
@@ -808,7 +842,7 @@ pub struct State {
     process_memory: utils::ProcessMemory,
     vram_text: String,
     memory_section_open: bool,
-    aimed_door: bool,
+    aimed_interactible: bool,
     vram_last_refresh: Instant,
 
     // Stats
@@ -1099,9 +1133,9 @@ impl State {
     }
 
     /// What the player is currently aiming at within activation reach, as the E key sees it: a
-    /// load door or an animated object, a loose body, or nothing to act on. Shared by the E key
-    /// and (via a precomputed bool) the crosshair and the debug `is_interactible` readout, so all
-    /// agree exactly.
+    /// load door or an animated object, a placed item, a loose body, or nothing to act on. Shared
+    /// by the E key and (via a precomputed bool) the crosshair and the debug `is_interactible`
+    /// readout, so all agree exactly.
     fn aim_target(&self) -> AimTarget {
         self.aim_target_of(self.aimed_ref().as_deref())
     }
@@ -1112,10 +1146,35 @@ impl State {
             return AimTarget::Nothing;
         };
         AimTarget::resolve(
-            activation::resolve(ref_id, &self.teleports, &self.animated_objects).is_some(),
+            self.pick_class_of(ref_id),
             refr_entity_id(ref_id),
             |entity| self.sim.is_grabbable(entity),
+            |entity| self.sim.can_carry(entity),
         )
+        .while_carrying(self.sim.carried().is_some())
+    }
+
+    /// What the ref is to the pick: the one place that tells a door, an item and a solid apart,
+    /// for the ball and for `aim_target_of` alike.
+    fn pick_class_of(&self, ref_id: &str) -> PickClass {
+        grab_input::pick_class(
+            activation::resolve(ref_id, &self.teleports, &self.animated_objects).is_some(),
+            || self.streamer.world_item(refr_entity_id(ref_id)).is_some(),
+        )
+    }
+
+    /// The rollover of the placed item aimed at, none when its base has no catalog entry.
+    fn item_prompt_of(&mut self, entity: EntityId) -> Option<RolloverPrompt> {
+        self.item_prompt_cache
+            .get_or_build(entity, || {
+                catalog_item_prompt(
+                    self.streamer.world_item(entity)?,
+                    &self.pipboy_catalog,
+                    &self.item_prompts,
+                    &self.player_owners,
+                )
+            })
+            .cloned()
     }
 
     /// What the walk-in entrance the player stands near shows. `pipboy_open` is the value the
@@ -1132,13 +1191,18 @@ impl State {
 
     /// The ref id of the object under the crosshair within activation reach.
     fn aimed_ref(&self) -> Option<String> {
-        self.sim
-            .debug_ray_hit(
-                self.camera.eye,
-                self.camera_controller.forward(),
-                ACTIVATE_REACH,
-            )?
-            .ref_id
+        self.aimed_hit()?.ref_id
+    }
+
+    /// What the player aims at within activation reach: the crosshair ray, widened to a ball for
+    /// placed items and activators. A ref that is both a door and an item counts as the door, as
+    /// in `aim_target_of`.
+    fn aimed_hit(&self) -> Option<RayHit> {
+        self.sim.pick_hit(
+            self.pick
+                .aim_from(self.camera.eye, self.camera_controller.forward()),
+            |ref_id| self.pick_class_of(ref_id),
+        )
     }
 
     /// The one entry for every request to teleport through a load door, by the door's ref id.
@@ -1198,13 +1262,8 @@ impl State {
             return;
         }
         let carrying = self.sim.carried().is_some();
-        let now = Instant::now();
-        let action = if is_pressed {
-            let aim = self.aim_target();
-            self.grab_input.activate_pressed(aim, carrying, now)
-        } else {
-            self.grab_input.activate_released(carrying, now)
-        };
+        let aim = self.aim_target();
+        let action = self.grab_input.activate_key(is_pressed, carrying, aim);
         self.apply_grab_action(action);
     }
 
@@ -1223,10 +1282,10 @@ impl State {
         }
     }
 
-    /// Fires a grab whose hold E has reached by `now`.
-    fn advance_carry_input(&mut self, now: Instant) {
+    /// Counts the frame starting at `frame_start` towards E's hold and fires a grab it reaches.
+    fn advance_carry_input(&mut self, frame_start: Instant) {
         if self.carry_controls_live() {
-            let action = self.grab_input.advance(now);
+            let action = self.grab_input.advance(frame_start);
             self.apply_grab_action(action);
         }
     }
@@ -1239,7 +1298,109 @@ impl State {
                 self.sim.apply(command.into_sim_command());
                 self.follow_carry_outcome();
             }
+            Some(GrabAction::PickUp(entity)) => self.pick_up_item(entity),
+            Some(GrabAction::ReportTooHeavy) => {
+                self.hud.show_message(Arc::clone(&self.too_heavy_text));
+            }
         }
+    }
+
+    /// Takes the placed item into the inventory: the lookup and the plan change nothing, the sim
+    /// grants the units (nothing changed on failure), then the streamer takes the item out of
+    /// the world. A second request for the same entity ends at the lookup.
+    fn pick_up_item(&mut self, entity: EntityId) {
+        let Some(item) = self.streamer.world_item(entity) else {
+            tracing::warn!("pickup of {entity:?} refused: it is not a placed item");
+            return;
+        };
+        let plan = match plan_pickup(item, &self.pipboy_catalog) {
+            Ok(plan) => plan,
+            Err(error) => {
+                tracing::warn!("pickup of {entity:?} refused: {error}");
+                return;
+            }
+        };
+        if let Err(error) = self.sim.pick_up_item(plan.entity, &plan.base, plan.count) {
+            tracing::error!("pickup of {entity:?} failed, nothing changed: {error}");
+            return;
+        }
+        if let Err(error) = self.streamer.remove_world_item(entity) {
+            tracing::error!(
+                "pickup of {entity:?} was granted but the item stays in the world: {error}"
+            );
+        }
+    }
+
+    /// Gives back the units of every drop the world never took, then handles every inventory
+    /// event of the sim, whatever an earlier one did: a taken item plays its pick-up sound, a
+    /// dropped stack goes into the world and plays its put-down sound once the world accepted
+    /// it. An audio error is fatal, as for footsteps, and returned after the last event.
+    fn drain_inventory_events(&mut self) -> Result<(), AudioError> {
+        return_abandoned(self.streamer.take_abandoned_drops(), |form_key, count| {
+            self.sim.restore_units(form_key, count)
+        });
+        handle_all(self.sim.drain_inventory_events(), |event| {
+            tracing::debug!("{}", inventory_log_line(&event));
+            let world_took_it = match &event {
+                InventoryEvent::Added { form_key, .. } => {
+                    self.streamer.prepare_item_collision_box(form_key);
+                    true
+                }
+                InventoryEvent::Dropped { form_key, count } => self.place_dropped(form_key, *count),
+            };
+            if world_took_it {
+                self.play_item_sound(&event)
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    /// Puts a dropped stack into the world around the player; without a player body or an item
+    /// collision box, or when the world refuses, the units go back to the inventory. Returns
+    /// whether the world took it.
+    fn place_dropped(&mut self, form_key: &str, count: u32) -> bool {
+        let (dropper, item) = match self.drop_inputs(form_key) {
+            Ok(inputs) => inputs,
+            Err(refusal) => {
+                refuse_drop(form_key, count, &refusal, |key, units| {
+                    self.sim.restore_units(key, units)
+                });
+                return false;
+            }
+        };
+        let eye = self.camera.eye;
+        let placed = placement(dropper, item, |origin, direction, reach| {
+            self.sim.static_ray_distance(origin, direction, reach)
+        });
+        tracing::debug!("{}", drop_request_line(form_key, count, &placed, eye));
+        let spec = dropped_spec(form_key, count, placed);
+        settle_drop(
+            spec,
+            |spec| self.streamer.spawn_world_item(spec),
+            |form_key, count| self.sim.restore_units(form_key, count),
+        )
+    }
+
+    /// The player dropping `form_key` and the box around the item's collision.
+    fn drop_inputs(&self, form_key: &str) -> Result<(Dropper, CollisionBox), DropRefusal> {
+        let body = self.sim.player_body().ok_or(DropRefusal::NoPlayerBody)?;
+        let item = self.streamer.item_collision_box(form_key)?;
+        let dropper = Dropper {
+            feet: body.feet,
+            standing_eye: self.sim.eye_heights().standing(),
+            body_radius: body.radius,
+            yaw: self.camera_controller.yaw(),
+        };
+        Ok((dropper, item))
+    }
+
+    fn play_item_sound(&mut self, event: &InventoryEvent) -> Result<(), AudioError> {
+        let Some(audio) = &mut self.audio else {
+            return Ok(());
+        };
+        let sound = item_sound_of(event);
+        audio.play_item_sound(sound.item, sound.kind)
     }
 
     /// Reports how the sim answered: a release of the carried body lets go of E and R, and a
@@ -1741,6 +1902,10 @@ impl State {
             interiors,
             teleports,
             door_prompts,
+            item_prompts,
+            player_owners,
+            refusal_texts,
+            too_heavy_text,
             walk_in,
             player_movement,
             buoyancy_table,
@@ -1755,7 +1920,16 @@ impl State {
         let world_clock = crate::assets::db::DbClient::new(&db_path)
             .and_then(|db| crate::assets::world_clock_start::load_world_clock(&db))
             .map_err(StartupError::WorldClock)?;
-        let mut sim = SimWorld::new(player_movement, world_clock);
+        let mut first_person_clips =
+            ClipLibrary::open(asset_server.asset_location(), FIRST_PERSON_ASSETS_DIR)
+                .map_err(StartupError::FirstPersonAssets)?;
+        let eye_heights = EyeHeights::try_from(read_first_person_camera(&mut first_person_clips)?)?;
+        tracing::info!(
+            "player eye: {:.4} u above the soles standing, {:.4} u sneaking",
+            eye_heights.standing(),
+            eye_heights.sneaking()
+        );
+        let mut sim = SimWorld::new(player_movement, eye_heights, world_clock);
         if let Some(hour) = overrides.hour {
             sim.apply(SimCommand::SetWorldClock(ClockEdit::SetHour(hour)));
         }
@@ -1798,11 +1972,8 @@ impl State {
         let footstep_catalog = crate::assets::db::DbClient::new(&db_path)
             .and_then(|db| db.get_footstep_catalog())
             .map_err(StartupError::Footsteps)?;
-        let gait_timings = load_gait_timings(&format!(
-            "{}/{FIRST_PERSON_ASSETS_DIR}",
-            asset_server.asset_location()
-        ))
-        .map_err(|error| StartupError::Footsteps(error.into()))?;
+        let gait_timings = load_gait_timings(&mut first_person_clips)
+            .map_err(|error| StartupError::Footsteps(error.into()))?;
         if let Some(mismatch) = crate::sim::jump_windup_mismatch(&gait_timings) {
             tracing::warn!("{mismatch}");
         }
@@ -1819,6 +1990,13 @@ impl State {
             )
             .map_err(AudioError::from)?;
             audio.set_footsteps(footsteps);
+            if let Some(item_sounds) = load_item_sounds(
+                &db_path,
+                Path::new(&layout::audio_dir(asset_server.asset_location())),
+                seed_from_clock(),
+            ) {
+                audio.set_item_sounds(item_sounds);
+            }
             if let Some(weather_sounds) =
                 weather_library.as_ref().map(sound_table).and_then(|table| {
                     load_or_report(
@@ -1847,7 +2025,8 @@ impl State {
             pipboy.require_marker_art(map.markers.iter().map(|marker| marker.marker_type))?;
         }
         pipboy.load_perk_grid(&device, &queue, surface_format)?;
-        sim.set_pipboy_catalog(std::sync::Arc::new(pipboy_catalog));
+        let pipboy_catalog = Arc::new(pipboy_catalog);
+        sim.set_pipboy_catalog(Arc::clone(&pipboy_catalog));
 
         let cull_stats = CullStatsReadback::new(&device);
         let gpu_profiler = GpuProfiler::new(&device, &queue);
@@ -1880,6 +2059,7 @@ impl State {
             history: LoadHistory::default(),
             preview: LoadScreenPreview::default(),
         };
+        let pick = settings.pick;
         Ok(Self {
             surface,
             device,
@@ -1966,17 +2146,23 @@ impl State {
             interior_filter: String::new(),
             teleports,
             door_prompts,
+            item_prompts,
+            player_owners,
+            too_heavy_text,
+            refusal_messages: RefusalMessages::new(refusal_texts),
+            pipboy_catalog,
+            item_prompt_cache: ItemPromptCache::default(),
+            aim_trace: aim_log::AimTrace::default(),
             walk_in,
             pending_teleport: spawn_target,
             auto_activate: std::env::var("OPENFO4_AUTO_ACTIVATE")
                 .ok()
-                .map(|s| {
+                .map_or_default(|s| {
                     s.split(',')
                         .map(|x| x.trim().to_string())
                         .filter(|x| !x.is_empty())
                         .collect()
-                })
-                .unwrap_or_default(),
+                }),
             auto_idx: 0,
             auto_cooldown: 0,
             walk_in_hook: WalkInDevHook::from_list(
@@ -1994,7 +2180,8 @@ impl State {
             input_mode: InputMode::Walk,
             freeze_camera,
             walk_keys: WalkKeys::default(),
-            grab_input: GrabInput::default(),
+            grab_input: GrabInput::new(pick.grab_hold()),
+            pick,
             world_fov_beth,
             fov_adjust: 0.0,
             collision_wireframe: false,
@@ -2040,7 +2227,7 @@ impl State {
             process_memory: utils::ProcessMemory::new(),
             vram_text: String::new(),
             memory_section_open: false,
-            aimed_door: false,
+            aimed_interactible: false,
             vram_last_refresh: Instant::now(),
             cull_stats,
             gpu_profiler,
@@ -2725,20 +2912,20 @@ impl State {
         let shows_interface = !self.shot_active();
         let pipboy_open = self.sim.pipboy_snapshot().model.open;
         self.pipboy.sync_open(pipboy_open);
-        if pipboy_open {
-            if shows_interface && !skip.skips(DebugPass::PipBoy) {
-                let snapshot = self.sim.pipboy_snapshot();
-                self.pipboy.render(
-                    &self.device,
-                    &self.queue,
-                    &mut encoder,
-                    &view,
-                    [self.config.width, self.config.height],
-                    &self.gpu_profiler,
-                    &snapshot,
-                );
-            }
-        } else if shows_interface && !skip.skips(DebugPass::Hud) {
+        if pipboy_open && shows_interface && !skip.skips(DebugPass::PipBoy) {
+            let snapshot = self.sim.pipboy_snapshot();
+            self.pipboy.render(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                &view,
+                [self.config.width, self.config.height],
+                &self.gpu_profiler,
+                &snapshot,
+            );
+        }
+        // Over the open Pip-Boy the HUD holds only its message list (`update_over_pipboy`).
+        if shows_interface && !skip.skips(DebugPass::Hud) {
             self.hud.render(
                 &self.device,
                 &self.queue,
@@ -2816,7 +3003,7 @@ impl State {
         // Compute the load-door activation state up front: a &self method can't
         // be called inside the egui closure once `self.debug_ui` is borrowed
         // mutably by render, so capture the plain bool here.
-        let dbg_interactible = self.aimed_door;
+        let dbg_interactible = self.aimed_interactible;
         let developer_window_visible = self.developer_window_visible() && !self.capture_active();
         let mut preview_request: Option<ScreenRequest> = None;
         let mut memory_section_open = false;
@@ -3856,6 +4043,10 @@ impl State {
 
         self.tick_walk_in_hook();
 
+        // Before a teleport tears the world down, so a dropped item lands in the world the
+        // player dropped it in.
+        self.drain_inventory_events()?;
+
         // Apply a load-door activation (E): the same teardown + teleport path as
         // the debug pickers, but the arrival position, grid and facing all come
         // from the door's XTEL. `switch_worldspace`'s returned default start is
@@ -3921,8 +4112,8 @@ impl State {
             InputMode::Walk => {
                 self.sim
                     .apply(SimCommand::SetPlayerInput(self.player_input()));
-                // Before the tick, with this frame's view: the grab hold is measured to the
-                // start of the frame, not to after a streaming hitch inside it.
+                // Before the tick, after this frame's key events, with this frame's view: the
+                // frame counts towards E's hold at its start.
                 self.advance_carry_input(frame_start);
                 self.sim.tick(dt);
                 self.sample_walk_in(pipboy_open, dt);
@@ -3948,28 +4139,43 @@ impl State {
         // Build the HUD overlay for this frame. The crosshair state is selected
         // here (render-side): door-aim depends on the camera, which the sim does
         // not own — the sim only supplies the Standard spread radius.
-        let aimed_ref = self.aimed_ref();
-        self.aimed_door = self.aim_target_of(aimed_ref.as_deref()) == AimTarget::Activatable;
+        let aimed_hit = self.aimed_hit();
+        let aimed_ref = aimed_hit.as_ref().and_then(|hit| hit.ref_id.clone());
+        let aim = self.aim_target_of(aimed_ref.as_deref());
+        if tracing::enabled!(target: aim_log::AIM_TRACE_TARGET, tracing::Level::TRACE)
+            && let Some(line) = self.aim_trace.observe(aimed_hit.as_ref(), aim)
+        {
+            tracing::trace!(target: aim_log::AIM_TRACE_TARGET, "{line}");
+        }
+        self.aimed_interactible = aim.is_interactible();
         let entrance = self.entrance_near_player(pipboy_open);
-        let door_hud = door_hud(
-            self.aimed_door,
+        let ordinary = if let AimTarget::Item { entity, .. } = aim {
+            self.item_prompt_of(entity)
+        } else {
+            self.item_prompt_cache.clear();
             self.door_prompts.prompt_for(
                 aimed_ref.as_deref(),
                 |ref_id| self.teleports.contains_key(ref_id),
                 |ref_id| self.animated_objects.door(refr_entity_id(ref_id)),
-            ),
-            entrance.as_ref(),
-        );
+            )
+        };
+        let aim_hud = aim_hud(self.aimed_interactible, ordinary, entrance.as_ref());
         let mut hud_snapshot = self.sim.hud_snapshot();
         hud_snapshot.visible &= self.flow.hud_visible();
-        self.hud.update(
-            &hud_snapshot,
-            door_hud.activate,
-            door_hud.prompt.as_ref(),
-            world_dt,
-            self.config.width,
-            self.config.height,
-        );
+        if pipboy_open {
+            self.hud
+                .update_over_pipboy(&hud_snapshot, dt, self.config.width, self.config.height);
+        } else {
+            self.hud.update(
+                &hud_snapshot,
+                aim_hud.activate,
+                aim_hud.prompt.as_ref(),
+                world_dt,
+                dt,
+                self.config.width,
+                self.config.height,
+            );
+        }
 
         drop(hud_span);
         let lighting_frame_span = tracing::info_span!("lighting_frame").entered();
@@ -4130,6 +4336,8 @@ impl State {
             width: self.config.width,
             height: self.config.height,
         });
+        self.streamer
+            .set_player_level(self.sim.pipboy_snapshot().model.character.progression.level);
         let stream = self.with_stream_targets(asset_server, |streamer, targets| {
             streamer.update_gpu_driven(eye, targets)
         })?;
@@ -4176,6 +4384,11 @@ impl State {
             });
         }
         self.dynamic_poses = dyn_poses;
+        if self.streamer.has_pending_hides() {
+            self.with_stream_targets(asset_server, |streamer, targets| {
+                streamer.apply_pending_hides(targets);
+            });
+        }
         self.write_animated_rows(asset_server);
         self.update_ragdolls(asset_server);
 
@@ -4506,10 +4719,22 @@ impl State {
         consumed
     }
 
+    /// Applies the Pip-Boy's actions one by one; the refusal of each goes to the HUD message list
+    /// before the next action can replace it.
     fn flush_pipboy_actions(&mut self) {
-        for action in self.pipboy.take_actions() {
-            self.sim.apply(SimCommand::PipBoy(action));
-        }
+        let actions = self.pipboy.take_actions();
+        apply_each(
+            &mut self.sim,
+            actions,
+            |sim, action| {
+                sim.apply(SimCommand::PipBoy(action));
+            },
+            |sim| {
+                if let Some(text) = self.refusal_messages.next_of(sim) {
+                    self.hud.show_message(text);
+                }
+            },
+        );
     }
 
     fn open_pipboy(&mut self, key: OpenKey) {
@@ -4648,9 +4873,7 @@ impl State {
                                 || self.walk_keys.right)
                         {
                             self.walk_keys.sprint_active = true;
-                            // Sprinting from sneak stands the player up (the
-                            // sim's headroom probe may delay the actual stand
-                            // under a low ceiling).
+                            // Sprinting from sneak stands the player up.
                             self.walk_keys.crouch_active = false;
                         }
                     }
