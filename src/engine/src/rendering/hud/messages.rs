@@ -34,8 +34,8 @@ const MAX_STEP_SECONDS: f32 = 0.25;
 
 /// What the original shows that the movie does not say. Everything measured is here.
 ///
-/// Measured in the original, 2026-11-12 and 2026-11-13, on one line ("The item is too heavy to
-/// carry.", game setting `sItemTooHeavy`; also "Keys stay in the bag.", `sNoKeyDropWarning`),
+/// Measured in the original, 2026-11-12 and 2026-11-13, on one line (game setting
+/// `sItemTooHeavy`; also `sNoKeyDropWarning`),
 /// 1600x900 captures read in stage pixels of the 1280x720 stage (1 capture pixel = 0.8 stage
 /// pixel), at the capture's HUD opacity (1: the brackets read opaque); n counts independent events
 /// (frames in brackets). Times are from the start of the line (its first ink), 50 ms sampling.
@@ -562,6 +562,8 @@ pub(super) mod tests {
     const CLIP_PATH: &str = "[HUDMessageItem]/HUDMessageItemInternal_mc";
     const TEXT_PATH: &str = "[HUDMessageItem]/HUDMessageItemInternal_mc/MessageText_tf";
     const CHARS_PER_LINE: usize = 10;
+    /// 31 characters, as long as the measured line, so the fake measure gives it the same height.
+    const SYNTHETIC_LINE: &str = "Too heavy for the test to lift.";
     const LINE_HEIGHT: f32 = 20.0;
     const MAX_BEARING: f32 = 2.0;
     const FPS: f32 = 30.0;
@@ -875,7 +877,7 @@ pub(super) mod tests {
     #[test]
     fn the_frame_around_one_line_is_the_measured_box() {
         let mut widget = widget_of(MOVIE_NUMBERS);
-        push(&mut widget, "Too heavy for the test to lift.");
+        push(&mut widget, SYNTHETIC_LINE);
         step(&mut widget, 0.0, HD);
         let rect = frame_of(&widget).rect;
         let [x0, y0, x1, _] = MEASURED.frame;
@@ -895,7 +897,7 @@ pub(super) mod tests {
     #[test]
     fn the_text_sits_where_the_measured_ink_sits() {
         let mut widget = widget_of(MOVIE_NUMBERS);
-        push(&mut widget, "Too heavy for the test to lift.");
+        push(&mut widget, SYNTHETIC_LINE);
         step(&mut widget, 0.0, HD);
         let rect = frame_of(&widget).rect;
         let geometry = widget.items()[0].geometry;
@@ -1417,7 +1419,7 @@ pub(super) mod tests {
         );
     }
 
-    /// The measured box of the "too heavy" line against the installed movie and font, at two
+    /// The measured box of the `sItemTooHeavy` line against the installed movie and font, at two
     /// sizes.
     #[test]
     #[ignore = "needs OPENFO4_INSTALL_DIR with the converted interface and fonts"]
@@ -1432,11 +1434,15 @@ pub(super) mod tests {
         let install = std::env::var(crate::assets::INSTALL_DIR_VAR).expect("OPENFO4_INSTALL_DIR");
         let fonts = UiFonts::load(&fonts_dir(&format!("{install}/{ASSETS_DIR}"))).unwrap();
         let mut font_system = fonts.font_system();
+        let too_heavy_line = crate::rendering::item_feedback::load_too_heavy_text(
+            &crate::assets::db::test_support::installed_database(),
+        )
+        .unwrap();
         for fb in [HD, (1600, 900)] {
             let hud = Layout::hud_stage(fb);
             let scale = hud.scale();
             let mut widget = MessagesWidget::new(spec.clone(), OBSERVED);
-            push(&mut widget, "Too heavy for the test to lift.");
+            push(&mut widget, &too_heavy_line);
             widget.update(0.0, fb, &hud, &TINT, |item| {
                 extent_of(&mut font_system, item)
             });
